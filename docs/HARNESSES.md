@@ -136,47 +136,50 @@ This gives Claude Code direct access to `memory_search`, `memory_store`,
 
 ## OpenCode
 
-OpenCode is an open-source AI coding tool. Signet integrates via a plugin and AGENTS.md sync.
+OpenCode is an open-source AI coding tool. Signet integrates via a
+bundled plugin and AGENTS.md sync.
 
 ### Files managed by Signet
 
 | File | Description |
 |------|-------------|
 | `~/.config/opencode/AGENTS.md` | Auto-synced from `~/.agents/AGENTS.md` |
-| `~/.config/opencode/memory.mjs` | Plugin providing remember/recall tools |
+| `~/.config/opencode/plugins/signet.mjs` | Bundled plugin providing memory tools |
 
-### Plugin
+### Plugin Bundle
 
-`memory.mjs` is an ES module plugin that OpenCode loads at startup. It registers `/remember` and `/recall` as native tools that call the Signet daemon.
+During `signet install`, the connector writes a self-contained
+`signet.mjs` file to `~/.config/opencode/plugins/`. OpenCode
+auto-discovers plugins from that directory at startup — no config
+entry is needed for the plugin itself.
 
-Example of what the plugin does:
+The plugin is built from `@signet/opencode-plugin` source and bundled
+into a single ESM file at build time (stored as a string constant in
+`plugin-bundle.ts`). This means the plugin has no external dependencies
+at runtime.
 
-```javascript
-// Provides /remember tool
-async function remember(content, options = {}) {
-  const res = await fetch('http://localhost:3850/api/memory/remember', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, who: 'opencode', ...options })
-  });
-  return res.json();
-}
+The previous approach (`memory.mjs` in the OpenCode root directory)
+is considered legacy. The connector automatically migrates away from
+it during install by deleting the old file and scrubbing any
+`memory.mjs` references from the config's `plugin` or `plugins` arrays.
 
-// Provides /recall tool
-async function recall(query, options = {}) {
-  const res = await fetch('http://localhost:3850/api/memory/recall', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, ...options })
-  });
-  return res.json();
-}
-```
+### Config File Detection
+
+The connector searches for an OpenCode config file in this order:
+
+1. `~/.config/opencode/opencode.json`
+2. `~/.config/opencode/opencode.jsonc`
+3. `~/.config/opencode/config.json`
+
+The first one found is used. If none exist, `opencode.json` is created
+as the default. JSONC files (with `//` comments and trailing commas)
+are parsed correctly — the connector strips comments and trailing
+commas before parsing.
 
 ### MCP Tools
 
-OpenCode also gets MCP tool access via a local server entry in
-`opencode.json`:
+OpenCode also gets MCP tool access via a local server entry registered
+in the config file during install:
 
 ```json
 {
@@ -323,20 +326,6 @@ This is a runtime plugin that OpenClaw loads to:
 - Inject memories into the system prompt
 
 Has a peer dependency on `openclaw` — only usable within the OpenClaw process.
-
----
-
-## Cursor (Planned)
-
-Signet will sync your agent identity to `.cursorrules` in your project directories. Configuration and hooks planned for a future release.
-
----
-
-## Windsurf (Planned)
-
-Windsurf integration is planned. Similar to Cursor — file-based identity sync and possibly a plugin for memory access.
-
----
 
 ## Adding a New Harness
 

@@ -70,13 +70,18 @@ Clicking a file opens it in the Config editor.
 Tabs
 ----
 
-**Config** — A plain-text editor for your agent's identity files. Files
-are loaded from `~/.agents/`. Use `Cmd+S` / `Ctrl+S` to save. Saving
-`AGENTS.md` triggers harness sync within 2 seconds.
+**Config** — A CodeMirror 6 editor for your agent's identity files.
+Files are loaded from `~/.agents/`. The editor provides syntax
+highlighting (markdown for `.md` files, YAML for `.yaml`), line
+numbers, bracket matching, fold gutters, search (`Ctrl+F`), and undo
+history. Use `Cmd+S` / `Ctrl+S` to save. Saving `AGENTS.md` triggers
+harness sync within 2 seconds. The editor uses a custom dark theme
+matching the dashboard design language, with a light theme variant
+activated by the `data-theme="light"` attribute.
 
-**Settings** — A YAML editor for `agent.yaml`. Modify embedding
-provider, pipeline V2 flags, search settings, memory retention
-windows, and auth configuration without leaving the browser.
+**Settings** — A YAML editor (also CodeMirror 6) for `agent.yaml`.
+Modify embedding provider, pipeline V2 flags, search settings, memory
+retention windows, and auth configuration without leaving the browser.
 Changes are saved directly to `~/.agents/agent.yaml`.
 
 **Memory** — Browse and search your memory database. Search runs hybrid
@@ -85,16 +90,33 @@ harness, pinned status, importance score, and date. Each memory card has
 a "Find Similar" button that runs a vector similarity search. The count
 shown reflects your current filter state.
 
-**Embeddings** — A 2D force-directed graph of your memory space. Memories
-with vector embeddings appear as nodes; edges connect nearest neighbors.
-Coordinates are computed server-side via UMAP (`GET
-/api/embeddings/projection`) and cached until the embedding count changes.
-Nodes are colored by source. Click a node to inspect the memory and view
-its nearest neighbors in a side panel.
+**Embeddings** — A 3D force-directed graph of your memory space
+(powered by `3d-force-graph` / Three.js). Memories with vector
+embeddings appear as nodes; edges connect k-nearest neighbors.
 
-Filter presets let you slice the graph by source, memory type, or importance
-range. Preset selections are persisted to `localStorage`. Cluster lens mode
-highlights a selected node's neighborhood.
+Coordinates are computed server-side via UMAP dimensionality reduction
+(`GET /api/embeddings/projection`) and cached until the embedding count
+changes. The server returns both 2D and 3D projections; the dashboard
+uses the 3D variant. Node positions are scaled by a factor of 52 and
+seeded from the UMAP coordinates; the force simulation refines layout
+from there.
+
+Nodes are colored by source (the `who` field). Node size scales with
+importance (base 0.6, up to 2.0). Click a node to inspect the memory
+and view its nearest neighbors in a side panel. Hovering a node shows
+a tooltip with the source and a truncated content label.
+
+Filter presets let you slice the graph by source, memory type, or
+importance range. Preset selections are persisted to `localStorage`.
+
+**Cluster lens mode** highlights a selected node's neighborhood:
+when active, only nodes in the `lensIds` set are rendered at full
+opacity while the rest are dimmed. Edges are similarly filtered.
+Pinned memories are visually distinguished.
+
+The `EmbeddingCanvas3D` component exposes `focusNode(id)` to animate
+the camera toward a specific node, and `refreshAppearance()` to
+re-apply color/opacity changes without rebuilding the graph.
 
 **Logs** — Real-time daemon log stream via Server-Sent Events
 (`/api/logs/stream`). A Live/Stop toggle controls the stream.

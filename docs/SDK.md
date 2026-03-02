@@ -385,6 +385,90 @@ const { data: memory, error } = useMemory(selectedId);
 Both hooks clean up in-flight requests on unmount via `AbortController`.
 
 
+Vercel AI SDK Integration
+---
+
+`@signet/sdk/ai-sdk` provides tool definitions and context injection
+compatible with the Vercel AI SDK (`ai` package from sdk.vercel.ai).
+Requires `zod` as a peer dependency (already present if you use the AI
+SDK).
+
+**`memoryTools(client)`** — Returns an object of tool definitions
+(`memory_search`, `memory_store`, `memory_modify`, `memory_forget`)
+that can be passed directly to the `tools` parameter of `generateText`
+or `streamText`.
+
+```typescript
+import { SignetClient } from "@signet/sdk";
+import { memoryTools } from "@signet/sdk/ai-sdk";
+import { generateText } from "ai";
+
+const signet = new SignetClient();
+const tools = await memoryTools(signet);
+
+const result = await generateText({
+  model: yourModel,
+  tools,
+  prompt: "What do you know about the user's coding preferences?",
+});
+```
+
+Each tool is a standard Vercel AI SDK tool with `description`,
+`parameters` (zod schema), and `execute` function.
+
+**`getMemoryContext(client, userMessage, opts?)`** — Convenience helper
+that runs a recall search and formats the results as a markdown string
+suitable for injecting into a system prompt.
+
+```typescript
+import { getMemoryContext } from "@signet/sdk/ai-sdk";
+
+const context = await getMemoryContext(signet, userMessage, {
+  limit: 5,
+  minScore: 0.3,
+});
+// Returns "" if no results, or "## Relevant Memories\n- ..." otherwise
+```
+
+
+OpenAI SDK Integration
+---
+
+`@signet/sdk/openai` provides tool definitions and a dispatcher
+compatible with OpenAI's function calling format.
+
+**`memoryToolDefinitions()`** — Returns an array of OpenAI-format tool
+definitions (`memory_search`, `memory_store`, `memory_modify`,
+`memory_forget`) ready for the `tools` parameter of
+`openai.chat.completions.create`.
+
+```typescript
+import { memoryToolDefinitions, executeMemoryTool } from "@signet/sdk/openai";
+
+const tools = memoryToolDefinitions();
+
+const response = await openai.chat.completions.create({
+  model: "gpt-4o",
+  tools,
+  messages,
+});
+```
+
+**`executeMemoryTool(client, toolName, args)`** — Dispatches a tool call
+to the corresponding `SignetClient` method. Pass the function name and
+parsed arguments from an OpenAI tool call response.
+
+```typescript
+for (const call of response.choices[0].message.tool_calls ?? []) {
+  const result = await executeMemoryTool(
+    signet,
+    call.function.name,
+    JSON.parse(call.function.arguments),
+  );
+}
+```
+
+
 Examples
 ---
 

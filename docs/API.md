@@ -120,6 +120,20 @@ composite health score derived from diagnostics.
 ```
 
 
+### GET /api/features
+
+Returns all runtime feature flags.
+
+**Response**
+
+```json
+{
+  "featureName": true,
+  "anotherFeature": false
+}
+```
+
+
 Auth
 ----
 
@@ -883,6 +897,13 @@ Check the configured embedding provider's availability. Results are cached for
 
 On failure, `available` is `false` and `error` contains a description.
 
+### GET /api/embeddings/health
+
+Returns embedding health metrics including coverage and staleness.
+
+**Response** — embedding health object with coverage percentage, stale
+count, and provider status.
+
 ### GET /api/embeddings/projection
 
 Returns a server-computed UMAP projection of all stored embeddings.
@@ -1363,11 +1384,38 @@ Delete a stored secret.
 
 Returns `404` if the secret does not exist.
 
+### POST /api/secrets/exec
+
+Execute a shell command with multiple secrets injected into the subprocess
+environment. Callers pass a map of env var names to secret names — never
+actual values. The daemon resolves and injects all values before spawning.
+
+**Request body**
+
+```json
+{
+  "command": "curl -H 'Authorization: Bearer $OPENAI_API_KEY' https://api.openai.com/v1/models",
+  "secrets": {
+    "OPENAI_API_KEY": "OPENAI_API_KEY",
+    "GITHUB_TOKEN": "GITHUB_TOKEN"
+  }
+}
+```
+
+Both `command` and `secrets` are required. The `secrets` map must contain at
+least one entry.
+
+**Response**
+
+```json
+{ "code": 0, "stdout": "...", "stderr": "" }
+```
+
 ### POST /api/secrets/:name/exec
 
-Execute a shell command with secrets injected into the subprocess environment.
-Callers pass references (env var name → secret name), never values. The daemon
-resolves and injects the actual values before spawning the subprocess.
+Legacy single-secret variant. Execute a shell command with a single secret
+injected into the subprocess environment. Prefer `/api/secrets/exec` for
+new integrations.
 
 **Request body**
 
@@ -1870,6 +1918,134 @@ embedded without calling the embedding provider.
 }
 ```
 
+### POST /api/repair/clean-orphans
+
+Remove embedding rows that reference memories which no longer exist.
+Rate-limited. Requires `admin` permission.
+
+**Response**
+
+```json
+{
+  "action": "cleanOrphanedEmbeddings",
+  "success": true,
+  "affected": 12,
+  "message": "cleaned 12 orphaned embeddings"
+}
+```
+
+### GET /api/repair/dedup-stats
+
+Returns statistics on potential duplicate memories (by content hash).
+Requires `admin` permission.
+
+**Response** — object with duplicate counts and affected memory IDs.
+
+### POST /api/repair/deduplicate
+
+Deduplicate memories by content hash and optionally by semantic similarity.
+Rate-limited. Requires `admin` permission.
+
+**Request body**
+
+```json
+{
+  "batchSize": 50,
+  "dryRun": false,
+  "semanticEnabled": false,
+  "semanticThreshold": 0.95
+}
+```
+
+All fields are optional. `dryRun: true` reports what would be deduplicated
+without making changes. `semanticEnabled` adds vector-similarity dedup on
+top of hash-based dedup.
+
+**Response**
+
+```json
+{
+  "action": "deduplicateMemories",
+  "success": true,
+  "affected": 7,
+  "message": "deduplicated 7 memories"
+}
+```
+
+
+Pipeline
+--------
+
+### GET /api/pipeline/status
+
+Composite pipeline status snapshot for dashboard visualization. Returns
+worker status, job queue counts (memory and summary), diagnostics, latency
+histograms, error summary, and the current pipeline mode.
+
+**Response**
+
+```json
+{
+  "workers": { ... },
+  "queues": {
+    "memory": { "pending": 3, "leased": 1, "completed": 200, "failed": 0, "dead": 0 },
+    "summary": { "pending": 0, "leased": 0, "completed": 5, "failed": 0, "dead": 0 }
+  },
+  "diagnostics": { ... },
+  "latency": { ... },
+  "errorSummary": { ... },
+  "mode": "controlled-write"
+}
+```
+
+Mode is one of: `disabled`, `frozen`, `shadow`, `controlled-write`.
+
+
+Checkpoints
+-----------
+
+Session checkpoints track continuity state at compaction boundaries.
+
+### GET /api/checkpoints
+
+List session checkpoints for a project.
+
+**Query parameters**
+
+| Parameter | Type   | Required | Description                          |
+|-----------|--------|----------|--------------------------------------|
+| `project` | string | yes      | Project path to filter by            |
+| `limit`   | integer | no      | Max results (default: 10, max: 100)  |
+
+**Response**
+
+```json
+{
+  "checkpoints": [
+    {
+      "session_key": "abc-123",
+      "project": "/path/to/project",
+      "trigger": "periodic",
+      "created_at": "2026-02-21T10:00:00.000Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### GET /api/checkpoints/:sessionKey
+
+Get all checkpoints for a specific session.
+
+**Response**
+
+```json
+{
+  "checkpoints": [ ... ],
+  "count": 3
+}
+```
+
 
 Analytics
 ---------
@@ -1944,6 +2120,139 @@ auditing data integrity.
   "errorSummary": { ... }
 }
 ```
+
+### GET /api/analytics/continuity
+
+Session continuity scores over time. Tracks how well memory injection
+maintains context across sessions.
+
+**Query parameters**
+
+| Parameter | Type    | Description                                    |
+|-----------|---------|------------------------------------------------|
+| `project` | string | Filter by project path (optional)              |
+| `limit`   | integer | Max scores to return (default: 50)             |
+
+**Response**
+
+```json
+{
+  "scores": [
+    {
+      "id": "uuid",
+      "session_key": "abc-123",
+      "project": "/path/to/project",
+      "harness": "claude-code",
+      "score": 0.85,
+      "memories_recalled": 12,
+      "memories_used": 8,
+      "novel_context_count": 3,
+      "reasoning": "...",
+      "created_at": "2026-02-21T10:00:00.000Z"
+    }
+  ],
+  "summary": {
+    "count": 50,
+    "average": 0.78,
+    "trend": 0.05,
+    "latest": 0.85
+  }
+}
+```
+
+### GET /api/analytics/continuity/latest
+
+Latest continuity score per project. Returns one row per project, ordered
+by most recent.
+
+**Response**
+
+```json
+{
+  "scores": [
+    { "project": "/path/to/project", "score": 0.85, "created_at": "2026-02-21T10:00:00.000Z" }
+  ]
+}
+```
+
+
+Telemetry
+---------
+
+Telemetry endpoints expose local-only event data collected by the daemon.
+No data is sent externally. If telemetry is disabled, endpoints return
+`enabled: false`.
+
+### GET /api/telemetry/events
+
+Query raw telemetry events.
+
+**Query parameters**
+
+| Parameter | Type    | Description                                    |
+|-----------|---------|------------------------------------------------|
+| `event`   | string  | Filter by event type (e.g., `llm.generate`)    |
+| `since`   | string  | ISO timestamp lower bound                      |
+| `until`   | string  | ISO timestamp upper bound                      |
+| `limit`   | integer | Max events (default: 100)                      |
+
+**Response**
+
+```json
+{
+  "events": [
+    {
+      "event": "llm.generate",
+      "properties": { "inputTokens": 500, "outputTokens": 200, "durationMs": 1200 },
+      "timestamp": "2026-02-21T10:00:00.000Z"
+    }
+  ],
+  "enabled": true
+}
+```
+
+### GET /api/telemetry/stats
+
+Aggregated telemetry statistics since daemon start or since a given timestamp.
+
+**Query parameters**
+
+| Parameter | Type   | Description                           |
+|-----------|--------|---------------------------------------|
+| `since`   | string | ISO timestamp lower bound (optional)  |
+
+**Response**
+
+```json
+{
+  "enabled": true,
+  "totalEvents": 500,
+  "llm": {
+    "calls": 120,
+    "errors": 2,
+    "totalInputTokens": 60000,
+    "totalOutputTokens": 24000,
+    "totalCost": 0.45,
+    "p50": 800,
+    "p95": 2400
+  },
+  "pipelineErrors": 3
+}
+```
+
+### GET /api/telemetry/export
+
+Export raw telemetry events as newline-delimited JSON (NDJSON).
+
+**Query parameters**
+
+| Parameter | Type    | Description                           |
+|-----------|---------|---------------------------------------|
+| `since`   | string  | ISO timestamp lower bound (optional)  |
+| `limit`   | integer | Max events (default: 10000)           |
+
+**Response** — `Content-Type: application/x-ndjson`. Each line is a
+JSON-serialized telemetry event. Returns `404` if telemetry is not enabled.
 
 
 Timeline
@@ -2114,6 +2423,27 @@ the task already has a running execution.
 ### GET /api/tasks/:id/runs
 
 Paginated run history. Supports `limit` and `offset` query parameters.
+
+### GET /api/tasks/:id/stream
+
+Server-Sent Events stream of live task output. Replays buffered output on
+connect, then streams new events in real time. Sends keepalive comments
+every 15 seconds.
+
+**Event types**
+
+| Type           | Description                              |
+|----------------|------------------------------------------|
+| `connected`    | Initial connection confirmation           |
+| `run-started`  | A run has begun (includes `runId`)        |
+| `run-output`   | Stdout or stderr chunk (`stream` field)   |
+| `run-completed`| Run finished (includes `exitCode`)        |
+
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+```
 
 
 Dashboard

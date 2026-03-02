@@ -51,7 +51,7 @@ state actually changes.
 Rust side (`src-tauri/src/`)
 -----------------------------
 
-Seven Tauri commands are registered:
+Eleven Tauri commands are registered:
 
 | Command | Description |
 |---------|-------------|
@@ -61,6 +61,10 @@ Seven Tauri commands are registered:
 | `get_daemon_pid` | Read the PID file |
 | `open_dashboard` | Open `http://localhost:3850` in the default browser |
 | `update_tray` | Apply a new `TrayState` to the icon and menu |
+| `quick_capture` | Open the quick-capture popup window |
+| `search_memories` | Open the memory search popup window |
+| `quit_capture_window` | Close the capture window |
+| `quit_search_window` | Close the search window |
 | `quit_app` | Exit the Tauri process |
 
 A `DaemonManager` platform trait abstracts start/stop/is_running.
@@ -101,26 +105,110 @@ All icons are 32×32 PNG.
 Build
 -----
 
+### Prerequisites
+
+- **Bun** — for building the TypeScript frontend
+- **Rust toolchain** (stable) — for compiling the Tauri backend
+- **System libraries** — Tauri v2 on Linux requires `webkit2gtk-4.1`,
+  `libayatana-appindicator3`, and related GTK/GLib dev packages. On
+  Arch: `webkit2gtk-4.1 libayatana-appindicator`. On Ubuntu/Debian:
+  `libwebkit2gtk-4.1-dev libappindicator3-dev`.
+
+### Build from source
+
 TypeScript is compiled with `bun build --target browser` (output to
-`src-tauri/`). Tauri is built separately with `cargo tauri build`,
-producing a self-contained `.AppImage` on Linux.
+`dist/`). Tauri reads from `dist/` as configured in `tauri.conf.json`.
+The Tauri build produces a self-contained `.AppImage` on Linux.
 
 The tray build is independent of the monorepo root `bun run build`.
 
 ```bash
-cd packages/tray/src-ts
-bun install && bun run build
-
 cd packages/tray
+
+# 1. Install TS dependencies
+bun install
+
+# 2. Build TypeScript frontend (runs automatically as beforeBuildCommand)
+bun run build:ts
+
+# 3. Build the Tauri app
 cargo tauri build
 ```
 
+The `build:ts` script compiles `src-ts/index.ts` with `--target browser
+--minify` and copies the HTML entry points (`index.html`,
+`capture.html`, `search.html`) into `dist/`.
 
-Deferred Features
+For development with hot-reload:
+
+```bash
+cd packages/tray
+cargo tauri dev
+```
+
+This runs `bun run build:ts` as a `beforeDevCommand` and starts the
+Tauri dev server.
+
+### Output
+
+| Platform | Output |
+|----------|--------|
+| Linux | `.AppImage` in `src-tauri/target/release/bundle/appimage/` |
+| macOS | `.dmg` / `.app` in `src-tauri/target/release/bundle/dmg/` |
+| Windows | `.msi` in `src-tauri/target/release/bundle/msi/` |
+
+
+Configuration
+-------------
+
+The tray app currently has no user-facing configuration file. It
+hardcodes `http://localhost:3850` as the daemon URL (matching the
+daemon's default). If you change the daemon port via `SIGNET_PORT`,
+the tray app will not detect it — this is a known limitation.
+
+The Tauri app metadata is defined in `src-tauri/tauri.conf.json`:
+
+- **identifier**: `ai.signet.tray`
+- **productName**: `Signet Tray`
+- **bundle targets**: all platforms enabled
+- **CSP**: allows `connect-src` to `http://localhost:*` for daemon API access
+
+
+Polling Architecture
+--------------------
+
+The TypeScript side runs four independent polling loops at staggered
+intervals:
+
+| Poller | Endpoint | Running interval | Stopped interval |
+|--------|----------|-----------------|-----------------|
+| Health | `/health` | 5s | 2s |
+| Memories | `/api/memories?limit=10` | 15s | — |
+| Diagnostics | `/api/diagnostics` | 30s | — |
+| Embeddings | `/api/embeddings/status` | 60s | — |
+
+Secondary pollers (memories, diagnostics, embeddings) only fire while
+the daemon is alive. When the daemon comes online, all secondary
+pollers kick off immediately. The tray icon and menu are only updated
+via `invoke("update_tray")` when the assembled state actually changes
+(JSON diff check).
+
+The `DaemonState` union carries rich data when running: version, PID,
+uptime, health score, memory counts, embedding provider/model/coverage,
+queue depth, ingestion rate (exponential moving average), and the 10
+most recent memories.
+
+
+Known Limitations
 -----------------
 
-The following are planned for future phases and are not yet implemented:
-
-- Autostart on login (systemd `Install` section / launchd / Windows registry)
-- Desktop notifications on state transitions
-- Full macOS and Windows `DaemonManager` implementations
+- **Hardcoded daemon URL** — the tray always connects to
+  `http://localhost:3850`. Custom ports via `SIGNET_PORT` are not
+  picked up.
+- **macOS and Windows stubs** — the `DaemonManager` trait only has a
+  full implementation for Linux. macOS has an autostart helper but the
+  start/stop commands are stubs. Windows is entirely unimplemented.
+- **No autostart** — the tray does not register itself to start on
+  login (planned).
+- **No desktop notifications** — state transitions are only reflected
+  in the tray icon/menu, not via OS notifications (planned).

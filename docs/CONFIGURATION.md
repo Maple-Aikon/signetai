@@ -78,9 +78,16 @@ memory:
     schedule: daily
     max_tokens: 4000
   pipelineV2:
-    enabled: false
+    enabled: true
     shadowMode: false
-    extractionModel: qwen3:4b
+    extraction:
+      provider: claude-code
+      model: haiku
+    graph:
+      enabled: true
+    autonomous:
+      enabled: true
+      maintenanceMode: execute
 
 hooks:
   sessionStart:
@@ -224,31 +231,35 @@ LLM-based fact extraction against incoming conversation text, then decides
 whether to write new memories, update existing ones, or skip. Config lives
 under `memory.pipelineV2` in `agent.yaml`.
 
-Pipeline V2 is disabled by default. Enable it explicitly:
+The config uses a nested structure with grouped sub-objects. Legacy flat
+keys (e.g. `extractionModel`, `workerPollMs`) are still supported for
+backward compatibility, but nested keys take precedence when both are
+present.
+
+Enable the pipeline:
 
 ```yaml
 memory:
   pipelineV2:
     enabled: true
     shadowMode: true        # extract without writing — safe first step
-    extractionModel: qwen3:4b
+    extraction:
+      provider: ollama
+      model: qwen3:4b
 ```
 
 
 ### Control flags
 
-These boolean fields gate major pipeline behaviors. All default to
-`false` unless noted.
+These top-level boolean fields gate major pipeline behaviors.
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `false` | Master switch. Pipeline does nothing when false. |
+| `enabled` | `true` | Master switch. Pipeline does nothing when false. |
 | `shadowMode` | `false` | Extract facts but skip writes. Useful for evaluation. |
 | `mutationsFrozen` | `false` | Allow reads; block all writes. Overrides `shadowMode`. |
-| `allowUpdateDelete` | `false` | Permit the pipeline to update or delete existing memories. |
-| `graphEnabled` | `false` | Build and query the knowledge graph during extraction. |
-| `autonomousEnabled` | `false` | Allow autonomous pipeline operations (maintenance, repair). |
-| `autonomousFrozen` | `false` | Block autonomous writes; autonomous reads still allowed. |
+| `semanticContradictionEnabled` | `false` | Enable LLM-based semantic contradiction detection for UPDATE/DELETE proposals. |
+| `telemetryEnabled` | `false` | Enable anonymous telemetry reporting. |
 
 The relationship between `shadowMode` and `mutationsFrozen` matters:
 `shadowMode` suppresses writes from the normal extraction path only;
@@ -256,100 +267,179 @@ The relationship between `shadowMode` and `mutationsFrozen` matters:
 including repairs and graph updates.
 
 
-### Extraction
+### Extraction (`extraction`)
 
-These fields control the Ollama-based extraction stage.
+Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `extractionModel` | `"qwen3:4b"` | — | Ollama model for fact extraction |
-| `extractionTimeout` | `45000` | 5000-300000 ms | Extraction call timeout |
-| `minFactConfidenceForWrite` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
+| `provider` | `"claude-code"` | — | `"ollama"`, `"claude-code"`, or `"opencode"` |
+| `model` | `"haiku"` | — | Model name for the configured provider |
+| `timeout` | `45000` | 5000-300000 ms | Extraction call timeout |
+| `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
 
-The extraction model must be available locally via Ollama. Lower
-`minFactConfidenceForWrite` to capture more facts at the cost of noise;
-raise it to write only high-confidence facts.
+When using `ollama`, the model must be available locally. When using
+`claude-code`, the Claude Code CLI must be on PATH. Lower `minConfidence`
+to capture more facts at the cost of noise; raise it to write only
+high-confidence facts.
 
 
-### Worker
+### Worker (`worker`)
 
 The pipeline processes jobs through a queue with lease-based concurrency
 control.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `workerPollMs` | `2000` | 100-60000 ms | How often the worker polls for pending jobs |
-| `workerMaxRetries` | `3` | 1-10 | Max retry attempts before a job goes to dead-letter |
+| `pollMs` | `2000` | 100-60000 ms | How often the worker polls for pending jobs |
+| `maxRetries` | `3` | 1-10 | Max retry attempts before a job goes to dead-letter |
 | `leaseTimeoutMs` | `300000` | 10000-600000 ms | Time before an uncompleted job lease expires |
 
-A job that exceeds `workerMaxRetries` moves to dead-letter status and is
+A job that exceeds `maxRetries` moves to dead-letter status and is
 eventually purged by the retention worker.
 
 
-### Knowledge Graph
+### Knowledge Graph (`graph`)
 
-When `graphEnabled: true`, the pipeline builds entity-relationship links
+When `graph.enabled: true`, the pipeline builds entity-relationship links
 from extracted facts and uses them to boost search relevance.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `graphBoostWeight` | `0.15` | 0.0-1.0 | Weight applied to graph-neighbor score boost |
-| `graphBoostTimeoutMs` | `500` | 50-5000 ms | Timeout for graph lookup during search |
+| `enabled` | `true` | — | Enable knowledge graph building and querying |
+| `boostWeight` | `0.15` | 0.0-1.0 | Weight applied to graph-neighbor score boost |
+| `boostTimeoutMs` | `500` | 50-5000 ms | Timeout for graph lookup during search |
 
 
-### Reranker
+### Reranker (`reranker`)
 
-An optional cross-encoder reranking pass that runs after initial
-retrieval. Disabled by default.
+An optional reranking pass that runs after initial retrieval. An
+embedding-based reranker is built in (uses cached vectors, no extra
+LLM calls). Custom cross-encoder providers can also be used.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Enable the reranking pass |
+| `model` | `""` | — | Model name for the reranker (empty uses embedding-based) |
+| `topN` | `20` | 1-100 | Number of candidates to pass to the reranker |
+| `timeoutMs` | `2000` | 100-30000 ms | Timeout for the reranking call |
+
+
+### Autonomous (`autonomous`)
+
+Controls autonomous maintenance, repair, and mutation behavior.
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `rerankerEnabled` | `false` | Enable the reranking pass |
-| `rerankerModel` | `""` | Model name for the reranker |
-| `rerankerTopN` | `20` | Number of candidates to pass to the reranker |
-| `rerankerTimeoutMs` | `2000` | Timeout for the reranking call (100-30000 ms) |
-
-
-### Maintenance
-
-The maintenance worker periodically inspects the database for anomalies
-and can trigger corrective actions.
-
-| Field | Default | Description |
-|-------|---------|-------------|
+| `enabled` | `true` | Allow autonomous pipeline operations (maintenance, repair). |
+| `frozen` | `false` | Block autonomous writes; autonomous reads still allowed. |
+| `allowUpdateDelete` | `true` | Permit the pipeline to update or delete existing memories. |
 | `maintenanceIntervalMs` | `1800000` | How often maintenance runs (30 min). Range: 60s-24h. |
-| `maintenanceMode` | `"observe"` | `"observe"` logs issues; `"execute"` attempts repairs. |
+| `maintenanceMode` | `"execute"` | `"observe"` logs issues; `"execute"` attempts repairs. |
 
 In `"observe"` mode the worker emits structured log events but makes no
-changes. Switch to `"execute"` only when `autonomousEnabled: true`.
+changes. When `frozen` is true, the maintenance interval never starts,
+though the worker's `tick()` method remains callable for on-demand
+inspection.
 
 
-### Repair budgets
+### Repair budgets (`repair`)
 
-Repair sub-workers limit how aggressively they re-embed or re-queue items
-to avoid overloading Ollama.
+Repair sub-workers limit how aggressively they re-embed, re-queue, or
+deduplicate items to avoid overloading providers.
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `repairReembedCooldownMs` | `300000` | Min time between re-embed batches (10s-1h) |
-| `repairReembedHourlyBudget` | `10` | Max re-embed operations per hour (1-1000) |
-| `repairRequeueCooldownMs` | `60000` | Min time between re-queue batches (5s-1h) |
-| `repairRequeueHourlyBudget` | `50` | Max re-queue operations per hour (1-1000) |
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `reembedCooldownMs` | `300000` | 10s-1h | Min time between re-embed batches |
+| `reembedHourlyBudget` | `10` | 1-1000 | Max re-embed operations per hour |
+| `requeueCooldownMs` | `60000` | 5s-1h | Min time between re-queue batches |
+| `requeueHourlyBudget` | `50` | 1-1000 | Max re-queue operations per hour |
+| `dedupCooldownMs` | `600000` | 10s-1h | Min time between dedup batches |
+| `dedupHourlyBudget` | `3` | 1-100 | Max dedup operations per hour |
+| `dedupSemanticThreshold` | `0.92` | 0.0-1.0 | Cosine similarity threshold for semantic dedup |
+| `dedupBatchSize` | `100` | 10-1000 | Max candidates evaluated per dedup batch |
 
 
-### Document ingest worker
+### Document ingest (`documents`)
 
 Controls chunking for ingesting large documents into the memory store.
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `documentWorkerIntervalMs` | `10000` | Poll interval for pending document jobs (1s-300s) |
-| `documentChunkSize` | `2000` | Target chunk size in characters (200-50000) |
-| `documentChunkOverlap` | `200` | Overlap between adjacent chunks (0-10000 chars) |
-| `documentMaxContentBytes` | `10485760` | Max document size accepted (1 KB - 100 MB) |
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `workerIntervalMs` | `10000` | 1s-300s | Poll interval for pending document jobs |
+| `chunkSize` | `2000` | 200-50000 | Target chunk size in characters |
+| `chunkOverlap` | `200` | 0-10000 | Overlap between adjacent chunks (chars) |
+| `maxContentBytes` | `10485760` | 1 KB-100 MB | Max document size accepted |
 
 Chunk overlap ensures context is not lost at chunk boundaries. A value of
-10-15% of `documentChunkSize` is a reasonable starting point.
+10-15% of `chunkSize` is a reasonable starting point.
+
+
+### Guardrails (`guardrails`)
+
+Content size limits applied during extraction and recall to prevent
+oversized content from degrading pipeline performance.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `maxContentChars` | `500` | 50-100000 | Max characters stored per memory |
+| `chunkTargetChars` | `300` | 50-50000 | Target chunk size for content splitting |
+| `recallTruncateChars` | `500` | 50-100000 | Max characters returned per memory in recall results |
+
+These limits are enforced at the pipeline level. Content exceeding
+`maxContentChars` is truncated before storage. Recall results are
+truncated at `recallTruncateChars` to keep session context budgets
+predictable.
+
+
+### Continuity (`continuity`)
+
+Session checkpoint configuration for continuity recovery. Checkpoints
+capture periodic snapshots of session state (focus, prompts, memory
+activity) to aid recovery after context compaction or session restart.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Master switch for session checkpoints |
+| `promptInterval` | `10` | 1-1000 | Prompts between periodic checkpoints |
+| `timeIntervalMs` | `900000` | 60s-1h | Time between periodic checkpoints (15 min default) |
+| `maxCheckpointsPerSession` | `50` | 1-500 | Per-session checkpoint cap (oldest pruned) |
+| `retentionDays` | `7` | 1-90 | Days before old checkpoints are hard-deleted |
+| `recoveryBudgetChars` | `2000` | 200-10000 | Max characters for recovery digest |
+
+Checkpoints are triggered by five events: `periodic`, `pre_compaction`,
+`session_end`, `agent`, and `explicit`. Secrets are redacted before
+storage.
+
+
+### Telemetry (`telemetry`)
+
+Anonymous usage telemetry. Only active when `telemetryEnabled: true`.
+Events are batched and flushed periodically.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `posthogHost` | `""` | — | PostHog instance URL (empty disables) |
+| `posthogApiKey` | `""` | — | PostHog project API key |
+| `flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
+| `flushBatchSize` | `50` | 1-500 | Max events per flush batch |
+| `retentionDays` | `90` | 1-365 | Days before local telemetry data is purged |
+
+
+### Embedding tracker (`embeddingTracker`)
+
+Background polling loop that detects stale or missing embeddings and
+refreshes them in small batches. Runs alongside the extraction pipeline.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Master switch |
+| `pollMs` | `5000` | 1s-60s | Polling interval between refresh cycles |
+| `batchSize` | `8` | 1-20 | Max embeddings refreshed per cycle |
+
+The tracker detects embeddings that are missing, have a stale content
+hash, or were produced by a different model than the currently configured
+one. It uses `setTimeout` chains for natural backpressure.
 
 
 Auth Config

@@ -455,7 +455,7 @@ Optional Reranking
 
 After baseline hybrid search returns a scored candidate list, an optional
 reranking pass can reorder the top-N entries using a cross-encoder or other
-scoring model. Reranking is disabled by default (`rerankerEnabled: false`).
+scoring model. Reranking is disabled by default (`reranker.enabled: false`).
 
 The `rerank` function accepts a query string, a mutable candidate list, a
 `RerankProvider` callback, and a `RerankConfig`. It slices the list at
@@ -470,51 +470,288 @@ implement the `RerankProvider` signature
 `(query, candidates, cfg) => Promise<RerankCandidate[]>` and can call any
 scoring backend.
 
+### Embedding-Based Reranker
+
+An embedding-based reranker implementation is provided in
+`reranker-embedding.ts`. It re-scores candidates using full-content cosine
+similarity against the query embedding vector. Cached embeddings from the
+database are used when available, avoiding extra provider calls in most
+cases.
+
+The factory function `createEmbeddingReranker` takes a `DbAccessor` and
+a pre-computed `queryVector` (Float32Array) and returns a `RerankProvider`.
+For each candidate with a cached embedding, the score is blended:
+`0.7 × original_score + 0.3 × cosine_similarity`. Candidates without a
+cached embedding keep their original score. Results are sorted by blended
+score descending. This reranker is fast (no LLM call), deterministic, and
+catches cases where BM25 candidates were not vector-compared at all.
+
+
+Semantic Contradiction Detection
+---
+
+The pipeline includes two layers of contradiction detection for UPDATE and
+DELETE proposals.
+
+**Syntactic detection** (in `worker.ts`) is the fast path. It tokenizes
+both the fact content and the target memory's content, checks for lexical
+overlap of at least two tokens, then looks for either a negation-polarity
+difference (one has a negation token, the other doesn't) or an antonym
+pair conflict (enabled/disabled, allow/deny, etc.).
+
+**Semantic detection** (in `contradiction.ts`) is the slow path. It uses
+an LLM to catch semantic contradictions like "uses PostgreSQL" vs
+"migrated to MongoDB". It is only called for update proposals with lexical
+overlap >= 3 tokens where syntactic detection returned false. The LLM is
+prompted to return a JSON object with `contradicts` (boolean), `confidence`
+(0–1), and `reasoning` (string).
+
+Semantic contradiction detection is gated by `semanticContradictionEnabled`
+(default `false`). When enabled, the LLM call uses a 15-second timeout.
+On timeout or parse failure, the result defaults to "no contradiction" —
+the check is advisory and never blocks a proposal.
+
+
+URL Fetcher
+---
+
+The document ingest pipeline fetches web content through `url-fetcher.ts`.
+The fetcher provides timeout and size guards, and strips HTML to plain text
+for downstream chunking and embedding.
+
+`fetchUrlContent(url, opts?)` accepts a URL and optional `FetchOptions`
+(`timeoutMs` default 30,000 ms, `maxBytes` default 10 MB). It performs
+a pre-flight size check from the `Content-Length` header, then stream-reads
+the response body with a running byte counter. If total bytes exceed
+`maxBytes` during streaming, the fetch is aborted.
+
+Supported content types: `text/html`, `text/*`, `application/json`,
+`application/xml`. Binary and unsupported types are rejected with an
+error. For HTML responses, `<script>` and `<style>` blocks are stripped
+entirely, remaining tags are removed, common HTML entities are decoded,
+and the page title is extracted from the first `<title>` tag. The result
+includes `content`, `contentType`, optional `title`, and `byteLength`.
+
+
+Embedding Tracker
+---
+
+The embedding tracker (`packages/daemon/src/embedding-tracker.ts`) is a
+background polling loop that detects stale or missing embeddings and
+refreshes them in small batches. It is separate from the extraction
+pipeline and runs alongside it.
+
+Each cycle:
+
+1. **Provider health check** — calls the embedding provider's health
+   endpoint (uses existing 30-second cache). If the provider is
+   unavailable, the cycle is skipped and `skippedCycles` is incremented.
+
+2. **Stale detection query** — a read-only query finds memories where:
+   - No embedding row exists (missing)
+   - The embedding's `content_hash` differs from the memory's (stale)
+   - The memory's `embedding_model` differs from the configured model
+     (model switch)
+   Results are ordered by `updated_at DESC` and capped at `batchSize`.
+
+3. **Sequential embedding fetch** — each stale row's content is embedded
+   one at a time, outside any transaction. Failed fetches increment the
+   `failed` counter without aborting the cycle.
+
+4. **Batch write** — all successful embeddings are upserted in a single
+   `withWriteTx` call. For each result: stale embeddings are deleted by
+   source (except the new hash), the new embedding row is upserted on
+   `content_hash` conflict, the `vec_embeddings` virtual table is synced,
+   and `embedding_model` is updated on the memory row.
+
+The tracker uses `setTimeout` chains for natural backpressure. It
+exposes a `getStats()` method returning `{ running, processed, failed,
+skippedCycles, lastCycleAt, queueDepth }`.
+
+Configuration lives under `embeddingTracker` in the pipeline config:
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Master switch |
+| `pollMs` | `5000` | 1000–60000 ms | Polling interval between cycles |
+| `batchSize` | `8` | 1–20 | Max embeddings refreshed per cycle |
+
+
+Session Checkpoints
+---
+
+Session checkpoints (`packages/daemon/src/session-checkpoints.ts`) capture
+periodic snapshots of session state for continuity recovery. They store
+a digest of the session's current focus, prompt count, memory queries,
+and recent remembers.
+
+Checkpoints are triggered by five event types:
+
+- `periodic` — fired on a timer or prompt-count interval
+- `pre_compaction` — fired when the harness signals context compaction
+- `session_end` — fired when a session closes
+- `agent` — fired by agent-initiated events
+- `explicit` — fired by manual API calls
+
+Each checkpoint row stores `session_key`, `harness`, `project`,
+`project_normalized`, `trigger`, `digest`, `prompt_count`,
+`memory_queries` (JSON array), and `recent_remembers` (JSON array).
+Secrets are redacted before storage using pattern-based scrubbing
+(Bearer tokens, API keys, base64 credential blobs, env variable values).
+
+A buffered flush queue (`queueCheckpointWrite`) debounces writes at
+2,500 ms intervals. If two triggers fire within the flush window for
+the same session, queries and remembers are merged (union with caps:
+20 queries, 10 remembers) and prompt counts are summed.
+
+Per-session caps are enforced: when checkpoint count exceeds
+`maxCheckpointsPerSession`, the oldest rows are deleted.
+
+Digest formatters produce structured markdown for each trigger type:
+
+- `formatPeriodicDigest` — project, prompt count, duration, recent
+  prompts, memory activity
+- `formatPreCompactionDigest` — same plus optional session context
+- `formatSessionEndDigest` — same with total prompt count
+
+Pruning is strict: `pruneCheckpoints(db, retentionDays)` hard-deletes
+all checkpoints older than the retention window.
+
+Configuration lives under `continuity` in the pipeline config:
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Master switch |
+| `promptInterval` | `10` | 1–1000 | Prompts between periodic checkpoints |
+| `timeIntervalMs` | `900000` | 60s–1h | Time between periodic checkpoints (15 min) |
+| `maxCheckpointsPerSession` | `50` | 1–500 | Per-session cap |
+| `retentionDays` | `7` | 1–90 | Days before old checkpoints are pruned |
+| `recoveryBudgetChars` | `2000` | 200–10000 | Max characters for recovery digest |
+
+
+Continuity Scoring
+---
+
+At session end, the summary worker scores how effectively injected
+memories were used during the session. The scoring flow:
+
+1. **Load injected memories** — queries `session_memories` joined with
+   `memories` for the session, filtered to `was_injected = 1`, ordered
+   by `rank ASC`.
+
+2. **LLM evaluation** — the injected memories and session transcript are
+   sent to the LLM, which returns a JSON object with `score` (0–1),
+   `confidence` (0–1), `memories_used` (count), `novel_context_count`,
+   `reasoning`, and `per_memory` (array of `{ id, relevance }`).
+
+3. **Per-memory relevance** — each entry in `per_memory` uses an 8-char
+   prefix of the memory ID. The prefix is resolved to the full UUID via
+   a map built from the injected memories. The `relevance_score` column
+   on `session_memories` is updated for each matched memory.
+
+4. **Score persistence** — the overall score, confidence, memory counts,
+   reasoning, and continuity reasoning are written to `session_scores`.
+   The `memories_recalled` field uses the actual injected count (not zero).
+
+The scoring handles edge cases gracefully: markdown fences and `<think>`
+blocks are stripped from LLM output, missing optional fields default to
+zero/empty, out-of-range scores are clamped to [0, 1], and sessions
+without `session_memories` data still get a valid score row.
+
 
 Configuration Reference
 ---
 
 All pipeline config lives under `memory.pipelineV2` in `agent.yaml` (or
-`AGENT.yaml` / `config.yaml`). The full set of keys with their defaults:
+`AGENT.yaml` / `config.yaml`). The config uses a nested structure with
+grouped sub-objects. Legacy flat keys are also supported for backward
+compatibility (nested keys take precedence).
+
+### Top-level flags
 
 ```
-enabled                     false
-shadowMode                  false
-allowUpdateDelete           false
-graphEnabled                false
-autonomousEnabled           false
-mutationsFrozen             false
-autonomousFrozen            false
-
-extractionModel             "qwen3:4b"
-extractionTimeout           45000   (ms, range 5000–300000)
-
-workerPollMs                2000    (ms, range 100–60000)
-workerMaxRetries            3       (range 1–10)
-leaseTimeoutMs              300000  (ms, range 10000–600000)
-
-minFactConfidenceForWrite   0.7     (fraction 0.0–1.0)
-
-graphBoostWeight            0.15    (fraction 0.0–1.0)
-graphBoostTimeoutMs         500     (ms, range 50–5000)
-
-rerankerEnabled             false
-rerankerModel               ""
-rerankerTopN                20      (range 1–100)
-rerankerTimeoutMs           2000    (ms, range 100–30000)
-
-maintenanceIntervalMs       1800000 (30 min, range 60000–86400000)
-maintenanceMode             "observe"  ("observe" | "execute")
-repairReembedCooldownMs     300000  (ms, range 10000–3600000)
-repairReembedHourlyBudget   10      (range 1–1000)
-repairRequeueCooldownMs     60000   (ms, range 5000–3600000)
-repairRequeueHourlyBudget   50      (range 1–1000)
-
-documentWorkerIntervalMs    10000   (ms, range 1000–300000)
-documentChunkSize           2000    (chars, range 200–50000)
-documentChunkOverlap        200     (chars, range 0–10000)
-documentMaxContentBytes     10485760 (10 MB, range 1024–104857600)
+enabled                         true
+shadowMode                      false
+mutationsFrozen                 false
+semanticContradictionEnabled    false
+telemetryEnabled                false
 ```
+
+### Nested sub-objects and defaults
+
+```yaml
+extraction:
+  provider: claude-code          # "ollama" | "claude-code" | "opencode"
+  model: haiku
+  timeout: 45000                 # ms, range 5000–300000
+  minConfidence: 0.7             # fraction 0.0–1.0
+
+worker:
+  pollMs: 2000                   # ms, range 100–60000
+  maxRetries: 3                  # range 1–10
+  leaseTimeoutMs: 300000         # ms, range 10000–600000
+
+graph:
+  enabled: true
+  boostWeight: 0.15              # fraction 0.0–1.0
+  boostTimeoutMs: 500            # ms, range 50–5000
+
+reranker:
+  enabled: true
+  model: ""
+  topN: 20                       # range 1–100
+  timeoutMs: 2000                # ms, range 100–30000
+
+autonomous:
+  enabled: true
+  frozen: false
+  allowUpdateDelete: true
+  maintenanceIntervalMs: 1800000 # 30 min, range 60s–24h
+  maintenanceMode: execute       # "observe" | "execute"
+
+repair:
+  reembedCooldownMs: 300000      # 5 min, range 10s–1h
+  reembedHourlyBudget: 10        # range 1–1000
+  requeueCooldownMs: 60000       # 1 min, range 5s–1h
+  requeueHourlyBudget: 50        # range 1–1000
+  dedupCooldownMs: 600000        # 10 min, range 10s–1h
+  dedupHourlyBudget: 3           # range 1–100
+  dedupSemanticThreshold: 0.92   # fraction 0.0–1.0
+  dedupBatchSize: 100            # range 10–1000
+
+documents:
+  workerIntervalMs: 10000        # ms, range 1s–300s
+  chunkSize: 2000                # chars, range 200–50000
+  chunkOverlap: 200              # chars, range 0–10000
+  maxContentBytes: 10485760      # 10 MB, range 1 KB–100 MB
+
+guardrails:
+  maxContentChars: 500           # range 50–100000
+  chunkTargetChars: 300          # range 50–50000
+  recallTruncateChars: 500       # range 50–100000
+
+continuity:
+  enabled: true
+  promptInterval: 10             # range 1–1000
+  timeIntervalMs: 900000         # 15 min, range 60s–1h
+  maxCheckpointsPerSession: 50   # range 1–500
+  retentionDays: 7               # range 1–90
+  recoveryBudgetChars: 2000      # range 200–10000
+
+telemetry:
+  posthogHost: ""
+  posthogApiKey: ""
+  flushIntervalMs: 60000         # ms, range 5s–10min
+  flushBatchSize: 50             # range 1–500
+  retentionDays: 90              # range 1–365
+
+embeddingTracker:
+  enabled: true
+  pollMs: 5000                   # ms, range 1s–60s
+  batchSize: 8                   # range 1–20
+```
+
+### Example configurations
 
 A minimal configuration to enable the pipeline in shadow mode:
 
@@ -531,8 +768,10 @@ To enable controlled writes with graph support:
 memory:
   pipelineV2:
     enabled: true
-    graphEnabled: true
-    minFactConfidenceForWrite: 0.75
+    graph:
+      enabled: true
+    extraction:
+      minConfidence: 0.75
 ```
 
 To enable autonomous maintenance in execute mode:
@@ -541,6 +780,30 @@ To enable autonomous maintenance in execute mode:
 memory:
   pipelineV2:
     enabled: true
-    autonomousEnabled: true
-    maintenanceMode: execute
+    autonomous:
+      enabled: true
+      maintenanceMode: execute
+```
+
+Full production configuration:
+
+```yaml
+memory:
+  pipelineV2:
+    enabled: true
+    semanticContradictionEnabled: true
+    extraction:
+      provider: ollama
+      model: qwen3:4b
+    graph:
+      enabled: true
+    autonomous:
+      enabled: true
+      maintenanceMode: execute
+    continuity:
+      enabled: true
+      promptInterval: 10
+    embeddingTracker:
+      enabled: true
+      pollMs: 5000
 ```

@@ -28,19 +28,48 @@ Both systems can be active simultaneously — they serve different purposes and
 don't conflict.
 
 
-Available Tools
----------------
+When to Use MCP vs Hooks
+------------------------
 
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `memory_search` | Hybrid vector + keyword search | `query` (required), `limit`, `type`, `min_score` |
-| `memory_store` | Save a new memory | `content` (required), `type`, `importance`, `tags` |
-| `memory_get` | Retrieve a memory by ID | `id` (required) |
-| `memory_list` | List memories with filters | `limit`, `offset`, `type` |
-| `memory_modify` | Edit an existing memory | `id` (required), `reason` (required), `content`, `type`, `importance`, `tags` |
-| `memory_forget` | Soft-delete a memory | `id` (required), `reason` (required) |
+| Scenario | Use |
+|----------|-----|
+| Session start/end lifecycle | Hooks |
+| Automatic memory extraction after each prompt | Hooks |
+| Agent wants to search memories mid-conversation | MCP (`memory_search`) |
+| Agent wants to store a specific fact | MCP (`memory_store`) |
+| Agent needs to run a command with secrets | MCP (`secret_exec`) |
+| Compaction boundary handling | Hooks |
+| Agent-initiated memory edits or deletions | MCP (`memory_modify`, `memory_forget`) |
 
-### Example: memory_search
+**Rule of thumb:** hooks are for automatic, lifecycle-driven events. MCP is
+for agent-initiated, on-demand operations.
+
+
+Tool Reference
+--------------
+
+All tools are defined in `packages/daemon/src/mcp/tools.ts`. Tool handlers
+call the daemon's HTTP API internally — they don't duplicate business logic.
+
+### memory_search
+
+Hybrid vector + keyword search over stored memories. Returns results ranked
+by combined BM25 + vector similarity score with optional graph boost and
+reranking.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | yes | Search query text |
+| `limit` | number | no | Max results to return (default 10) |
+| `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
+| `min_score` | number | no | Minimum relevance score threshold |
+
+**Returns:** Array of memory objects with content, type, importance, tags,
+and relevance score.
+
+**Example:**
 
 ```json
 {
@@ -50,10 +79,25 @@ Available Tools
 }
 ```
 
-Returns matching memories ranked by hybrid score (BM25 + vector similarity
-with optional graph boost and reranking).
+**Daemon endpoint:** `POST /api/memory/recall`
 
-### Example: memory_store
+### memory_store
+
+Save a new memory to the database. Tags are prepended in `[tag1,tag2]: `
+format before being sent to the daemon.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `content` | string | yes | Memory content to save |
+| `type` | string | no | Memory type (`fact`, `preference`, `decision`, etc.) |
+| `importance` | number | no | Importance score 0–1 |
+| `tags` | string | no | Comma-separated tags for categorization |
+
+**Returns:** The created memory object with its assigned ID.
+
+**Example:**
 
 ```json
 {
@@ -61,6 +105,184 @@ with optional graph boost and reranking).
   "importance": 0.8,
   "tags": "preference,tooling"
 }
+```
+
+**Daemon endpoint:** `POST /api/memory/remember`
+
+### memory_get
+
+Retrieve a single memory by its ID.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | yes | Memory ID to retrieve |
+
+**Returns:** Full memory object including content, type, importance, tags,
+created/updated timestamps, and version history.
+
+**Example:**
+
+```json
+{
+  "id": "a1b2c3d4-..."
+}
+```
+
+**Daemon endpoint:** `GET /api/memory/:id`
+
+### memory_list
+
+List memories with optional pagination and type filtering.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `limit` | number | no | Max results (default 100) |
+| `offset` | number | no | Pagination offset |
+| `type` | string | no | Filter by memory type |
+
+**Returns:** Array of memory objects.
+
+**Example:**
+
+```json
+{
+  "limit": 20,
+  "offset": 0,
+  "type": "decision"
+}
+```
+
+**Daemon endpoint:** `GET /api/memories`
+
+### memory_modify
+
+Edit an existing memory. Requires a reason for the edit (used for version
+history tracking).
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | yes | Memory ID to modify |
+| `reason` | string | yes | Why this edit is being made |
+| `content` | string | no | New content |
+| `type` | string | no | New type |
+| `importance` | number | no | New importance |
+| `tags` | string | no | New tags (comma-separated) |
+
+**Returns:** Updated memory object.
+
+**Example:**
+
+```json
+{
+  "id": "a1b2c3d4-...",
+  "content": "User prefers Bun for all JS projects",
+  "reason": "Updated to reflect broader preference"
+}
+```
+
+**Daemon endpoint:** `PATCH /api/memory/:id`
+
+### memory_forget
+
+Soft-delete a memory. The memory is not physically removed — it's marked
+as forgotten with a reason for auditability.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | yes | Memory ID to forget |
+| `reason` | string | yes | Why this memory should be forgotten |
+
+**Returns:** Confirmation of deletion.
+
+**Example:**
+
+```json
+{
+  "id": "a1b2c3d4-...",
+  "reason": "User corrected this preference"
+}
+```
+
+**Daemon endpoint:** `DELETE /api/memory/:id`
+
+### secret_list
+
+List available secret names. Returns names only — raw secret values are
+never exposed to agents.
+
+**Parameters:** None.
+
+**Returns:** Object with a `secrets` array of string names.
+
+**Example:**
+
+```json
+{}
+```
+
+**Daemon endpoint:** `GET /api/secrets`
+
+### secret_exec
+
+Run a shell command with secrets injected as environment variables. Output
+is automatically redacted — secret values never appear in results.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `command` | string | yes | Shell command to execute |
+| `secrets` | object | yes | Map of env var name to secret name (at least one entry required) |
+
+**Returns:** Object with `stdout`, `stderr`, and `code` (exit code).
+Secret values in output are replaced with `[REDACTED]`.
+
+**Example:**
+
+```json
+{
+  "command": "curl -H \"Authorization: Bearer $OPENAI_API_KEY\" https://api.openai.com/v1/models",
+  "secrets": {
+    "OPENAI_API_KEY": "OPENAI_API_KEY"
+  }
+}
+```
+
+**Daemon endpoint:** `POST /api/secrets/exec` (30s timeout)
+
+
+Discovery Protocol
+------------------
+
+AI harnesses discover Signet's MCP server in one of two ways:
+
+### Automatic (via `signet install`)
+
+The connector for each harness registers the MCP server in the harness's
+configuration file during installation. No manual steps needed.
+
+### Manual discovery
+
+1. The daemon must be running (`signet start`)
+2. The MCP server is available at:
+   - **Streamable HTTP:** `http://localhost:3850/mcp`
+   - **stdio:** spawn the `signet-mcp` binary as a subprocess
+3. The daemon port can be overridden via `SIGNET_PORT` (default: 3850)
+4. The daemon host can be overridden via `SIGNET_HOST` (default: localhost)
+
+Clients can verify the server is reachable with the MCP `initialize`
+handshake:
+
+```bash
+echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"1.0"},"capabilities":{}},"id":1}' | signet-mcp
 ```
 
 
@@ -167,6 +389,23 @@ MCP connections inherit the daemon's auth model:
   bridge runs locally and connects to the daemon with the same auth context.
 - **hybrid**: Localhost requests (including MCP) are trusted; remote
   requests require a token.
+
+
+Internals
+---------
+
+The MCP tool handlers use a shared `daemonFetch` helper that sends HTTP
+requests to the daemon API with these headers:
+
+- `x-signet-runtime-path: plugin` — identifies this as a plugin-path request
+- `x-signet-actor: mcp-server` — identifies the calling actor
+- `x-signet-actor-type: harness` — actor type classification
+
+The default request timeout is 10 seconds, except for `secret_exec` which
+uses 30 seconds to allow for longer-running commands.
+
+Errors are returned as MCP error results with `isError: true` and a
+human-readable message.
 
 
 Roadmap

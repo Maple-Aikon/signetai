@@ -141,3 +141,107 @@ are designed to be idempotent — safe to install multiple times. Follow
 that pattern.
 
 Be transparent about AI assistance in PRs where applicable.
+
+Conventional Commits and Versioning
+---
+
+Commit types drive automated version bumps:
+
+- `feat:` or `feat(scope):` → **minor** version bump (user-facing features only)
+- `fix:`, `refactor:`, `chore:`, `perf:`, `docs:`, etc. → **patch** bump
+- `BREAKING CHANGE:` in subject or `!` after type (e.g. `feat!:`) → **major** bump
+
+Use `feat:` only for genuinely new user-facing functionality. Internal
+improvements, helpers, and plumbing should use `fix:`, `refactor:`,
+`chore:`, or `perf:` to avoid unnecessary minor bumps.
+
+Release Workflow
+---
+
+Releases are fully automated via GitHub Actions (`.github/workflows/release.yml`).
+**Do not publish packages manually.** Push to `main` and CI handles the rest.
+
+### What triggers a release
+
+Every push to `main` triggers the workflow, **unless** the commit message
+contains `chore: release` (prevents infinite loops from release commits)
+or the push only changes non-code files (markdown, images, etc.).
+
+### Automated steps
+
+1. **Build** — `bun install && bun run build` on all packages
+2. **Version bump** — Reads the current version from `packages/signetai/package.json`,
+   compares with remote, computes bump level from commit messages, and increments
+   accordingly. All `package.json` files (except `packages/cli/dashboard/package.json`)
+   are updated to the new version.
+3. **Changelog** — `bun scripts/changelog.ts` generates a new entry in `CHANGELOG.md`
+   from conventional commit subjects since the last tag.
+4. **npm publish** — Publishes `signetai` and `@signetai/signet-memory-openclaw`
+   to npm with the `next` tag, then promotes to `latest` (unless it's a major bump).
+5. **Commit and tag** — Commits the version bump and changelog as `chore: release <version>`,
+   creates a `v<version>` git tag, and pushes both.
+6. **GitHub Release** — Creates a GitHub release with the changelog section as notes.
+
+### Published packages
+
+- `signetai` (meta-package bundling CLI + daemon)
+- `@signetai/signet-memory-openclaw` (OpenClaw runtime adapter)
+
+### Adding a new package to the publish step
+
+Append an additional `cd ../path && npm publish --tag next --access public`
+line to the "Publish to npm" step in `.github/workflows/release.yml`, and
+add a corresponding `npm dist-tag add` in the "Promote to latest" step.
+
+Scripts
+---
+
+All scripts live in `scripts/` and are written in TypeScript (run via
+`bun`) or bash.
+
+| Script | Description |
+|--------|-------------|
+| `changelog.ts` | Generates a CHANGELOG.md entry from conventional commits since the last git tag. Groups commits by type (`feat`, `fix`, `perf`, `refactor`, `docs`). Also writes a `.bump-level` file used by CI to determine the semver bump. Called automatically during the release workflow. |
+| `bump-level.ts` | Exports `computeBumpLevel()` — scans commit subjects for `BREAKING CHANGE:` (→ major), `feat:` (→ minor), or defaults to patch. Used by `changelog.ts`. |
+| `version-sync.ts` | Aligns the `version` field in all workspace `package.json` files to match the reference version in `packages/signetai/package.json`. Run manually with `bun run version:sync` or pass `--to <version>` to set an explicit version. |
+| `extract-changelog-section.ts` | Extracts a single version's section from CHANGELOG.md. Used by CI to populate GitHub release notes. |
+| `check-install-guide.ts` | Validates that the install guide (`web/public/skill.md`), README, and landing page components contain the expected install prompt and don't reference deprecated commands. |
+| `post-push-sync.sh` | Watches for the release workflow to complete after a push to `main`, then pulls the resulting release commit locally. Useful for staying in sync after pushing. |
+
+To run any script manually:
+
+```bash
+bun scripts/changelog.ts
+bun scripts/version-sync.ts --to 1.2.3
+bun scripts/extract-changelog-section.ts 0.14.5
+bun scripts/check-install-guide.ts
+./scripts/post-push-sync.sh
+```
+
+Test Discovery
+---
+
+Test discovery is configured in `bunfig.toml`:
+
+```toml
+[test]
+root = "packages"
+```
+
+This scopes `bun test` to only discover test files under `packages/`.
+The `references/` directory (which contains third-party codebases like
+OpenClaw for local development reference) is explicitly excluded to
+prevent foreign test files from running.
+
+To run tests for a specific package:
+
+```bash
+# Run all tests in a package
+bun test packages/daemon/
+
+# Run a single test file
+bun test packages/daemon/src/pipeline/worker.test.ts
+
+# Run all tests across all packages
+bun test
+```

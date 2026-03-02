@@ -49,6 +49,21 @@ implements `install`, `uninstall`, `isInstalled`, and `getConfigPath`.
 `@signet/sdk` is the embedding library for third-party apps that want
 to call the daemon API without shelling out to the CLI.
 
+`@signet/opencode-plugin` is the runtime plugin for OpenCode. It
+provides memory tools and session lifecycle hooks that call the daemon
+API during OpenCode sessions.
+
+`@signetai/signet-memory-openclaw` is the runtime adapter for OpenClaw.
+It bridges OpenClaw's plugin interface to the daemon API for memory
+operations during conversations.
+
+`@signet/tray` is the system tray application. It provides a native
+desktop UI for daemon status, quick actions, and notifications.
+
+`predictor` is the predictive memory scorer sidecar, written in Rust.
+It implements autograd, checkpointing, and data loading for real-time
+preference scoring. (WIP)
+
 ---
 
 End-to-End Data Flow
@@ -691,30 +706,93 @@ All endpoints are served by the Hono server on port 3850.
 |----------|--------|------|-------------|
 | `/health` | GET | none | Uptime, pid, version |
 | `/api/status` | GET | none | Full daemon status |
+| `/api/features` | GET | none | Feature flags |
 | `/api/config` | GET | local | List config files |
 | `/api/config` | POST | local | Save a config file |
 | `/api/identity` | GET | local | Agent identity |
+| `/api/auth/whoami` | GET | none | Current auth identity |
+| `/api/auth/token` | POST | admin | Issue auth token |
 | `/api/memories` | GET | recall | List with pagination |
 | `/api/memory/remember` | POST | remember | Save a memory, enqueue extraction |
 | `/api/memory/recall` | POST | recall | Hybrid search |
+| `/api/memory/forget` | POST | forget | Batch forget memories |
+| `/api/memory/modify` | POST | modify | Modify a memory |
+| `/api/memory/search` | GET | recall | Search memories |
+| `/api/memory/:id` | GET | recall | Get a memory |
+| `/api/memory/:id` | PATCH | modify | Update a memory |
+| `/api/memory/:id` | DELETE | forget | Delete a memory |
+| `/api/memory/:id/history` | GET | recall | Memory version history |
+| `/api/memory/:id/recover` | POST | recover | Recover a deleted memory |
 | `/memory/search` | GET | recall | Legacy keyword search |
 | `/memory/similar` | GET | recall | Vector similarity search |
 | `/api/embeddings` | GET | recall | Export embeddings |
+| `/api/embeddings/status` | GET | recall | Embedding provider status |
+| `/api/embeddings/health` | GET | recall | Embedding health metrics |
 | `/api/embeddings/projection` | GET | recall | UMAP 2D/3D projection |
 | `/api/hooks/session-start` | POST | remember | Inject context into session |
 | `/api/hooks/user-prompt-submit` | POST | recall | Per-prompt context load |
 | `/api/hooks/session-end` | POST | remember | Extract session memories |
 | `/api/hooks/remember` | POST | remember | Save a memory via hook |
 | `/api/hooks/recall` | POST | recall | Search via hook |
+| `/api/hooks/pre-compaction` | POST | remember | Pre-compaction instructions |
+| `/api/hooks/compaction-complete` | POST | remember | Save compaction summary |
+| `/api/hooks/synthesis/*` | GET/POST | local | MEMORY.md synthesis |
 | `/api/harnesses` | GET | local | List configured harnesses |
 | `/api/harnesses/regenerate` | POST | local | Regenerate harness configs |
 | `/api/skills` | GET | local | List installed skills |
 | `/api/secrets` | GET | admin | List secret names |
-| `/api/analytics` | GET | analytics | Usage counters and latency |
-| `/api/diagnostics` | GET | diagnostics | Health report |
-| `/api/repair` | POST | operator | Trigger repair action |
-| `/api/connectors` | GET/POST | connectors | List or register connectors |
+| `/api/secrets/exec` | POST | admin | Execute with multiple secrets |
+| `/api/secrets/:name/exec` | POST | admin | Execute with single secret (legacy) |
 | `/api/documents` | GET/POST | documents | List or enqueue documents |
+| `/api/documents/:id` | GET/DELETE | documents | Get or delete a document |
+| `/api/documents/:id/chunks` | GET | documents | Get document chunks |
+| `/api/connectors` | GET/POST | connectors | List or register connectors |
+| `/api/connectors/:id` | GET/DELETE | connectors | Get or delete a connector |
+| `/api/connectors/:id/sync` | POST | connectors | Trigger incremental sync |
+| `/api/connectors/:id/sync/full` | POST | connectors | Trigger full re-sync |
+| `/api/connectors/:id/health` | GET | connectors | Connector health |
+| `/api/diagnostics` | GET | diagnostics | Full health report |
+| `/api/diagnostics/:domain` | GET | diagnostics | Per-domain health score |
+| `/api/pipeline/status` | GET | diagnostics | Pipeline status snapshot |
+| `/api/repair/requeue-dead` | POST | operator | Requeue dead-letter jobs |
+| `/api/repair/release-leases` | POST | operator | Release stale job leases |
+| `/api/repair/check-fts` | POST | operator | Check/repair FTS consistency |
+| `/api/repair/retention-sweep` | POST | operator | Trigger retention sweep |
+| `/api/repair/embedding-gaps` | GET | operator | Count unembedded memories |
+| `/api/repair/re-embed` | POST | operator | Batch re-embed missing vectors |
+| `/api/repair/clean-orphans` | POST | operator | Remove orphaned embeddings |
+| `/api/repair/dedup-stats` | GET | operator | Deduplication statistics |
+| `/api/repair/deduplicate` | POST | operator | Deduplicate memories |
+| `/api/checkpoints` | GET | recall | Session checkpoints by project |
+| `/api/checkpoints/:sessionKey` | GET | recall | Session checkpoints by session |
+| `/api/analytics/usage` | GET | analytics | Usage counters |
+| `/api/analytics/errors` | GET | analytics | Recent error events |
+| `/api/analytics/latency` | GET | analytics | Latency histograms |
+| `/api/analytics/logs` | GET | analytics | Structured log entries |
+| `/api/analytics/memory-safety` | GET | analytics | Mutation diagnostics |
+| `/api/analytics/continuity` | GET | analytics | Continuity scores over time |
+| `/api/analytics/continuity/latest` | GET | analytics | Latest score per project |
+| `/api/telemetry/events` | GET | analytics | Query telemetry events |
+| `/api/telemetry/stats` | GET | analytics | Aggregated telemetry stats |
+| `/api/telemetry/export` | GET | analytics | Export telemetry as NDJSON |
+| `/api/timeline/:id` | GET | analytics | Entity event timeline |
+| `/api/timeline/:id/export` | GET | analytics | Export timeline with metadata |
+| `/api/git/status` | GET | local | Git sync status |
+| `/api/git/pull` | POST | local | Pull from remote |
+| `/api/git/push` | POST | local | Push to remote |
+| `/api/git/sync` | POST | local | Pull then push |
+| `/api/git/config` | GET/POST | local | Git sync configuration |
+| `/api/update/check` | GET | local | Check for updates |
+| `/api/update/config` | GET/POST | local | Update configuration |
+| `/api/update/run` | POST | local | Apply pending update |
+| `/api/tasks` | GET/POST | local | List/create scheduled tasks |
+| `/api/tasks/:id` | GET/PATCH/DELETE | local | Get/update/delete task |
+| `/api/tasks/:id/run` | POST | local | Trigger immediate run |
+| `/api/tasks/:id/runs` | GET | local | Paginated run history |
+| `/api/tasks/:id/stream` | GET | local | SSE stream of task output |
+| `/api/logs` | GET | local | Daemon log access |
+| `/api/logs/stream` | GET | local | SSE log streaming |
+| `/mcp` | ALL | none | MCP server (Streamable HTTP) |
 | `/*` | GET | none | Dashboard static files |
 
 ---
@@ -739,6 +817,12 @@ packages/daemon/src/
     repair-actions.ts         Policy-gated repair functions
     session-tracker.ts        Plugin vs legacy runtime mutex
     memory-config.ts          PipelineV2Config type and defaults
+    embedding-tracker.ts      Incremental embedding refresh tracker
+    embedding-health.ts       Embedding health metrics
+    session-checkpoints.ts    Session checkpoint persistence
+    continuity-state.ts       Continuity state for compaction boundaries
+    telemetry.ts              Local telemetry event collection
+    feature-flags.ts          Runtime feature flags
 
     auth/
         types.ts              AuthMode, TokenRole, Permission
