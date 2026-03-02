@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.21.0] - 2026-03-02
+
+### Features
+
+- **dashboard**: add section-level dirty indicators in settings
+
+### Performance
+
+- **dashboard**: lazy load EmbeddingCanvas3D and defer graph init
+
+
 ## [0.20.2] - 2026-03-02
 
 ### Features
