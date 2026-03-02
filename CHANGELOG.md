@@ -2,6 +2,21 @@
 
 All notable changes to Signet are documented here.
 
+## [0.20.1] - 2026-03-02
+
+### Refactoring
+
+- **dashboard**: add loading indicator during search debounce
+
+
+## [0.20.0] - 2026-03-02
+
+### Bug Fixes
+
+- **dashboard**: add keyboard navigation and delete confirmation for memory cards
+- **hooks**: sanitize per-prompt recall query context
+
+
 ## [0.19.0] - 2026-03-02
 
 ### Features
