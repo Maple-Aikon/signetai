@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.15.0] - 2026-03-02
+
+### Bug Fixes
+
+- **daemon**: use Homebrew SQLite on macOS for extension loading
+
+
 ## [0.14.5] - 2026-03-01
 
 ### Features
