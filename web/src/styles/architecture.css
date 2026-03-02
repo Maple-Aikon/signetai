@@ -1,0 +1,440 @@
+/* ==========================================================================
+   ARCHITECTURE PAGE
+   ========================================================================== */
+
+.arch-page {
+	padding-top: 56px;
+}
+
+/* ==========================================================================
+   ARCH HERO
+   ========================================================================== */
+.arch-hero {
+	padding: var(--space-3xl) 0 var(--space-2xl);
+	text-align: center;
+}
+
+.arch-hero-title {
+	font-size: clamp(2rem, 4vw, 3.2rem);
+	line-height: 1.08;
+	letter-spacing: 0.01em;
+	margin-bottom: var(--space-lg);
+}
+
+.arch-hero-desc {
+	font-size: 0.9375rem;
+	line-height: 1.75;
+	color: var(--color-text);
+	max-width: 640px;
+	margin: 0 auto;
+}
+
+/* ==========================================================================
+   ARCH OVERVIEW — STEP FLOW
+   ========================================================================== */
+.arch-steps {
+	display: grid;
+	grid-template-columns: repeat(5, 1fr);
+	gap: 0;
+	position: relative;
+}
+
+.arch-step {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+	padding: 0 var(--space-md);
+	position: relative;
+}
+
+.arch-step:not(:last-child)::after {
+	content: ">";
+	position: absolute;
+	right: -4px;
+	top: 20px;
+	font-family: var(--font-mono);
+	font-size: 1.25rem;
+	color: var(--color-text-muted);
+}
+
+.arch-step-num {
+	width: 40px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--color-border-strong);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--color-text-bright);
+	margin-bottom: var(--space-md);
+}
+
+.arch-step-label {
+	font-family: var(--font-display);
+	font-size: 0.8125rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--color-text-bright);
+	margin-bottom: 8px;
+}
+
+.arch-step-desc {
+	font-size: 0.75rem;
+	color: var(--color-text-muted);
+	line-height: 1.6;
+}
+
+/* ==========================================================================
+   ARCH DATA FLOW
+   ========================================================================== */
+.arch-flows {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: var(--space-xl);
+}
+
+.arch-flow {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border-strong);
+	padding: var(--space-lg);
+	position: relative;
+}
+
+.arch-flow::before,
+.arch-flow::after {
+	content: "";
+	position: absolute;
+	width: 6px;
+	height: 6px;
+	border-color: var(--color-text-muted);
+	border-style: solid;
+}
+.arch-flow::before {
+	top: -1px;
+	left: -1px;
+	border-width: 1px 0 0 1px;
+}
+.arch-flow::after {
+	bottom: -1px;
+	right: -1px;
+	border-width: 0 1px 1px 0;
+}
+
+.arch-flow-title {
+	font-family: var(--font-display);
+	font-size: 0.8125rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--color-text-bright);
+	margin-bottom: var(--space-lg);
+	padding-bottom: var(--space-sm);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.arch-flow-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
+.arch-flow-step {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.6;
+	color: var(--color-text);
+	padding: 10px 0 10px 20px;
+	position: relative;
+	border-left: 1px solid var(--color-border-strong);
+	margin-left: 6px;
+}
+
+.arch-flow-step::before {
+	content: "";
+	position: absolute;
+	left: -4px;
+	top: 15px;
+	width: 7px;
+	height: 7px;
+	border: 1px solid var(--color-text-muted);
+	background: var(--color-surface);
+}
+
+.arch-flow-step:last-child {
+	border-left-color: transparent;
+}
+
+.arch-flow-step code {
+	color: var(--color-text-bright);
+	font-size: inherit;
+}
+
+/* ==========================================================================
+   ARCH PIPELINE — STAGE CARDS
+   ========================================================================== */
+.arch-stage-grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: var(--space-lg);
+}
+
+.arch-stage-card {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border-strong);
+	padding: var(--space-lg);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-sm);
+	transition: border-color var(--dur) var(--ease);
+}
+
+.arch-stage-card:hover {
+	border-color: var(--color-text-muted);
+}
+
+.arch-stage-num {
+	font-family: var(--font-mono);
+	font-size: 0.625rem;
+	letter-spacing: 0.1em;
+	color: var(--color-text-muted);
+	text-transform: uppercase;
+}
+
+.arch-stage-title {
+	font-family: var(--font-display);
+	font-size: 0.875rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--color-text-bright);
+}
+
+.arch-stage-desc {
+	font-size: 0.8125rem;
+	line-height: 1.7;
+	color: var(--color-text);
+}
+
+/* ==========================================================================
+   ARCH PLATFORMS
+   ========================================================================== */
+.arch-platform-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: var(--space-lg);
+}
+
+.arch-platform-card {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border-strong);
+	padding: var(--space-lg);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-sm);
+	transition: border-color var(--dur) var(--ease);
+}
+
+.arch-platform-card:hover {
+	border-color: var(--color-text-muted);
+}
+
+.arch-platform-name {
+	font-family: var(--font-display);
+	font-size: 0.875rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--color-text-bright);
+}
+
+.arch-platform-desc {
+	font-size: 0.8125rem;
+	line-height: 1.7;
+	color: var(--color-text);
+}
+
+.arch-platform-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px 6px;
+	border: 1px solid var(--color-border-strong);
+	font-size: 0.5625rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--color-text-muted);
+	width: fit-content;
+}
+
+.arch-harness-insight {
+	margin-top: var(--space-xl);
+	padding: var(--space-lg);
+	border: 1px solid var(--color-border);
+	background: var(--color-surface);
+	font-size: 0.875rem;
+	line-height: 1.7;
+	color: var(--color-text);
+}
+
+.arch-harness-insight strong {
+	color: var(--color-text-bright);
+	font-weight: 600;
+}
+
+/* ==========================================================================
+   ARCH IDENTITY
+   ========================================================================== */
+.arch-identity-intro {
+	font-size: 0.9375rem;
+	line-height: 1.75;
+	color: var(--color-text);
+	max-width: 720px;
+	margin-bottom: var(--space-xl);
+}
+
+.arch-identity-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: var(--space-lg);
+}
+
+.arch-identity-item {
+	padding: var(--space-lg);
+	border: 1px solid var(--color-border-strong);
+	background: var(--color-surface);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-sm);
+}
+
+.arch-identity-label {
+	font-family: var(--font-display);
+	font-size: 0.8125rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--color-text-bright);
+}
+
+.arch-identity-desc {
+	font-size: 0.8125rem;
+	line-height: 1.7;
+	color: var(--color-text);
+}
+
+.arch-identity-coda {
+	margin-top: var(--space-xl);
+	padding: var(--space-lg);
+	border-left: 2px solid var(--color-text-muted);
+	font-family: var(--font-display);
+	font-size: 1rem;
+	letter-spacing: 0.04em;
+	color: var(--color-text-bright);
+	line-height: 1.6;
+}
+
+/* ==========================================================================
+   ARCH CTA
+   ========================================================================== */
+.arch-cta-grid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: var(--space-lg);
+}
+
+.arch-cta-card {
+	text-decoration: none;
+	border: 1px solid var(--color-border-strong);
+	background: var(--color-surface);
+	padding: var(--space-lg);
+	min-height: 160px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.arch-cta-card:hover {
+	border-color: var(--color-text-muted);
+	background: var(--color-surface-raised);
+}
+
+.arch-cta-card h3 {
+	font-size: 0.875rem;
+	letter-spacing: 0.08em;
+	line-height: 1.2;
+	color: var(--color-text-bright);
+}
+
+.arch-cta-card p {
+	font-size: 0.8125rem;
+	line-height: 1.7;
+	color: var(--color-text);
+}
+
+.arch-cta-arrow {
+	margin-top: auto;
+	font-size: 0.6875rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--color-accent);
+}
+
+/* ==========================================================================
+   RESPONSIVE
+   ========================================================================== */
+@media (max-width: 1080px) {
+	.arch-stage-grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (max-width: 900px) {
+	.arch-steps {
+		grid-template-columns: 1fr;
+		gap: var(--space-lg);
+	}
+	.arch-step {
+		flex-direction: row;
+		text-align: left;
+		gap: var(--space-md);
+		padding: 0;
+	}
+	.arch-step:not(:last-child)::after {
+		display: none;
+	}
+	.arch-step-num {
+		flex-shrink: 0;
+		margin-bottom: 0;
+	}
+
+	.arch-flows {
+		grid-template-columns: 1fr;
+	}
+
+	.arch-platform-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.arch-identity-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.arch-cta-grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (max-width: 720px) {
+	.arch-hero {
+		padding: var(--space-2xl) 0 var(--space-xl);
+	}
+
+	.arch-stage-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.arch-cta-grid {
+		grid-template-columns: 1fr;
+	}
+}

@@ -19,4 +19,17 @@ const testimonials = defineCollection({
   }),
 });
 
-export const collections = { docs, testimonials };
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.mdx', base: './src/content/blog' }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    date: z.coerce.date(),
+    author: z.string().default('Nicholai'),
+    tags: z.array(z.string()).default([]),
+    image: z.string().optional(),
+    draft: z.boolean().default(false),
+  }),
+});
+
+export const collections = { docs, testimonials, blog };

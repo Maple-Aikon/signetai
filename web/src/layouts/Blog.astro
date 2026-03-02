@@ -1,0 +1,94 @@
+---
+import Base from './Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/blog.css';
+import '../styles/docs.css';
+
+interface Props {
+  title: string;
+  description?: string;
+  date: Date;
+  author: string;
+  tags?: string[];
+  image?: string;
+  previousPost?: {
+    title: string;
+    url: string;
+  };
+  nextPost?: {
+    title: string;
+    url: string;
+  };
+}
+
+const {
+  title,
+  description,
+  date,
+  author,
+  tags = [],
+  image,
+  previousPost,
+  nextPost,
+} = Astro.props;
+
+const formattedDate = date.toLocaleDateString('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+});
+---
+
+<Base title={`${title} — SignetAI Blog`} description={description} image={image} type="article">
+  <Nav />
+
+  <div class="blog-shell">
+    <main class="blog-main">
+      <header class="blog-article-header">
+        <p class="blog-kicker">
+          <a href="/blog">Blog</a>
+        </p>
+        <h1>{title}</h1>
+        <div class="blog-meta">
+          <time datetime={date.toISOString().slice(0, 10)}>{formattedDate}</time>
+          <span class="blog-meta-separator">/</span>
+          <span>{author}</span>
+        </div>
+        {description ? <p class="blog-description">{description}</p> : null}
+        {tags.length > 0 ? (
+          <div class="blog-tags">
+            {tags.map((tag) => (
+              <span class="blog-tag">{tag}</span>
+            ))}
+          </div>
+        ) : null}
+      </header>
+
+      <article class="prose">
+        <slot />
+      </article>
+
+      {(previousPost || nextPost) ? (
+        <nav class="blog-pager" aria-label="Post navigation">
+          {previousPost ? (
+            <a class="blog-pager-link" href={previousPost.url} rel="prev">
+              <span class="blog-pager-label">Previous</span>
+              <span class="blog-pager-title">{previousPost.title}</span>
+            </a>
+          ) : <span class="blog-pager-spacer"></span>}
+
+          {nextPost ? (
+            <a class="blog-pager-link" href={nextPost.url} rel="next">
+              <span class="blog-pager-label">Next</span>
+              <span class="blog-pager-title">{nextPost.title}</span>
+            </a>
+          ) : <span class="blog-pager-spacer"></span>}
+        </nav>
+      ) : null}
+
+    </main>
+  </div>
+
+  <Footer />
+</Base>

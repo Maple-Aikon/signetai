@@ -21,6 +21,7 @@ function stripHtml(html: string): string {
 export async function GET(context: APIContext) {
   const site = context.site?.toString().replace(/\/$/, '') ?? 'https://www.signetai.sh';
   const docs = await getCollection('docs');
+  const blog = await getCollection('blog');
 
   const sorted = [...docs]
     .filter((doc) => doc.data.title)
@@ -49,6 +50,29 @@ export async function GET(context: APIContext) {
       sections.push(`URL: ${site}/docs/${slug}/`);
       sections.push('');
       sections.push(doc.body);
+      sections.push('');
+      sections.push('---');
+      sections.push('');
+    }
+  }
+
+  const blogPosts = [...blog]
+    .filter((post) => !post.data.draft)
+    .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+
+  if (blogPosts.length > 0) {
+    sections.push('# Blog');
+    sections.push('');
+
+    for (const post of blogPosts) {
+      sections.push(`## ${post.data.title}`);
+      sections.push(`URL: ${site}/blog/${post.id}/`);
+      sections.push(`Date: ${post.data.date.toISOString().slice(0, 10)}`);
+      sections.push(`Author: ${post.data.author}`);
+      sections.push('');
+      if (post.body) {
+        sections.push(post.body);
+      }
       sections.push('');
       sections.push('---');
       sections.push('');

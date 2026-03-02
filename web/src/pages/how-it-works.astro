@@ -1,0 +1,46 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import StructuredData from '../components/StructuredData.astro';
+import ArchHero from '../components/architecture/ArchHero.astro';
+import ArchOverview from '../components/architecture/ArchOverview.astro';
+import ArchDataFlow from '../components/architecture/ArchDataFlow.astro';
+import ArchPipeline from '../components/architecture/ArchPipeline.astro';
+import ArchHarnesses from '../components/architecture/ArchHarnesses.astro';
+import ArchIdentity from '../components/architecture/ArchIdentity.astro';
+import ArchCta from '../components/architecture/ArchCta.astro';
+import '../styles/architecture.css';
+
+const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://www.signetai.sh';
+---
+
+<Base
+  title="How Signet Works — SignetAI"
+  description="Architecture overview of Signet: local-first memory pipeline, platform connectors, decentralized identity, and encrypted sync for AI agents."
+>
+  <Nav />
+  <main class="arch-page">
+    <ArchHero />
+    <ArchOverview />
+    <ArchDataFlow />
+    <ArchPipeline />
+    <ArchHarnesses />
+    <ArchIdentity />
+    <ArchCta />
+  </main>
+  <Footer />
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'TechArticle',
+    headline: 'How Signet Works',
+    description: 'Architecture overview of Signet: local-first memory pipeline, platform connectors, and decentralized identity for AI agents.',
+    url: `${siteUrl}/how-it-works`,
+    publisher: {
+      '@type': 'Organization',
+      name: 'SignetAI',
+      url: siteUrl,
+    },
+  }} />
+  <script src="../scripts/interactions.ts"></script>
+</Base>

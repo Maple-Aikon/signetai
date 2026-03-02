@@ -1,0 +1,73 @@
+---
+import { getCollection, render } from 'astro:content';
+import Blog from '../../layouts/Blog.astro';
+import StructuredData from '../../components/StructuredData.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts
+    .filter((post) => !post.data.draft)
+    .map((post) => ({
+      params: { slug: post.id },
+      props: { post },
+    }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+
+// Build chronological neighbors for prev/next
+const allPosts = (await getCollection('blog'))
+  .filter((p) => !p.data.draft)
+  .sort((a, b) => a.data.date.getTime() - b.data.date.getTime());
+
+const currentIndex = allPosts.findIndex((p) => p.id === post.id);
+const previousPost = currentIndex > 0
+  ? { title: allPosts[currentIndex - 1].data.title, url: `/blog/${allPosts[currentIndex - 1].id}/` }
+  : undefined;
+const nextPost = currentIndex < allPosts.length - 1
+  ? { title: allPosts[currentIndex + 1].data.title, url: `/blog/${allPosts[currentIndex + 1].id}/` }
+  : undefined;
+
+const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://www.signetai.sh';
+const pageUrl = `${siteUrl}/blog/${post.id}/`;
+---
+
+<Blog
+  title={post.data.title}
+  description={post.data.description}
+  date={post.data.date}
+  author={post.data.author}
+  tags={post.data.tags}
+  image={post.data.image}
+  previousPost={previousPost}
+  nextPost={nextPost}
+>
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'TechArticle',
+    headline: post.data.title,
+    description: post.data.description,
+    datePublished: post.data.date.toISOString().slice(0, 10),
+    author: {
+      '@type': 'Person',
+      name: post.data.author,
+    },
+    url: pageUrl,
+    publisher: {
+      '@type': 'Organization',
+      name: 'SignetAI',
+      url: siteUrl,
+    },
+  }} />
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: siteUrl },
+      { '@type': 'ListItem', position: 2, name: 'Blog', item: `${siteUrl}/blog/` },
+      { '@type': 'ListItem', position: 3, name: post.data.title, item: pageUrl },
+    ],
+  }} />
+  <Content />
+</Blog>

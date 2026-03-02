@@ -44,8 +44,9 @@ function getFileMtime(docId: string): Date {
 
 export async function GET(context: APIContext) {
   const docs = await getCollection('docs');
+  const blog = await getCollection('blog');
 
-  const items = docs
+  const docItems = docs
     .filter((doc) => doc.data.title && doc.id !== 'readme')
     .map((doc) => {
       const slug = doc.id.replace(/\.md$/, '').toLowerCase();
@@ -57,8 +58,21 @@ export async function GET(context: APIContext) {
       };
     });
 
+  const blogItems = blog
+    .filter((post) => !post.data.draft)
+    .map((post) => ({
+      title: post.data.title,
+      description: post.data.description,
+      link: `/blog/${post.id}/`,
+      pubDate: post.data.date,
+    }));
+
+  const items = [...docItems, ...blogItems].sort(
+    (a, b) => (b.pubDate?.getTime() ?? 0) - (a.pubDate?.getTime() ?? 0),
+  );
+
   return rss({
-    title: 'SignetAI Documentation',
+    title: 'SignetAI',
     description:
       'Signet is local-first agent infrastructure. Portable memory, encrypted secrets, and identity that lives on your machine.',
     site: context.site?.toString() ?? 'https://www.signetai.sh',

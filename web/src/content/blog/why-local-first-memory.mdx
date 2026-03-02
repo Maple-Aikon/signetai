@@ -1,0 +1,57 @@
+---
+title: "Why Local-First Memory Matters"
+description: "Your agent's memories shouldn't live on someone else's server. Here's why Signet chose local-first architecture and what it means for you."
+date: 2026-02-25
+author: "Nicholai"
+tags: ["architecture", "local-first", "privacy", "memory"]
+---
+
+Every major AI platform today stores your conversations, preferences, and customizations on their servers. They'll tell you it's for your convenience. What they won't tell you is that it's also for theirs — and that you can't take any of it with you when you leave.
+
+Signet takes a different approach. Your agent's memory lives on your machine. Period.
+
+## The Problem with Cloud Memory
+
+When your AI memories live in the cloud, you're trusting a third party with some of the most intimate details of how you think and work. Your coding patterns, your business logic, your communication style, your API keys — all sitting on infrastructure you don't control.
+
+And when that platform decides to change their pricing, their terms, or their entire product direction? Your memories go with them. You start over. Again.
+
+This isn't hypothetical. We've watched it happen. Platforms deprecate features, sunset products, and lock customizations behind premium tiers. The data you generated — the context that makes your agent *yours* — becomes leverage against you.
+
+## SQLite is the Source of Truth
+
+In Signet, a SQLite database on your machine is the source of truth for everything. Your memories, your agent's identity, its skills — all stored locally in a format you can inspect, back up, and version control.
+
+Markdown files like `AGENTS.md` and `MEMORY.md` are generated *outputs* from that database. The daemon watches for changes and regenerates harness-specific configs for whatever platforms you use — Claude Code, OpenCode, Cursor, whatever comes next. The database is canonical. Everything else is a view.
+
+This means you can open your agent's memory in any SQLite browser and see exactly what it knows. No mystery. No black box. No "we process your data to improve our services" buried in a terms of service update.
+
+## No Telemetry, No Cloud Dependency
+
+Signet runs entirely on your machine. The daemon is a local process. Search is local (hybrid vector + keyword, powered by SQLite FTS5). Embeddings can run through a local model. There's no phone-home, no analytics beacon, no "anonymous usage data" collection.
+
+This isn't just a privacy stance — it's a reliability stance. Your agent works offline. It works on an airplane. It works when the API provider is having an outage. It works when you're on a spotty hotel connection. Your agent's memory doesn't depend on someone else's uptime.
+
+## Portable Across Platforms
+
+Because the database is local and the format is open, you're never locked in. Signet connectors generate platform-specific configs from the same source of truth. Switch from Claude Code to Cursor? Your agent comes with you. Try out a new coding assistant? Signet adapts.
+
+This is what "portable identity" actually means. Not "export your data as a JSON blob and hope the next platform can parse it." Actual, live synchronization across every tool you use, powered by a daemon that watches your local database and keeps everything in sync.
+
+## Fast, Private, Verifiable
+
+Local-first isn't just about philosophy. It's practical.
+
+**Fast** — SQLite queries are sub-millisecond. No network round trip. No API rate limit. Your agent's recall is as fast as your disk.
+
+**Private** — Your memories never leave your machine unless you explicitly set up git sync to your own remote. Even then, it's your repo, your server, your encryption.
+
+**Verifiable** — You can read every memory your agent has stored. You can see its reasoning, its confidence scores, its decision to keep or discard a piece of information. Full observability into the pipeline that shapes your agent's understanding of you.
+
+## The Path Forward
+
+We believe the future of AI agents is local-first, user-owned, and platform-agnostic. Not because it's the easiest path — cloud is always easier to ship — but because it's the right one.
+
+Your agent should be yours. Your memories should be yours. Your identity should be yours.
+
+That's what we're building.

@@ -296,6 +296,23 @@ section {
 	color: var(--color-text-muted);
 	letter-spacing: 0.1em;
 }
+.footer-nav {
+	display: flex;
+	align-items: center;
+	gap: var(--space-lg);
+	margin-bottom: var(--space-md);
+}
+.footer-nav a {
+	font-family: var(--font-mono);
+	font-size: 0.6875rem;
+	color: var(--color-text-muted);
+	text-decoration: none;
+	letter-spacing: 0.06em;
+	transition: color var(--dur) var(--ease);
+}
+.footer-nav a:hover {
+	color: var(--color-text-bright);
+}
 .footer-links {
 	display: flex;
 	align-items: center;

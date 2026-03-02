@@ -1,0 +1,49 @@
+---
+const steps = [
+  {
+    num: 1,
+    label: 'Configure',
+    desc: '~/.agents/agent.yaml — plain YAML you can read and edit by hand.',
+  },
+  {
+    num: 2,
+    label: 'Remember',
+    desc: 'signet remember — auto-embedding into local SQLite, no cloud required.',
+  },
+  {
+    num: 3,
+    label: 'Recall',
+    desc: 'Semantic + keyword search, ranked by importance and recency.',
+  },
+  {
+    num: 4,
+    label: 'Sync',
+    desc: 'Daemon regenerates platform configs — CLAUDE.md, .cursorrules, etc.',
+  },
+  {
+    num: 5,
+    label: 'Carry',
+    desc: 'New machine? signet init --import. Fully restored in seconds.',
+  },
+];
+---
+
+<section id="overview" class="container" style="border-top: 1px solid var(--color-border)">
+  <div class="section-header reveal">
+    <div class="crosshair"></div>
+    <span class="section-label">Overview</span>
+    <span class="section-index">01 / 06</span>
+  </div>
+
+  <div class="arch-steps reveal">
+    {steps.map((step) => (
+      <div class="arch-step">
+        <div class="arch-step-num">{step.num}</div>
+        <div>
+          <div class="arch-step-label">{step.label}</div>
+          <div class="arch-step-desc">{step.desc}</div>
+        </div>
+      </div>
+    ))}
+  </div>
+</section>
