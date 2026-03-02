@@ -26,6 +26,9 @@ interface Props {
 
 let { memories }: Props = $props();
 
+// Delete confirmation state - tracks which memory is pending delete confirmation
+let deleteConfirmId = $state<string | null>(null);
+
 let rawDisplay = $derived(
 	mem.similarSourceId
 		? mem.similarResults
@@ -286,12 +289,49 @@ function formatIsoDate(value: string): string {
 				{@const tags = parseMemoryTags(memory.tags)}
 				{@const scoreLabel = memoryScoreLabel(memory)}
 
-				<article class="doc-card relative flex flex-col
-					gap-1.5 p-3 border border-[var(--sig-border-strong)]
-					border-t-2 border-t-[var(--sig-text-muted)]
-					bg-[var(--sig-surface)] overflow-hidden
-					transition-colors duration-150
-					hover:border-[var(--sig-text-muted)]">
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+			<article
+				class="doc-card relative flex flex-col
+				gap-1.5 p-3 border border-[var(--sig-border-strong)]
+				border-t-2 border-t-[var(--sig-text-muted)]
+				bg-[var(--sig-surface)] overflow-hidden
+				transition-colors duration-150
+				hover:border-[var(--sig-text-muted)]"
+				tabindex="0"
+				aria-label="Memory from {memory.who || 'unknown'}: {memory.content.slice(0, 80)}{memory.content.length > 80 ? '...' : ''}"
+				onkeydown={(e) => {
+					if (!memory.id) return;
+					// Enter or Space: Edit memory (or confirm delete if pending)
+					if (e.key === 'Enter' || e.key === ' ') {
+						e.preventDefault();
+						if (deleteConfirmId === memory.id) {
+							openEditForm(memory.id, "delete");
+							deleteConfirmId = null;
+						} else {
+							openEditForm(memory.id, "edit");
+						}
+					}
+					// Escape: Cancel pending delete confirmation
+					if (e.key === 'Escape' && deleteConfirmId === memory.id) {
+						e.preventDefault();
+						deleteConfirmId = null;
+					}
+					// Delete or Backspace: Show delete confirmation (or confirm if already pending)
+					if (e.key === 'Delete' || e.key === 'Backspace') {
+						e.preventDefault();
+						if (deleteConfirmId === memory.id) {
+							openEditForm(memory.id, "delete");
+							deleteConfirmId = null;
+						} else {
+							deleteConfirmId = memory.id;
+						}
+					}
+					// 's' key: Find similar
+					if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
+						e.preventDefault();
+						findSimilar(memory.id, memory);
+					}
+				}}>
 
 					<header class="flex justify-between items-start gap-1.5">
 						<div class="flex items-center flex-wrap gap-1">
@@ -337,11 +377,25 @@ function formatIsoDate(value: string): string {
 							onclick={() => openEditForm(memory.id, "edit")}
 							title="Edit memory"
 						>edit</button>
-						<button
-							class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-red-400 transition-colors duration-100 bg-transparent"
-							onclick={() => openEditForm(memory.id, "delete")}
-							title="Delete memory"
-						>delete</button>
+						{#if deleteConfirmId === memory.id}
+							<!-- Inline delete confirmation -->
+							<button
+								class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-red-500 text-red-400 cursor-pointer hover:bg-red-500 hover:text-white transition-colors duration-100 bg-transparent"
+								onclick={() => { openEditForm(memory.id, "delete"); deleteConfirmId = null; }}
+								title="Confirm delete"
+							>confirm</button>
+							<button
+								class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-text-bright)] transition-colors duration-100 bg-transparent"
+								onclick={() => deleteConfirmId = null}
+								title="Cancel delete"
+							>cancel</button>
+						{:else}
+							<button
+								class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-red-400 transition-colors duration-100 bg-transparent"
+								onclick={() => deleteConfirmId = memory.id}
+								title="Delete memory"
+							>delete</button>
+						{/if}
 						<button
 							class="ml-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
 							onclick={() => findSimilar(memory.id, memory)}
@@ -400,7 +454,20 @@ function formatIsoDate(value: string): string {
 	}
 
 	.doc-card:hover::before,
-	.doc-card:hover::after {
+	.doc-card:hover::after,
+	.doc-card:focus::before,
+	.doc-card:focus::after {
 		border-color: var(--sig-text-muted);
+	}
+
+	.doc-card:focus {
+		border-color: var(--sig-text-muted);
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 2px;
+	}
+
+	/* Remove outline when clicking (mouse users) but keep for keyboard */
+	.doc-card:focus:not(:focus-visible) {
+		outline: none;
 	}
 </style>
