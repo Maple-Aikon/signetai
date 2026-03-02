@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.20.1] - 2026-03-02
+
+### Refactoring
+
+- **dashboard**: add loading indicator during search debounce
+
+
 ## [0.20.0] - 2026-03-02
 
 ### Bug Fixes
