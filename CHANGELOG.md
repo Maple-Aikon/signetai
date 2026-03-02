@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.19.0] - 2026-03-02
+
+### Features
+
+- **web**: two-column blog layout with sticky TOC rail
+- **web**: improve blog readability, navigation, and add hero images
+
+
 ## [0.18.0] - 2026-03-02
 
 ### Features
