@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.30.0] - 2026-03-03
+
+### Features
+
+- **extension**: add browser extension for Chrome and Firefox
+
+
 ## [0.29.0] - 2026-03-03
 
 ### Features
