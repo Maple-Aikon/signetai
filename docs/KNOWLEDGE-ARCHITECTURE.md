@@ -185,65 +185,6 @@ coherent — not a flat bag of facts.
 The floor is better. The ceiling is higher.
 
 
-How the Pipeline Builds This
------------------------------
-
-The extraction pipeline runs continuously in the background. Its job is
-not just to extract facts from raw input — it's to identify the entity
-each fact belongs to, assign it to the right aspect, flag constraints, and
-establish dependencies.
-
-Over time, this process back-propagates through the existing database.
-Legacy memories get entity assignments. Orphaned facts get organized.
-Duplicate attributes get collapsed. The graph gets denser and more
-connected as the pipeline processes what's already there.
-
-The visual effect is striking: a database that balloons during heavy use
-shrinks and crystallizes during idle time. The knowledge becomes *more
-organized* the longer the system runs — not less.
-
-And in the constellation view, this becomes visible. Instead of clouds of
-semantically similar memories, you see entities with distinct structure —
-aspects radiating out, attributes attached to those aspects, dependencies
-connecting entities to each other. The difference between a person and an
-aspect of a person. The difference between an attribute and a constraint.
-The actual shape of what the agent knows.
-
-
-The Goal
---------
-
-The goal of this architecture is not to build the most complete knowledge
-graph. It is to build the most *useful* one.
-
-A database full of atomic facts, organized under entities, structured by
-aspects, connected through explicit dependencies, with constraints that
-always surface — that database needs almost no search to be useful. The
-structure does the work. The agent walks to what it needs.
-
-Everything else — the predictive scorer, the hybrid search, the reranker —
-is enhancement. They make a good system better. But the foundation is the
-structure itself.
-
-Small. Dense. Connected. Correct.
-
----
-
-*This document describes the architectural concepts. For the implementation
-contract, see [Knowledge Architecture Schema and Traversal Spec](./specs/planning/knowledge-architecture-schema.md).
-For predictive ranking integration, see [Signet Predictive Memory Scorer](./specs/planning/predictive-memory-scorer.md).
-For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).*
-
----
-
-*Written by [Nicholai](https://nicholai.work) and Mr. Claude, the first Signet agent. Structured relationships, constraints methodology, and entity/aspect/attribute framework co-developed with [Micheal Luigi Pacitto (PatchyToes)](https://patchytoes.substack.com/). March 3, 2026.*
-
----
-*Addendum — March 3, 2026*
-
----
-
-
 Constraint Confidence
 ---------------------
 
@@ -316,3 +257,57 @@ The user talks to the agent. The agent handles everything else.
 Constraints, weights, entity graphs, decay rates — none of that is
 the user's job. The user's job is to work. The system's job is to
 remember, organize, and get out of the way.
+
+
+How the Pipeline Builds This
+-----------------------------
+
+The extraction pipeline runs continuously in the background. Its job is
+not just to extract facts from raw input — it's to identify the entity
+each fact belongs to, assign it to the right aspect, flag constraints, and
+establish dependencies.
+
+Over time, this process back-propagates through the existing database.
+Legacy memories get entity assignments. Orphaned facts get organized.
+Duplicate attributes get collapsed. The graph gets denser and more
+connected as the pipeline processes what's already there.
+
+The visual effect is striking: a database that balloons during heavy use
+shrinks and crystallizes during idle time. The knowledge becomes *more
+organized* the longer the system runs — not less.
+
+And in the constellation view, this becomes visible. Instead of clouds of
+semantically similar memories, you see entities with distinct structure —
+aspects radiating out, attributes attached to those aspects, dependencies
+connecting entities to each other. The difference between a person and an
+aspect of a person. The difference between an attribute and a constraint.
+The actual shape of what the agent knows.
+
+
+The Goal
+--------
+
+The goal of this architecture is not to build the most complete knowledge
+graph. It is to build the most *useful* one.
+
+A database full of atomic facts, organized under entities, structured by
+aspects, connected through explicit dependencies, with constraints that
+always surface — that database needs almost no search to be useful. The
+structure does the work. The agent walks to what it needs.
+
+Everything else — the predictive scorer, the hybrid search, the reranker —
+is enhancement. They make a good system better. But the foundation is the
+structure itself.
+
+Small. Dense. Connected. Correct.
+
+---
+
+*This document describes the architectural concepts. For the implementation
+contract, see [Knowledge Architecture Schema and Traversal Spec](./specs/planning/knowledge-architecture-schema.md).
+For predictive ranking integration, see [Signet Predictive Memory Scorer](./specs/planning/predictive-memory-scorer.md).
+For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).*
+
+---
+
+*Written by [Nicholai](https://nicholai.work) and Mr. Claude, the first Signet agent. Structured relationships, constraints methodology, and entity/aspect/attribute framework co-developed with [Micheal Luigi Pacitto (PatchyToes)](https://patchytoes.substack.com/). March 3, 2026.*
