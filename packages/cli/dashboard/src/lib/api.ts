@@ -532,6 +532,12 @@ export interface RepairActionResult {
 	status: number;
 }
 
+export interface EmbeddingGapStats {
+	unembedded: number;
+	total: number;
+	coverage: string;
+}
+
 async function runRepairAction(path: string, payload: Record<string, unknown>): Promise<RepairActionResult> {
 	try {
 		const response = await fetch(`${API_BASE}${path}`, {
@@ -593,15 +599,34 @@ export async function repairCleanOrphans(): Promise<RepairActionResult> {
 	return runRepairAction("/api/repair/clean-orphans", DASHBOARD_REPAIR_PAYLOAD);
 }
 
-export async function repairReEmbed(batchSize = 250): Promise<RepairActionResult> {
+export async function repairReEmbed(batchSize = 250, fullSweep = true): Promise<RepairActionResult> {
 	return runRepairAction("/api/repair/re-embed", {
 		...DASHBOARD_REPAIR_PAYLOAD,
 		batchSize,
+		fullSweep,
 	});
 }
 
 export async function repairResyncVectorIndex(): Promise<RepairActionResult> {
 	return runRepairAction("/api/repair/resync-vec", DASHBOARD_REPAIR_PAYLOAD);
+}
+
+export async function getEmbeddingGapStats(): Promise<EmbeddingGapStats | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/repair/embedding-gaps`);
+		if (!response.ok) return null;
+		const body = (await response.json()) as Partial<EmbeddingGapStats>;
+		if (typeof body.unembedded !== "number" || typeof body.total !== "number" || typeof body.coverage !== "string") {
+			return null;
+		}
+		return {
+			unembedded: body.unembedded,
+			total: body.total,
+			coverage: body.coverage,
+		};
+	} catch {
+		return null;
+	}
 }
 
 export async function getHarnesses(): Promise<Harness[]> {

@@ -8,6 +8,7 @@ import {
 	type ProjectionQueryOptions,
 	type RepairActionResult,
 	getDistinctWho,
+	getEmbeddingGapStats,
 	getEmbeddingHealth,
 	getProjection,
 	getSimilarMemories,
@@ -177,6 +178,16 @@ let healthReport = $state<EmbeddingHealthReport | null>(null);
 let healthExpanded = $state(false);
 let healthFixBusy = $state(false);
 let healthTimer: ReturnType<typeof setInterval> | undefined;
+let healthFixStatus = $state<string | null>(null);
+let healthFixDetails = $state<string | null>(null);
+let healthFixProgress = $state<{
+	baseline: number;
+	completed: number;
+	remaining: number;
+	percent: number;
+	coverage: string;
+} | null>(null);
+let healthFixTimer: ReturnType<typeof setInterval> | undefined;
 
 onMount(() => {
 	controlsMenuOpen = workspaceLayout.embeddings.controlsOpen;
@@ -188,9 +199,114 @@ async function fetchHealth(): Promise<void> {
 	healthReport = await getEmbeddingHealth();
 }
 
+function parseCooldownMs(message: string): number | null {
+	const match = message.match(/cooldown active,\s*(\d+)ms remaining/i);
+	if (!match?.[1]) return null;
+	const parsed = Number.parseInt(match[1], 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function formatCooldown(ms: number): string {
+	const totalSeconds = Math.ceil(ms / 1000);
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function parseMissingFromCheckMessage(message: string): number | null {
+	const match = message.match(/([\d,]+)\s+memories?\s+missing\s+embeddings/i);
+	if (!match?.[1]) return null;
+	const parsed = Number.parseInt(match[1].replaceAll(",", ""), 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function clearHealthFixProgressTimer(): void {
+	if (healthFixTimer) {
+		clearInterval(healthFixTimer);
+		healthFixTimer = undefined;
+	}
+}
+
+function formatElapsed(ms: number): string {
+	const seconds = Math.max(1, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainder = seconds % 60;
+	return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function startReembedProgress(initialMissing: number | null): void {
+	clearHealthFixProgressTimer();
+	const startedAt = Date.now();
+	let baselineMissing: number | null = initialMissing;
+	let pollInFlight = false;
+	let pollCount = 0;
+
+	healthFixStatus = "Re-embedding in progress";
+	healthFixDetails =
+		initialMissing === null ? "Collecting progress..." : `${initialMissing.toLocaleString()} missing at start`;
+	healthFixProgress = null;
+
+	const poll = async (): Promise<void> => {
+		if (pollInFlight) return;
+		pollInFlight = true;
+		try {
+			const gaps = await getEmbeddingGapStats();
+			const elapsed = formatElapsed(Date.now() - startedAt);
+			healthFixStatus = `Re-embedding in progress (${elapsed})`;
+			if (gaps) {
+				if (baselineMissing === null) {
+					baselineMissing = gaps.unembedded;
+				}
+				const baseline = Math.max(0, baselineMissing ?? gaps.unembedded);
+				const completed = Math.max(0, baseline - gaps.unembedded);
+				const percent = baseline > 0 ? Math.min(100, (completed / baseline) * 100) : 100;
+				healthFixProgress = {
+					baseline,
+					completed,
+					remaining: gaps.unembedded,
+					percent,
+					coverage: gaps.coverage,
+				};
+				healthFixDetails =
+					baselineMissing === null
+						? `${gaps.unembedded.toLocaleString()} still missing (${gaps.coverage} coverage)`
+						: `${completed.toLocaleString()} completed, ${gaps.unembedded.toLocaleString()} remaining (${gaps.coverage} coverage)`;
+			}
+			if (pollCount % 2 === 0) {
+				await fetchHealth();
+			}
+			pollCount++;
+		} finally {
+			pollInFlight = false;
+		}
+	};
+
+	void poll();
+	healthFixTimer = setInterval(() => {
+		void poll();
+	}, 3000);
+}
+
 async function runFix(check: EmbeddingCheckResult): Promise<void> {
 	if (healthFixBusy) return;
 	healthFixBusy = true;
+	const isReembedCheck = check.name === "coverage" || check.name === "null-vectors";
+	if (!isReembedCheck) {
+		healthFixStatus = `Running ${check.name} repair...`;
+		healthFixDetails = null;
+		healthFixProgress = null;
+	}
+	if (isReembedCheck) {
+		const initialMissingFromCheck = parseMissingFromCheckMessage(check.message);
+		if (initialMissingFromCheck !== null) {
+			startReembedProgress(initialMissingFromCheck);
+		} else {
+			const gaps = await getEmbeddingGapStats();
+			startReembedProgress(gaps?.unembedded ?? null);
+		}
+	}
 	try {
 		let result: RepairActionResult;
 		if (check.name === "orphaned-embeddings") {
@@ -205,8 +321,44 @@ async function runFix(check: EmbeddingCheckResult): Promise<void> {
 		}
 
 		if (!result.success) {
+			clearHealthFixProgressTimer();
+			if (result.status === 429) {
+				const cooldownMs = parseCooldownMs(result.message);
+				if (cooldownMs !== null) {
+					healthFixStatus = "Repair blocked by cooldown";
+					healthFixDetails = `Try again in ${formatCooldown(cooldownMs)}.`;
+					toast(`Repair on cooldown. Try again in ${formatCooldown(cooldownMs)}.`, "warning", 4500);
+				} else {
+					healthFixStatus = "Repair blocked by policy";
+					healthFixDetails = result.message;
+					toast(`Repair temporarily blocked: ${result.message}`, "warning", 5000);
+				}
+				await fetchHealth();
+				return;
+			}
+			healthFixStatus = "Repair failed";
+			healthFixDetails = result.message;
+			healthFixProgress = null;
 			toast(`Repair failed: ${result.message}`, "error", 5000);
 			return;
+		}
+
+		clearHealthFixProgressTimer();
+		healthFixStatus = "Repair completed";
+		healthFixDetails = result.message;
+		if (isReembedCheck) {
+			const gaps = await getEmbeddingGapStats();
+			if (gaps && healthFixProgress) {
+				const baseline = healthFixProgress.baseline;
+				const completed = Math.max(0, baseline - gaps.unembedded);
+				healthFixProgress = {
+					baseline,
+					completed,
+					remaining: gaps.unembedded,
+					percent: baseline > 0 ? Math.min(100, (completed / baseline) * 100) : 100,
+					coverage: gaps.coverage,
+				};
+			}
 		}
 
 		if (result.affected > 0) {
@@ -215,7 +367,11 @@ async function runFix(check: EmbeddingCheckResult): Promise<void> {
 			toast(result.message, "info", 4500);
 		}
 		await fetchHealth();
+		if (isReembedCheck && result.affected > 0) {
+			await reloadEmbeddingsGraph();
+		}
 	} finally {
+		clearHealthFixProgressTimer();
 		healthFixBusy = false;
 	}
 }
@@ -236,6 +392,7 @@ $effect(() => {
 	fetchHealth();
 	healthTimer = setInterval(fetchHealth, 60000);
 	return () => {
+		clearHealthFixProgressTimer();
 		if (healthTimer) clearInterval(healthTimer);
 	};
 });
@@ -1379,6 +1536,9 @@ $effect(() => {
 						></span>
 						{healthReport.status}
 						<span class="text-[var(--sig-text-muted)]">{Math.round(healthReport.score * 100)}%</span>
+						{#if healthFixBusy && healthFixProgress}
+							<span class="text-[#c4a24a]">{Math.round(healthFixProgress.percent)}%</span>
+						{/if}
 					</button>
 					{#if healthExpanded}
 						<div class="mt-1 border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.92)] px-2 py-2 w-[320px]">
@@ -1386,6 +1546,28 @@ $effect(() => {
 								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Constellation Health</span>
 								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)]">{healthReport.config.provider}/{healthReport.config.model}</span>
 							</div>
+							{#if healthFixStatus}
+								<div class="mb-2 border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-1.5 py-1.5">
+									<div class="font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text)] leading-[1.3]">{healthFixStatus}</div>
+									{#if healthFixDetails}
+										<div class="mt-0.5 font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)] leading-[1.3]">{healthFixDetails}</div>
+									{/if}
+									{#if healthFixProgress}
+										<div class="mt-1">
+											<div class="flex items-center justify-between font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)]">
+												<span>{healthFixProgress.completed.toLocaleString()} / {healthFixProgress.baseline.toLocaleString()}</span>
+												<span>{Math.round(healthFixProgress.percent)}%</span>
+											</div>
+											<div class="mt-1 h-[5px] border border-[rgba(255,255,255,0.2)] bg-[rgba(255,255,255,0.05)]">
+												<div class="h-full bg-[#c4a24a]" style={`width:${Math.max(0, Math.min(100, healthFixProgress.percent))}%`}></div>
+											</div>
+											<div class="mt-1 font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)]">
+												{healthFixProgress.remaining.toLocaleString()} remaining · {healthFixProgress.coverage} coverage
+											</div>
+										</div>
+									{/if}
+								</div>
+							{/if}
 							<div class="space-y-1">
 								{#each healthReport.checks as check}
 									<div class="flex items-start gap-1.5 px-1.5 py-1 border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.02)]">

@@ -91,6 +91,7 @@ import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker"
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import {
 	type RepairContext,
+	type RepairResult,
 	checkFtsConsistency,
 	cleanOrphanedEmbeddings,
 	createRateLimiter,
@@ -5305,16 +5306,30 @@ app.get("/api/repair/embedding-gaps", (c) => {
 	return c.json(stats);
 });
 
+function repairHttpStatus(result: RepairResult): number {
+	if (result.success) return 200;
+	if (
+		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress/i.test(
+			result.message,
+		)
+	) {
+		return 429;
+	}
+	return 500;
+}
+
 app.post("/api/repair/re-embed", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
 	let batchSize = 50;
 	let dryRun = false;
+	let fullSweep = false;
 
 	try {
 		const body = await c.req.json();
 		if (typeof body.batchSize === "number") batchSize = body.batchSize;
 		if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
+		if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 	} catch {
 		// no body or invalid JSON — use defaults
 	}
@@ -5328,23 +5343,25 @@ app.post("/api/repair/re-embed", async (c) => {
 		cfg.embedding,
 		batchSize,
 		dryRun,
+		fullSweep,
+		fullSweep && ctx.actorType === "operator" ? 0 : undefined,
 	);
 
-	return c.json(result, result.success ? 200 : 429);
+	return c.json(result, repairHttpStatus(result));
 });
 
 app.post("/api/repair/resync-vec", (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
 	const result = resyncVectorIndex(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
-	return c.json(result, result.success ? 200 : 429);
+	return c.json(result, repairHttpStatus(result));
 });
 
 app.post("/api/repair/clean-orphans", (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
 	const result = cleanOrphanedEmbeddings(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
-	return c.json(result, result.success ? 200 : 429);
+	return c.json(result, repairHttpStatus(result));
 });
 
 app.get("/api/repair/dedup-stats", (c) => {
@@ -5371,7 +5388,7 @@ app.post("/api/repair/deduplicate", async (c) => {
 		// no body or invalid JSON — use defaults
 	}
 	const result = await deduplicateMemories(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, options);
-	return c.json(result, result.success ? 200 : 429);
+	return c.json(result, repairHttpStatus(result));
 });
 
 // ============================================================================

@@ -4,69 +4,69 @@
  * Own your agent. Bring it anywhere.
  */
 
-import { Command } from "commander";
-import chalk from "chalk";
-import ora from "ora";
-import { input, select, confirm, checkbox, password } from "@inquirer/prompts";
 import { spawn, spawnSync } from "child_process";
-import { homedir, platform } from "os";
-import { join, dirname, resolve as resolvePath } from "path";
 import {
-	existsSync,
-	mkdirSync,
-	writeFileSync,
-	readFileSync,
 	copyFileSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
 	readdirSync,
 	rmSync,
 	statSync,
-	lstatSync,
+	writeFileSync,
 } from "fs";
+import { homedir, platform } from "os";
+import { dirname, join, resolve as resolvePath } from "path";
 import { fileURLToPath } from "url";
-import Database from "./sqlite.js";
-import open from "open";
+import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
+import { ClaudeCodeConnector } from "@signet/connector-claude-code";
+import { OpenClawConnector } from "@signet/connector-openclaw";
+import { OpenCodeConnector } from "@signet/connector-opencode";
 import {
-	detectSystemPython,
-	detectPyenv,
-	detectConda,
-	detectBestPython,
-	isZvecCompatible,
-	getPyenvPython,
-	createVenv,
-	installDeps,
-	installPyenvPython,
-	createCondaEnv,
-	getCondaPython,
-	checkZvecInstalled,
-	type PythonInfo,
-	type PyenvInfo,
-	type CondaInfo,
-} from "./python.js";
-import {
-	detectExistingSetup as detectExistingSetupCore,
-	hasValidIdentity,
-	getMissingIdentityFiles,
-	unifySkills,
-	importMemoryLogs,
 	IDENTITY_FILES,
-	detectSchema,
-	ensureUnifiedSchema,
-	runMigrations,
-	loadSqliteVec,
-	parseSimpleYaml,
-	formatYaml,
-	symlinkSkills,
-	resolvePrimaryPackageManager,
-	getSkillsRunnerCommand,
+	type ImportResult,
+	type MigrationResult,
+	type SchemaInfo,
 	type SetupDetection,
 	type SkillsResult,
-	type ImportResult,
-	type SchemaInfo,
-	type MigrationResult,
+	detectExistingSetup as detectExistingSetupCore,
+	detectSchema,
+	ensureUnifiedSchema,
+	formatYaml,
+	getMissingIdentityFiles,
+	getSkillsRunnerCommand,
+	hasValidIdentity,
+	importMemoryLogs,
+	loadSqliteVec,
+	parseSimpleYaml,
+	resolvePrimaryPackageManager,
+	runMigrations,
+	symlinkSkills,
+	unifySkills,
 } from "@signet/core";
-import { OpenClawConnector } from "@signet/connector-openclaw";
-import { ClaudeCodeConnector } from "@signet/connector-claude-code";
-import { OpenCodeConnector } from "@signet/connector-opencode";
+import chalk from "chalk";
+import { Command } from "commander";
+import open from "open";
+import ora from "ora";
+import {
+	type CondaInfo,
+	type PyenvInfo,
+	type PythonInfo,
+	checkZvecInstalled,
+	createCondaEnv,
+	createVenv,
+	detectBestPython,
+	detectConda,
+	detectPyenv,
+	detectSystemPython,
+	getCondaPython,
+	getPyenvPython,
+	installDeps,
+	installPyenvPython,
+	isZvecCompatible,
+} from "./python.js";
+import Database from "./sqlite.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -136,9 +136,7 @@ function syncBuiltinSkills(
 
 	mkdirSync(skillsDest, { recursive: true });
 
-	const entries = readdirSync(skillsSource, { withFileTypes: true }).filter(
-		(d) => d.isDirectory(),
-	);
+	const entries = readdirSync(skillsSource, { withFileTypes: true }).filter((d) => d.isDirectory());
 
 	for (const entry of entries) {
 		const src = join(skillsSource, entry.name);
@@ -227,10 +225,7 @@ async function gitAddAndCommit(dir: string, message: string): Promise<boolean> {
 	});
 }
 
-async function gitAutoCommit(
-	dir: string,
-	changedFile: string,
-): Promise<boolean> {
+async function gitAutoCommit(dir: string, changedFile: string): Promise<boolean> {
 	const now = new Date();
 	const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
 	const filename = changedFile.split("/").pop() || "file";
@@ -244,18 +239,77 @@ async function gitAutoCommit(
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const DEFAULT_PORT = 3850;
+const DAEMON_BASE_URLS = [`http://127.0.0.1:${DEFAULT_PORT}`, `http://[::1]:${DEFAULT_PORT}`] as const;
 
+interface DaemonInstance {
+	readonly baseUrl: string;
+	readonly pid: number | null;
+	readonly uptime: number | null;
+	readonly version: string | null;
+}
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-async function isDaemonRunning(): Promise<boolean> {
+async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 	try {
-		const response = await fetch(`http://localhost:${DEFAULT_PORT}/health`, {
-			signal: AbortSignal.timeout(2000),
+		const response = await fetch(`${baseUrl}/health`, {
+			signal: AbortSignal.timeout(1200),
 		});
 		return response.ok;
 	} catch {
 		return false;
 	}
+}
+
+async function getReachableDaemonUrls(): Promise<string[]> {
+	const checks = await Promise.all(
+		DAEMON_BASE_URLS.map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
+	);
+	return checks.flatMap((url) => (url === null ? [] : [url]));
+}
+
+async function getDaemonInstances(): Promise<DaemonInstance[]> {
+	const urls = await getReachableDaemonUrls();
+	const instances = await Promise.all(
+		urls.map(async (baseUrl): Promise<DaemonInstance> => {
+			try {
+				const response = await fetch(`${baseUrl}/api/status`, {
+					signal: AbortSignal.timeout(1200),
+				});
+				if (response.ok) {
+					const data = (await response.json()) as {
+						pid?: number;
+						uptime?: number;
+						version?: string;
+					};
+					return {
+						baseUrl,
+						pid: data.pid ?? null,
+						uptime: data.uptime ?? null,
+						version: data.version ?? null,
+					};
+				}
+			} catch {
+				// Fall back to health-only instance metadata
+			}
+
+			return {
+				baseUrl,
+				pid: null,
+				uptime: null,
+				version: null,
+			};
+		}),
+	);
+
+	return instances;
+}
+
+async function isDaemonRunning(): Promise<boolean> {
+	const urls = await getReachableDaemonUrls();
+	return urls.length > 0;
 }
 
 async function getDaemonStatus(): Promise<{
@@ -264,34 +318,25 @@ async function getDaemonStatus(): Promise<{
 	uptime: number | null;
 	version: string | null;
 }> {
-	try {
-		const response = await fetch(
-			`http://localhost:${DEFAULT_PORT}/api/status`,
-			{
-				signal: AbortSignal.timeout(2000),
-			},
-		);
-		if (response.ok) {
-			const data = (await response.json()) as {
-				pid?: number;
-				uptime?: number;
-				version?: string;
-			};
-			return {
-				running: true,
-				pid: data.pid ?? null,
-				uptime: data.uptime ?? null,
-				version: data.version ?? null,
-			};
-		}
-	} catch {
-		// Not running
+	const instances = await getDaemonInstances();
+	if (instances.length > 0) {
+		const preferred = instances.find((instance) => typeof instance.uptime === "number") ?? instances[0];
+		return {
+			running: true,
+			pid: preferred.pid,
+			uptime: preferred.uptime,
+			version: preferred.version,
+		};
 	}
 
 	return { running: false, pid: null, uptime: null, version: null };
 }
 
 async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+	if (await isDaemonRunning()) {
+		return true;
+	}
+
 	const daemonDir = join(agentsDir, ".daemon");
 	const logDir = join(daemonDir, "logs");
 
@@ -327,6 +372,7 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 		env: {
 			...process.env,
 			SIGNET_PORT: DEFAULT_PORT.toString(),
+			SIGNET_HOST: process.env.SIGNET_HOST || "127.0.0.1",
 			SIGNET_PATH: agentsDir,
 		},
 	});
@@ -346,29 +392,71 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 
 async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	const pidFile = join(agentsDir, ".daemon", "pid");
+	const targetPids = new Set<number>();
 
-	// Try graceful shutdown via PID
 	if (existsSync(pidFile)) {
 		try {
-			const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-			process.kill(pid, "SIGTERM");
-
-			// Wait for shutdown
-			for (let i = 0; i < 20; i++) {
-				await new Promise((resolve) => setTimeout(resolve, 250));
-				try {
-					process.kill(pid, 0);
-				} catch {
-					// Process is dead
-					return true;
-				}
+			const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+			if (Number.isInteger(pid) && pid > 0) {
+				targetPids.add(pid);
 			}
+		} catch {
+			// Ignore unreadable/stale PID file
+		}
+	}
 
-			// Force kill
-			process.kill(pid, "SIGKILL");
+	const instances = await getDaemonInstances();
+	for (const instance of instances) {
+		if (typeof instance.pid === "number" && instance.pid > 0) {
+			targetPids.add(instance.pid);
+		}
+	}
+
+	const isPidAlive = (pid: number): boolean => {
+		try {
+			process.kill(pid, 0);
 			return true;
 		} catch {
-			// Process might already be dead
+			return false;
+		}
+	};
+
+	const waitForPidExit = async (pid: number): Promise<boolean> => {
+		for (let i = 0; i < 20; i++) {
+			if (!isPidAlive(pid)) return true;
+			await sleep(250);
+		}
+		return !isPidAlive(pid);
+	};
+
+	for (const pid of targetPids) {
+		try {
+			process.kill(pid, "SIGTERM");
+		} catch {
+			// Process already dead or inaccessible
+		}
+	}
+
+	for (const pid of targetPids) {
+		const exited = await waitForPidExit(pid);
+		if (!exited) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				// Process already dead or inaccessible
+			}
+		}
+	}
+
+	for (const pid of targetPids) {
+		await waitForPidExit(pid);
+	}
+
+	if (existsSync(pidFile)) {
+		try {
+			rmSync(pidFile, { force: true });
+		} catch {
+			// Ignore
 		}
 	}
 
@@ -377,8 +465,7 @@ async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 
 function formatUptime(seconds: number): string {
 	if (seconds < 60) return `${Math.floor(seconds)}s`;
-	if (seconds < 3600)
-		return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+	if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
 	const hours = Math.floor(seconds / 3600);
 	const mins = Math.floor((seconds % 3600) / 60);
 	return `${hours}h ${mins}m`;
@@ -478,9 +565,7 @@ function detectExistingSetup(basePath: string): SetupDetection {
 function hasExistingIdentityFiles(detection: SetupDetection): boolean {
 	// Check for core identity files (non-optional ones)
 	const coreFiles = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
-	const foundCore = detection.identityFiles.filter((f) =>
-		coreFiles.includes(f),
-	);
+	const foundCore = detection.identityFiles.filter((f) => coreFiles.includes(f));
 	return foundCore.length >= 2;
 }
 
@@ -499,9 +584,7 @@ function formatDetectionSummary(detection: SetupDetection): string {
 
 	if (detection.memoryLogCount > 0) {
 		lines.push(`  ${chalk.cyan("Memory logs:")}`);
-		lines.push(
-			`    ${chalk.dim("•")} ${detection.memoryLogCount} files in memory/`,
-		);
+		lines.push(`    ${chalk.dim("•")} ${detection.memoryLogCount} files in memory/`);
 	}
 
 	if (detection.hasClawdhub) {
@@ -544,27 +627,10 @@ interface SetupWizardOptions {
 	configureOpenclawWorkspace?: boolean;
 }
 
-const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
-	"claude-code",
-	"opencode",
-	"openclaw",
-];
-const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
-	"native",
-	"ollama",
-	"openai",
-	"none",
-];
-const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
-	"claude-code",
-	"ollama",
-	"opencode",
-	"none",
-];
-const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = [
-	"plugin",
-	"legacy",
-];
+const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = ["claude-code", "opencode", "openclaw"];
+const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "ollama", "openai", "none"];
+const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = ["claude-code", "ollama", "opencode", "none"];
+const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 
 function collectListOption(value: string, previous: string[]): string[] {
 	const parts = value
@@ -605,10 +671,7 @@ function extractPathOption(value: unknown): string | null {
 	return null;
 }
 
-function normalizeChoice<T extends string>(
-	value: unknown,
-	allowed: readonly T[],
-): T | null {
+function normalizeChoice<T extends string>(value: unknown, allowed: readonly T[]): T | null {
 	const normalized = normalizeStringValue(value);
 	if (!normalized) {
 		return null;
@@ -676,11 +739,7 @@ function normalizeAgentPath(pathValue: string): string {
 }
 
 function hasExistingAgentState(detection: SetupDetection): boolean {
-	return (
-		detection.memoryDb ||
-		detection.agentYaml ||
-		detection.identityFiles.length > 0
-	);
+	return detection.memoryDb || detection.agentYaml || detection.identityFiles.length > 0;
 }
 
 function scoreOpenClawWorkspace(pathValue: string): number {
@@ -747,11 +806,7 @@ function normalizeHarnessList(rawValues: readonly string[] | undefined): Harness
 
 function failNonInteractiveSetup(message: string): never {
 	console.error(chalk.red(`  ${message}`));
-	console.error(
-		chalk.dim(
-			"  Ask the user for explicit provider choices and pass them as CLI flags.",
-		),
-	);
+	console.error(chalk.dim("  Ask the user for explicit provider choices and pass them as CLI flags."));
 	process.exit(1);
 }
 
@@ -894,14 +949,10 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 
 	if (platform() === "linux") {
 		const spinner = ora("Installing Ollama...").start();
-		const result = await runCommandWithOutput(
-			"sh",
-			["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
-			{
-				env: { ...process.env },
-				timeout: 300000,
-			},
-		);
+		const result = await runCommandWithOutput("sh", ["-c", "curl -fsSL https://ollama.com/install.sh | sh"], {
+			env: { ...process.env },
+			timeout: 300000,
+		});
 
 		if (result.code !== 0) {
 			spinner.fail("Ollama install failed");
@@ -916,9 +967,7 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 		return hasCommand("ollama");
 	}
 
-	console.log(
-		chalk.yellow("  Automated install is not available on this platform."),
-	);
+	console.log(chalk.yellow("  Automated install is not available on this platform."));
 	printOllamaInstallInstructions();
 	return false;
 }
@@ -945,9 +994,7 @@ async function queryOllamaModels(baseUrl = "http://localhost:11434"): Promise<{
 			models?: Array<{ name?: string }>;
 		};
 
-		const models = (data.models ?? [])
-			.map((m) => m.name?.trim())
-			.filter((m): m is string => Boolean(m));
+		const models = (data.models ?? []).map((m) => m.name?.trim()).filter((m): m is string => Boolean(m));
 
 		return { available: true, models };
 	} catch (error) {
@@ -960,9 +1007,7 @@ async function queryOllamaModels(baseUrl = "http://localhost:11434"): Promise<{
 }
 
 function hasOllamaModel(models: string[], model: string): boolean {
-	return models.some(
-		(entry) => entry === model || entry.startsWith(`${model}:`),
-	);
+	return models.some((entry) => entry === model || entry.startsWith(`${model}:`));
 }
 
 async function pullOllamaModel(model: string): Promise<boolean> {
@@ -984,9 +1029,7 @@ async function pullOllamaModel(model: string): Promise<boolean> {
 	return true;
 }
 
-async function promptOllamaFailureFallback(): Promise<
-	"retry" | "native" | "openai" | "none"
-> {
+async function promptOllamaFailureFallback(): Promise<"retry" | "native" | "openai" | "none"> {
 	console.log();
 	return select({
 		message: "How do you want to continue?",
@@ -1103,11 +1146,7 @@ async function interactiveMenu() {
 		}
 	} else {
 		console.log(chalk.green(`  ● Daemon running`));
-		console.log(
-			chalk.dim(
-				`    PID: ${status.pid} | Uptime: ${formatUptime(status.uptime || 0)}`,
-			),
-		);
+		console.log(chalk.dim(`    PID: ${status.pid} | Uptime: ${formatUptime(status.uptime || 0)}`));
 		console.log();
 	}
 
@@ -1292,10 +1331,7 @@ async function manageSecrets() {
 
 		const spinner = ora("Deleting...").start();
 		try {
-			const { ok, data } = await secretApiCall(
-				"DELETE",
-				`/api/secrets/${name}`,
-			);
+			const { ok, data } = await secretApiCall("DELETE", `/api/secrets/${name}`);
 			if (ok) {
 				spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} deleted`));
 			} else {
@@ -1328,9 +1364,7 @@ async function manageHarnesses() {
 			await configureHarnessHooks(harness, basePath);
 			spinner.text = `Configured ${harness}`;
 		} catch (err) {
-			console.warn(
-				`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`,
-			);
+			console.warn(`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1381,10 +1415,7 @@ async function existingSetupWizard(
 		// Copy requirements.txt
 		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
 		if (existsSync(requirementsSource)) {
-			copyFileSync(
-				requirementsSource,
-				join(basePath, "memory", "requirements.txt"),
-			);
+			copyFileSync(requirementsSource, join(basePath, "memory", "requirements.txt"));
 		}
 
 		// Install/update built-in skills
@@ -1420,15 +1451,12 @@ async function existingSetupWizard(
 			env: process.env,
 		});
 
-			const config: Record<string, unknown> = {
+		const config: Record<string, unknown> = {
 			version: 1,
 			schema: "signet/v1",
 			agent: {
 				name: agentName,
-				description:
-					existingConfig.description ||
-					existingConfig.agent?.description ||
-					"Personal AI assistant",
+				description: existingConfig.description || existingConfig.agent?.description || "Personal AI assistant",
 				created: now,
 				updated: now,
 			},
@@ -1456,35 +1484,33 @@ async function existingSetupWizard(
 				heartbeat: "HEARTBEAT.md",
 				memory: "MEMORY.md",
 				tools: "TOOLS.md",
-				},
+			},
+		};
+
+		if (options?.embeddingProvider && options.embeddingProvider !== "none") {
+			const embeddingModel =
+				options.embeddingModel ||
+				(options.embeddingProvider === "openai" ? "text-embedding-3-small" : "nomic-embed-text");
+			config.embedding = {
+				provider: options.embeddingProvider,
+				model: embeddingModel,
+				dimensions: getEmbeddingDimensions(embeddingModel),
 			};
+		}
 
-			if (options?.embeddingProvider && options.embeddingProvider !== "none") {
-				const embeddingModel =
-					options.embeddingModel ||
-					(options.embeddingProvider === "openai"
-						? "text-embedding-3-small"
-						: "nomic-embed-text");
-				config.embedding = {
-					provider: options.embeddingProvider,
-					model: embeddingModel,
-					dimensions: getEmbeddingDimensions(embeddingModel),
-				};
-			}
-
-			if (options?.extractionProvider && options.extractionProvider !== "none") {
-				(config.memory as Record<string, unknown>).pipelineV2 = {
-					enabled: true,
-					extractionProvider: options.extractionProvider,
-					extractionModel:
-						options.extractionModel ||
-						(options.extractionProvider === "claude-code"
-							? "haiku"
-							: options.extractionProvider === "opencode"
-								? "anthropic/claude-haiku-4-5-20251001"
-								: "glm-4.7-flash"),
-				};
-			}
+		if (options?.extractionProvider && options.extractionProvider !== "none") {
+			(config.memory as Record<string, unknown>).pipelineV2 = {
+				enabled: true,
+				extractionProvider: options.extractionProvider,
+				extractionModel:
+					options.extractionModel ||
+					(options.extractionProvider === "claude-code"
+						? "haiku"
+						: options.extractionProvider === "opencode"
+							? "anthropic/claude-haiku-4-5-20251001"
+							: "glm-4.7-flash"),
+			};
+		}
 
 		// Only write agent.yaml if it doesn't exist
 		if (!existsSync(join(basePath, "agent.yaml"))) {
@@ -1527,13 +1553,7 @@ async function existingSetupWizard(
               INSERT INTO memories (id, content, type, source, tags, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             `);
-						stmt.run(
-							id,
-							mem.content,
-							mem.type,
-							mem.sourceType,
-							JSON.stringify(mem.tags),
-						);
+						stmt.run(id, mem.content, mem.type, mem.sourceType, JSON.stringify(mem.tags));
 					},
 				};
 				importResult = importMemoryLogs(basePath, dbWrapper as any);
@@ -1565,9 +1585,7 @@ async function existingSetupWizard(
 				}>,
 			});
 		} catch (err) {
-			console.warn(
-				`\n  ⚠ Skills unification warning: ${(err as Error).message}`,
-			);
+			console.warn(`\n  ⚠ Skills unification warning: ${(err as Error).message}`);
 		}
 
 		// 6. Install connectors for detected harnesses
@@ -1579,9 +1597,7 @@ async function existingSetupWizard(
 				await configureHarnessHooks(harness, basePath);
 				configuredHarnesses.push(harness);
 			} catch (err) {
-				console.warn(
-					`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`,
-				);
+				console.warn(`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`);
 			}
 		}
 
@@ -1611,30 +1627,21 @@ async function existingSetupWizard(
 
 		// Summary output
 		console.log();
-		console.log(
-			chalk.dim("  Your existing identity files are now managed by Signet."),
-		);
+		console.log(chalk.dim("  Your existing identity files are now managed by Signet."));
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
 
 		// Show what was done
 		if (importResult && importResult.imported > 0) {
-			console.log(
-				chalk.dim(`  Memory logs imported: ${importResult.imported} entries`),
-			);
+			console.log(chalk.dim(`  Memory logs imported: ${importResult.imported} entries`));
 			if (importResult.skipped > 0) {
 				console.log(chalk.dim(`    (${importResult.skipped} skipped)`));
 			}
 		}
 
-		if (
-			skillsResult &&
-			(skillsResult.imported > 0 || skillsResult.symlinked > 0)
-		) {
+		if (skillsResult && (skillsResult.imported > 0 || skillsResult.symlinked > 0)) {
 			console.log(
-				chalk.dim(
-					`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`,
-				),
+				chalk.dim(`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`),
 			);
 		}
 
@@ -1648,9 +1655,7 @@ async function existingSetupWizard(
 
 		if (daemonStarted) {
 			console.log();
-			console.log(
-				chalk.green(`  ● Daemon running at http://localhost:${DEFAULT_PORT}`),
-			);
+			console.log(chalk.green(`  ● Daemon running at http://localhost:${DEFAULT_PORT}`));
 		}
 
 		// Git commit
@@ -1681,21 +1686,9 @@ async function existingSetupWizard(
 
 		// Suggest onboarding
 		console.log();
-		console.log(
-			chalk.cyan(
-				"  → Next step: Say '/onboarding' to personalize your agent",
-			),
-		);
-		console.log(
-			chalk.dim(
-				"    This will walk you through setting up your agent's personality,",
-			),
-		);
-		console.log(
-			chalk.dim(
-				"    communication style, and your preferences.",
-			),
-		);
+		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
+		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
+		console.log(chalk.dim("    communication style, and your preferences."));
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
@@ -1723,9 +1716,7 @@ async function setupWizard(options: SetupWizardOptions) {
 				if (nonInteractive) {
 					basePath = openClawWorkspace;
 				} else {
-					console.log(
-						chalk.cyan(`  Detected OpenClaw workspace: ${openClawWorkspace}`),
-					);
+					console.log(chalk.cyan(`  Detected OpenClaw workspace: ${openClawWorkspace}`));
 					const useDetectedWorkspace = await confirm({
 						message: "Use this as the Signet agent directory?",
 						default: true,
@@ -1761,12 +1752,8 @@ async function setupWizard(options: SetupWizardOptions) {
 	}
 
 	// Extract existing values for defaults
-	const existingName =
-		existingConfig.name || existingConfig.agent?.name || "My Agent";
-	const existingDesc =
-		existingConfig.description ||
-		existingConfig.agent?.description ||
-		"Personal AI assistant";
+	const existingName = existingConfig.name || existingConfig.agent?.name || "My Agent";
+	const existingDesc = existingConfig.description || existingConfig.agent?.description || "Personal AI assistant";
 	const existingHarnesses: string[] = Array.isArray(existingConfig.harnesses)
 		? existingConfig.harnesses
 				.filter((value: unknown): value is string => typeof value === "string")
@@ -1848,8 +1835,7 @@ async function setupWizard(options: SetupWizardOptions) {
 		}
 
 		const skillSyncResult = syncBuiltinSkills(templatesDir, basePath);
-		const syncedBuiltins =
-			skillSyncResult.installed.length + skillSyncResult.updated.length;
+		const syncedBuiltins = skillSyncResult.installed.length + skillSyncResult.updated.length;
 		if (syncedBuiltins > 0) {
 			console.log(chalk.dim(`  Synced built-in skills: ${syncedBuiltins}`));
 		}
@@ -1864,37 +1850,23 @@ async function setupWizard(options: SetupWizardOptions) {
 		console.log();
 
 		console.log(chalk.bold("  Signet will:"));
-		console.log(
-			chalk.dim(
-				"    1. Create AGENT.yaml manifest pointing to your existing files",
-			),
-		);
+		console.log(chalk.dim("    1. Create AGENT.yaml manifest pointing to your existing files"));
 		console.log(chalk.dim("    2. Import memory logs to SQLite for search"));
-		console.log(
-			chalk.dim("    3. Sync built-in skills + unify external skill sources"),
-		);
+		console.log(chalk.dim("    3. Sync built-in skills + unify external skill sources"));
 		console.log(chalk.dim("    4. Install connectors for detected harnesses"));
 		console.log(chalk.dim("    5. Keep all existing files unchanged"));
 		console.log();
 
 		if (nonInteractive) {
-			const migrationEmbeddingProvider = normalizeChoice(
-				options.embeddingProvider,
-				EMBEDDING_PROVIDER_CHOICES,
-			);
-			const migrationExtractionProvider = normalizeChoice(
-				options.extractionProvider,
-				EXTRACTION_PROVIDER_CHOICES,
-			);
+			const migrationEmbeddingProvider = normalizeChoice(options.embeddingProvider, EMBEDDING_PROVIDER_CHOICES);
+			const migrationExtractionProvider = normalizeChoice(options.extractionProvider, EXTRACTION_PROVIDER_CHOICES);
 			if (!migrationEmbeddingProvider) {
 				failNonInteractiveSetup(
 					"Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).",
 				);
 			}
 			if (!migrationExtractionProvider) {
-				failNonInteractiveSetup(
-					"Non-interactive setup requires --extraction-provider (claude-code, ollama, or none).",
-				);
+				failNonInteractiveSetup("Non-interactive setup requires --extraction-provider (claude-code, ollama, or none).");
 			}
 
 			await existingSetupWizard(basePath, existing, existingConfig, {
@@ -2004,9 +1976,7 @@ async function setupWizard(options: SetupWizardOptions) {
 
 		// Reject unknown harness values in non-interactive mode
 		if (rawParts.length > 0 && rawParts.length !== requestedHarnesses.length) {
-			const unknown = rawParts.filter(
-				(p) => !normalizeChoice(p, SETUP_HARNESS_CHOICES),
-			);
+			const unknown = rawParts.filter((p) => !normalizeChoice(p, SETUP_HARNESS_CHOICES));
 			failNonInteractiveSetup(
 				`Unknown --harness value(s): ${unknown.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
 			);
@@ -2033,14 +2003,9 @@ async function setupWizard(options: SetupWizardOptions) {
 		const existingConfigs = connector.getDiscoveredConfigPaths();
 
 		if (nonInteractive) {
-			configureOpenClawWs =
-				options.configureOpenclawWorkspace === true &&
-				existingConfigs.length > 0;
+			configureOpenClawWs = options.configureOpenclawWorkspace === true && existingConfigs.length > 0;
 
-			const requestedRuntimePath = normalizeChoice(
-				options.openclawRuntimePath,
-				OPENCLAW_RUNTIME_CHOICES,
-			);
+			const requestedRuntimePath = normalizeChoice(options.openclawRuntimePath, OPENCLAW_RUNTIME_CHOICES);
 			openclawRuntimePath = requestedRuntimePath ?? "plugin";
 		} else {
 			if (existingConfigs.length > 0) {
@@ -2058,14 +2023,12 @@ async function setupWizard(options: SetupWizardOptions) {
 					{
 						value: "plugin" as const,
 						name: "Plugin adapter (recommended)",
-						description:
-							"@signetai/signet-memory-openclaw — full lifecycle + memory tools",
+						description: "@signetai/signet-memory-openclaw — full lifecycle + memory tools",
 					},
 					{
 						value: "legacy" as const,
 						name: "Legacy hooks",
-						description:
-							"handler.js for /remember, /recall, /context commands",
+						description: "handler.js for /remember, /recall, /context commands",
 					},
 				],
 				default: "plugin",
@@ -2081,35 +2044,21 @@ async function setupWizard(options: SetupWizardOptions) {
 				default: existingDesc,
 			});
 
-	const requestedEmbeddingProvider = normalizeChoice(
-		options.embeddingProvider,
-		EMBEDDING_PROVIDER_CHOICES,
-	);
-	const requestedExtractionProvider = normalizeChoice(
-		options.extractionProvider,
-		EXTRACTION_PROVIDER_CHOICES,
-	);
+	const requestedEmbeddingProvider = normalizeChoice(options.embeddingProvider, EMBEDDING_PROVIDER_CHOICES);
+	const requestedExtractionProvider = normalizeChoice(options.extractionProvider, EXTRACTION_PROVIDER_CHOICES);
 
 	if (nonInteractive && !requestedEmbeddingProvider) {
-		failNonInteractiveSetup(
-			"Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).",
-		);
+		failNonInteractiveSetup("Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).");
 	}
 
 	if (nonInteractive && !requestedExtractionProvider) {
-		failNonInteractiveSetup(
-			"Non-interactive setup requires --extraction-provider (claude-code, ollama, or none).",
-		);
+		failNonInteractiveSetup("Non-interactive setup requires --extraction-provider (claude-code, ollama, or none).");
 	}
 
 	let embeddingProvider: EmbeddingProviderChoice;
 	if (nonInteractive) {
-		const providerFromConfig = normalizeChoice(
-			existingEmbedding.provider,
-			EMBEDDING_PROVIDER_CHOICES,
-		);
-		embeddingProvider =
-			requestedEmbeddingProvider ?? providerFromConfig ?? "none";
+		const providerFromConfig = normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
+		embeddingProvider = requestedEmbeddingProvider ?? providerFromConfig ?? "none";
 	} else {
 		console.log();
 		embeddingProvider = (await select({
@@ -2164,14 +2113,8 @@ async function setupWizard(options: SetupWizardOptions) {
 	} else if (embeddingProvider === "openai") {
 		if (nonInteractive) {
 			const configuredModel =
-				normalizeChoice(options.embeddingModel, [
-					"text-embedding-3-small",
-					"text-embedding-3-large",
-				]) ||
-				normalizeChoice(existingEmbedding.model, [
-					"text-embedding-3-small",
-					"text-embedding-3-large",
-				]) ||
+				normalizeChoice(options.embeddingModel, ["text-embedding-3-small", "text-embedding-3-large"]) ||
+				normalizeChoice(existingEmbedding.model, ["text-embedding-3-small", "text-embedding-3-large"]) ||
 				"text-embedding-3-small";
 			embeddingModel = configuredModel;
 			embeddingDimensions = getEmbeddingDimensions(configuredModel);
@@ -2186,7 +2129,7 @@ async function setupWizard(options: SetupWizardOptions) {
 	const existingSearchBalance = parseSearchBalanceValue(existingSearch.alpha);
 	const requestedSearchBalance = parseSearchBalanceValue(options.searchBalance);
 	const searchBalance = nonInteractive
-		? requestedSearchBalance ?? existingSearchBalance ?? 0.7
+		? (requestedSearchBalance ?? existingSearchBalance ?? 0.7)
 		: await select({
 				message: "Search style (semantic vs keyword matching):",
 				choices: [
@@ -2215,8 +2158,7 @@ async function setupWizard(options: SetupWizardOptions) {
 			existingMemory.pipelineV2?.extractionProvider,
 			EXTRACTION_PROVIDER_CHOICES,
 		);
-		extractionProvider =
-			requestedExtractionProvider ?? providerFromConfig ?? detectedProvider;
+		extractionProvider = requestedExtractionProvider ?? providerFromConfig ?? detectedProvider;
 	} else {
 		console.log();
 		const choices = [
@@ -2323,25 +2265,25 @@ async function setupWizard(options: SetupWizardOptions) {
 			message: "Search candidates per source (top_k):",
 			default: "20",
 		});
-		searchTopK = parseInt(topKInput, 10) || 20;
+		searchTopK = Number.parseInt(topKInput, 10) || 20;
 
 		const minScoreInput = await input({
 			message: "Minimum search score threshold (0-1):",
 			default: "0.3",
 		});
-		searchMinScore = parseFloat(minScoreInput) || 0.3;
+		searchMinScore = Number.parseFloat(minScoreInput) || 0.3;
 
 		const budgetInput = await input({
 			message: "Session context budget (characters):",
 			default: "2000",
 		});
-		memorySessionBudget = parseInt(budgetInput, 10) || 2000;
+		memorySessionBudget = Number.parseInt(budgetInput, 10) || 2000;
 
 		const decayInput = await input({
 			message: "Memory importance decay rate per day (0-1):",
 			default: "0.95",
 		});
-		memoryDecayRate = parseFloat(decayInput) || 0.95;
+		memoryDecayRate = Number.parseFloat(decayInput) || 0.95;
 	}
 
 	// Git version control setup
@@ -2352,11 +2294,7 @@ async function setupWizard(options: SetupWizardOptions) {
 		// Directory exists - check if it's a git repo
 		if (isGitRepo(basePath)) {
 			gitEnabled = true;
-			console.log(
-				chalk.dim(
-					"  Git repo detected. Will create backup commit before changes.",
-				),
-			);
+			console.log(chalk.dim("  Git repo detected. Will create backup commit before changes."));
 		} else if (!shouldSkipGit) {
 			const initGit = nonInteractive
 				? true
@@ -2427,10 +2365,7 @@ async function setupWizard(options: SetupWizardOptions) {
 		// Copy requirements.txt (optional, for users who want Python scripts)
 		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
 		if (existsSync(requirementsSource)) {
-			copyFileSync(
-				requirementsSource,
-				join(basePath, "memory", "requirements.txt"),
-			);
+			copyFileSync(requirementsSource, join(basePath, "memory", "requirements.txt"));
 		}
 
 		const utilScriptsSource = join(templatesDir, "scripts");
@@ -2447,10 +2382,7 @@ async function setupWizard(options: SetupWizardOptions) {
 		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
 		let agentsMd: string;
 		if (existsSync(agentsTemplate)) {
-			agentsMd = readFileSync(agentsTemplate, "utf-8").replace(
-				/\{\{AGENT_NAME\}\}/g,
-				agentName,
-			);
+			agentsMd = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
 		} else {
 			agentsMd = `# ${agentName}
 
@@ -2545,10 +2477,7 @@ ${agentName} is a helpful assistant.
 			if (existsSync(destPath)) continue;
 
 			if (existsSync(templatePath)) {
-				const content = readFileSync(templatePath, "utf-8").replace(
-					/\{\{AGENT_NAME\}\}/g,
-					agentName,
-				);
+				const content = readFileSync(templatePath, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
 				writeFileSync(destPath, content);
 			}
 		}
@@ -2572,18 +2501,14 @@ ${agentName} is a helpful assistant.
 				});
 				configuredHarnesses.push(harness);
 			} catch (err) {
-				console.warn(
-					`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`,
-				);
+				console.warn(`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`);
 			}
 		}
 
 		// Configure OpenClaw workspace if requested
 		if (configureOpenClawWs) {
 			spinner.text = "Configuring OpenClaw workspace...";
-			const patched = await new OpenClawConnector().configureWorkspace(
-				basePath,
-			);
+			const patched = await new OpenClawConnector().configureWorkspace(basePath);
 			if (patched.length > 0) {
 				console.log(chalk.dim(`\n  ✓ OpenClaw workspace set to ${basePath}`));
 			}
@@ -2616,9 +2541,7 @@ ${agentName} is a helpful assistant.
 
 		if (daemonStarted) {
 			console.log();
-			console.log(
-				chalk.green(`  ● Daemon running at http://localhost:${DEFAULT_PORT}`),
-			);
+			console.log(chalk.green(`  ● Daemon running at http://localhost:${DEFAULT_PORT}`));
 		}
 
 		console.log();
@@ -2649,21 +2572,9 @@ ${agentName} is a helpful assistant.
 
 		// Suggest onboarding
 		console.log();
-		console.log(
-			chalk.cyan(
-				"  → Next step: Say '/onboarding' to personalize your agent",
-			),
-		);
-		console.log(
-			chalk.dim(
-				"    This will walk you through setting up your agent's personality,",
-			),
-		);
-		console.log(
-			chalk.dim(
-				"    communication style, and your preferences.",
-			),
-		);
+		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
+		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
+		console.log(chalk.dim("    communication style, and your preferences."));
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
@@ -2692,10 +2603,7 @@ async function importFromGitHub(basePath: string) {
 	if (!gitUrl.includes("://") && !gitUrl.startsWith("git@")) {
 		// Assume it's username/repo format
 		gitUrl = `https://github.com/${gitUrl}.git`;
-	} else if (
-		gitUrl.startsWith("https://github.com/") &&
-		!gitUrl.endsWith(".git")
-	) {
+	} else if (gitUrl.startsWith("https://github.com/") && !gitUrl.endsWith(".git")) {
 		gitUrl = gitUrl + ".git";
 	}
 
@@ -2730,14 +2638,10 @@ async function importFromGitHub(basePath: string) {
 	const spinner = ora("Cloning repository...").start();
 
 	try {
-		const cloneResult = spawnSync(
-			"git",
-			["clone", "--depth", "1", gitUrl, tmpDir],
-			{
-				encoding: "utf-8",
-				stdio: ["pipe", "pipe", "pipe"],
-			},
-		);
+		const cloneResult = spawnSync("git", ["clone", "--depth", "1", gitUrl, tmpDir], {
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 
 		if (cloneResult.status !== 0) {
 			spinner.fail("Clone failed");
@@ -2749,14 +2653,7 @@ async function importFromGitHub(basePath: string) {
 		spinner.succeed("Repository cloned");
 
 		// List files that will be imported
-		const configFiles = [
-			"agent.yaml",
-			"AGENTS.md",
-			"SOUL.md",
-			"IDENTITY.md",
-			"USER.md",
-			"MEMORY.md",
-		];
+		const configFiles = ["agent.yaml", "AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
 		const foundFiles: string[] = [];
 
 		for (const file of configFiles) {
@@ -2858,9 +2755,7 @@ async function importFromGitHub(basePath: string) {
 
 async function launchDashboard(options: { path?: string }) {
 	console.log(signetLogo());
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 
 	const running = await isDaemonRunning();
 
@@ -2886,9 +2781,7 @@ async function launchDashboard(options: { path?: string }) {
 // ============================================================================
 
 async function migrateSchema(options: { path?: string }) {
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 	const dbPath = join(basePath, "memory", "memories.db");
 
 	console.log(signetLogo());
@@ -2940,9 +2833,7 @@ async function migrateSchema(options: { path?: string }) {
 
 		if (result.migrated) {
 			console.log(
-				chalk.green(
-					`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`,
-				),
+				chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`),
 			);
 		} else {
 			console.log(chalk.dim("  No migration needed"));
@@ -2971,9 +2862,7 @@ async function migrateSchema(options: { path?: string }) {
 // ============================================================================
 
 async function showStatus(options: { path?: string }) {
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 	const existing = detectExistingSetup(basePath);
 
 	console.log(signetLogo());
@@ -3023,23 +2912,17 @@ async function showStatus(options: { path?: string }) {
 			if (schemaInfo.type !== "core" && schemaInfo.type !== "unknown") {
 				console.log();
 				console.log(chalk.yellow(`  ⚠ Database schema: ${schemaInfo.type}`));
-				console.log(
-					chalk.dim(
-						`    Run ${chalk.bold("signet migrate-schema")} to upgrade`,
-					),
-				);
+				console.log(chalk.dim(`    Run ${chalk.bold("signet migrate-schema")} to upgrade`));
 			}
 
-			const memoryCount = db
-				.prepare("SELECT COUNT(*) as count FROM memories")
-				.get() as { count: number };
+			const memoryCount = db.prepare("SELECT COUNT(*) as count FROM memories").get() as { count: number };
 
 			// Conversations table may not exist in older schemas
 			let conversationCount: { count: number } | undefined;
 			if (schemaInfo.hasConversations) {
-				conversationCount = db
-					.prepare("SELECT COUNT(*) as count FROM conversations")
-					.get() as { count: number } | undefined;
+				conversationCount = db.prepare("SELECT COUNT(*) as count FROM conversations").get() as
+					| { count: number }
+					| undefined;
 			}
 
 			console.log();
@@ -3110,11 +2993,9 @@ async function showLogs(options: {
 	category?: string;
 	path?: string;
 }) {
-	const limit = parseInt(options.lines || "50", 10);
+	const limit = Number.parseInt(options.lines || "50", 10);
 	const { follow, level, category } = options;
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 
 	console.log(signetLogo());
 
@@ -3128,9 +3009,7 @@ async function showLogs(options: {
 			if (level) params.set("level", level);
 			if (category) params.set("category", category);
 
-			const res = await fetch(
-				`http://localhost:${DEFAULT_PORT}/api/logs?${params}`,
-			);
+			const res = await fetch(`http://localhost:${DEFAULT_PORT}/api/logs?${params}`);
 			const data = await res.json();
 
 			if (data.logs && data.logs.length > 0) {
@@ -3147,9 +3026,7 @@ async function showLogs(options: {
 				console.log();
 				console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
-				const eventSource = new EventSource(
-					`http://localhost:${DEFAULT_PORT}/api/logs/stream`,
-				);
+				const eventSource = new EventSource(`http://localhost:${DEFAULT_PORT}/api/logs/stream`);
 
 				eventSource.onmessage = (event) => {
 					try {
@@ -3174,19 +3051,14 @@ async function showLogs(options: {
 			fallbackToFile();
 		}
 	} else {
-		console.log(
-			chalk.yellow("  Daemon not running - reading from log files\n"),
-		);
+		console.log(chalk.yellow("  Daemon not running - reading from log files\n"));
 		fallbackToFile();
 	}
 
 	function fallbackToFile() {
 		// Fall back to reading log files directly
 		const logDir = join(basePath, ".daemon", "logs");
-		const logFile = join(
-			logDir,
-			`signet-${new Date().toISOString().split("T")[0]}.log`,
-		);
+		const logFile = join(logDir, `signet-${new Date().toISOString().split("T")[0]}.log`);
 
 		if (!existsSync(logFile)) {
 			console.log(chalk.dim("  No log files found"));
@@ -3214,10 +3086,7 @@ async function showLogs(options: {
 // CLI Definition
 // ============================================================================
 
-program
-	.name("signet")
-	.description("Own your agent. Bring it anywhere.")
-	.version(VERSION);
+program.name("signet").description("Own your agent. Bring it anywhere.").version(VERSION);
 
 program
 	.command("setup")
@@ -3232,36 +3101,18 @@ program
 		collectListOption,
 		[],
 	)
-	.option(
-		"--embedding-provider <provider>",
-		"Embedding provider in non-interactive mode (ollama, openai, none)",
-	)
+	.option("--embedding-provider <provider>", "Embedding provider in non-interactive mode (ollama, openai, none)")
 	.option("--embedding-model <model>", "Embedding model in non-interactive mode")
-	.option(
-		"--extraction-provider <provider>",
-		"Extraction provider in non-interactive mode (claude-code, ollama, none)",
-	)
+	.option("--extraction-provider <provider>", "Extraction provider in non-interactive mode (claude-code, ollama, none)")
 	.option("--extraction-model <model>", "Extraction model in non-interactive mode")
-	.option(
-		"--search-balance <alpha>",
-		"Search balance alpha in non-interactive mode (0-1)",
-	)
-	.option(
-		"--openclaw-runtime-path <mode>",
-		"OpenClaw runtime path in non-interactive mode (plugin, legacy)",
-	)
+	.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
+	.option("--openclaw-runtime-path <mode>", "OpenClaw runtime path in non-interactive mode (plugin, legacy)")
 	.option(
 		"--configure-openclaw-workspace",
 		"Patch discovered OpenClaw configs to use the selected setup path in non-interactive mode",
 	)
-	.option(
-		"--open-dashboard",
-		"Open dashboard after setup in non-interactive mode",
-	)
-	.option(
-		"--skip-git",
-		"Skip git initialization and setup commits in non-interactive mode",
-	)
+	.option("--open-dashboard", "Open dashboard after setup in non-interactive mode")
+	.option("--skip-git", "Skip git initialization and setup commits in non-interactive mode")
 	.action(setupWizard);
 
 program
@@ -3286,9 +3137,7 @@ program
 // Daemon action handlers (shared between top-level and subcommand)
 async function doStart(options: { path?: string } = {}) {
 	console.log(signetLogo());
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 
 	const running = await isDaemonRunning();
 	if (running) {
@@ -3309,9 +3158,7 @@ async function doStart(options: { path?: string } = {}) {
 
 async function doStop(options: { path?: string } = {}) {
 	console.log(signetLogo());
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 
 	const running = await isDaemonRunning();
 	if (!running) {
@@ -3331,9 +3178,7 @@ async function doStop(options: { path?: string } = {}) {
 
 async function doRestart(options: { path?: string } = {}) {
 	console.log(signetLogo());
-	const basePath = normalizeAgentPath(
-		extractPathOption(options) ?? AGENTS_DIR,
-	);
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 
 	const spinner = ora("Restarting daemon...").start();
 	await stopDaemon(basePath);
@@ -3349,9 +3194,7 @@ async function doRestart(options: { path?: string } = {}) {
 }
 
 // signet daemon <command> - grouped daemon commands
-const daemonCmd = program
-	.command("daemon")
-	.description("Manage the Signet daemon");
+const daemonCmd = program.command("daemon").description("Manage the Signet daemon");
 
 daemonCmd
 	.command("start")
@@ -3384,10 +3227,7 @@ daemonCmd
 	.option("-n, --lines <lines>", "Number of lines to show", "50")
 	.option("-f, --follow", "Follow log output in real-time")
 	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
-	.option(
-		"-c, --category <category>",
-		"Filter by category (daemon, api, memory, sync, git, watcher)",
-	)
+	.option("-c, --category <category>", "Filter by category (daemon, api, memory, sync, git, watcher)")
 	.action(showLogs);
 
 // Top-level aliases for convenience (backwards compatible)
@@ -3416,10 +3256,7 @@ program
 	.option("-n, --lines <lines>", "Number of lines to show", "50")
 	.option("-f, --follow", "Follow log output in real-time")
 	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
-	.option(
-		"-c, --category <category>",
-		"Filter by category (daemon, api, memory, sync, git, watcher)",
-	)
+	.option("-c, --category <category>", "Filter by category (daemon, api, memory, sync, git, watcher)")
 	.action(showLogs);
 
 program
@@ -3431,9 +3268,7 @@ program
 		const templatesDir = getTemplatesDir();
 
 		if (!existsSync(basePath)) {
-			console.log(
-				chalk.red("  No Signet installation found. Run: signet setup"),
-			);
+			console.log(chalk.red("  No Signet installation found. Run: signet setup"));
 			return;
 		}
 
@@ -3479,9 +3314,7 @@ program
 				console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
 				synced++;
 			} catch {
-				console.log(
-					chalk.yellow(`  ⚠ hooks re-registration failed for ${harness}`),
-				);
+				console.log(chalk.yellow(`  ⚠ hooks re-registration failed for ${harness}`));
 			}
 		}
 
@@ -3501,9 +3334,7 @@ program
 
 		const agentYamlPath = join(AGENTS_DIR, "agent.yaml");
 		if (!existsSync(agentYamlPath)) {
-			console.log(
-				chalk.yellow("  No agent.yaml found. Run `signet setup` first."),
-			);
+			console.log(chalk.yellow("  No agent.yaml found. Run `signet setup` first."));
 			return;
 		}
 
@@ -3511,9 +3342,7 @@ program
 		const existingYaml = readFileSync(agentYamlPath, "utf-8");
 		// Simple YAML parsing for our known structure
 		const getYamlValue = (key: string, fallback: string) => {
-			const match = existingYaml.match(
-				new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"),
-			);
+			const match = existingYaml.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"));
 			return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
 		};
 
@@ -3562,14 +3391,8 @@ program
 				// Update the YAML
 				let updatedYaml = existingYaml;
 				updatedYaml = updatedYaml.replace(/^(\s*name:)\s*.+$/m, `$1 "${name}"`);
-				updatedYaml = updatedYaml.replace(
-					/^(\s*description:)\s*.+$/m,
-					`$1 "${description}"`,
-				);
-				updatedYaml = updatedYaml.replace(
-					/^(\s*updated:)\s*.+$/m,
-					`$1 "${new Date().toISOString()}"`,
-				);
+				updatedYaml = updatedYaml.replace(/^(\s*description:)\s*.+$/m, `$1 "${description}"`);
+				updatedYaml = updatedYaml.replace(/^(\s*updated:)\s*.+$/m, `$1 "${new Date().toISOString()}"`);
 
 				writeFileSync(agentYamlPath, updatedYaml);
 				console.log(chalk.green("  ✓ Agent identity updated"));
@@ -3589,10 +3412,7 @@ program
 
 				// Update harnesses in YAML
 				const harnessYaml = harnesses.map((h) => `  - ${h}`).join("\n");
-				let updatedYaml = existingYaml.replace(
-					/^harnesses:\n(  - .+\n)+/m,
-					`harnesses:\n${harnessYaml}\n`,
-				);
+				const updatedYaml = existingYaml.replace(/^harnesses:\n( {2}- .+\n)+/m, `harnesses:\n${harnessYaml}\n`);
 
 				writeFileSync(agentYamlPath, updatedYaml);
 				console.log(chalk.green("  ✓ Harnesses updated"));
@@ -3642,8 +3462,7 @@ program
 							],
 						});
 						model = m;
-						dimensions =
-							m === "all-minilm" ? 384 : m === "mxbai-embed-large" ? 1024 : 768;
+						dimensions = m === "all-minilm" ? 384 : m === "mxbai-embed-large" ? 1024 : 768;
 					} else {
 						const m = await select({
 							message: "Model:",
@@ -3666,13 +3485,13 @@ program
 					let updatedYaml = existingYaml;
 					if (existingYaml.includes("embedding:")) {
 						updatedYaml = updatedYaml.replace(
-							/^embedding:\n(  .+\n)+/m,
+							/^embedding:\n( {2}.+\n)+/m,
 							`embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
 						);
 					} else {
 						// Add embedding section after harnesses
 						updatedYaml = updatedYaml.replace(
-							/^(harnesses:\n(  - .+\n)+)/m,
+							/^(harnesses:\n( {2}- .+\n)+)/m,
 							`$1\nembedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
 						);
 					}
@@ -3706,10 +3525,7 @@ program
 				let updatedYaml = existingYaml;
 				updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
 				updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
-				updatedYaml = updatedYaml.replace(
-					/^(\s*min_score:)\s*.+$/m,
-					`$1 ${minScore}`,
-				);
+				updatedYaml = updatedYaml.replace(/^(\s*min_score:)\s*.+$/m, `$1 ${minScore}`);
 
 				writeFileSync(agentYamlPath, updatedYaml);
 				console.log(chalk.green("  ✓ Search settings updated"));
@@ -3727,14 +3543,8 @@ program
 				});
 
 				let updatedYaml = existingYaml;
-				updatedYaml = updatedYaml.replace(
-					/^(\s*session_budget:)\s*.+$/m,
-					`$1 ${sessionBudget}`,
-				);
-				updatedYaml = updatedYaml.replace(
-					/^(\s*decay_rate:)\s*.+$/m,
-					`$1 ${decayRate}`,
-				);
+				updatedYaml = updatedYaml.replace(/^(\s*session_budget:)\s*.+$/m, `$1 ${sessionBudget}`);
+				updatedYaml = updatedYaml.replace(/^(\s*decay_rate:)\s*.+$/m, `$1 ${decayRate}`);
 
 				writeFileSync(agentYamlPath, updatedYaml);
 				console.log(chalk.green("  ✓ Memory settings updated"));
@@ -3753,11 +3563,7 @@ program
 
 const DAEMON_URL = `http://localhost:${DEFAULT_PORT}`;
 
-async function secretApiCall(
-	method: string,
-	path: string,
-	body?: unknown,
-): Promise<{ ok: boolean; data: unknown }> {
+async function secretApiCall(method: string, path: string, body?: unknown): Promise<{ ok: boolean; data: unknown }> {
 	const res = await fetch(`${DAEMON_URL}${path}`, {
 		method,
 		headers: body ? { "Content-Type": "application/json" } : {},
@@ -3771,17 +3577,13 @@ async function secretApiCall(
 async function ensureDaemonForSecrets(): Promise<boolean> {
 	const running = await isDaemonRunning();
 	if (!running) {
-		console.error(
-			chalk.red("  Daemon is not running. Start it with: signet start"),
-		);
+		console.error(chalk.red("  Daemon is not running. Start it with: signet start"));
 		return false;
 	}
 	return true;
 }
 
-const secretCmd = program
-	.command("secret")
-	.description("Manage encrypted secrets");
+const secretCmd = program.command("secret").description("Manage encrypted secrets");
 
 secretCmd
 	.command("put <name> [value]")
@@ -3827,9 +3629,7 @@ secretCmd
 		try {
 			const { ok, data } = await secretApiCall("GET", "/api/secrets");
 			if (!ok) {
-				console.error(
-					chalk.red(`  Error: ${(data as { error: string }).error}`),
-				);
+				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
 				process.exit(1);
 			}
 			const secrets = (data as { secrets: string[] }).secrets;
@@ -3860,10 +3660,7 @@ secretCmd
 
 		const spinner = ora("Deleting...").start();
 		try {
-			const { ok, data } = await secretApiCall(
-				"DELETE",
-				`/api/secrets/${name}`,
-			);
+			const { ok, data } = await secretApiCall("DELETE", `/api/secrets/${name}`);
 			if (ok) {
 				spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} deleted`));
 			} else {
@@ -3898,10 +3695,7 @@ function appendCliString(value: string, previous: string[]): string[] {
 	return [...previous, value];
 }
 
-const onePasswordCmd = secretCmd
-	.command("onepassword")
-	.alias("op")
-	.description("Manage 1Password integration");
+const onePasswordCmd = secretCmd.command("onepassword").alias("op").description("Manage 1Password integration");
 
 onePasswordCmd
 	.command("connect [token]")
@@ -3937,9 +3731,7 @@ onePasswordCmd
 					? (data as { vaultCount: number }).vaultCount
 					: 0;
 
-			spinner.succeed(
-				chalk.green(`Connected to 1Password (${vaultCount} vaults accessible)`),
-			);
+			spinner.succeed(chalk.green(`Connected to 1Password (${vaultCount} vaults accessible)`));
 		} catch (e) {
 			spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
 			process.exit(1);
@@ -4019,18 +3811,9 @@ onePasswordCmd
 onePasswordCmd
 	.command("import")
 	.description("Import password-like fields from 1Password into Signet secrets")
-	.option(
-		"-v, --vault <vault>",
-		"Vault ID or exact name (repeatable)",
-		appendCliString,
-		[] as string[],
-	)
+	.option("-v, --vault <vault>", "Vault ID or exact name (repeatable)", appendCliString, [] as string[])
 	.option("--prefix <prefix>", "Prefix for imported secret names", "OP")
-	.option(
-		"--overwrite",
-		"Overwrite existing Signet secrets with the same name",
-		false,
-	)
+	.option("--overwrite", "Overwrite existing Signet secrets with the same name", false)
 	.option("--token <token>", "Use token for this import without saving it")
 	.action(
 		async (options: {
@@ -4076,11 +3859,7 @@ onePasswordCmd
 						console.log(chalk.dim(`  - ${item.itemTitle}: ${item.error}`));
 					}
 					if (result.errors.length > maxPreview) {
-						console.log(
-							chalk.dim(
-								`  ...and ${result.errors.length - maxPreview} more`,
-							),
-						);
+						console.log(chalk.dim(`  ...and ${result.errors.length - maxPreview} more`));
 					}
 				}
 			} catch (e) {
@@ -4169,10 +3948,7 @@ function listLocalSkills(): Array<SkillMeta & { dirName: string }> {
 		});
 }
 
-async function fetchFromDaemon<T>(
-	path: string,
-	opts?: RequestInit & { timeout?: number },
-): Promise<T | null> {
+async function fetchFromDaemon<T>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T | null> {
 	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
 	try {
 		const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
@@ -4189,24 +3965,17 @@ async function fetchFromDaemon<T>(
 // Returns [results, rateLimited]
 async function searchRegistry(
 	query: string,
-): Promise<
-	[Array<{ name: string; description: string; url: string }>, boolean]
-> {
+): Promise<[Array<{ name: string; description: string; url: string }>, boolean]> {
 	// GitHub repository search - no auth needed for public search (10 req/min limit)
 	try {
-		const q = encodeURIComponent(
-			`${query} topic:agent-skill OR filename:SKILL.md in:path`,
-		);
-		const res = await fetch(
-			`https://api.github.com/search/repositories?q=${q}&sort=stars&per_page=10`,
-			{
-				headers: {
-					Accept: "application/vnd.github.v3+json",
-					"User-Agent": "signet-cli",
-				},
-				signal: AbortSignal.timeout(8000),
+		const q = encodeURIComponent(`${query} topic:agent-skill OR filename:SKILL.md in:path`);
+		const res = await fetch(`https://api.github.com/search/repositories?q=${q}&sort=stars&per_page=10`, {
+			headers: {
+				Accept: "application/vnd.github.v3+json",
+				"User-Agent": "signet-cli",
 			},
-		);
+			signal: AbortSignal.timeout(8000),
+		});
 
 		if (res.status === 403 || res.status === 429) return [[], true];
 		if (!res.ok) return [[], false];
@@ -4244,14 +4013,11 @@ skillCmd
 		const data = await fetchFromDaemon<{
 			skills: Array<SkillMeta & { name: string }>;
 		}>("/api/skills");
-		const skills =
-			data?.skills ?? listLocalSkills().map((s) => ({ ...s, name: s.dirName }));
+		const skills = data?.skills ?? listLocalSkills().map((s) => ({ ...s, name: s.dirName }));
 
 		if (skills.length === 0) {
 			console.log(chalk.dim(`  No skills installed at ${SKILLS_DIR}`));
-			console.log(
-				chalk.dim("  Run `signet skill search <query>` to find skills"),
-			);
+			console.log(chalk.dim("  Run `signet skill search <query>` to find skills"));
 			return;
 		}
 
@@ -4269,9 +4035,7 @@ skillCmd
 // signet skill install <name>
 skillCmd
 	.command("install <name>")
-	.description(
-		"Install a skill from skills.sh registry (e.g. browser-use or owner/repo)",
-	)
+	.description("Install a skill from skills.sh registry (e.g. browser-use or owner/repo)")
 	.action(async (name: string) => {
 		const spinner = ora(`Installing ${chalk.cyan(name)}...`).start();
 
@@ -4288,29 +4052,18 @@ skillCmd
 			});
 
 			if (result?.success) {
-				spinner.succeed(
-					`Installed ${chalk.cyan(name)} to ${SKILLS_DIR}/${name}/`,
-				);
+				spinner.succeed(`Installed ${chalk.cyan(name)} to ${SKILLS_DIR}/${name}/`);
 			} else {
 				spinner.fail(`Failed to install ${name}`);
 				if (result?.error) console.error(chalk.dim(`  ${result.error}`));
-				console.log(
-					chalk.dim(
-						`\n  Tip: provide full GitHub path: signet skill install owner/repo`,
-					),
-				);
+				console.log(chalk.dim(`\n  Tip: provide full GitHub path: signet skill install owner/repo`));
 			}
 		} else {
 			const packageManager = resolvePrimaryPackageManager({
 				agentsDir: AGENTS_DIR,
 				env: process.env,
 			});
-			const skillsCommand = getSkillsRunnerCommand(packageManager.family, [
-				"add",
-				name,
-				"--global",
-				"--yes",
-			]);
+			const skillsCommand = getSkillsRunnerCommand(packageManager.family, ["add", name, "--global", "--yes"]);
 
 			spinner.text = `Installing ${chalk.cyan(name)} (daemon offline, running ${skillsCommand.command} skills)...`;
 			if (packageManager.source === "fallback") {
@@ -4334,11 +4087,7 @@ skillCmd
 					} else {
 						spinner.fail(`Failed to install ${name}`);
 						if (stderr) console.error(chalk.dim(`  ${stderr.trim()}`));
-						console.log(
-							chalk.dim(
-								`\n  Tip: provide full GitHub path: signet skill install owner/repo`,
-							),
-						);
+						console.log(chalk.dim(`\n  Tip: provide full GitHub path: signet skill install owner/repo`));
 					}
 					resolve();
 				});
@@ -4417,12 +4166,8 @@ skillCmd
 		if (local.length > 0) {
 			console.log(chalk.bold(`  Installed matching "${query}":\n`));
 			for (const skill of local) {
-				const desc = skill.description
-					? chalk.dim(` — ${skill.description}`)
-					: "";
-				console.log(
-					`    ${chalk.green("✓")} ${chalk.cyan(skill.dirName)}${desc}`,
-				);
+				const desc = skill.description ? chalk.dim(` — ${skill.description}`) : "";
+				console.log(`    ${chalk.green("✓")} ${chalk.cyan(skill.dirName)}${desc}`);
 			}
 			console.log();
 		}
@@ -4432,22 +4177,14 @@ skillCmd
 			for (const skill of remote) {
 				const isInstalled = installed.has(skill.name);
 				const mark = isInstalled ? chalk.green("✓ ") : "  ";
-				const desc = skill.description
-					? chalk.dim(` — ${skill.description}`)
-					: "";
+				const desc = skill.description ? chalk.dim(` — ${skill.description}`) : "";
 				console.log(`  ${mark}${chalk.cyan(skill.name)}${desc}`);
 				console.log(`       ${chalk.dim(skill.url)}`);
 			}
 			console.log();
-			console.log(
-				chalk.dim(`  Install with: signet skill install <owner/repo>`),
-			);
+			console.log(chalk.dim(`  Install with: signet skill install <owner/repo>`));
 		} else if (rateLimited) {
-			console.log(
-				chalk.yellow(
-					`  Registry search rate-limited. Browse at ${chalk.cyan("https://skills.sh")}`,
-				),
-			);
+			console.log(chalk.yellow(`  Registry search rate-limited. Browse at ${chalk.cyan("https://skills.sh")}`));
 		} else if (local.length === 0) {
 			console.log(chalk.dim(`  No skills found for "${query}"`));
 			console.log(chalk.dim(`  Browse all skills at https://skills.sh`));
@@ -4494,7 +4231,7 @@ program
 	.description("Save a memory (auto-embedded for vector search)")
 	.option("-w, --who <who>", "Who is remembering", "user")
 	.option("-t, --tags <tags>", "Comma-separated tags")
-	.option("-i, --importance <n>", "Importance (0-1)", parseFloat, 0.7)
+	.option("-i, --importance <n>", "Importance (0-1)", Number.parseFloat, 0.7)
 	.option("--critical", "Mark as critical (pinned)", false)
 	.action(async (content: string, options) => {
 		if (!(await ensureDaemonForSecrets())) return;
@@ -4510,9 +4247,7 @@ program
 		});
 
 		if (!ok || (data as { error?: string }).error) {
-			spinner.fail(
-				(data as { error?: string }).error || "Failed to save memory",
-			);
+			spinner.fail((data as { error?: string }).error || "Failed to save memory");
 			process.exit(1);
 		}
 
@@ -4524,9 +4259,7 @@ program
 			embedded: boolean;
 		};
 
-		const embedStatus = result.embedded
-			? chalk.dim(" (embedded)")
-			: chalk.yellow(" (no embedding)");
+		const embedStatus = result.embedded ? chalk.dim(" (embedded)") : chalk.yellow(" (no embedding)");
 		spinner.succeed(`Saved memory: ${chalk.cyan(result.id)}${embedStatus}`);
 
 		if (result.pinned) {
@@ -4541,7 +4274,7 @@ program
 program
 	.command("recall <query>")
 	.description("Search memories using hybrid (vector + keyword) search")
-	.option("-l, --limit <n>", "Max results", parseInt, 10)
+	.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
 	.option("-t, --type <type>", "Filter by type")
 	.option("--tags <tags>", "Filter by tags (comma-separated)")
 	.option("--who <who>", "Filter by who")
@@ -4592,11 +4325,7 @@ program
 
 		if (result.results.length === 0) {
 			console.log(chalk.dim("  No memories found"));
-			console.log(
-				chalk.dim(
-					"  Try a different query or add memories with `signet remember`",
-				),
-			);
+			console.log(chalk.dim("  Try a different query or add memories with `signet remember`"));
 			return;
 		}
 
@@ -4610,12 +4339,9 @@ program
 			const tags = r.tags ? chalk.dim(` [${r.tags}]`) : "";
 
 			// Truncate long content for display
-			const displayContent =
-				r.content.length > 120 ? r.content.slice(0, 117) + "..." : r.content;
+			const displayContent = r.content.length > 120 ? r.content.slice(0, 117) + "..." : r.content;
 
-			console.log(
-				`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tags}`,
-			);
+			console.log(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tags}`);
 			console.log(chalk.dim(`      by ${r.who} · ${r.type} · ${source}`));
 		}
 		console.log();
@@ -4625,9 +4351,7 @@ program
 // signet embed - Embedding audit and backfill
 // ============================================================================
 
-const embedCmd = program
-	.command("embed")
-	.description("Embedding management (audit, backfill)");
+const embedCmd = program.command("embed").description("Embedding management (audit, backfill)");
 
 embedCmd
 	.command("audit")
@@ -4638,10 +4362,7 @@ embedCmd
 
 		const spinner = ora("Checking embedding coverage...").start();
 
-		const { ok, data } = await secretApiCall(
-			"GET",
-			"/api/repair/embedding-gaps",
-		);
+		const { ok, data } = await secretApiCall("GET", "/api/repair/embedding-gaps");
 
 		if (!ok || (data as { error?: string }).error) {
 			spinner.fail((data as { error?: string }).error || "Audit failed");
@@ -4663,32 +4384,18 @@ embedCmd
 
 		const embedded = stats.total - stats.unembedded;
 		const coverageColor =
-			stats.unembedded === 0
-				? chalk.green
-				: stats.unembedded > stats.total * 0.3
-					? chalk.red
-					: chalk.yellow;
+			stats.unembedded === 0 ? chalk.green : stats.unembedded > stats.total * 0.3 ? chalk.red : chalk.yellow;
 
 		console.log(chalk.bold("\n  Embedding Coverage Audit\n"));
 		console.log(`  Total memories:    ${chalk.cyan(stats.total)}`);
 		console.log(`  Embedded:          ${chalk.green(embedded)}`);
-		console.log(
-			`  Missing:           ${stats.unembedded > 0 ? chalk.red(stats.unembedded) : chalk.green(0)}`,
-		);
+		console.log(`  Missing:           ${stats.unembedded > 0 ? chalk.red(stats.unembedded) : chalk.green(0)}`);
 		console.log(`  Coverage:          ${coverageColor(stats.coverage)}`);
 		console.log();
 
 		if (stats.unembedded > 0) {
-			console.log(
-				chalk.dim(
-					"  Run `signet embed backfill` to generate missing embeddings",
-				),
-			);
-			console.log(
-				chalk.dim(
-					"  Run `signet embed backfill --dry-run` to preview without changes",
-				),
-			);
+			console.log(chalk.dim("  Run `signet embed backfill` to generate missing embeddings"));
+			console.log(chalk.dim("  Run `signet embed backfill --dry-run` to preview without changes"));
 			console.log();
 		}
 	});
@@ -4697,21 +4404,12 @@ embedCmd
 	.command("backfill")
 	.description("Generate embeddings for memories that are missing them")
 	.option("--dry-run", "Preview what would be embedded without making changes")
-	.option(
-		"--batch-size <n>",
-		"Number of memories to embed per batch",
-		parseInt,
-		50,
-	)
+	.option("--batch-size <n>", "Number of memories to embed per batch", Number.parseInt, 50)
 	.option("--json", "Output as JSON")
 	.action(async (options) => {
 		if (!(await ensureDaemonForSecrets())) return;
 
-		const spinner = ora(
-			options.dryRun
-				? "Checking missing embeddings..."
-				: "Backfilling embeddings...",
-		).start();
+		const spinner = ora(options.dryRun ? "Checking missing embeddings..." : "Backfilling embeddings...").start();
 
 		const { ok, data } = await secretApiCall("POST", "/api/repair/re-embed", {
 			batchSize: options.batchSize,
@@ -4745,11 +4443,7 @@ embedCmd
 			}
 			console.log(`  ${result.message}`);
 			if (!options.dryRun && result.affected > 0) {
-				console.log(
-					chalk.dim(
-						"\n  Run `signet embed audit` to check updated coverage",
-					),
-				);
+				console.log(chalk.dim("\n  Run `signet embed audit` to check updated coverage"));
 			}
 		} else {
 			console.log(chalk.yellow(`\n  ${result.message}`));
@@ -4768,11 +4462,7 @@ program
 	.option("--include-embeddings", "Include embedding vectors (can be regenerated)")
 	.option("--json", "Output as JSON instead of ZIP")
 	.action(async (options) => {
-		const {
-			collectExportData,
-			serializeExportData,
-			loadSqliteVec,
-		} = await import("@signet/core");
+		const { collectExportData, serializeExportData, loadSqliteVec } = await import("@signet/core");
 
 		const agentsDir = join(homedir(), ".agents");
 		const dbPath = join(agentsDir, "memory", "memories.db");
@@ -4829,20 +4519,12 @@ program
 program
 	.command("import <path>")
 	.description("Import agent data from an export bundle")
-	.option(
-		"--conflict <strategy>",
-		"Conflict resolution: skip, overwrite, merge",
-		"skip",
-	)
+	.option("--conflict <strategy>", "Conflict resolution: skip, overwrite, merge", "skip")
 	.option("--json", "Input is a JSON file instead of a directory")
 	.action(async (importPath: string, options) => {
-		const {
-			importMemories,
-			importEntities,
-			importRelations,
-			loadSqliteVec,
-			runMigrations,
-		} = await import("@signet/core");
+		const { importMemories, importEntities, importRelations, loadSqliteVec, runMigrations } = await import(
+			"@signet/core"
+		);
 
 		const agentsDir = join(homedir(), ".agents");
 		const dbPath = join(agentsDir, "memory", "memories.db");
@@ -4896,13 +4578,9 @@ program
 				})
 			: { imported: 0, skipped: 0 };
 
-		const entityCount = fileMap.has("entities.jsonl")
-			? importEntities(db, fileMap.get("entities.jsonl")!)
-			: 0;
+		const entityCount = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl")!) : 0;
 
-		const relationCount = fileMap.has("relations.jsonl")
-			? importRelations(db, fileMap.get("relations.jsonl")!)
-			: 0;
+		const relationCount = fileMap.has("relations.jsonl") ? importRelations(db, fileMap.get("relations.jsonl")!) : 0;
 
 		db.close();
 
@@ -4932,11 +4610,7 @@ program
 		console.log();
 	});
 
-function loadDirRecursive(
-	dir: string,
-	prefix: string,
-	out: Map<string, string>,
-): void {
+function loadDirRecursive(dir: string, prefix: string, out: Map<string, string>): void {
 	const entries = readdirSync(dir, { withFileTypes: true });
 	for (const entry of entries) {
 		const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -4957,9 +4631,7 @@ function loadDirRecursive(
 // signet hook - Lifecycle hooks for harness integration
 // ============================================================================
 
-const hookCmd = program
-	.command("hook")
-	.description("Lifecycle hooks for harness integration");
+const hookCmd = program.command("hook").description("Lifecycle hooks for harness integration");
 
 // Suppress all hook subcommands in spawned agent contexts to prevent
 // recursive extraction loops (scheduler spawn, pipeline provider, etc.)
@@ -5081,12 +4753,8 @@ hookCmd
 						if (typeof msg !== "object" || msg === null) continue;
 
 						const record = msg as Record<string, unknown>;
-						const role =
-							typeof record.role === "string" ? record.role.toLowerCase() : "";
-						const sender =
-							typeof record.sender === "string"
-								? record.sender.toLowerCase()
-								: "";
+						const role = typeof record.role === "string" ? record.role.toLowerCase() : "";
+						const sender = typeof record.sender === "string" ? record.sender.toLowerCase() : "";
 						const isAssistant =
 							role === "assistant" ||
 							role === "agent" ||
@@ -5096,11 +4764,7 @@ hookCmd
 
 						if (!isAssistant) continue;
 
-						const content = pickString(
-							record.content,
-							record.text,
-							record.message,
-						);
+						const content = pickString(record.content, record.text, record.message);
 						if (content) {
 							lastAssistantMessage = content;
 							break;
@@ -5190,7 +4854,7 @@ hookCmd
 	.command("pre-compaction")
 	.description("Get summary instructions before session compaction")
 	.requiredOption("-H, --harness <harness>", "Harness name")
-	.option("--message-count <count>", "Number of messages in session", parseInt)
+	.option("--message-count <count>", "Number of messages in session", Number.parseInt)
 	.option("--json", "Output as JSON")
 	.action(async (options) => {
 		// Parse stdin for session_id and context from harness
@@ -5274,9 +4938,7 @@ hookCmd
 // signet hook synthesis
 hookCmd
 	.command("synthesis")
-	.description(
-		"Request MEMORY.md synthesis (returns prompt for configured harness)",
-	)
+	.description("Request MEMORY.md synthesis (returns prompt for configured harness)")
 	.option("--json", "Output as JSON")
 	.action(async (options) => {
 		// First get the config
@@ -5342,9 +5004,7 @@ hookCmd
 // Update Commands
 // ============================================================================
 
-const updateCmd = program
-	.command("update")
-	.description("Check, install, and manage auto-updates");
+const updateCmd = program.command("update").description("Check, install, and manage auto-updates");
 
 const MIN_AUTO_UPDATE_INTERVAL = 300;
 const MAX_AUTO_UPDATE_INTERVAL = 604800;
@@ -5387,18 +5047,10 @@ updateCmd
 			spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
 			console.log(chalk.dim(`  Current: v${data.currentVersion}`));
 			if (data.restartRequired && data.pendingVersion) {
-				console.log(
-					chalk.dim(
-						`  Pending restart: v${data.pendingVersion} already installed`,
-					),
-				);
+				console.log(chalk.dim(`  Pending restart: v${data.pendingVersion} already installed`));
 			}
 			if (data.publishedAt) {
-				console.log(
-					chalk.dim(
-						`  Released: ${new Date(data.publishedAt).toLocaleDateString()}`,
-					),
-				);
+				console.log(chalk.dim(`  Released: ${new Date(data.publishedAt).toLocaleDateString()}`));
 			}
 			if (data.releaseUrl) {
 				console.log(chalk.dim(`  ${data.releaseUrl}`));
@@ -5406,13 +5058,9 @@ updateCmd
 			console.log(chalk.cyan("\n  Run: signet update install"));
 		} else if (data.restartRequired) {
 			spinner.succeed(
-				chalk.yellow(
-					`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`,
-				),
+				chalk.yellow(`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`),
 			);
-			console.log(
-				chalk.cyan("\n  Restart daemon to apply: signet daemon restart"),
-			);
+			console.log(chalk.cyan("\n  Restart daemon to apply: signet daemon restart"));
 		} else {
 			spinner.succeed("Already up to date");
 			console.log(chalk.dim(`  Version: v${data?.currentVersion}`));
@@ -5438,14 +5086,8 @@ updateCmd
 		}
 
 		if (check.restartRequired && !check.updateAvailable) {
-			console.log(
-				chalk.yellow(
-					`✓ Update already installed (v${check.pendingVersion || check.latestVersion})`,
-				),
-			);
-			console.log(
-				chalk.cyan("  Restart daemon to apply: signet daemon restart"),
-			);
+			console.log(chalk.yellow(`✓ Update already installed (v${check.pendingVersion || check.latestVersion})`));
+			console.log(chalk.cyan("  Restart daemon to apply: signet daemon restart"));
 			return;
 		}
 
@@ -5484,8 +5126,7 @@ updateCmd
 		try {
 			const templatesDir = getTemplatesDir();
 			const skillResult = syncBuiltinSkills(templatesDir, AGENTS_DIR);
-			const totalSynced =
-				skillResult.installed.length + skillResult.updated.length;
+			const totalSynced = skillResult.installed.length + skillResult.updated.length;
 			if (totalSynced > 0) {
 				console.log(chalk.green(`  ✓ ${totalSynced} skills synced`));
 			}
@@ -5515,9 +5156,7 @@ updateCmd
 		}
 
 		if (data.restartRequired) {
-			console.log(
-				chalk.cyan("\n  Restart daemon to apply: signet daemon restart"),
-			);
+			console.log(chalk.cyan("\n  Restart daemon to apply: signet daemon restart"));
 		}
 	});
 
@@ -5541,32 +5180,20 @@ updateCmd
 		}
 
 		console.log(chalk.bold("Update Status\n"));
-		console.log(
-			`  ${chalk.dim("Auto-install:")} ${data.autoInstall ? chalk.green("enabled") : chalk.dim("disabled")}`,
-		);
-		console.log(
-			`  ${chalk.dim("Interval:")}     every ${data.checkInterval || "?"}s`,
-		);
-		console.log(
-			`  ${chalk.dim("In progress:")}  ${data.updateInProgress ? chalk.yellow("yes") : chalk.dim("no")}`,
-		);
+		console.log(`  ${chalk.dim("Auto-install:")} ${data.autoInstall ? chalk.green("enabled") : chalk.dim("disabled")}`);
+		console.log(`  ${chalk.dim("Interval:")}     every ${data.checkInterval || "?"}s`);
+		console.log(`  ${chalk.dim("In progress:")}  ${data.updateInProgress ? chalk.yellow("yes") : chalk.dim("no")}`);
 
 		if (data.pendingRestartVersion) {
-			console.log(
-				`  ${chalk.dim("Pending:")}      v${data.pendingRestartVersion} (restart required)`,
-			);
+			console.log(`  ${chalk.dim("Pending:")}      v${data.pendingRestartVersion} (restart required)`);
 		}
 
 		if (data.lastAutoUpdateAt) {
-			console.log(
-				`  ${chalk.dim("Last success:")} ${new Date(data.lastAutoUpdateAt).toLocaleString()}`,
-			);
+			console.log(`  ${chalk.dim("Last success:")} ${new Date(data.lastAutoUpdateAt).toLocaleString()}`);
 		}
 
 		if (data.lastAutoUpdateError) {
-			console.log(
-				`  ${chalk.dim("Last error:")}   ${chalk.yellow(data.lastAutoUpdateError)}`,
-			);
+			console.log(`  ${chalk.dim("Last error:")}   ${chalk.yellow(data.lastAutoUpdateError)}`);
 		}
 	});
 
@@ -5581,15 +5208,9 @@ updateCmd
 	)
 	.action(async (options) => {
 		const interval = Number.parseInt(options.interval, 10);
-		if (
-			!Number.isFinite(interval) ||
-			interval < MIN_AUTO_UPDATE_INTERVAL ||
-			interval > MAX_AUTO_UPDATE_INTERVAL
-		) {
+		if (!Number.isFinite(interval) || interval < MIN_AUTO_UPDATE_INTERVAL || interval > MAX_AUTO_UPDATE_INTERVAL) {
 			console.error(
-				chalk.red(
-					`Interval must be between ${MIN_AUTO_UPDATE_INTERVAL} and ${MAX_AUTO_UPDATE_INTERVAL} seconds`,
-				),
+				chalk.red(`Interval must be between ${MIN_AUTO_UPDATE_INTERVAL} and ${MAX_AUTO_UPDATE_INTERVAL} seconds`),
 			);
 			process.exit(1);
 		}
@@ -5615,9 +5236,7 @@ updateCmd
 		console.log(chalk.dim(`  Interval: every ${interval}s`));
 		console.log(chalk.dim("  Updates install in the background"));
 		if (data.persisted === false) {
-			console.log(
-				chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"),
-			);
+			console.log(chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"));
 		}
 	});
 
@@ -5641,9 +5260,7 @@ updateCmd
 
 		console.log(chalk.green("✓ Auto-update disabled"));
 		if (data.persisted === false) {
-			console.log(
-				chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"),
-			);
+			console.log(chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"));
 		}
 	});
 
@@ -5679,11 +5296,7 @@ updateCmd.action(async () => {
 		console.log(chalk.dim(`  Current: v${data.currentVersion}`));
 		console.log(chalk.cyan("\n  Run: signet update install"));
 	} else if (data.restartRequired) {
-		spinner.succeed(
-			chalk.yellow(
-				`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`,
-			),
-		);
+		spinner.succeed(chalk.yellow(`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`));
 		console.log(chalk.cyan("\n  Run: signet daemon restart"));
 	} else {
 		spinner.succeed("Already up to date");
@@ -5733,54 +5346,36 @@ gitCmd
 
 		// Show auth status with context-appropriate messaging
 		if (data.authMethod === "no-remote") {
-			console.log(
-				`  ${chalk.dim("Auth:")}       ${chalk.dim("no remote configured")}`,
-			);
+			console.log(`  ${chalk.dim("Auth:")}       ${chalk.dim("no remote configured")}`);
 		} else if (data.hasCredentials) {
-			console.log(
-				`  ${chalk.dim("Auth:")}       ${chalk.green(data.authMethod || "configured")}`,
-			);
+			console.log(`  ${chalk.dim("Auth:")}       ${chalk.green(data.authMethod || "configured")}`);
 		} else {
-			console.log(
-				`  ${chalk.dim("Auth:")}       ${chalk.yellow("no credentials")}`,
-			);
+			console.log(`  ${chalk.dim("Auth:")}       ${chalk.yellow("no credentials")}`);
 		}
 
-		console.log(
-			`  ${chalk.dim("Auto-sync:")}  ${data.autoSync ? chalk.green("enabled") : chalk.dim("disabled")}`,
-		);
+		console.log(`  ${chalk.dim("Auto-sync:")}  ${data.autoSync ? chalk.green("enabled") : chalk.dim("disabled")}`);
 
 		if (data.lastSync) {
 			console.log(`  ${chalk.dim("Last sync:")}  ${data.lastSync}`);
 		}
 
 		if (data.uncommittedChanges !== undefined && data.uncommittedChanges > 0) {
-			console.log(
-				`  ${chalk.dim("Uncommitted:")} ${chalk.yellow(data.uncommittedChanges + " changes")}`,
-			);
+			console.log(`  ${chalk.dim("Uncommitted:")} ${chalk.yellow(data.uncommittedChanges + " changes")}`);
 		}
 
 		if (data.unpushedCommits !== undefined && data.unpushedCommits > 0) {
-			console.log(
-				`  ${chalk.dim("Unpushed:")}   ${chalk.cyan(data.unpushedCommits + " commits")}`,
-			);
+			console.log(`  ${chalk.dim("Unpushed:")}   ${chalk.cyan(data.unpushedCommits + " commits")}`);
 		}
 
 		if (data.unpulledCommits !== undefined && data.unpulledCommits > 0) {
-			console.log(
-				`  ${chalk.dim("Unpulled:")}   ${chalk.cyan(data.unpulledCommits + " commits")}`,
-			);
+			console.log(`  ${chalk.dim("Unpulled:")}   ${chalk.cyan(data.unpulledCommits + " commits")}`);
 		}
 
 		// Context-appropriate help message
 		if (data.authMethod === "no-remote") {
-			console.log(
-				chalk.dim("\n  To enable sync: git -C ~/.agents remote add origin <url>"),
-			);
+			console.log(chalk.dim("\n  To enable sync: git -C ~/.agents remote add origin <url>"));
 		} else if (!data.hasCredentials) {
-			console.log(
-				chalk.dim("\n  To enable sync: gh auth login, or signet secret put GITHUB_TOKEN"),
-			);
+			console.log(chalk.dim("\n  To enable sync: gh auth login, or signet secret put GITHUB_TOKEN"));
 		}
 	});
 
@@ -5869,7 +5464,7 @@ gitCmd
 			method: "POST",
 			body: JSON.stringify({
 				autoSync: true,
-				syncInterval: parseInt(options.interval, 10),
+				syncInterval: Number.parseInt(options.interval, 10),
 			}),
 		});
 
@@ -5912,9 +5507,7 @@ interface MigrationSource {
 	count: number;
 }
 
-async function detectVectorSources(
-	basePath: string,
-): Promise<MigrationSource[]> {
+async function detectVectorSources(basePath: string): Promise<MigrationSource[]> {
 	const sources: MigrationSource[] = [];
 	const memoryDir = join(basePath, "memory");
 
@@ -5949,18 +5542,14 @@ async function detectVectorSources(
 
 			if (tableCheck) {
 				// Check if vector column is BLOB (old format)
-				const schemaCheck = db
-					.prepare(`PRAGMA table_info(embeddings)`)
-					.all() as Array<{
+				const schemaCheck = db.prepare(`PRAGMA table_info(embeddings)`).all() as Array<{
 					name: string;
 					type: string;
 				}>;
 				const vectorCol = schemaCheck.find((c) => c.name === "vector");
 
 				if (vectorCol && vectorCol.type === "BLOB") {
-					const countResult = db
-						.prepare(`SELECT COUNT(*) as count FROM embeddings`)
-						.get() as { count: number };
+					const countResult = db.prepare(`SELECT COUNT(*) as count FROM embeddings`).get() as { count: number };
 					if (countResult.count > 0) {
 						sources.push({
 							type: "blob",
@@ -5979,9 +5568,7 @@ async function detectVectorSources(
 					.get();
 
 				if (vecTableCheck) {
-					const vecCountResult = db
-						.prepare(`SELECT COUNT(*) as count FROM vec_embeddings`)
-						.get() as { count: number };
+					const vecCountResult = db.prepare(`SELECT COUNT(*) as count FROM vec_embeddings`).get() as { count: number };
 					if (vecCountResult.count > 0) {
 						sources.push({
 							type: "vec_table",
@@ -6004,14 +5591,8 @@ async function detectVectorSources(
 program
 	.command("migrate-vectors")
 	.description("Migrate existing BLOB vectors to sqlite-vec format")
-	.option(
-		"--keep-blobs",
-		"Keep old BLOB column after migration (safer for rollback)",
-	)
-	.option(
-		"--remove-zvec",
-		"Delete vectors.zvec file after successful migration",
-	)
+	.option("--keep-blobs", "Keep old BLOB column after migration (safer for rollback)")
+	.option("--remove-zvec", "Delete vectors.zvec file after successful migration")
 	.option("--dry-run", "Show what would be migrated without making changes")
 	.option("--rollback", "Rollback to BLOB format (not implemented in Phase 1)")
 	.action(async (options) => {
@@ -6025,16 +5606,8 @@ program
 		// Handle rollback option
 		if (options.rollback) {
 			console.log(chalk.yellow("  Rollback is not implemented in Phase 1."));
-			console.log(
-				chalk.dim(
-					"  If you used --keep-blobs during migration, you can manually",
-				),
-			);
-			console.log(
-				chalk.dim(
-					"  restore by dropping vec_embeddings table and using the BLOB column.",
-				),
-			);
+			console.log(chalk.dim("  If you used --keep-blobs during migration, you can manually"));
+			console.log(chalk.dim("  restore by dropping vec_embeddings table and using the BLOB column."));
 			return;
 		}
 
@@ -6052,11 +5625,7 @@ program
 		// Check if vec_embeddings already populated
 		const vecTableSource = sources.find((s) => s.type === "vec_table");
 		if (vecTableSource) {
-			console.log(
-				chalk.green(
-					`  vec_embeddings table already populated with ${vecTableSource.count} vectors`,
-				),
-			);
+			console.log(chalk.green(`  vec_embeddings table already populated with ${vecTableSource.count} vectors`));
 			console.log(chalk.dim("  Migration appears to have already been run."));
 
 			// Still check for zvec to clean up
@@ -6078,9 +5647,7 @@ program
 		const blobSource = sources.find((s) => s.type === "blob");
 		if (!blobSource) {
 			console.log(chalk.yellow("  No existing embeddings found to migrate."));
-			console.log(
-				chalk.dim("  The embeddings table is empty or already migrated."),
-			);
+			console.log(chalk.dim("  The embeddings table is empty or already migrated."));
 			return;
 		}
 
@@ -6089,9 +5656,7 @@ program
 		console.log(chalk.cyan("  Migration Plan:"));
 		console.log(chalk.dim(`    Source: ${blobSource.path}`));
 		console.log(chalk.dim(`    Embeddings to migrate: ${blobSource.count}`));
-		console.log(
-			chalk.dim(`    Keep BLOB column: ${options.keepBlobs ? "yes" : "no"}`),
-		);
+		console.log(chalk.dim(`    Keep BLOB column: ${options.keepBlobs ? "yes" : "no"}`));
 
 		const zvecSource = sources.find((s) => s.type === "zvec");
 		if (zvecSource) {
@@ -6128,16 +5693,14 @@ program
 
 			// Load sqlite-vec extension BEFORE creating virtual table
 			if (!loadSqliteVec(db)) {
-				spinner.fail(
-					"sqlite-vec extension not found — cannot migrate vectors."
-				);
+				spinner.fail("sqlite-vec extension not found — cannot migrate vectors.");
 				return;
 			}
 
 			// Detect actual embedding dimensions from existing data
-			const dimRow = db
-				.prepare("SELECT dimensions FROM embeddings LIMIT 1")
-				.get() as { dimensions: number } | undefined;
+			const dimRow = db.prepare("SELECT dimensions FROM embeddings LIMIT 1").get() as
+				| { dimensions: number }
+				| undefined;
 			const dims = dimRow?.dimensions ?? 768;
 
 			// Drop existing vec_embeddings (may have wrong dimensions from prior run)
@@ -6172,10 +5735,7 @@ program
 				try {
 					// Convert BLOB to Float32Array
 					const float32Array = new Float32Array(
-						row.vector.buffer.slice(
-							row.vector.byteOffset,
-							row.vector.byteOffset + row.vector.byteLength,
-						),
+						row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength),
 					);
 
 					// Insert with rowid matching the embeddings.id
@@ -6187,9 +5747,7 @@ program
 					}
 				} catch (err) {
 					failed++;
-					console.error(
-						`\n  Failed to migrate embedding ${row.id}: ${(err as Error).message}`,
-					);
+					console.error(`\n  Failed to migrate embedding ${row.id}: ${(err as Error).message}`);
 				}
 			}
 
@@ -6225,19 +5783,13 @@ program
 				} catch (err) {
 					spinner.warn("Could not remove BLOB column");
 					console.log(chalk.dim(`  ${(err as Error).message}`));
-					console.log(
-						chalk.dim(
-							"  Vectors were migrated successfully. BLOB column retained.",
-						),
-					);
+					console.log(chalk.dim("  Vectors were migrated successfully. BLOB column retained."));
 				}
 			}
 
 			db.close();
 
-			spinner.succeed(
-				chalk.green(`Migrated ${migrated} embeddings to sqlite-vec format`),
-			);
+			spinner.succeed(chalk.green(`Migrated ${migrated} embeddings to sqlite-vec format`));
 
 			if (failed > 0) {
 				console.log(chalk.yellow(`  ${failed} embeddings failed to migrate`));
@@ -6249,20 +5801,12 @@ program
 					rmSync(zvecSource.path);
 					console.log(chalk.dim(`  Removed ${zvecSource.path}`));
 				} catch (err) {
-					console.log(
-						chalk.yellow(
-							`  Could not remove zvec file: ${(err as Error).message}`,
-						),
-					);
+					console.log(chalk.yellow(`  Could not remove zvec file: ${(err as Error).message}`));
 				}
 			}
 
 			console.log();
-			console.log(
-				chalk.dim(
-					"  You may need to restart the daemon for changes to take effect:",
-				),
-			);
+			console.log(chalk.dim("  You may need to restart the daemon for changes to take effect:"));
 			console.log(chalk.cyan("    signet daemon restart"));
 		} catch (err) {
 			spinner.fail("Migration failed");

@@ -6,13 +6,14 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import type { PipelineV2Config } from "./memory-config";
+import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import {
 	checkFtsConsistency,
 	checkRepairGate,
 	createRateLimiter,
 	deduplicateMemories,
 	getDedupStats,
+	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
 	resyncVectorIndex,
@@ -108,6 +109,13 @@ const TEST_CFG: PipelineV2Config = {
 		flushBatchSize: 50,
 		retentionDays: 90,
 	},
+};
+
+const TEST_EMBEDDING_CFG: EmbeddingConfig = {
+	provider: "ollama",
+	model: "test",
+	dimensions: 3,
+	base_url: "http://localhost:11434",
 };
 
 const CTX_OPERATOR = {
@@ -412,6 +420,125 @@ describe("checkFtsConsistency", () => {
 		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
 		// Rebuild only runs on mismatch; consistent case is a no-op
 		expect(result.success).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// reembedMissingMemories
+// ---------------------------------------------------------------------------
+
+describe("reembedMissingMemories", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+		accessor = asAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("repairs memories even when content_hash is NULL", async () => {
+		insertMemory(db, "mem-null-hash");
+
+		const limiter = createRateLimiter();
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+
+		const embedded = db.prepare("SELECT content_hash FROM embeddings WHERE source_id = ?").get("mem-null-hash") as
+			| { content_hash: string }
+			| undefined;
+		expect(embedded?.content_hash).toBeTruthy();
+	});
+
+	it("syncs vec row using canonical embedding id on hash conflict", async () => {
+		ensureVecTable(db);
+		const now = new Date().toISOString();
+
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-existing", "duplicate content", "hash-shared", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-target", "duplicate content", "hash-shared", now, now);
+
+		insertEmbedding(db, {
+			id: "emb-existing",
+			contentHash: "hash-shared",
+			sourceId: "mem-existing",
+			vector: [0.9, 0.9, 0.9],
+		});
+
+		const limiter = createRateLimiter();
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.4, 0.5, 0.6],
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
+		);
+
+		expect(result.success).toBe(true);
+
+		const vecIds = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
+		expect(vecIds.map((row) => row.id)).toEqual(["emb-existing"]);
+	});
+
+	it("can sweep all missing embeddings across multiple batches in one run", async () => {
+		const now = new Date().toISOString();
+		for (let i = 0; i < 5; i++) {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+				 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+			).run(`mem-sweep-${i}`, `content sweep ${i}`, `hash-sweep-${i}`, now, now);
+		}
+
+		const limiter = createRateLimiter();
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			2,
+			false,
+			true,
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(5);
+		expect(result.message).toMatch(/across 3 batch/);
+
+		const remaining = db
+			.prepare(
+				`SELECT COUNT(*) AS n
+				 FROM memories m
+				 LEFT JOIN embeddings e ON e.source_type = 'memory' AND e.source_id = m.id
+				 WHERE m.is_deleted = 0 AND e.id IS NULL`,
+			)
+			.get() as { n: number };
+		expect(remaining.n).toBe(0);
 	});
 });
 

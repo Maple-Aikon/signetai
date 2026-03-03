@@ -6,6 +6,7 @@
  * All actions respect autonomousFrozen regardless of actor type.
  */
 
+import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import {
 	countChanges,
@@ -453,38 +454,23 @@ const DEFAULT_REEMBED_BATCH = 50;
 interface UnembeddedMemory {
 	readonly id: string;
 	readonly content: string;
-	readonly content_hash: string;
+	readonly content_hash: string | null;
 }
 
-/**
- * Backfill embeddings for memories that have no vector.
- *
- * Embedding fetches are async network calls so this function is async
- * and carefully avoids calling the provider inside a write transaction.
- */
-export async function reembedMissingMemories(
+interface ReembedBatchOutcome {
+	readonly selected: number;
+	readonly written: number;
+	readonly failed: number;
+}
+
+let reembedInProgress = false;
+
+async function reembedMissingMemoriesBatch(
 	accessor: DbAccessor,
-	cfg: PipelineV2Config,
-	ctx: RepairContext,
-	limiter: RateLimiter,
 	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	embeddingCfg: EmbeddingConfig,
-	batchSize: number = DEFAULT_REEMBED_BATCH,
-	dryRun = false,
-): Promise<RepairResult> {
-	const action = "reembedMissingMemories";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, cfg.repair.reembedHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
-	}
-
-	// Step 1: read unembedded memories (outside any write tx)
+	batchSize: number,
+): Promise<ReembedBatchOutcome> {
 	const unembedded = accessor.withReadDb((db) => {
 		return db
 			.prepare(
@@ -501,24 +487,12 @@ export async function reembedMissingMemories(
 
 	if (unembedded.length === 0) {
 		return {
-			action,
-			success: true,
-			affected: 0,
-			message: "no unembedded memories found",
+			selected: 0,
+			written: 0,
+			failed: 0,
 		};
 	}
 
-	if (dryRun) {
-		const stats = getEmbeddingGapStats(accessor);
-		return {
-			action,
-			success: true,
-			affected: 0,
-			message: `dry run: ${unembedded.length} memories in this batch, ${stats.unembedded} total unembedded`,
-		};
-	}
-
-	// Step 2: fetch embeddings async (outside any transaction)
 	const results: Array<{
 		memory: UnembeddedMemory;
 		vector: readonly number[];
@@ -540,27 +514,29 @@ export async function reembedMissingMemories(
 
 	if (results.length === 0) {
 		return {
-			action,
-			success: false,
-			affected: 0,
-			message: `embedding provider returned no vectors for ${unembedded.length} memories`,
+			selected: unembedded.length,
+			written: 0,
+			failed: unembedded.length,
 		};
 	}
 
-	// Step 3: batch-write embeddings in a single write tx
 	const written = accessor.withWriteTx((db) => {
 		const now = new Date().toISOString();
 		let count = 0;
 
 		for (const { memory, vector } of results) {
+			const contentHash =
+				typeof memory.content_hash === "string" && memory.content_hash.trim().length > 0
+					? memory.content_hash
+					: normalizeAndHashContent(memory.content).contentHash;
 			const embId = crypto.randomUUID();
 			const blob = vectorToBlob(vector);
-			syncVecDeleteBySourceExceptHash(db, "memory", memory.id, memory.content_hash);
+			syncVecDeleteBySourceExceptHash(db, "memory", memory.id, contentHash);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ?
 				   AND content_hash <> ?`,
-			).run(memory.id, memory.content_hash);
+			).run(memory.id, contentHash);
 			const result = db
 				.prepare(
 					`INSERT INTO embeddings
@@ -575,32 +551,164 @@ export async function reembedMissingMemories(
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				)
-				.run(embId, memory.content_hash, blob, vector.length, memory.id, memory.content, now);
+				.run(embId, contentHash, blob, vector.length, memory.id, memory.content, now);
 			if (countChanges(result) > 0) {
-				syncVecInsert(db, embId, vector);
+				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+					| { id: string }
+					| undefined;
+				const actualEmbeddingId = actualRow?.id ?? embId;
+				syncVecInsert(db, actualEmbeddingId, vector);
 				count++;
 			}
 		}
 
-		const msg = `re-embedded ${count} of ${unembedded.length} memories`;
-		writeRepairAudit(db, action, ctx, count, msg);
 		return count;
 	});
 
-	limiter.record(action);
-	logger.info("pipeline", "repair: re-embedded missing memories", {
-		affected: written,
-		attempted: unembedded.length,
-		actor: ctx.actor,
-		reason: ctx.reason,
-	});
-
 	return {
-		action,
-		success: true,
-		affected: written,
-		message: `re-embedded ${written} of ${unembedded.length} memories`,
+		selected: unembedded.length,
+		written,
+		failed: unembedded.length - results.length,
 	};
+}
+
+/**
+ * Backfill embeddings for memories that have no vector.
+ *
+ * Embedding fetches are async network calls so this function is async
+ * and carefully avoids calling the provider inside a write transaction.
+ */
+export async function reembedMissingMemories(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	embeddingCfg: EmbeddingConfig,
+	batchSize: number = DEFAULT_REEMBED_BATCH,
+	dryRun = false,
+	runToCompletion = false,
+	cooldownMsOverride?: number,
+): Promise<RepairResult> {
+	const action = "reembedMissingMemories";
+	const effectiveCooldownMs =
+		typeof cooldownMsOverride === "number" && Number.isFinite(cooldownMsOverride)
+			? Math.max(0, Math.floor(cooldownMsOverride))
+			: cfg.repair.reembedCooldownMs;
+	const gate = checkRepairGate(cfg, ctx, limiter, action, effectiveCooldownMs, cfg.repair.reembedHourlyBudget);
+
+	if (!gate.allowed) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: gate.reason ?? "denied by policy gate",
+		};
+	}
+
+	const normalizedBatchSize =
+		Number.isFinite(batchSize) && batchSize > 0 ? Math.max(1, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
+
+	const initialStats = getEmbeddingGapStats(accessor);
+	if (initialStats.unembedded === 0) {
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "no unembedded memories found",
+		};
+	}
+
+	if (dryRun) {
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: `dry run: ${Math.min(normalizedBatchSize, initialStats.unembedded)} memories in this batch, ${initialStats.unembedded} total unembedded`,
+		};
+	}
+
+	if (reembedInProgress) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: "re-embed already in progress",
+		};
+	}
+
+	reembedInProgress = true;
+	try {
+		let attempted = 0;
+		let written = 0;
+		let failed = 0;
+		let batches = 0;
+
+		while (true) {
+			const outcome = await reembedMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, normalizedBatchSize);
+
+			if (outcome.selected === 0) break;
+
+			attempted += outcome.selected;
+			written += outcome.written;
+			failed += outcome.failed;
+			batches++;
+
+			if (!runToCompletion) break;
+			if (outcome.selected < normalizedBatchSize) break;
+			if (outcome.written === 0) break;
+		}
+
+		if (attempted === 0) {
+			return {
+				action,
+				success: true,
+				affected: 0,
+				message: "no unembedded memories found",
+			};
+		}
+
+		if (written === 0) {
+			return {
+				action,
+				success: false,
+				affected: 0,
+				message: `embedding provider returned no vectors for ${attempted} memories`,
+			};
+		}
+
+		const remaining = getEmbeddingGapStats(accessor).unembedded;
+		const scope = runToCompletion ? `across ${batches} batch(es)` : "in one batch";
+		const msg =
+			failed > 0
+				? `re-embedded ${written} of ${attempted} memories ${scope} (${failed} failed, ${remaining} still missing)`
+				: `re-embedded ${written} of ${attempted} memories ${scope} (${remaining} still missing)`;
+
+		accessor.withWriteTx((db) => {
+			writeRepairAudit(db, action, ctx, written, msg);
+		});
+
+		limiter.record(action);
+		logger.info("pipeline", "repair: re-embedded missing memories", {
+			affected: written,
+			attempted,
+			failed,
+			remaining,
+			batches,
+			runToCompletion,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
+
+		return {
+			action,
+			success: true,
+			affected: written,
+			message: msg,
+		};
+	} finally {
+		reembedInProgress = false;
+	}
 }
 
 // ---------------------------------------------------------------------------
