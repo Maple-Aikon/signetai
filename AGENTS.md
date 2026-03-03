@@ -117,6 +117,7 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 | `@signet/connector-base` | Shared connector primitives/utilities | node |
 | `@signet/cli` | CLI tool: setup wizard, daemon management | node |
 | `@signet/daemon` | Background service: HTTP API, MCP server, file watching | bun |
+| `@signet/extension` | Browser extension: popup dashboard, highlight-to-remember | browser |
 | `@signet/sdk` | Integration SDK for third-party apps | node |
 | `@signet/connector-claude-code` | Claude Code connector: hooks, CLAUDE.md generation | node |
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
