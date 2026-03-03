@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.27.0] - 2026-03-03
+
+### Bug Fixes
+
+- **daemon**: avoid marketplace MCP route shadowing
+
+
 ## [0.26.0] - 2026-03-03
 
 ### Features
