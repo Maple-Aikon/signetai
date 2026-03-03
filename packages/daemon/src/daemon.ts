@@ -269,8 +269,9 @@ async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promise<numbe
 						logger.info("embedding", "Ollama fallback succeeded — will use ollama for remaining embeddings this session");
 						return result;
 					}
+					logger.warn("embedding", "Ollama fallback also failed");
 				} catch {
-					// ollama also not available
+					logger.warn("embedding", "Ollama fallback not reachable");
 				}
 				return null;
 			}
