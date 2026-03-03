@@ -6,16 +6,19 @@ import {
 	type Memory,
 	type ProjectionNode,
 	type ProjectionQueryOptions,
+	type RepairActionResult,
 	getDistinctWho,
 	getEmbeddingHealth,
 	getProjection,
 	getSimilarMemories,
 	repairCleanOrphans,
 	repairReEmbed,
+	repairResyncVectorIndex,
 	setMemoryPinned,
 } from "$lib/api";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import { mem } from "$lib/stores/memory.svelte";
+import { toast } from "$lib/stores/toast.svelte";
 import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
@@ -189,10 +192,27 @@ async function runFix(check: EmbeddingCheckResult): Promise<void> {
 	if (healthFixBusy) return;
 	healthFixBusy = true;
 	try {
+		let result: RepairActionResult;
 		if (check.name === "orphaned-embeddings") {
-			await repairCleanOrphans();
+			result = await repairCleanOrphans();
+		} else if (check.name === "vec-table-sync") {
+			result = await repairResyncVectorIndex();
 		} else if (check.name === "coverage" || check.name === "null-vectors") {
-			await repairReEmbed();
+			result = await repairReEmbed();
+		} else {
+			toast(`Repair action not wired for ${check.name}`, "warning");
+			return;
+		}
+
+		if (!result.success) {
+			toast(`Repair failed: ${result.message}`, "error", 5000);
+			return;
+		}
+
+		if (result.affected > 0) {
+			toast(result.message, "success", 4500);
+		} else {
+			toast(result.message, "info", 4500);
 		}
 		await fetchHealth();
 	} finally {

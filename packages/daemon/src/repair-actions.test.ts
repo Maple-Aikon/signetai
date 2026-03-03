@@ -5,17 +5,18 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
-import type { DbAccessor, WriteDb, ReadDb } from "./db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { PipelineV2Config } from "./memory-config";
 import {
-	createRateLimiter,
-	checkRepairGate,
-	requeueDeadJobs,
-	releaseStaleLeases,
 	checkFtsConsistency,
-	triggerRetentionSweep,
-	getDedupStats,
+	checkRepairGate,
+	createRateLimiter,
 	deduplicateMemories,
+	getDedupStats,
+	releaseStaleLeases,
+	requeueDeadJobs,
+	resyncVectorIndex,
+	triggerRetentionSweep,
 } from "./repair-actions";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,7 @@ const TEST_CFG: PipelineV2Config = {
 	enabled: true,
 	shadowMode: false,
 	mutationsFrozen: false,
+	semanticContradictionEnabled: false,
 	extraction: {
 		provider: "ollama",
 		model: "test",
@@ -98,6 +100,14 @@ const TEST_CFG: PipelineV2Config = {
 		chunkTargetChars: 300,
 		recallTruncateChars: 500,
 	},
+	telemetryEnabled: false,
+	telemetry: {
+		posthogHost: "",
+		posthogApiKey: "",
+		flushIntervalMs: 60000,
+		flushBatchSize: 50,
+		retentionDays: 90,
+	},
 };
 
 const CTX_OPERATOR = {
@@ -120,18 +130,50 @@ function insertMemory(db: Database, id: string): void {
 	).run(id, `content for ${id}`, "fact", now, now, "test");
 }
 
-function insertJob(
-	db: Database,
-	id: string,
-	memId: string,
-	status: string,
-	leasedAt?: string,
-): void {
+function insertJob(db: Database, id: string, memId: string, status: string, leasedAt?: string): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO memory_jobs (id, memory_id, job_type, status, leased_at, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	).run(id, memId, "extract", status, leasedAt ?? null, now, now);
+}
+
+function ensureVecTable(db: Database): void {
+	try {
+		db.exec("DROP TABLE IF EXISTS vec_embeddings");
+	} catch {
+		// ignore drop failures in tests
+	}
+	db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB)");
+}
+
+function vectorBlob(values: readonly number[]): Buffer {
+	const f32 = new Float32Array(values);
+	return Buffer.from(f32.buffer.slice(0));
+}
+
+function insertEmbedding(
+	db: Database,
+	params: {
+		id: string;
+		contentHash: string;
+		sourceId: string;
+		vector: readonly number[];
+	},
+): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+		 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)`,
+	).run(
+		params.id,
+		params.contentHash,
+		vectorBlob(params.vector),
+		params.vector.length,
+		params.sourceId,
+		`chunk for ${params.sourceId}`,
+		now,
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -267,9 +309,9 @@ describe("requeueDeadJobs", () => {
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(2);
 
-		const statuses = db
-			.prepare("SELECT status FROM memory_jobs WHERE memory_id = 'mem-1'")
-			.all() as Array<{ status: string }>;
+		const statuses = db.prepare("SELECT status FROM memory_jobs WHERE memory_id = 'mem-1'").all() as Array<{
+			status: string;
+		}>;
 		expect(statuses.every((r) => r.status === "pending")).toBe(true);
 	});
 
@@ -280,20 +322,12 @@ describe("requeueDeadJobs", () => {
 		}
 
 		const limiter = createRateLimiter();
-		const result = requeueDeadJobs(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-			3,
-		);
+		const result = requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, limiter, 3);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(3);
 
-		const remaining = db
-			.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'")
-			.get() as { n: number };
+		const remaining = db.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'").get() as { n: number };
 		expect(remaining.n).toBe(2);
 	});
 });
@@ -334,14 +368,10 @@ describe("releaseStaleLeases", () => {
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
 
-		const stale = db
-			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-stale'")
-			.get() as { status: string };
+		const stale = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-stale'").get() as { status: string };
 		expect(stale.status).toBe("pending");
 
-		const fresh = db
-			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-fresh'")
-			.get() as { status: string };
+		const fresh = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-fresh'").get() as { status: string };
 		expect(fresh.status).toBe("leased");
 	});
 });
@@ -367,13 +397,7 @@ describe("checkFtsConsistency", () => {
 	it("reports consistent FTS when counts match", () => {
 		insertMemory(db, "mem-fts-ok");
 		const limiter = createRateLimiter();
-		const result = checkFtsConsistency(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-			false,
-		);
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, false);
 
 		expect(result.success).toBe(true);
 		// counts match (FTS5 external content reads from memories)
@@ -385,13 +409,7 @@ describe("checkFtsConsistency", () => {
 		insertMemory(db, "mem-fts-rebuild");
 		const limiter = createRateLimiter();
 		// repair=true triggers rebuild even when consistent; should not throw
-		const result = checkFtsConsistency(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-			true,
-		);
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
 		// Rebuild only runs on mismatch; consistent case is a no-op
 		expect(result.success).toBe(true);
 	});
@@ -527,12 +545,7 @@ describe("deduplicateMemories", () => {
 		).run("mid-importance", "duplicate content", now, now);
 
 		const limiter = createRateLimiter();
-		const result = await deduplicateMemories(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-		);
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(2); // 2 losers soft-deleted
@@ -566,9 +579,7 @@ describe("deduplicateMemories", () => {
 		const limiter = createRateLimiter();
 		await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
-		const row = db
-			.prepare("SELECT tags FROM memories WHERE id = 'keeper-tags'")
-			.get() as { tags: string };
+		const row = db.prepare("SELECT tags FROM memories WHERE id = 'keeper-tags'").get() as { tags: string };
 		const tags = row.tags.split(",");
 		expect(tags).toContain("alpha");
 		expect(tags).toContain("beta");
@@ -588,12 +599,7 @@ describe("deduplicateMemories", () => {
 		).run("unpinned-mem", "content", now, now);
 
 		const limiter = createRateLimiter();
-		const result = await deduplicateMemories(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-		);
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		// Pinned memories are excluded from the initial query, so the
 		// cluster only contains unpinned-mem (1 row) -- not enough to deduplicate
@@ -639,13 +645,7 @@ describe("deduplicateMemories", () => {
 		).run("dry-2", "content", now, now);
 
 		const limiter = createRateLimiter();
-		const result = await deduplicateMemories(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-			{ dryRun: true },
-		);
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(0);
@@ -653,9 +653,7 @@ describe("deduplicateMemories", () => {
 		expect(result.message).toMatch(/dry run/);
 
 		// Nothing should be deleted
-		const active = db
-			.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
-			.get() as { n: number };
+		const active = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
 		expect(active.n).toBe(2);
 	});
 
@@ -691,12 +689,7 @@ describe("deduplicateMemories", () => {
 			autonomous: { ...TEST_CFG.autonomous, frozen: true },
 		};
 		const limiter = createRateLimiter();
-		const result = await deduplicateMemories(
-			accessor,
-			frozenCfg,
-			CTX_OPERATOR,
-			limiter,
-		);
+		const result = await deduplicateMemories(accessor, frozenCfg, CTX_OPERATOR, limiter);
 		expect(result.success).toBe(false);
 	});
 
@@ -718,20 +711,13 @@ describe("deduplicateMemories", () => {
 		}
 
 		const limiter = createRateLimiter();
-		const result = await deduplicateMemories(
-			accessor,
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-		);
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.clusters).toBe(2);
 		expect(result.affected).toBe(3); // 2 from cluster A + 1 from cluster B
 
-		const active = db
-			.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
-			.get() as { n: number };
+		const active = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
 		expect(active.n).toBe(2); // 1 keeper per cluster
 	});
 });
@@ -750,14 +736,74 @@ describe("triggerRetentionSweep", () => {
 		};
 
 		const limiter = createRateLimiter();
-		const result = triggerRetentionSweep(
-			TEST_CFG,
-			CTX_OPERATOR,
-			limiter,
-			handle,
-		);
+		const result = triggerRetentionSweep(TEST_CFG, CTX_OPERATOR, limiter, handle);
 
 		expect(result.success).toBe(true);
 		expect(swept).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// resyncVectorIndex
+// ---------------------------------------------------------------------------
+
+describe("resyncVectorIndex", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(db);
+		accessor = asAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("inserts missing vec rows and removes orphan vec rows", () => {
+		insertMemory(db, "mem-v-1");
+		insertMemory(db, "mem-v-2");
+
+		insertEmbedding(db, {
+			id: "emb-v-1",
+			contentHash: "hash-v-1",
+			sourceId: "mem-v-1",
+			vector: [0.1, 0.2, 0.3],
+		});
+		insertEmbedding(db, {
+			id: "emb-v-2",
+			contentHash: "hash-v-2",
+			sourceId: "mem-v-2",
+			vector: [0.4, 0.5, 0.6],
+		});
+
+		db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(
+			"emb-v-1",
+			new Float32Array([0.1, 0.2, 0.3]),
+		);
+		db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(
+			"emb-orphan",
+			new Float32Array([9, 9, 9]),
+		);
+
+		const limiter = createRateLimiter();
+		const result = resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(2);
+
+		const ids = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
+		expect(ids.map((row) => row.id)).toEqual(["emb-v-1", "emb-v-2"]);
+	});
+
+	it("returns a clear error when vec table is missing", () => {
+		db.exec("DROP TABLE vec_embeddings");
+		const limiter = createRateLimiter();
+		const result = resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+		expect(result.success).toBe(false);
+		expect(result.message).toMatch(/vec_embeddings table not found/);
 	});
 });

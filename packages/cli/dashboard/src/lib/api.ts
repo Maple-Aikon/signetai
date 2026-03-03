@@ -524,32 +524,84 @@ export async function getEmbeddingHealth(): Promise<EmbeddingHealthReport | null
 	}
 }
 
-export async function repairCleanOrphans(): Promise<{ success: boolean; affected: number; message: string } | null> {
+export interface RepairActionResult {
+	success: boolean;
+	affected: number;
+	message: string;
+	action?: string;
+	status: number;
+}
+
+async function runRepairAction(path: string, payload: Record<string, unknown>): Promise<RepairActionResult> {
 	try {
-		const response = await fetch(`${API_BASE}/api/repair/clean-orphans`, {
+		const response = await fetch(`${API_BASE}${path}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ reason: "dashboard: embedding health", actor: "dashboard" }),
+			body: JSON.stringify(payload),
 		});
-		if (!response.ok) return null;
-		return await response.json();
-	} catch {
-		return null;
+		const body = (await response.json().catch(() => null)) as {
+			success?: unknown;
+			affected?: unknown;
+			message?: unknown;
+			error?: unknown;
+			action?: unknown;
+		} | null;
+
+		const affected = typeof body?.affected === "number" ? body.affected : 0;
+		const action = typeof body?.action === "string" ? body.action : undefined;
+		const responseMessage =
+			typeof body?.message === "string"
+				? body.message
+				: typeof body?.error === "string"
+					? body.error
+					: `HTTP ${response.status}`;
+
+		if (response.ok) {
+			const success = typeof body?.success === "boolean" ? body.success : true;
+			return {
+				success,
+				affected,
+				message: responseMessage,
+				action,
+				status: response.status,
+			};
+		}
+
+		return {
+			success: false,
+			affected,
+			message: responseMessage,
+			action,
+			status: response.status,
+		};
+	} catch (error) {
+		return {
+			success: false,
+			affected: 0,
+			message: error instanceof Error ? error.message : String(error),
+			status: 0,
+		};
 	}
 }
 
-export async function repairReEmbed(): Promise<{ success: boolean; affected: number; message: string } | null> {
-	try {
-		const response = await fetch(`${API_BASE}/api/repair/re-embed`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ reason: "dashboard: embedding health", actor: "dashboard" }),
-		});
-		if (!response.ok) return null;
-		return await response.json();
-	} catch {
-		return null;
-	}
+const DASHBOARD_REPAIR_PAYLOAD = {
+	reason: "dashboard: embedding health",
+	actor: "dashboard",
+};
+
+export async function repairCleanOrphans(): Promise<RepairActionResult> {
+	return runRepairAction("/api/repair/clean-orphans", DASHBOARD_REPAIR_PAYLOAD);
+}
+
+export async function repairReEmbed(batchSize = 250): Promise<RepairActionResult> {
+	return runRepairAction("/api/repair/re-embed", {
+		...DASHBOARD_REPAIR_PAYLOAD,
+		batchSize,
+	});
+}
+
+export async function repairResyncVectorIndex(): Promise<RepairActionResult> {
+	return runRepairAction("/api/repair/resync-vec", DASHBOARD_REPAIR_PAYLOAD);
 }
 
 export async function getHarnesses(): Promise<Harness[]> {
@@ -582,10 +634,7 @@ export interface SyncResult {
 
 export async function syncConnector(id: string): Promise<SyncResult> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/connectors/${encodeURIComponent(id)}/sync`,
-			{ method: "POST" },
-		);
+		const response = await fetch(`${API_BASE}/api/connectors/${encodeURIComponent(id)}/sync`, { method: "POST" });
 		return await response.json();
 	} catch (e) {
 		return { status: "error", error: e instanceof Error ? e.message : String(e) };
@@ -594,10 +643,9 @@ export async function syncConnector(id: string): Promise<SyncResult> {
 
 export async function syncConnectorFull(id: string): Promise<SyncResult> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/connectors/${encodeURIComponent(id)}/sync/full?confirm=true`,
-			{ method: "POST" },
-		);
+		const response = await fetch(`${API_BASE}/api/connectors/${encodeURIComponent(id)}/sync/full?confirm=true`, {
+			method: "POST",
+		});
 		return await response.json();
 	} catch (e) {
 		return { status: "error", error: e instanceof Error ? e.message : String(e) };

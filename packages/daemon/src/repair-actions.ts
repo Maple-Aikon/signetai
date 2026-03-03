@@ -7,11 +7,17 @@
  */
 
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import type { EmbeddingConfig } from "./memory-config";
-import { countChanges, vectorToBlob, syncVecInsert, syncVecDeleteBySourceExceptHash, syncVecDeleteByEmbeddingIds } from "./db-helpers";
-import { insertHistoryEvent } from "./transactions";
+import {
+	countChanges,
+	syncVecDeleteByEmbeddingIds,
+	syncVecDeleteBySourceExceptHash,
+	syncVecInsert,
+	vectorToBlob,
+} from "./db-helpers";
 import { logger } from "./logger";
+import type { EmbeddingConfig } from "./memory-config";
 import type { PipelineV2Config } from "./memory-config";
+import { insertHistoryEvent } from "./transactions";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -47,11 +53,7 @@ interface RateLimiterEntry {
 }
 
 export interface RateLimiter {
-	check(
-		action: string,
-		cooldownMs: number,
-		hourlyBudget: number,
-	): RepairGateCheck;
+	check(action: string, cooldownMs: number, hourlyBudget: number): RepairGateCheck;
 	record(action: string): void;
 }
 
@@ -59,11 +61,7 @@ export function createRateLimiter(): RateLimiter {
 	const state = new Map<string, RateLimiterEntry>();
 
 	return {
-		check(
-			action: string,
-			cooldownMs: number,
-			hourlyBudget: number,
-		): RepairGateCheck {
+		check(action: string, cooldownMs: number, hourlyBudget: number): RepairGateCheck {
 			const now = Date.now();
 			const entry = state.get(action);
 
@@ -78,8 +76,7 @@ export function createRateLimiter(): RateLimiter {
 			}
 
 			// Reset hourly counter if the window has passed
-			const effectiveCount =
-				now >= entry.hourResetAt ? 0 : entry.hourlyCount;
+			const effectiveCount = now >= entry.hourResetAt ? 0 : entry.hourlyCount;
 			if (effectiveCount >= hourlyBudget) {
 				return {
 					allowed: false,
@@ -146,13 +143,7 @@ export function checkRepairGate(
 // Audit helper
 // ---------------------------------------------------------------------------
 
-function writeRepairAudit(
-	db: WriteDb,
-	action: string,
-	ctx: RepairContext,
-	affected: number,
-	message: string,
-): void {
+function writeRepairAudit(db: WriteDb, action: string, ctx: RepairContext, affected: number, message: string): void {
 	insertHistoryEvent(db, {
 		memoryId: "system",
 		event: "none",
@@ -186,14 +177,7 @@ export function requeueDeadJobs(
 	maxBatch: number = DEFAULT_REQUEUE_BATCH,
 ): RepairResult {
 	const action = "requeueDeadJobs";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.requeueCooldownMs,
-		cfg.repair.requeueHourlyBudget,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
 
 	if (!gate.allowed) {
 		return {
@@ -205,9 +189,9 @@ export function requeueDeadJobs(
 	}
 
 	const affected = accessor.withWriteTx((db) => {
-		const dead = db
-			.prepare("SELECT id FROM memory_jobs WHERE status = 'dead' LIMIT ?")
-			.all(maxBatch) as Array<{ id: string }>;
+		const dead = db.prepare("SELECT id FROM memory_jobs WHERE status = 'dead' LIMIT ?").all(maxBatch) as Array<{
+			id: string;
+		}>;
 
 		if (dead.length === 0) return 0;
 
@@ -253,14 +237,7 @@ export function releaseStaleLeases(
 	limiter: RateLimiter,
 ): RepairResult {
 	const action = "releaseStaleLeases";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.requeueCooldownMs,
-		cfg.repair.requeueHourlyBudget,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
 
 	if (!gate.allowed) {
 		return {
@@ -314,17 +291,10 @@ export function checkFtsConsistency(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
 	limiter: RateLimiter,
-	repair: boolean = false,
+	repair = false,
 ): RepairResult {
 	const action = "checkFtsConsistency";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.reembedCooldownMs,
-		FTS_HOURLY_BUDGET,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, FTS_HOURLY_BUDGET);
 
 	if (!gate.allowed) {
 		return {
@@ -336,17 +306,13 @@ export function checkFtsConsistency(
 	}
 
 	const { memCount, ftsCount, ftsMissing } = accessor.withReadDb((db) => {
-		const memRow = db
-			.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0")
-			.get() as { n: number };
+		const memRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
 
 		// Guard against missing FTS table (can happen on upgrades)
 		let ftsN = 0;
 		let missing = false;
 		try {
-			const ftsRow = db
-				.prepare("SELECT COUNT(*) as n FROM memories_fts")
-				.get() as { n: number };
+			const ftsRow = db.prepare("SELECT COUNT(*) as n FROM memories_fts").get() as { n: number };
 			ftsN = ftsRow.n;
 		} catch {
 			missing = true;
@@ -376,19 +342,12 @@ export function checkFtsConsistency(
 	// FTS5 external content tables include tombstones, so ftsCount >=
 	// memCount is normal. Only flag when the gap exceeds 10%, matching
 	// the threshold in diagnostics.ts getIndexHealth().
-	const mismatch =
-		memCount > 0 && ftsCount > memCount * 1.1;
+	const mismatch = memCount > 0 && ftsCount > memCount * 1.1;
 
 	if (mismatch && repair) {
 		accessor.withWriteTx((db) => {
 			db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
-			writeRepairAudit(
-				db,
-				action,
-				ctx,
-				1,
-				`FTS rebuilt: ${memCount} active vs ${ftsCount} FTS rows`,
-			);
+			writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} active vs ${ftsCount} FTS rows`);
 		});
 	}
 
@@ -424,14 +383,7 @@ export function triggerRetentionSweep(
 	retentionHandle: { sweep(): unknown },
 ): RepairResult {
 	const action = "triggerRetentionSweep";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.requeueCooldownMs,
-		cfg.repair.requeueHourlyBudget,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
 
 	if (!gate.allowed) {
 		return {
@@ -468,13 +420,9 @@ export interface EmbeddingGapStats {
 	readonly coverage: string;
 }
 
-export function getEmbeddingGapStats(
-	accessor: DbAccessor,
-): EmbeddingGapStats {
+export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
 	return accessor.withReadDb((db) => {
-		const totalRow = db
-			.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0")
-			.get() as { n: number };
+		const totalRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
 		const unembeddedRow = db
 			.prepare(
 				`SELECT COUNT(*) as n FROM memories m
@@ -519,23 +467,13 @@ export async function reembedMissingMemories(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
 	limiter: RateLimiter,
-	embeddingFn: (
-		content: string,
-		cfg: EmbeddingConfig,
-	) => Promise<number[] | null>,
+	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	embeddingCfg: EmbeddingConfig,
 	batchSize: number = DEFAULT_REEMBED_BATCH,
-	dryRun: boolean = false,
+	dryRun = false,
 ): Promise<RepairResult> {
 	const action = "reembedMissingMemories";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.reembedCooldownMs,
-		cfg.repair.reembedHourlyBudget,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, cfg.repair.reembedHourlyBudget);
 
 	if (!gate.allowed) {
 		return {
@@ -617,12 +555,7 @@ export async function reembedMissingMemories(
 		for (const { memory, vector } of results) {
 			const embId = crypto.randomUUID();
 			const blob = vectorToBlob(vector);
-			syncVecDeleteBySourceExceptHash(
-				db,
-				"memory",
-				memory.id,
-				memory.content_hash,
-			);
+			syncVecDeleteBySourceExceptHash(db, "memory", memory.id, memory.content_hash);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ?
@@ -642,15 +575,7 @@ export async function reembedMissingMemories(
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				)
-				.run(
-					embId,
-					memory.content_hash,
-					blob,
-					vector.length,
-					memory.id,
-					memory.content,
-					now,
-				);
+				.run(embId, memory.content_hash, blob, vector.length, memory.id, memory.content, now);
 			if (countChanges(result) > 0) {
 				syncVecInsert(db, embId, vector);
 				count++;
@@ -693,14 +618,7 @@ export function cleanOrphanedEmbeddings(
 	limiter: RateLimiter,
 ): RepairResult {
 	const action = "cleanOrphanedEmbeddings";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.requeueCooldownMs,
-		cfg.repair.requeueHourlyBudget,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
 
 	if (!gate.allowed) {
 		return {
@@ -727,9 +645,7 @@ export function cleanOrphanedEmbeddings(
 		syncVecDeleteByEmbeddingIds(db, ids);
 
 		const placeholders = ids.map(() => "?").join(", ");
-		const result = db
-			.prepare(`DELETE FROM embeddings WHERE id IN (${placeholders})`)
-			.run(...ids);
+		const result = db.prepare(`DELETE FROM embeddings WHERE id IN (${placeholders})`).run(...ids);
 
 		const count = countChanges(result);
 		const msg = `cleaned ${count} orphaned embedding(s)`;
@@ -749,6 +665,154 @@ export function cleanOrphanedEmbeddings(
 		success: true,
 		affected,
 		message: `cleaned ${affected} orphaned embedding(s)`,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Resync vec index
+// ---------------------------------------------------------------------------
+
+interface VecResyncStats {
+	readonly vecAvailable: boolean;
+	readonly inserted: number;
+	readonly deleted: number;
+	readonly skipped: number;
+}
+
+function blobToFloat32Vector(raw: unknown): Float32Array | null {
+	if (raw instanceof Float32Array) return raw;
+	if (raw instanceof ArrayBuffer) {
+		if (raw.byteLength % 4 !== 0) return null;
+		return new Float32Array(raw.slice(0));
+	}
+	if (ArrayBuffer.isView(raw)) {
+		const buffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+		if (buffer.byteLength % 4 !== 0) return null;
+		return new Float32Array(buffer);
+	}
+	return null;
+}
+
+/**
+ * Reconcile vec_embeddings with embeddings by deleting orphan vec rows
+ * and inserting rows missing from the vec index.
+ */
+export function resyncVectorIndex(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+): RepairResult {
+	const action = "resyncVectorIndex";
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, cfg.repair.reembedHourlyBudget);
+
+	if (!gate.allowed) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: gate.reason ?? "denied by policy gate",
+		};
+	}
+
+	const stats: VecResyncStats = accessor.withWriteTx((db): VecResyncStats => {
+		try {
+			db.prepare("SELECT 1 FROM vec_embeddings LIMIT 1").get();
+		} catch {
+			return {
+				vecAvailable: false,
+				inserted: 0,
+				deleted: 0,
+				skipped: 0,
+			};
+		}
+
+		const orphanRows = db
+			.prepare(
+				`SELECT v.id
+				 FROM vec_embeddings v
+				 LEFT JOIN embeddings e ON e.id = v.id
+				 WHERE e.id IS NULL`,
+			)
+			.all() as Array<{ id: string }>;
+
+		let deleted = 0;
+		if (orphanRows.length > 0) {
+			const remove = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
+			for (const row of orphanRows) {
+				const result = remove.run(row.id);
+				if (countChanges(result) > 0) deleted++;
+			}
+		}
+
+		const missingRows = db
+			.prepare(
+				`SELECT e.id, e.vector
+				 FROM embeddings e
+				 LEFT JOIN vec_embeddings v ON v.id = e.id
+				 WHERE v.id IS NULL`,
+			)
+			.all() as Array<{ id: string; vector: unknown }>;
+
+		let inserted = 0;
+		let skipped = 0;
+		const insert = db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
+
+		for (const row of missingRows) {
+			const vector = blobToFloat32Vector(row.vector);
+			if (!vector) {
+				skipped++;
+				continue;
+			}
+			const result = insert.run(row.id, vector);
+			if (countChanges(result) > 0) inserted++;
+		}
+
+		const affected = inserted + deleted;
+		const msg =
+			skipped > 0
+				? `resynced vec index (+${inserted}/-${deleted}, skipped ${skipped} malformed vector(s))`
+				: `resynced vec index (+${inserted}/-${deleted})`;
+		writeRepairAudit(db, action, ctx, affected, msg);
+
+		return {
+			vecAvailable: true,
+			inserted,
+			deleted,
+			skipped,
+		};
+	});
+
+	if (!stats.vecAvailable) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: "vec_embeddings table not found; restart daemon to initialize vector index",
+		};
+	}
+
+	limiter.record(action);
+	const affected = stats.inserted + stats.deleted;
+	const message =
+		stats.skipped > 0
+			? `resynced vec index (+${stats.inserted}/-${stats.deleted}, skipped ${stats.skipped} malformed vector(s))`
+			: `resynced vec index (+${stats.inserted}/-${stats.deleted})`;
+
+	logger.info("pipeline", "repair: resynced vec index", {
+		affected,
+		inserted: stats.inserted,
+		deleted: stats.deleted,
+		skipped: stats.skipped,
+		actor: ctx.actor,
+		reason: ctx.reason,
+	});
+
+	return {
+		action,
+		success: true,
+		affected,
+		message,
 	};
 }
 
@@ -778,9 +842,7 @@ export function getDedupStats(accessor: DbAccessor): DedupStats {
 			)
 			.get() as { clusters: number; excess_total: number } | undefined;
 
-		const totalRow = db
-			.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
-			.get() as { n: number };
+		const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
 
 		return {
 			exactClusters: row?.clusters ?? 0,
@@ -824,8 +886,18 @@ function scoreDedupCandidate(c: DedupCandidate): number {
 }
 
 function mergeTags(existing: string | null, incoming: string | null): string | null {
-	const a = existing ? existing.split(",").map((t) => t.trim()).filter(Boolean) : [];
-	const b = incoming ? incoming.split(",").map((t) => t.trim()).filter(Boolean) : [];
+	const a = existing
+		? existing
+				.split(",")
+				.map((t) => t.trim())
+				.filter(Boolean)
+		: [];
+	const b = incoming
+		? incoming
+				.split(",")
+				.map((t) => t.trim())
+				.filter(Boolean)
+		: [];
 	const merged = [...new Set([...a, ...b])];
 	return merged.length > 0 ? merged.join(",") : null;
 }
@@ -844,7 +916,7 @@ function processCluster(
 
 	// Score and pick keeper
 	let bestIdx = 0;
-	let bestScore = -Infinity;
+	let bestScore = Number.NEGATIVE_INFINITY;
 	for (let i = 0; i < candidates.length; i++) {
 		const score = scoreDedupCandidate(candidates[i]);
 		if (score > bestScore) {
@@ -864,8 +936,7 @@ function processCluster(
 	}
 
 	if (mergedTags !== keeper.tags) {
-		db.prepare("UPDATE memories SET tags = ?, updated_at = ? WHERE id = ?")
-			.run(mergedTags, now, keeper.id);
+		db.prepare("UPDATE memories SET tags = ?, updated_at = ? WHERE id = ?").run(mergedTags, now, keeper.id);
 	}
 
 	// Audit keeper
@@ -887,9 +958,11 @@ function processCluster(
 
 	// Soft-delete losers
 	for (const loser of losers) {
-		db.prepare(
-			"UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?",
-		).run(now, now, loser.id);
+		db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?").run(
+			now,
+			now,
+			loser.id,
+		);
 
 		insertHistoryEvent(db, {
 			memoryId: loser.id,
@@ -921,14 +994,7 @@ export async function deduplicateMemories(
 	},
 ): Promise<DedupResult> {
 	const action = "deduplicateMemories";
-	const gate = checkRepairGate(
-		cfg,
-		ctx,
-		limiter,
-		action,
-		cfg.repair.dedupCooldownMs,
-		cfg.repair.dedupHourlyBudget,
-	);
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.dedupCooldownMs, cfg.repair.dedupHourlyBudget);
 
 	if (!gate.allowed) {
 		return {
@@ -941,8 +1007,7 @@ export async function deduplicateMemories(
 	}
 
 	const batchSize = options?.batchSize ?? cfg.repair.dedupBatchSize;
-	const semanticThreshold =
-		options?.semanticThreshold ?? cfg.repair.dedupSemanticThreshold;
+	const semanticThreshold = options?.semanticThreshold ?? cfg.repair.dedupSemanticThreshold;
 	const dryRun = options?.dryRun ?? false;
 	const semanticEnabled = options?.semanticEnabled ?? false;
 
@@ -966,11 +1031,7 @@ export async function deduplicateMemories(
 		const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
 		let semanticClusterCount = 0;
 		if (semanticEnabled) {
-			const semanticClusters = await findSemanticDuplicates(
-				accessor,
-				semanticThreshold,
-				batchSize,
-			);
+			const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize);
 			semanticClusterCount = semanticClusters.length;
 		}
 		limiter.record(action);
@@ -1016,11 +1077,7 @@ export async function deduplicateMemories(
 
 	// Phase 2: Semantic clusters (only if exact phase didn't fill batch)
 	if (semanticEnabled && totalClusters < batchSize) {
-		const semanticClusters = await findSemanticDuplicates(
-			accessor,
-			semanticThreshold,
-			batchSize - totalClusters,
-		);
+		const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize - totalClusters);
 
 		for (const cluster of semanticClusters) {
 			const removed = accessor.withWriteTx((db) => {
@@ -1102,9 +1159,9 @@ async function findSemanticDuplicates(
 
 		const neighbors = accessor.withReadDb((db) => {
 			// Get the vector for this candidate's embedding
-			const vecRow = db
-				.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?")
-				.get(candidate.embedding_id) as { embedding: ArrayBuffer } | undefined;
+			const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
+				| { embedding: ArrayBuffer }
+				| undefined;
 
 			if (!vecRow) return [];
 
