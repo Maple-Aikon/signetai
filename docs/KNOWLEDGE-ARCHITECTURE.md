@@ -236,7 +236,8 @@ For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).*
 
 ---
 
-*Written by Nicholai and Mr. Claude, the first Signet agent.*
+*Written by Nicholai and Mr. Claude, the first Signet agent.
+Structured relationships, constraints methodology, and entity/aspect/attribute framework co-developed with Michael (PatchyToes).
 *March 3, 2026*
 
 
