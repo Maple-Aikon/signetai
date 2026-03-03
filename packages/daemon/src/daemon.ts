@@ -4821,6 +4821,10 @@ app.post("/api/tasks", async (c) => {
 		return c.json({ error: "harness must be 'claude-code' or 'opencode'" }, 400);
 	}
 
+	if (skillName && (skillName.includes("/") || skillName.includes(".."))) {
+		return c.json({ error: "Invalid skill name" }, 400);
+	}
+
 	if (skillName && skillMode !== "inject" && skillMode !== "slash") {
 		return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
 	}
@@ -4905,6 +4909,10 @@ app.patch("/api/tasks/:id", async (c) => {
 
 	const skillName = body.skillName !== undefined ? (body.skillName || null) : existing.skill_name;
 	const skillMode = body.skillMode !== undefined ? (body.skillMode || null) : existing.skill_mode;
+
+	if (skillName && (skillName.includes("/") || skillName.includes(".."))) {
+		return c.json({ error: "Invalid skill name" }, 400);
+	}
 
 	if (skillName && skillMode !== null && skillMode !== "inject" && skillMode !== "slash") {
 		return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
