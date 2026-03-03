@@ -544,19 +544,6 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				defaults.search.rehearsal_half_life_days = Math.max(1, srch.rehearsal_half_life_days);
 			}
 
-			// Auto-migrate ollama+nomic users to native provider
-			if (
-				defaults.embedding.provider === "ollama" &&
-				(defaults.embedding.model === "nomic-embed-text" ||
-					defaults.embedding.model === "nomic-embed-text-v1.5" ||
-					defaults.embedding.model.startsWith("nomic-embed-text:"))
-			) {
-				defaults.embedding.provider = "native";
-				defaults.embedding.model = "nomic-embed-text-v1.5";
-				defaults.embedding.base_url = "";
-				console.info("[signet] Using native embedding provider (runtime override for ollama+nomic config)");
-			}
-
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 

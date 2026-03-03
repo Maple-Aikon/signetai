@@ -230,26 +230,54 @@ interface EmbeddingStatus {
 // Cached native embed function — avoids dynamic import on every call
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
 
+async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string): Promise<number[] | null> {
+	const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embeddings`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ model, prompt: text }),
+		signal: AbortSignal.timeout(30000),
+	});
+	if (!res.ok) return null;
+	const data = (await res.json()) as { embedding: number[] };
+	return data.embedding ?? null;
+}
+
+// Track whether we've already fallen back to ollama for native failures
+let nativeFallbackToOllama = false;
+
 async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promise<number[] | null> {
 	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "native") {
-			if (!cachedNativeEmbed) {
-				const mod = await import("./native-embedding");
-				cachedNativeEmbed = mod.nativeEmbed;
+			// If we've already determined native is broken, go straight to ollama
+			if (nativeFallbackToOllama) {
+				return await fetchOllamaEmbedding(text, "http://localhost:11434", "nomic-embed-text");
 			}
-			return await cachedNativeEmbed(text);
+			try {
+				if (!cachedNativeEmbed) {
+					const mod = await import("./native-embedding");
+					cachedNativeEmbed = mod.nativeEmbed;
+				}
+				return await cachedNativeEmbed(text);
+			} catch (nativeErr) {
+				// Native failed — try ollama as fallback
+				logger.warn("embedding", `Native embedding failed, attempting ollama fallback: ${nativeErr instanceof Error ? nativeErr.message : String(nativeErr)}`);
+				try {
+					const result = await fetchOllamaEmbedding(text, "http://localhost:11434", "nomic-embed-text");
+					if (result !== null) {
+						nativeFallbackToOllama = true;
+						logger.info("embedding", "Ollama fallback succeeded — will use ollama for remaining embeddings this session");
+						return result;
+					}
+					logger.warn("embedding", "Ollama fallback also failed");
+				} catch {
+					logger.warn("embedding", "Ollama fallback not reachable");
+				}
+				return null;
+			}
 		}
 		if (cfg.provider === "ollama") {
-			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/api/embeddings`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ model: cfg.model, prompt: text }),
-				signal: AbortSignal.timeout(30000),
-			});
-			if (!res.ok) return null;
-			const data = (await res.json()) as { embedding: number[] };
-			return data.embedding ?? null;
+			return await fetchOllamaEmbedding(text, cfg.base_url, cfg.model);
 		} else {
 			// OpenAI-compatible
 			const apiKey = cfg.api_key ?? process.env.OPENAI_API_KEY ?? "";
@@ -641,10 +669,36 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
 			// Reuse the cached module from fetchEmbedding path
 			const mod = await import("./native-embedding");
 			const nativeStatus = await mod.checkNativeProvider();
-			status.available = nativeStatus.available;
-			status.dimensions = nativeStatus.dimensions;
-			if (!nativeStatus.available) {
-				status.error = nativeStatus.error ?? "Native embedding provider not ready";
+			if (nativeStatus.available) {
+				status.available = true;
+				status.dimensions = nativeStatus.dimensions;
+			} else {
+				// Native unavailable — check if ollama is available as fallback
+				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
+				try {
+					const ollamaRes = await fetch("http://localhost:11434/api/tags", {
+						method: "GET",
+						signal: AbortSignal.timeout(3000),
+					});
+					if (ollamaRes.ok) {
+						const ollamaData = (await ollamaRes.json()) as { models?: { name: string }[] };
+						const models = ollamaData.models ?? [];
+						const hasNomic = models.some((m) => m.name.startsWith("nomic-embed-text"));
+						if (hasNomic) {
+							status.available = true;
+							status.dimensions = 768;
+							status.error = "Native unavailable — using ollama fallback";
+							nativeFallbackToOllama = true;
+							logger.info("embedding", "Ollama fallback available — will use ollama for embeddings");
+						} else {
+							status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama available but nomic-embed-text not found.`;
+						}
+					} else {
+						status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not available.`;
+					}
+				} catch {
+					status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not reachable.`;
+				}
 			}
 		} else if (cfg.provider === "ollama") {
 			// Check Ollama API availability

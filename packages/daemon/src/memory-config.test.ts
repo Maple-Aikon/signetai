@@ -93,25 +93,25 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.dimensions).toBe(768);
 	});
 
-	it("auto-migrates ollama+nomic-embed-text to native provider", () => {
+	it("respects ollama+nomic-embed-text config without overriding", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
 			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  dimensions: 768\n",
 		);
 		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.embedding.provider).toBe("native");
-		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.model).toBe("nomic-embed-text");
 	});
 
-	it("auto-migrates ollama+nomic-embed-text:latest to native", () => {
+	it("respects ollama+nomic-embed-text:latest config without overriding", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
 			"embedding:\n  provider: ollama\n  model: nomic-embed-text:latest\n  dimensions: 768\n",
 		);
 		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.embedding.provider).toBe("native");
+		expect(cfg.embedding.provider).toBe("ollama");
 	});
 
 	it("does NOT migrate ollama+bge-large (non-nomic model)", () => {
