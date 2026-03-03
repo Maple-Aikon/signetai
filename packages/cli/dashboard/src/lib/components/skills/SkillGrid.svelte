@@ -74,6 +74,19 @@ let featuredItems = $derived.by(() => {
 });
 
 let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
+
+// Progressive rendering: show N items initially, expand on demand
+const PAGE_SIZE = 60;
+let visibleCount = $state(PAGE_SIZE);
+
+$effect(() => {
+	items;
+	visibleCount = PAGE_SIZE;
+});
+
+let visibleItems = $derived(items.slice(0, visibleCount));
+let hasMore = $derived(visibleCount < items.length);
+let remainingCount = $derived(items.length - visibleCount);
 </script>
 
 <div class="grid-container">
@@ -105,7 +118,7 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 
 		<!-- Main grid -->
 		<div class="grid">
-			{#each items as item (item.name)}
+			{#each visibleItems as item (skillKey(item))}
 				<SkillCard
 					{item}
 					{mode}
@@ -120,6 +133,16 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 				/>
 			{/each}
 		</div>
+
+		{#if hasMore}
+			<button
+				type="button"
+				class="show-more"
+				onclick={() => (visibleCount += PAGE_SIZE)}
+			>
+				Show more ({remainingCount} remaining)
+			</button>
+		{/if}
 	{:else}
 		{#if emptyState}
 			<SkillsEmptyState kind={emptyState} actions={emptyActions} />
@@ -167,6 +190,29 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 		gap: var(--space-sm);
+	}
+
+	.show-more {
+		display: block;
+		width: 100%;
+		padding: var(--space-sm) var(--space-md);
+		background: transparent;
+		border: 1px dashed var(--sig-border);
+		border-radius: 6px;
+		color: var(--sig-text-muted);
+		font-family: var(--font-mono);
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		cursor: pointer;
+		transition:
+			border-color 0.15s,
+			color 0.15s;
+	}
+
+	.show-more:hover {
+		border-color: var(--sig-accent);
+		color: var(--sig-text-bright);
 	}
 
 	.empty {
