@@ -9,7 +9,7 @@ import {
 import { parseAuthConfig, type AuthConfig } from "./auth/config";
 
 export interface EmbeddingConfig {
-	provider: "ollama" | "openai" | "none";
+	provider: "native" | "ollama" | "openai" | "none";
 	model: string;
 	dimensions: number;
 	base_url: string;
@@ -476,10 +476,10 @@ export function loadPipelineConfig(
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 	const defaults: ResolvedMemoryConfig = {
 		embedding: {
-			provider: "ollama",
-			model: "nomic-embed-text",
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
 			dimensions: 768,
-			base_url: "http://localhost:11434",
+			base_url: "",
 		},
 		search: {
 			alpha: 0.7,
@@ -515,7 +515,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			if (emb.provider === "none") {
 				defaults.embedding.provider = "none";
 			} else if (emb.provider) {
-				defaults.embedding.provider = emb.provider as "ollama" | "openai";
+				defaults.embedding.provider = emb.provider as "native" | "ollama" | "openai";
 				defaults.embedding.model =
 					(emb.model as string | undefined) ?? defaults.embedding.model;
 				defaults.embedding.dimensions = Number.parseInt(
@@ -542,6 +542,19 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			}
 			if (typeof srch.rehearsal_half_life_days === "number") {
 				defaults.search.rehearsal_half_life_days = Math.max(1, srch.rehearsal_half_life_days);
+			}
+
+			// Auto-migrate ollama+nomic users to native provider
+			if (
+				defaults.embedding.provider === "ollama" &&
+				(defaults.embedding.model === "nomic-embed-text" ||
+					defaults.embedding.model === "nomic-embed-text-v1.5" ||
+					defaults.embedding.model.startsWith("nomic-embed-text:"))
+			) {
+				defaults.embedding.provider = "native";
+				defaults.embedding.model = "nomic-embed-text-v1.5";
+				defaults.embedding.base_url = "";
+				console.info("[signet] Using native embedding provider (runtime override for ollama+nomic config)");
 			}
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);

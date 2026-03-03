@@ -85,6 +85,56 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.dimensions).toBe(3072);
 	});
 
+	it("defaults to native provider when no config exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("native");
+		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
+		expect(cfg.embedding.dimensions).toBe(768);
+	});
+
+	it("auto-migrates ollama+nomic-embed-text to native provider", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  dimensions: 768\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("native");
+		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
+	});
+
+	it("auto-migrates ollama+nomic-embed-text:latest to native", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text:latest\n  dimensions: 768\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("native");
+	});
+
+	it("does NOT migrate ollama+bge-large (non-nomic model)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: bge-large\n  dimensions: 1024\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.model).toBe("bge-large");
+	});
+
+	it("does NOT migrate openai provider", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: openai\n  model: text-embedding-3-small\n  dimensions: 1536\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("openai");
+	});
+
 	it("includes pipelineV2 defaults when no config exists", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);

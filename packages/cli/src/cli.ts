@@ -523,7 +523,7 @@ function formatDetectionSummary(detection: SetupDetection): string {
 }
 
 type HarnessChoice = "claude-code" | "opencode" | "openclaw";
-type EmbeddingProviderChoice = "ollama" | "openai" | "none";
+type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
 type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "none";
 type OpenClawRuntimeChoice = "plugin" | "legacy";
 
@@ -550,6 +550,7 @@ const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"openclaw",
 ];
 const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
+	"native",
 	"ollama",
 	"openai",
 	"none",
@@ -984,12 +985,13 @@ async function pullOllamaModel(model: string): Promise<boolean> {
 }
 
 async function promptOllamaFailureFallback(): Promise<
-	"retry" | "openai" | "none"
+	"retry" | "native" | "openai" | "none"
 > {
 	console.log();
 	return select({
 		message: "How do you want to continue?",
 		choices: [
+			{ value: "native", name: "Use built-in embeddings (recommended)" },
 			{ value: "retry", name: "Retry Ollama checks" },
 			{ value: "openai", name: "Switch to OpenAI" },
 			{ value: "none", name: "Continue without embeddings" },
@@ -998,7 +1000,7 @@ async function promptOllamaFailureFallback(): Promise<
 }
 
 async function preflightOllamaEmbedding(model: string): Promise<{
-	provider: "ollama" | "openai" | "none";
+	provider: "native" | "ollama" | "openai" | "none";
 	model?: string;
 	dimensions?: number;
 }> {
@@ -1009,6 +1011,9 @@ async function preflightOllamaEmbedding(model: string): Promise<{
 			if (!installed) {
 				const fallback = await promptOllamaFailureFallback();
 				if (fallback === "retry") continue;
+				if (fallback === "native") {
+					return { provider: "native", model: "nomic-embed-text-v1.5", dimensions: 768 };
+				}
 				if (fallback === "openai") {
 					return promptOpenAIEmbeddingModel();
 				}
@@ -1024,6 +1029,9 @@ async function preflightOllamaEmbedding(model: string): Promise<{
 
 			const fallback = await promptOllamaFailureFallback();
 			if (fallback === "retry") continue;
+			if (fallback === "native") {
+				return { provider: "native", model: "nomic-embed-text-v1.5", dimensions: 768 };
+			}
 			if (fallback === "openai") {
 				return promptOpenAIEmbeddingModel();
 			}
@@ -1046,6 +1054,9 @@ async function preflightOllamaEmbedding(model: string): Promise<{
 
 			const fallback = await promptOllamaFailureFallback();
 			if (fallback === "retry") continue;
+			if (fallback === "native") {
+				return { provider: "native", model: "nomic-embed-text-v1.5", dimensions: 768 };
+			}
 			if (fallback === "openai") {
 				return promptOpenAIEmbeddingModel();
 			}
@@ -1877,7 +1888,7 @@ async function setupWizard(options: SetupWizardOptions) {
 			);
 			if (!migrationEmbeddingProvider) {
 				failNonInteractiveSetup(
-					"Non-interactive setup requires --embedding-provider (ollama, openai, or none).",
+					"Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).",
 				);
 			}
 			if (!migrationExtractionProvider) {
@@ -2081,7 +2092,7 @@ async function setupWizard(options: SetupWizardOptions) {
 
 	if (nonInteractive && !requestedEmbeddingProvider) {
 		failNonInteractiveSetup(
-			"Non-interactive setup requires --embedding-provider (ollama, openai, or none).",
+			"Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).",
 		);
 	}
 
@@ -2104,7 +2115,8 @@ async function setupWizard(options: SetupWizardOptions) {
 		embeddingProvider = (await select({
 			message: "How should memories be embedded for search?",
 			choices: [
-				{ value: "ollama", name: "Ollama (local, recommended)" },
+				{ value: "native", name: "Built-in (recommended, no setup required)" },
+				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
 				{ value: "openai", name: "OpenAI API" },
 				{ value: "none", name: "Skip embeddings for now" },
 			],
@@ -2115,7 +2127,11 @@ async function setupWizard(options: SetupWizardOptions) {
 	let embeddingModel = "nomic-embed-text";
 	let embeddingDimensions = 768;
 
-	if (embeddingProvider === "ollama") {
+	if (embeddingProvider === "native") {
+		embeddingModel = "nomic-embed-text-v1.5";
+		embeddingDimensions = 768;
+		// No preflight needed — model downloads on first daemon start
+	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =
 				normalizeStringValue(options.embeddingModel) ||

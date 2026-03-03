@@ -217,7 +217,7 @@ const CURRENT_VERSION = getDaemonVersion();
 // ============================================================================
 
 interface EmbeddingStatus {
-	provider: "ollama" | "openai";
+	provider: "native" | "ollama" | "openai" | "none";
 	model: string;
 	available: boolean;
 	dimensions?: number;
@@ -226,9 +226,19 @@ interface EmbeddingStatus {
 	checkedAt: string;
 }
 
+// Cached native embed function — avoids dynamic import on every call
+let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
+
 async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promise<number[] | null> {
 	if (cfg.provider === "none") return null;
 	try {
+		if (cfg.provider === "native") {
+			if (!cachedNativeEmbed) {
+				const mod = await import("./native-embedding");
+				cachedNativeEmbed = mod.nativeEmbed;
+			}
+			return await cachedNativeEmbed(text);
+		}
 		if (cfg.provider === "ollama") {
 			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/api/embeddings`, {
 				method: "POST",
@@ -626,7 +636,16 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
 	}
 
 	try {
-		if (cfg.provider === "ollama") {
+		if (cfg.provider === "native") {
+			// Reuse the cached module from fetchEmbedding path
+			const mod = await import("./native-embedding");
+			const nativeStatus = await mod.checkNativeProvider();
+			status.available = nativeStatus.available;
+			status.dimensions = nativeStatus.dimensions;
+			if (!nativeStatus.available) {
+				status.error = nativeStatus.error ?? "Native embedding provider not ready";
+			}
+		} else if (cfg.provider === "ollama") {
 			// Check Ollama API availability
 			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/api/tags`, {
 				method: "GET",
@@ -6944,6 +6963,14 @@ async function cleanup() {
 		await stopPipeline();
 	} catch {
 		// best-effort
+	}
+
+	// Shut down native embedding WASM runtime
+	try {
+		const { shutdownNativeProvider } = await import("./native-embedding");
+		await shutdownNativeProvider();
+	} catch {
+		// best-effort — module may not have been loaded
 	}
 
 	closeLlmProvider();

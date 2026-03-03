@@ -52,7 +52,7 @@ export interface AgentManifest {
 
 	// Embedding configuration
 	embedding?: {
-		provider: "ollama" | "openai";
+		provider: "native" | "ollama" | "openai";
 		model: string;
 		dimensions: number;
 		base_url?: string;
@@ -105,7 +105,7 @@ export interface AgentConfig {
 	dbPath?: string;
 	autoSync?: boolean;
 	embeddings?: {
-		provider: "openai" | "ollama" | "local";
+		provider: "native" | "openai" | "ollama" | "local";
 		model?: string;
 		dimensions?: number;
 	};
