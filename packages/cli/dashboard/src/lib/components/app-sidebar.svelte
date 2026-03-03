@@ -89,7 +89,7 @@ const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
 							<Sidebar.MenuButton
 								isActive={nav.activeTab === item.id}
 								onclick={() => setTab(item.id)}
-								tooltip={item.label}
+								tooltipContent={item.label}
 							>
 								<item.icon class="size-4" />
 								<span class="text-xs uppercase tracking-[0.06em]
@@ -132,10 +132,10 @@ const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
 			</Sidebar.MenuItem>
 
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton
-					onclick={onthemetoggle}
-					tooltip={theme === "dark" ? "Light mode" : "Dark mode"}
-				>
+			<Sidebar.MenuButton
+				onclick={onthemetoggle}
+				tooltipContent={theme === "dark" ? "Light mode" : "Dark mode"}
+			>
 					{#if theme === "dark"}
 						<Sun class="size-4" />
 					{:else}
@@ -152,10 +152,10 @@ const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
 			</Sidebar.MenuItem>
 
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton
-					onclick={() => window.open("https://github.com/Signet-AI/signetai", "_blank")}
-					tooltip="GitHub"
-				>
+			<Sidebar.MenuButton
+				onclick={() => window.open("https://github.com/Signet-AI/signetai", "_blank")}
+				tooltipContent="GitHub"
+			>
 					<Github class="size-4" />
 					<span class="text-xs font-[family-name:var(--font-mono)]
 						overflow-hidden whitespace-nowrap
