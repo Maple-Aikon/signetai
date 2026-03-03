@@ -29,6 +29,7 @@ interface Props {
 	nowMs: number;
 	showNewSinceLastSeen: boolean;
 	lastSeenMs: number | null;
+	sourceFocusSources: Set<string> | null;
 	onselectnode: (embedding: EmbeddingPoint | null) => void;
 	onhovernode: (embedding: EmbeddingPoint | null) => void;
 }
@@ -49,6 +50,7 @@ let {
 	nowMs,
 	showNewSinceLastSeen,
 	lastSeenMs,
+	sourceFocusSources,
 	onselectnode,
 	onhovernode,
 }: Props = $props();
@@ -448,6 +450,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 			clusterLensMode,
 			colorMode,
 			nowMs,
+			sourceFocusSources,
 		);
 		ctx.fill();
 

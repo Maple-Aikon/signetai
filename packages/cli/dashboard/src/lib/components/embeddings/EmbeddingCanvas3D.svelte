@@ -23,6 +23,7 @@ interface Props {
 	nowMs: number;
 	showNewSinceLastSeen: boolean;
 	lastSeenMs: number | null;
+	sourceFocusSources: Set<string> | null;
 	onselectnode: (embedding: EmbeddingPoint | null) => void;
 	onhovernode: (embedding: EmbeddingPoint | null) => void;
 	embeddingById: Map<string, EmbeddingPoint>;
@@ -41,6 +42,7 @@ let {
 	nowMs,
 	showNewSinceLastSeen,
 	lastSeenMs,
+	sourceFocusSources,
 	onselectnode,
 	onhovernode,
 	embeddingById,
@@ -93,6 +95,7 @@ export function refreshAppearance(): void {
 			nowMs,
 			showNewSinceLastSeen,
 			lastSeenMs,
+			sourceFocusSources,
 		),
 	);
 	graph3d.linkColor((link: any) => {
@@ -163,6 +166,7 @@ export async function init(): Promise<void> {
 				nowMs,
 				showNewSinceLastSeen,
 				lastSeenMs,
+				sourceFocusSources,
 			),
 		)
 		.nodeVal(
