@@ -44,22 +44,13 @@
 	let isDirty = $derived((savedByFile[selectedFile] ?? activeFile?.content ?? "") !== editorContent);
 
 	// Track dirty state per file
-	let filesWithDirty = $derived(
-		mdFiles.map((f) => ({
-			name: f.name,
-			content: f.content,
-			isDirty: (savedByFile[f.name] ?? f.content) !== (f.name === selectedFile ? editorContent : f.content),
-		}))
-	);
-
-	// Actually compute dirty per file properly
 	let fileDirtyState = $derived.by(() => {
 		const result: Record<string, boolean> = {};
 		for (const file of mdFiles) {
 			if (file.name === selectedFile) {
 				result[file.name] = (savedByFile[file.name] ?? file.content) !== editorContent;
 			} else {
-				result[file.name] = false; // Other files can't be dirty since we're not editing them
+				result[file.name] = false;
 			}
 		}
 		return result;
@@ -183,11 +174,12 @@
 			return;
 		}
 
+		const contentToSave = editorContent;
 		saving = true;
 		try {
-			const result = await saveConfigFileResult(selectedFile, editorContent);
+			const result = await saveConfigFileResult(selectedFile, contentToSave);
 			if (result.ok) {
-				savedByFile = { ...savedByFile, [selectedFile]: editorContent };
+				savedByFile = { ...savedByFile, [selectedFile]: contentToSave };
 				lastSavedAt = new Date().toISOString();
 				saveFeedback = `Saved ${selectedFile}`;
 				toast(saveFeedback, "success");
