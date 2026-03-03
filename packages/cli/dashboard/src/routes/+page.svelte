@@ -17,7 +17,7 @@ import {
 	mem,
 	queueMemorySearch,
 } from "$lib/stores/memory.svelte";
-import { nav } from "$lib/stores/navigation.svelte";
+import { initNavFromHash, nav, setTab } from "$lib/stores/navigation.svelte";
 import { sk } from "$lib/stores/skills.svelte";
 import { openForm, ts } from "$lib/stores/tasks.svelte";
 import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
@@ -55,7 +55,7 @@ $effect(() => {
 
 function selectFile(name: string) {
 	selectedFile = name;
-	nav.activeTab = "config";
+	setTab("config");
 }
 
 // --- Memory display ---
@@ -81,7 +81,7 @@ $effect(() => {
 // --- Embeddings bridge ---
 function openGlobalSimilar(memory: Memory) {
 	mem.query = memory.content;
-	nav.activeTab = "memory";
+	setTab("memory");
 	queueMemorySearch();
 }
 
@@ -104,6 +104,8 @@ $effect(() => {
 
 // --- Init ---
 onMount(() => {
+	const cleanupNav = initNavFromHash();
+
 	getStatus().then((s) => {
 		daemonStatus = s;
 	});
@@ -118,6 +120,7 @@ onMount(() => {
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
 	return () => {
+		cleanupNav();
 		window.removeEventListener("beforeunload", handleBeforeUnload);
 	};
 });

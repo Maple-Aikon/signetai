@@ -1,5 +1,5 @@
 <script lang="ts">
-import { type TabId, nav } from "$lib/stores/navigation.svelte";
+import { type TabId, setTab } from "$lib/stores/navigation.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
 import Search from "@lucide/svelte/icons/search";
 import { Dialog as CommandPrimitive } from "bits-ui";
@@ -46,7 +46,7 @@ $effect(() => {
 });
 
 function setTabAndClose(tab: TabId) {
-	nav.activeTab = tab;
+	setTab(tab);
 	open = false;
 	query = "";
 	selectedIndex = 0;
