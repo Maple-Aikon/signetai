@@ -2,6 +2,19 @@
 
 All notable changes to Signet are documented here.
 
+## [0.29.0] - 2026-03-03
+
+### Features
+
+- **dashboard**: add intuitive 1password secrets flow
+- **secrets**: add 1password sdk integration for secret refs and import
+
+### Bug Fixes
+
+- **embeddings**: wire repair actions and vec resync
+- **secrets**: keep exec path non-blocking
+
+
 ## [0.28.0] - 2026-03-03
 
 ### Features
