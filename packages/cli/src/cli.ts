@@ -1218,7 +1218,7 @@ async function interactiveMenu() {
 				await input({ message: "Press Enter to continue..." });
 				break;
 
-			case "restart":
+			case "restart": {
 				const spinner = ora("Restarting daemon...").start();
 				await stopDaemon();
 				const restarted = await startDaemon();
@@ -1227,8 +1227,18 @@ async function interactiveMenu() {
 				} else {
 					spinner.fail("Failed to restart daemon");
 				}
+				if (isOpenClawDetected()) {
+					const shouldRestart = await confirm({
+						message: "Restart connected OpenClaw instance?",
+						default: false,
+					});
+					if (shouldRestart) {
+						await restartOpenClaw(AGENTS_DIR);
+					}
+				}
 				await input({ message: "Press Enter to continue..." });
 				break;
+			}
 
 			case "stop":
 				const stopSpinner = ora("Stopping daemon...").start();
@@ -3176,7 +3186,53 @@ async function doStop(options: { path?: string } = {}) {
 	}
 }
 
-async function doRestart(options: { path?: string } = {}) {
+function isOpenClawDetected(): boolean {
+	const connector = new OpenClawConnector();
+	return connector.getDiscoveredConfigPaths().length > 0;
+}
+
+async function restartOpenClaw(basePath: string): Promise<boolean> {
+	const yamlPath = join(basePath, "agent.yaml");
+	let restartCommand: string | undefined;
+
+	try {
+		const yaml = readFileSync(yamlPath, "utf-8");
+		const config = parseSimpleYaml(yaml);
+		restartCommand = config.services?.openclaw?.restart_command;
+	} catch {
+		// agent.yaml missing or unparseable
+	}
+
+	if (!restartCommand) {
+		console.log();
+		console.log(chalk.yellow("  No OpenClaw restart command configured."));
+		console.log(chalk.dim("  Add to ~/.agents/agent.yaml:"));
+		console.log(chalk.dim("    services:"));
+		console.log(chalk.dim("      openclaw:"));
+		console.log(chalk.dim('        restart_command: "systemctl --user restart openclaw"'));
+		return false;
+	}
+
+	const spinner = ora("Restarting OpenClaw...").start();
+	try {
+		const result = spawnSync("sh", ["-c", restartCommand], {
+			timeout: 15_000,
+			stdio: "pipe",
+		});
+		if (result.status === 0) {
+			spinner.succeed("OpenClaw restarted");
+			return true;
+		}
+		const stderr = result.stderr?.toString().trim();
+		spinner.fail(`OpenClaw restart failed${stderr ? `: ${stderr}` : ""}`);
+		return false;
+	} catch {
+		spinner.fail("OpenClaw restart timed out");
+		return false;
+	}
+}
+
+async function doRestart(options: { path?: string; openclaw?: boolean } = {}) {
 	console.log(signetLogo());
 	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
 
@@ -3190,6 +3246,16 @@ async function doRestart(options: { path?: string } = {}) {
 		console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
 	} else {
 		spinner.fail("Failed to restart daemon");
+	}
+
+	if (options.openclaw !== false && isOpenClawDetected()) {
+		const shouldRestart = await confirm({
+			message: "Restart connected OpenClaw instance?",
+			default: false,
+		});
+		if (shouldRestart) {
+			await restartOpenClaw(basePath);
+		}
 	}
 }
 
@@ -3212,6 +3278,7 @@ daemonCmd
 	.command("restart")
 	.description("Restart the daemon")
 	.option("-p, --path <path>", "Base path for agent files")
+	.option("--no-openclaw", "Skip OpenClaw restart prompt")
 	.action(doRestart);
 
 daemonCmd
@@ -3247,6 +3314,7 @@ program
 	.command("restart")
 	.description("Restart the daemon (alias for: signet daemon restart)")
 	.option("-p, --path <path>", "Base path for agent files")
+	.option("--no-openclaw", "Skip OpenClaw restart prompt")
 	.action(doRestart);
 
 program
