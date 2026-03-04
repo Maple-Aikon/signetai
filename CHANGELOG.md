@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.37.0] - 2026-03-04
+
+### Bug Fixes
+
+- replace type assertions with runtime narrowing in startConnectorSync
+- **connectors**: add harness and connector resync actions
+
+
 ## [0.36.2] - 2026-03-04
 
 ### Features
