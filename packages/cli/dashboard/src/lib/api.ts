@@ -668,6 +668,16 @@ export interface SyncResult {
 	message?: string;
 }
 
+export interface BulkConnectorSyncResult {
+	status: string;
+	total: number;
+	started: number;
+	alreadySyncing: number;
+	unsupported: number;
+	failed: number;
+	error?: string;
+}
+
 export async function syncConnector(id: string): Promise<SyncResult> {
 	try {
 		const response = await fetch(`${API_BASE}/api/connectors/${encodeURIComponent(id)}/sync`, { method: "POST" });
@@ -685,6 +695,56 @@ export async function syncConnectorFull(id: string): Promise<SyncResult> {
 		return await response.json();
 	} catch (e) {
 		return { status: "error", error: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+export async function resyncConnectors(): Promise<BulkConnectorSyncResult> {
+	try {
+		const response = await fetch(`${API_BASE}/api/connectors/resync`, { method: "POST" });
+		const body = (await response.json().catch(() => null)) as
+			| {
+					status?: unknown;
+					total?: unknown;
+					started?: unknown;
+					alreadySyncing?: unknown;
+					unsupported?: unknown;
+					failed?: unknown;
+					error?: unknown;
+			  }
+			| null;
+
+		const status = typeof body?.status === "string" ? body.status : response.ok ? "ok" : "error";
+		const total = typeof body?.total === "number" ? body.total : 0;
+		const started = typeof body?.started === "number" ? body.started : 0;
+		const alreadySyncing = typeof body?.alreadySyncing === "number" ? body.alreadySyncing : 0;
+		const unsupported = typeof body?.unsupported === "number" ? body.unsupported : 0;
+		const failed = typeof body?.failed === "number" ? body.failed : 0;
+		const error =
+			typeof body?.error === "string"
+				? body.error
+				: response.ok
+					? undefined
+					: `HTTP ${response.status}`;
+
+		return {
+			status,
+			total,
+			started,
+			alreadySyncing,
+			unsupported,
+			failed,
+			error,
+		};
+	} catch (e) {
+		return {
+			status: "error",
+			total: 0,
+			started: 0,
+			alreadySyncing: 0,
+			unsupported: 0,
+			failed: 0,
+			error: e instanceof Error ? e.message : String(e),
+		};
 	}
 }
 

@@ -29,6 +29,9 @@ import {
 	parseSimpleYaml,
 	stripSignetBlock,
 	vectorSearch,
+	CONNECTOR_PROVIDERS,
+	type ConnectorConfig,
+	type SyncCursor,
 } from "@signet/core";
 import { watch } from "chokidar";
 import { type Context, Hono } from "hono";
@@ -3624,6 +3627,100 @@ app.delete("/api/documents/:id", async (c) => {
 // Connectors API
 // ============================================================================
 
+type ConnectorSyncStartOutcome =
+	| { status: "syncing" }
+	| { status: "already-syncing" }
+	| { status: "unsupported"; provider: string }
+	| { status: "error"; error: string };
+
+function startConnectorSync(
+	connectorId: string,
+	mode: "incremental" | "full",
+): ConnectorSyncStartOutcome {
+	const accessor = getDbAccessor();
+	const connectorRow = getConnector(accessor, connectorId);
+	if (!connectorRow) {
+		return { status: "error", error: "Connector not found" };
+	}
+
+	if (connectorRow.status === "syncing") {
+		return { status: "already-syncing" };
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(connectorRow.config_json);
+	} catch {
+		return { status: "error", error: "Connector config is invalid JSON" };
+	}
+	if (
+		typeof parsed !== "object" ||
+		parsed === null ||
+		!("provider" in parsed) ||
+		typeof (parsed as Record<string, unknown>).provider !== "string" ||
+		!(CONNECTOR_PROVIDERS as readonly string[]).includes(
+			(parsed as Record<string, unknown>).provider as string,
+		)
+	) {
+		return { status: "error", error: "Invalid connector config" };
+	}
+	// provider validated above — safe to treat as ConnectorConfig
+	const config = parsed as ConnectorConfig;
+
+	if (config.provider !== "filesystem") {
+		return { status: "unsupported", provider: config.provider };
+	}
+
+	updateConnectorStatus(accessor, connectorId, "syncing");
+	const connector = createFilesystemConnector(config, accessor);
+
+	let incrementalCursor: SyncCursor | null = null;
+	if (mode === "incremental") {
+		if (!connectorRow.cursor_json) {
+			incrementalCursor = { lastSyncAt: new Date(0).toISOString() };
+		} else {
+			try {
+				const cursorParsed: unknown = JSON.parse(connectorRow.cursor_json);
+				if (
+					typeof cursorParsed === "object" &&
+					cursorParsed !== null &&
+					"lastSyncAt" in cursorParsed &&
+					typeof (cursorParsed as Record<string, unknown>).lastSyncAt === "string"
+				) {
+					incrementalCursor = cursorParsed as SyncCursor;
+				} else {
+					incrementalCursor = { lastSyncAt: new Date(0).toISOString() };
+				}
+			} catch {
+				incrementalCursor = { lastSyncAt: new Date(0).toISOString() };
+			}
+		}
+	}
+
+	const syncPromise =
+		mode === "full"
+			? connector.syncFull()
+			: connector.syncIncremental(incrementalCursor ?? { lastSyncAt: new Date(0).toISOString() });
+
+	syncPromise
+		.then((result) => {
+			updateCursor(accessor, connectorId, result.cursor);
+			updateConnectorStatus(accessor, connectorId, "idle");
+			logger.info("connectors", mode === "full" ? "Full sync completed" : "Sync completed", {
+				connectorId,
+				added: result.documentsAdded,
+				updated: result.documentsUpdated,
+			});
+		})
+		.catch((err) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			updateConnectorStatus(accessor, connectorId, "error", msg);
+			logger.error("connectors", mode === "full" ? "Full sync failed" : "Sync failed", new Error(msg));
+		});
+
+	return { status: "syncing" };
+}
+
 // GET /api/connectors — list all connectors
 app.get("/api/connectors", (c) => {
 	try {
@@ -3689,58 +3786,56 @@ app.get("/api/connectors/:id", (c) => {
 // POST /api/connectors/:id/sync — trigger incremental sync
 app.post("/api/connectors/:id/sync", async (c) => {
 	const id = c.req.param("id");
-	const accessor = getDbAccessor();
-
-	const connectorRow = getConnector(accessor, id);
-	if (!connectorRow) return c.json({ error: "Connector not found" }, 404);
-
-	if (connectorRow.status === "syncing") {
+	const outcome = startConnectorSync(id, "incremental");
+	if (outcome.status === "error") return c.json({ error: outcome.error }, 404);
+	if (outcome.status === "already-syncing") {
 		return c.json({ status: "syncing", message: "Already syncing" });
 	}
-
-	const config = JSON.parse(connectorRow.config_json) as {
-		id: string;
-		provider: "filesystem" | "github-docs" | "gdrive";
-		displayName: string;
-		settings: Record<string, unknown>;
-		enabled: boolean;
-	};
-
-	// Only filesystem is supported for now
-	if (config.provider !== "filesystem") {
-		return c.json({ error: `Provider ${config.provider} not yet supported` }, 501);
+	if (outcome.status === "unsupported") {
+		return c.json({ error: `Provider ${outcome.provider} not yet supported` }, 501);
 	}
-
-	updateConnectorStatus(accessor, id, "syncing");
-
-	// Fire and forget — caller polls GET /api/connectors/:id for status
-	const connector = createFilesystemConnector(config, accessor);
-	const cursor = connectorRow.cursor_json
-		? (JSON.parse(connectorRow.cursor_json) as {
-				lastSyncAt: string;
-				checkpoint?: string;
-				version?: number;
-			})
-		: { lastSyncAt: new Date(0).toISOString() };
-
-	connector
-		.syncIncremental(cursor)
-		.then((result) => {
-			updateCursor(accessor, id, result.cursor);
-			updateConnectorStatus(accessor, id, "idle");
-			logger.info("connectors", "Sync completed", {
-				connectorId: id,
-				added: result.documentsAdded,
-				updated: result.documentsUpdated,
-			});
-		})
-		.catch((err) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			updateConnectorStatus(accessor, id, "error", msg);
-			logger.error("connectors", "Sync failed", new Error(msg));
-		});
-
 	return c.json({ status: "syncing" });
+});
+
+// POST /api/connectors/resync — trigger incremental sync for all connectors
+app.post("/api/connectors/resync", async (c) => {
+	try {
+		const accessor = getDbAccessor();
+		const connectors = listConnectors(accessor);
+
+		let started = 0;
+		let alreadySyncing = 0;
+		let unsupported = 0;
+		let failed = 0;
+
+		for (const conn of connectors) {
+			const outcome = startConnectorSync(conn.id, "incremental");
+			if (outcome.status === "syncing") started++;
+			if (outcome.status === "already-syncing") alreadySyncing++;
+			if (outcome.status === "unsupported") unsupported++;
+			if (outcome.status === "error") failed++;
+		}
+
+		return c.json({
+			status: "ok",
+			total: connectors.length,
+			started,
+			alreadySyncing,
+			unsupported,
+			failed,
+		});
+	} catch (e) {
+		logger.error("connectors", "Failed to trigger bulk resync", e instanceof Error ? e : new Error(String(e)));
+		return c.json({
+			status: "error",
+			error: "Failed to trigger connector re-sync",
+			total: 0,
+			started: 0,
+			alreadySyncing: 0,
+			unsupported: 0,
+			failed: 0,
+		}, 500);
+	}
 });
 
 // POST /api/connectors/:id/sync/full — trigger full resync
@@ -3751,41 +3846,14 @@ app.post("/api/connectors/:id/sync/full", async (c) => {
 		return c.json({ error: "Full resync requires ?confirm=true" }, 400);
 	}
 
-	const accessor = getDbAccessor();
-	const connectorRow = getConnector(accessor, id);
-	if (!connectorRow) return c.json({ error: "Connector not found" }, 404);
-
-	const config = JSON.parse(connectorRow.config_json) as {
-		id: string;
-		provider: "filesystem" | "github-docs" | "gdrive";
-		displayName: string;
-		settings: Record<string, unknown>;
-		enabled: boolean;
-	};
-
-	if (config.provider !== "filesystem") {
-		return c.json({ error: `Provider ${config.provider} not yet supported` }, 501);
+	const outcome = startConnectorSync(id, "full");
+	if (outcome.status === "error") return c.json({ error: outcome.error }, 404);
+	if (outcome.status === "already-syncing") {
+		return c.json({ status: "syncing", message: "Already syncing" });
 	}
-
-	updateConnectorStatus(accessor, id, "syncing");
-
-	const connector = createFilesystemConnector(config, accessor);
-
-	connector
-		.syncFull()
-		.then((result) => {
-			updateCursor(accessor, id, result.cursor);
-			updateConnectorStatus(accessor, id, "idle");
-			logger.info("connectors", "Full sync completed", {
-				connectorId: id,
-				added: result.documentsAdded,
-			});
-		})
-		.catch((err) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			updateConnectorStatus(accessor, id, "error", msg);
-			logger.error("connectors", "Full sync failed", new Error(msg));
-		});
+	if (outcome.status === "unsupported") {
+		return c.json({ error: `Provider ${outcome.provider} not yet supported` }, 501);
+	}
 
 	return c.json({ status: "syncing" });
 });

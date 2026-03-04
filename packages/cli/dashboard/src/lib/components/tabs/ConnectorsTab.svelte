@@ -6,6 +6,8 @@
 	import {
 		getHarnesses,
 		getConnectors,
+		regenerateHarnesses,
+		resyncConnectors,
 		syncConnector,
 		syncConnectorFull,
 		type Harness,
@@ -18,6 +20,8 @@
 	let loading = $state(true);
 	let syncingId = $state<string | null>(null);
 	let syncMenuOpen = $state<string | null>(null);
+	let harnessResyncing = $state(false);
+	let connectorsResyncing = $state(false);
 
 	function relativeTime(iso: string | null): string {
 		if (!iso) return "never";
@@ -41,10 +45,80 @@
 	}
 
 	async function load() {
-		const [h, c] = await Promise.all([getHarnesses(), getConnectors()]);
-		harnesses = h;
-		connectors = c;
-		loading = false;
+		try {
+			const [h, c] = await Promise.all([getHarnesses(), getConnectors()]);
+			harnesses = h;
+			connectors = c;
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function triggerHarnessResync(): Promise<void> {
+		harnessResyncing = true;
+		try {
+			const result = await regenerateHarnesses();
+			if (!result.success) {
+				toast(`Harness re-sync failed: ${result.error ?? "unknown error"}`, "error");
+				return;
+			}
+			toast(result.message ?? "Harness re-sync completed", "success");
+			await load();
+		} catch (e) {
+			toast(
+				`Harness re-sync failed: ${e instanceof Error ? e.message : String(e)}`,
+				"error",
+			);
+		} finally {
+			harnessResyncing = false;
+		}
+	}
+
+	function buildConnectorResyncMessage(result: {
+		started: number;
+		alreadySyncing: number;
+		unsupported: number;
+		failed: number;
+		total: number;
+	}): string {
+		const parts: string[] = [];
+		parts.push(`Started ${result.started}`);
+		if (result.alreadySyncing > 0) parts.push(`${result.alreadySyncing} already syncing`);
+		if (result.unsupported > 0) parts.push(`${result.unsupported} unsupported`);
+		if (result.failed > 0) parts.push(`${result.failed} failed`);
+		parts.push(`of ${result.total}`);
+		return `Connector re-sync summary: ${parts.join(", ")}`;
+	}
+
+	async function triggerConnectorsResync(): Promise<void> {
+		if (connectors.length === 0) {
+			toast("No document connectors configured", "error");
+			return;
+		}
+
+		connectorsResyncing = true;
+		try {
+			const result = await resyncConnectors();
+			if (result.status === "error") {
+				toast(`Connector re-sync failed: ${result.error ?? "unknown error"}`, "error");
+				return;
+			}
+
+			const message = buildConnectorResyncMessage(result);
+			if (result.failed > 0) {
+				toast(message, "error");
+			} else {
+				toast(message, "success");
+			}
+			await load();
+		} catch (e) {
+			toast(
+				`Connector re-sync failed: ${e instanceof Error ? e.message : String(e)}`,
+				"error",
+			);
+		} finally {
+			connectorsResyncing = false;
+		}
 	}
 
 	async function triggerSync(conn: DocumentConnector): Promise<void> {
@@ -106,9 +180,20 @@
 	{:else}
 		<!-- Platform Harnesses -->
 		<section>
-			<h3 class="sig-label uppercase tracking-[0.1em] mb-3">
-				Platform Harnesses
-			</h3>
+			<div class="flex items-center justify-between mb-3 gap-3">
+				<h3 class="sig-label uppercase tracking-[0.1em]">
+					Platform Harnesses
+				</h3>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={harnessResyncing}
+					class="sig-meta uppercase tracking-[0.08em] h-auto px-2 py-1"
+					onclick={triggerHarnessResync}
+				>
+					{harnessResyncing ? "Re-syncing..." : "Re-sync Harnesses"}
+				</Button>
+			</div>
 			<div class="grid gap-2">
 				{#each harnesses as h (h.id)}
 					<div
@@ -154,9 +239,20 @@
 
 		<!-- Document Connectors -->
 		<section>
-			<h3 class="sig-label uppercase tracking-[0.1em] mb-3">
-				Document Connectors
-			</h3>
+			<div class="flex items-center justify-between mb-3 gap-3">
+				<h3 class="sig-label uppercase tracking-[0.1em]">
+					Document Connectors
+				</h3>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={connectorsResyncing || connectors.length === 0}
+					class="sig-meta uppercase tracking-[0.08em] h-auto px-2 py-1"
+					onclick={triggerConnectorsResync}
+				>
+					{connectorsResyncing ? "Re-syncing..." : "Re-sync Connectors"}
+				</Button>
+			</div>
 			{#if connectors.length === 0}
 				<div class="flex items-center justify-center py-8
 					sig-label border border-dashed border-[var(--sig-border)]">
