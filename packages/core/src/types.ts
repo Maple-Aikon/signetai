@@ -81,6 +81,13 @@ export interface AgentManifest {
 		registry?: string;
 	};
 
+	// External service integration
+	services?: {
+		openclaw?: {
+			restart_command?: string;
+		};
+	};
+
 	// Legacy fields
 	auth?: {
 		method: "none" | "erc8128" | "gpg" | "did";
