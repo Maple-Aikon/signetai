@@ -402,6 +402,7 @@ function formatMemoryMoment(
 		return date.toLocaleTimeString("en-US", {
 			hour: "numeric",
 			minute: "2-digit",
+			timeZone: "UTC",
 		});
 	}
 	return date.toLocaleString("en-US", {
@@ -409,6 +410,7 @@ function formatMemoryMoment(
 		day: "numeric",
 		hour: "numeric",
 		minute: "2-digit",
+		timeZone: "UTC",
 	});
 }
 
