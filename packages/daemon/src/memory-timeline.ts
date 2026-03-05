@@ -341,8 +341,9 @@ export function buildMemoryTimeline(
 		// memoryRows.length includes rows with corrupt timestamps that fail parseTimestamp
 		// and are excluded from all buckets — subtract them for an accurate count.
 		totalMemories: memoryRows.length - invalidMemoryTimestamps,
-		// Count of history events within the 30-day window for non-deleted memories
-		totalHistoryEvents: historyRows.length,
+		// Same rationale as totalMemories: subtract corrupt-timestamp rows that are
+		// counted by historyRows.length but skipped via continue in the loop above.
+		totalHistoryEvents: historyRows.length - invalidHistoryTimestamps,
 		invalidMemoryTimestamps,
 		invalidHistoryTimestamps,
 		buckets: responseBuckets,

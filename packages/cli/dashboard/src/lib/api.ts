@@ -308,6 +308,12 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 							.filter((tag) => typeof tag === "string")
 							.map((tag) => tag.trim())
 							.filter((tag) => tag.length > 0);
+					} else {
+						// JSON parsed but not an array — fall through to CSV
+						tags = trimmed
+							.split(",")
+							.map((tag) => tag.trim())
+							.filter((tag) => tag.length > 0);
 					}
 				} catch {
 					// Fall through to CSV parsing on JSON parse error
