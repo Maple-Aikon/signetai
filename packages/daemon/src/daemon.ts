@@ -6584,7 +6584,11 @@ ${fileList}
 		}
 	}
 
-	// Write SIGNET-ARCHITECTURE.md if missing or outdated
+	ensureArchitectureDoc();
+}
+
+/** Write SIGNET-ARCHITECTURE.md if missing or outdated. */
+function ensureArchitectureDoc(): void {
 	const archPath = join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md");
 	try {
 		const archContent = buildArchitectureDoc();
@@ -6624,6 +6628,7 @@ function startFileWatcher() {
 			join(AGENTS_DIR, "MEMORY.md"),
 			join(AGENTS_DIR, "IDENTITY.md"),
 			join(AGENTS_DIR, "USER.md"),
+			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
 			join(AGENTS_DIR, "memory"), // Watch entire memory directory for new/changed .md files
 		],
 		{
@@ -6652,6 +6657,15 @@ function startFileWatcher() {
 				}),
 			);
 		}
+	});
+
+	watcher.on("unlink", (path) => {
+		logger.info("watcher", "File removed", { path });
+		// Recreate the architecture doc immediately if deleted at runtime
+		if (path.endsWith("SIGNET-ARCHITECTURE.md")) {
+			ensureArchitectureDoc();
+		}
+		scheduleAutoCommit(path);
 	});
 
 	watcher.on("add", (path) => {
@@ -7225,6 +7239,10 @@ async function main() {
 	// Start file watcher
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
+
+	// Ensure SIGNET-ARCHITECTURE.md exists on startup (file watcher uses
+	// ignoreInitial:true so it won't recreate missing files on its own)
+	ensureArchitectureDoc();
 
 	// Load config and log resolved embedding settings for diagnostics
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
