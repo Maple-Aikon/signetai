@@ -222,13 +222,18 @@ function checkMigrationDrift(claudeMd: string): MigrationDrift {
 	const ranges: { location: string; text: string }[] = [];
 	// Bound the scan to the migrations section to avoid false positives from
 	// unrelated text elsewhere in CLAUDE.md (e.g. changelogs, step counts).
-	const migSection = sliceSection(claudeMd, "## Database Migrations") || claudeMd;
+	const sectionHeader = "## Database Migrations";
+	const sectionStart = claudeMd.indexOf(sectionHeader);
+	const migSection = sliceSection(claudeMd, sectionHeader) || claudeMd;
+	// Compute line offset so reported locations point to the correct file line.
+	const lineOffset =
+		sectionStart === -1 ? 0 : claudeMd.slice(0, sectionStart).split("\n").length - 1;
 	const lines = migSection.split("\n");
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 		const rangeMatch = line.match(/(\d{3})[\w-]*\s+through\s+(\d{3})[\w-]*/);
 		if (rangeMatch) {
-			ranges.push({ location: `CLAUDE.md:${i + 1}`, text: rangeMatch[0] });
+			ranges.push({ location: `CLAUDE.md:${lineOffset + i + 1}`, text: rangeMatch[0] });
 		}
 	}
 
@@ -301,9 +306,12 @@ function getActualPackages(): PackageInfo[] {
 				} catch {
 					// Skip malformed package manifests.
 				}
-			} else if (statSync(full).isDirectory() && entry !== "node_modules") {
-				scan(full, rel);
 			}
+		}
+		// Always recurse — a workspace root may have an unnamed package.json
+		// but still contain named sub-packages underneath it.
+		if (statSync(full).isDirectory() && entry !== "node_modules") {
+			scan(full, rel);
 		}
 	}
 

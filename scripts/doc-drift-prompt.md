@@ -22,19 +22,17 @@ git checkout -b docs/drift-fix-$(date +%Y-%m-%dT%H-%M-%S)
 
 ## Step 3: Fix each category of drift
 
-Capture the current drift report before making any edits — this will be used
-in the PR description and commit message:
+Capture the current drift state before making any edits — this will be used
+for the commit message and PR description:
 
 ```bash
+DRIFT_JSON="$(bun scripts/doc-drift.ts 2>/dev/null)"
 DRIFT_REPORT="$(bun scripts/doc-drift.ts --markdown 2>/dev/null)"
-DRIFT_BULLETS="$(bun scripts/doc-drift.ts 2>/dev/null | jq -r '.summary[]' | sed 's/^/- /')"
+DRIFT_BULLETS="$(printf '%s' "${DRIFT_JSON}" | jq -r '.summary[]' 2>/dev/null | sed 's/^/- /')"
 ```
 
-Read the full JSON output for structured data:
-
-```bash
-bun scripts/doc-drift.ts
-```
+Use `${DRIFT_JSON}` for structured data (routes, migrations, packages)
+throughout Step 3 — do not re-run the script again for JSON output.
 
 ### Route drift (missing from CLAUDE.md)
 
