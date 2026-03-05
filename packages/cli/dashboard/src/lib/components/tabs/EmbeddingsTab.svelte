@@ -1257,8 +1257,8 @@ $effect(() => {
 		const rawMode = window.sessionStorage.getItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY);
 		if (rawMode === "source" || rawMode === "newness" || rawMode === "none") nodeColorMode = rawMode;
 		const rawNewSince = window.sessionStorage.getItem(NEW_SINCE_SESSION_STORAGE_KEY);
-		if (rawNewSince === "true" || rawNewSince === "false") {
-			showNewSinceLastSeen = rawNewSince === "true";
+		if (rawNewSince === "true") {
+			showNewSinceLastSeen = true;
 		}
 		const rawLastSeen = window.localStorage.getItem(LAST_SEEN_STORAGE_KEY);
 		if (rawLastSeen) {
