@@ -470,9 +470,11 @@ function generateReport(): DriftReport {
 		);
 	}
 	if (migrations.hasDrift) {
-		summary.push(
-			`Migration range stale: documented max differs from actual (${migrations.actualMax})`,
-		);
+		const migSummary =
+			migrations.documentedRanges.length === 0
+				? `Migration range not documented; actual latest is ${migrations.actualMax}`
+				: `Migration range stale: documented max differs from actual (${migrations.actualMax})`;
+		summary.push(migSummary);
 	}
 	if (keyFiles.missing.length > 0) {
 		summary.push(
