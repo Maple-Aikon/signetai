@@ -482,7 +482,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		);
 		ctx.fill();
 
-		if (showNewSinceLastSeen && isNewSinceLastSeen(node.data.createdAt, lastSeenMs)) {
+		if (colorMode !== "none" && showNewSinceLastSeen && isNewSinceLastSeen(node.data.createdAt, lastSeenMs)) {
 			ctx.beginPath();
 			ctx.arc(node.x, node.y, node.radius + 2.2, 0, Math.PI * 2);
 			ctx.strokeStyle = "rgba(246, 194, 107, 0.85)";
