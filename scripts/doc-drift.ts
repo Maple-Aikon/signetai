@@ -318,7 +318,7 @@ function getActualPackages(): PackageInfo[] {
 			}
 			// Always recurse — a workspace root may have an unnamed package.json
 			// but still contain named sub-packages underneath it.
-			if (statSync(full).isDirectory() && entry !== "node_modules") {
+			if (existsSync(full) && statSync(full).isDirectory() && entry !== "node_modules") {
 				scan(full, rel);
 			}
 		}
