@@ -307,11 +307,11 @@ function getActualPackages(): PackageInfo[] {
 					// Skip malformed package manifests.
 				}
 			}
-		}
-		// Always recurse — a workspace root may have an unnamed package.json
-		// but still contain named sub-packages underneath it.
-		if (statSync(full).isDirectory() && entry !== "node_modules") {
-			scan(full, rel);
+			// Always recurse — a workspace root may have an unnamed package.json
+			// but still contain named sub-packages underneath it.
+			if (statSync(full).isDirectory() && entry !== "node_modules") {
+				scan(full, rel);
+			}
 		}
 	}
 
