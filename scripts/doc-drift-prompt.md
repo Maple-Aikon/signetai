@@ -113,7 +113,7 @@ It should report no drift (exit 0). If drift remains, fix it and re-check.
 git add CLAUDE.md README.md docs/**/*.md 2>/dev/null || git add CLAUDE.md README.md docs/
 COMMIT_MSG_FILE="$(mktemp)"
 printf 'docs: fix documentation drift\n\n%s\n' "${DRIFT_BULLETS}" > "${COMMIT_MSG_FILE}"
-git commit -F "${COMMIT_MSG_FILE}"
+git commit -F "${COMMIT_MSG_FILE}" || { echo "Commit failed; aborting PR creation."; rm -f "${COMMIT_MSG_FILE}"; exit 1; }
 rm -f "${COMMIT_MSG_FILE}"
 
 PR_BODY_FILE="$(mktemp)"
