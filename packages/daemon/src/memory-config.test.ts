@@ -126,7 +126,7 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.base_url).toBe("http://192.168.1.100:11434");
 	});
 
-	it("preserves explicit empty ollama base_url", () => {
+	it("defaults ollama base_url when explicitly empty", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
@@ -134,7 +134,7 @@ describe("loadMemoryConfig", () => {
 		);
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("ollama");
-		expect(cfg.embedding.base_url).toBe("");
+		expect(cfg.embedding.base_url).toBe("http://localhost:11434");
 	});
 
 	it("does not set default base_url for non-ollama providers", () => {

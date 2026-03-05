@@ -528,7 +528,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				// For ollama provider, default to standard local URL only when base_url is omitted.
 				const explicitBaseUrl = emb.base_url as string | undefined;
 				if (defaults.embedding.provider === "ollama") {
-					defaults.embedding.base_url = explicitBaseUrl ?? DEFAULT_OLLAMA_BASE_URL;
+					defaults.embedding.base_url =
+						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
+							? explicitBaseUrl
+							: DEFAULT_OLLAMA_BASE_URL;
 				} else {
 					defaults.embedding.base_url = explicitBaseUrl ?? defaults.embedding.base_url;
 				}
