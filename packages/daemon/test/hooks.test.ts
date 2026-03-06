@@ -660,6 +660,30 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.queryTerms).not.toContain("conversation_label");
 	});
 
+	test("prefers adapter-provided userMessage over raw prompt envelope", () => {
+		createMemoryDb([
+			{
+				content: "The release checklist includes smoke tests and rollback notes",
+				importance: 0.8,
+			},
+		]);
+
+		const result = handleUserPromptSubmit({
+			harness: "openclaw",
+			userMessage: "Can you reiterate the release checklist?",
+			userPrompt:
+				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
+			rawPrompt:
+				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.queryTerms).toContain("reiterate");
+		expect(result.queryTerms).toContain("release");
+		expect(result.queryTerms).not.toContain("agents");
+		expect(result.queryTerms).not.toContain("discord");
+	});
+
 	test("includes last assistant message in recall query terms", () => {
 		createMemoryDb([
 			{

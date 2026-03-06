@@ -4517,8 +4517,13 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 	try {
 		const body = (await c.req.json()) as UserPromptSubmitRequest;
 
-		if (!body.harness || !body.userPrompt) {
-			return c.json({ error: "harness and userPrompt are required" }, 400);
+		const hasUserMessage =
+			typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
+		const hasUserPrompt =
+			typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
+
+		if (!body.harness || (!hasUserMessage && !hasUserPrompt)) {
+			return c.json({ error: "harness and userMessage or userPrompt are required" }, 400);
 		}
 
 		const runtimePath = resolveRuntimePath(c, body);

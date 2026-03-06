@@ -510,6 +510,39 @@ export class OpenClawConnector extends BaseConnector {
 		return false;
 	}
 
+	getConfiguredRuntimePath(): "plugin" | "legacy" | null {
+		let sawLegacy = false;
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const config = parseJsonOrJson5(
+					readFileSync(configPath, "utf-8"),
+				) as OpenClawConfigShape;
+
+				const pluginEntry =
+					config.plugins?.entries?.["signet-memory-openclaw"]?.enabled === true ||
+					config.plugins?.entries?.["signet-memory"]?.enabled === true;
+				const pluginSlot =
+					config.plugins?.slots?.memory === "signet-memory-openclaw" ||
+					config.plugins?.slots?.memory === "signet-memory";
+
+				if (pluginEntry || pluginSlot) {
+					return "plugin";
+				}
+
+				if (
+					config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true
+				) {
+					sawLegacy = true;
+				}
+			} catch {
+				// malformed config — skip
+			}
+		}
+
+		return sawLegacy ? "legacy" : null;
+	}
+
 	/**
 	 * Get the primary config path (first existing config, or default).
 	 */

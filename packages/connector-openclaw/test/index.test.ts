@@ -178,4 +178,57 @@ describe("OpenClawConnector config patching", () => {
 		const connector = new OpenClawConnector();
 		expect(connector.getDiscoveredWorkspacePaths()).toContain("/home/test-user/workspace");
 	});
+
+	it("detects plugin runtime path from config", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {
+							"signet-memory-openclaw": {
+								enabled: true,
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
+	});
+
+	it("detects legacy runtime path from config", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					hooks: {
+						internal: {
+							entries: {
+								"signet-memory": {
+									enabled: true,
+								},
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getConfiguredRuntimePath()).toBe("legacy");
+	});
 });

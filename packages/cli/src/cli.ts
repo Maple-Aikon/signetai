@@ -35,6 +35,7 @@ import {
 	detectSchema,
 	ensureUnifiedSchema,
 	formatYaml,
+	getGlobalInstallCommand,
 	getMissingIdentityFiles,
 	getSkillsRunnerCommand,
 	hasValidIdentity,
@@ -502,10 +503,17 @@ async function configureHarnessHooks(
 		}
 		case "openclaw": {
 			const connector = new OpenClawConnector();
+			const runtimePath =
+				options?.openclawRuntimePath ??
+				connector.getConfiguredRuntimePath() ??
+				"plugin";
 			await connector.install(basePath, {
 				configureWorkspace: options?.configureOpenClawWorkspace ?? false,
-				runtimePath: options?.openclawRuntimePath ?? "legacy",
+				runtimePath,
 			});
+			if (runtimePath === "plugin") {
+				await ensureOpenClawPluginPackage(basePath);
+			}
 			break;
 		}
 	}
@@ -513,6 +521,8 @@ async function configureHarnessHooks(
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const OPENCLAW_PLUGIN_PACKAGE = "@signetai/signet-memory-openclaw";
+const OPENCLAW_PLUGIN_SYNC_FILENAME = "openclaw-plugin-version";
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
 	if (!existsSync(packageJsonPath)) {
@@ -562,6 +572,78 @@ function signetLogo() {
 function detectExistingSetup(basePath: string): SetupDetection {
 	// Use the enhanced detection from @signet/core
 	return detectExistingSetupCore(basePath);
+}
+
+function getOpenClawPluginSyncPath(basePath: string): string {
+	return join(basePath, ".daemon", OPENCLAW_PLUGIN_SYNC_FILENAME);
+}
+
+function readOpenClawPluginSyncVersion(basePath: string): string | null {
+	const syncPath = getOpenClawPluginSyncPath(basePath);
+	if (!existsSync(syncPath)) {
+		return null;
+	}
+
+	try {
+		return readFileSync(syncPath, "utf-8").trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+function writeOpenClawPluginSyncVersion(basePath: string, version: string): void {
+	const syncPath = getOpenClawPluginSyncPath(basePath);
+	mkdirSync(dirname(syncPath), { recursive: true });
+	writeFileSync(syncPath, `${version}\n`);
+}
+
+async function ensureOpenClawPluginPackage(
+	basePath: string,
+	options: { force?: boolean; silent?: boolean } = {},
+): Promise<boolean> {
+	const connector = new OpenClawConnector();
+	if (connector.getConfiguredRuntimePath() !== "plugin") {
+		return false;
+	}
+
+	if (!options.force && readOpenClawPluginSyncVersion(basePath) === VERSION) {
+		return true;
+	}
+
+	const packageManager = resolvePrimaryPackageManager({
+		agentsDir: basePath,
+		env: process.env,
+	});
+	const installCommand = getGlobalInstallCommand(
+		packageManager.family,
+		`${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
+	);
+
+	const result = spawnSync(installCommand.command, installCommand.args, {
+		stdio: options.silent ? "pipe" : "inherit",
+		timeout: 120_000,
+		env: process.env,
+	});
+
+	if (result.status !== 0) {
+		if (!options.silent) {
+			console.log(
+				chalk.yellow(
+					`  Warning: failed to refresh ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
+				),
+			);
+		}
+		return false;
+	}
+
+	writeOpenClawPluginSyncVersion(basePath, VERSION);
+	if (!options.silent) {
+		console.log(
+			chalk.green(`  ✓ OpenClaw plugin refreshed (${OPENCLAW_PLUGIN_PACKAGE}@${VERSION})`),
+		);
+	}
+
+	return true;
 }
 
 /**
@@ -3141,6 +3223,29 @@ async function showLogs(options: {
 
 program.name("signet").description("Own your agent. Bring it anywhere.").version(VERSION);
 
+program.hook("preAction", async (_thisCommand, actionCommand) => {
+	let current: Command | null = actionCommand;
+	let topLevelCommand = "";
+
+	while (current && current.parent) {
+		if (current.parent.name() === "signet") {
+			topLevelCommand = current.name();
+			break;
+		}
+		current = current.parent;
+	}
+
+	if (topLevelCommand === "hook" || topLevelCommand === "setup") {
+		return;
+	}
+
+	if (!existsSync(AGENTS_DIR)) {
+		return;
+	}
+
+	await ensureOpenClawPluginPackage(AGENTS_DIR, { silent: true });
+});
+
 program
 	.command("setup")
 	.description("Setup wizard (interactive by default)")
@@ -4901,6 +5006,7 @@ hookCmd
 			body: JSON.stringify({
 				harness: options.harness,
 				project: options.project || stdinProject,
+				userMessage: userPrompt,
 				userPrompt,
 				sessionKey,
 				lastAssistantMessage: lastAssistantMessage || undefined,

@@ -127,7 +127,9 @@ export interface PreCompactionResponse {
 export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
+	userMessage?: string;
 	userPrompt: string;
+	rawPrompt?: string;
 	lastAssistantMessage?: string;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
@@ -1181,15 +1183,27 @@ function extractRecallWords(
 		.slice(0, 12);
 }
 
+function resolveRecallUserMessage(req: UserPromptSubmitRequest): string {
+	if (typeof req.userMessage === "string") {
+		const cleaned = req.userMessage.trim();
+		if (cleaned.length > 0) {
+			return cleaned;
+		}
+	}
+
+	return stripUntrustedMetadata(req.userPrompt).trim();
+}
+
 export function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
 ): UserPromptSubmitResponse {
 	const start = Date.now();
+	const userMessage = resolveRecallUserMessage(req);
 
-	const words = extractRecallWords(req.userPrompt, req.lastAssistantMessage);
+	const words = extractRecallWords(userMessage, req.lastAssistantMessage);
 
 	// Always record the prompt for continuity tracking, even if no FTS query
-	const snippet = req.userPrompt.slice(0, 200).trim();
+	const snippet = userMessage.slice(0, 200).trim();
 	recordPrompt(
 		req.sessionKey,
 		words.length > 0 ? words.join(" ") : undefined,
@@ -1303,7 +1317,7 @@ export function handleUserPromptSubmit(
 			project: req.project,
 			sessionKey: req.sessionKey,
 			memoryCount: selected.length,
-			prompt: req.userPrompt,
+			prompt: userMessage,
 			injectChars: inject.length,
 			inject,
 			durationMs: duration,
