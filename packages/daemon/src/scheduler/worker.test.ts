@@ -1,8 +1,11 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { ReadDb } from "../db-accessor";
-import { selectDueTasks } from "./worker";
+import { resolveTaskModel, selectDueTasks } from "./worker";
 
 interface TaskInsert {
 	readonly id: string;
@@ -84,5 +87,28 @@ describe("scheduler due task selection", () => {
 
 		const rows = selectDueTasks(db as unknown as ReadDb, nowIso, 2);
 		expect(rows.map((row) => row.id)).toEqual(["earliest", "middle"]);
+	});
+});
+
+describe("resolveTaskModel", () => {
+	it("returns the configured codex extraction model for codex tasks", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			writeFileSync(
+				join(agentsDir, "agent.yaml"),
+				[
+					"memory:",
+					"  pipelineV2:",
+					"    extraction:",
+					"      provider: codex",
+					"      model: gpt-5.3-codex",
+				].join("\n"),
+			);
+
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
+			expect(resolveTaskModel("opencode", agentsDir)).toBeUndefined();
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
 	});
 });

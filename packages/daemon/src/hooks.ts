@@ -1605,15 +1605,6 @@ export function normalizeCodexTranscript(raw: string): string {
 				if (item.type === "function_call_output" && typeof item.output === "string") {
 					lines.push(`Tool output: ${item.output.trim().slice(0, 1000)}`);
 				}
-				if (item.type === "item.completed") {
-					const completed = item.item;
-					if (typeof completed === "object" && completed !== null) {
-						const done = completed as Record<string, unknown>;
-						if (done.type === "agent_message" && typeof done.text === "string") {
-							lines.push(`Assistant: ${done.text.trim()}`);
-						}
-					}
-				}
 			}
 		}
 	}

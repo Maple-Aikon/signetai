@@ -5,7 +5,10 @@
  * Polls every 15 seconds (cron granularity is minutes).
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { DbAccessor, ReadDb } from "../db-accessor";
+import { loadMemoryConfig } from "../memory-config";
 import type { WorkerHandle } from "../pipeline/worker";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
@@ -15,6 +18,7 @@ import { logger } from "../logger";
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 
 export interface DueTaskRow {
 	readonly id: string;
@@ -51,6 +55,18 @@ export function selectDueTasks(
 			 LIMIT ?`,
 		)
 		.all(nowIso, limit) as ReadonlyArray<DueTaskRow>;
+}
+
+export function resolveTaskModel(
+	harness: DueTaskRow["harness"],
+	agentsDir: string = AGENTS_DIR,
+): string | undefined {
+	if (harness !== "codex") return undefined;
+
+	const cfg = loadMemoryConfig(agentsDir);
+	return cfg.pipelineV2.extraction.provider === "codex"
+		? cfg.pipelineV2.extraction.model
+		: undefined;
 }
 
 /** Start the scheduler worker. Returns a handle to stop it. */
@@ -180,6 +196,7 @@ async function executeTask(
 		task.skill_name,
 		task.skill_mode,
 	);
+	const model = resolveTaskModel(task.harness);
 
 	// Spawn the process
 	let result: SpawnResult;
@@ -211,6 +228,7 @@ async function executeTask(
 					});
 				},
 			},
+			model,
 		);
 	} catch (err) {
 		result = {

@@ -422,9 +422,9 @@ export function createCodexProvider(
 
 		try {
 			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
+				new Response(proc.stdout).text().catch(() => ""),
+				new Response(proc.stderr).text().catch(() => ""),
+				proc.exited.catch(() => -1),
 			]);
 			if (timedOut) {
 				throw new Error(`codex timeout after ${timeoutMs}ms`);
