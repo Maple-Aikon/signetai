@@ -11,4 +11,17 @@ describe("normalizeCodexTranscript", () => {
 
 		expect(normalizeCodexTranscript(raw)).toContain("Assistant: Here is the plan.");
 	});
+
+	it("does not duplicate assistant content from event_msg and item.completed", () => {
+		const raw = [
+			'{"type":"event_msg","payload":{"type":"user_message","message":"Hello"}}',
+			'{"type":"event_msg","payload":{"type":"agent_message","message":"Hi there"}}',
+			'{"type":"item.completed","item":{"type":"agent_message","text":"Hi there"}}',
+		].join("\n");
+
+		const result = normalizeCodexTranscript(raw);
+		const assistantLines = result.split("\n").filter((l) => l.startsWith("Assistant:"));
+		expect(assistantLines).toHaveLength(1);
+		expect(assistantLines[0]).toBe("Assistant: Hi there");
+	});
 });

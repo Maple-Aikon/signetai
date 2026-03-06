@@ -1467,11 +1467,11 @@ export function normalizeCodexTranscript(raw: string): string {
 			const payload = event.payload;
 			if (typeof payload === "object" && payload !== null) {
 				const msg = payload as Record<string, unknown>;
+				// Only capture user messages here; assistant turns come from
+				// item.completed which is authoritative and avoids duplicating
+				// content that Codex emits in both streaming and completion events.
 				if (msg.type === "user_message" && typeof msg.message === "string") {
 					lines.push(`User: ${msg.message.trim()}`);
-				}
-				if (msg.type === "agent_message" && typeof msg.message === "string") {
-					lines.push(`Assistant: ${msg.message.trim()}`);
 				}
 			}
 			continue;
