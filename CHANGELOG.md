@@ -2,6 +2,16 @@
 
 All notable changes to Signet are documented here.
 
+## [0.42.1] - 2026-03-06
+
+### Bug Fixes
+
+- **daemon**: re-export embedding helpers and getSecret after extraction
+- **daemon**: guard legacy hook path from envelope pollution in snippets
+- **daemon**: use hybrid recall for prompt submit
+- **openclaw**: clean recall queries and refresh plugin runtime
+
+
 ## [0.42.0] - 2026-03-06
 
 ### Bug Fixes
