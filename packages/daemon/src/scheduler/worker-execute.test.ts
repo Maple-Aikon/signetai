@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { runMigrations } from "@signet/core";
+import type { DbAccessor } from "../db-accessor";
 
 mock.module("../memory-config", () => ({
 	loadMemoryConfig: () => {
@@ -40,12 +41,17 @@ mock.module("../logger", () => ({
 
 const { executeTask } = await import("./worker");
 
+function isTaskRunRow(value: unknown): value is { status: string; error: string | null } {
+	if (typeof value !== "object" || value === null) return false;
+	return "status" in value && "error" in value;
+}
+
 describe("executeTask", () => {
 	let db: Database;
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		runMigrations(db);
 	});
 
 	afterEach(() => {
@@ -73,16 +79,17 @@ describe("executeTask", () => {
 			now,
 		);
 
-		const accessor = {
+		const accessor: DbAccessor = {
 			withReadDb<T>(fn: (rdb: unknown) => T): T {
 				return fn(db);
 			},
 			withWriteTx<T>(fn: (wdb: unknown) => T): T {
 				return fn(db);
 			},
+			close() {},
 		};
 
-		await executeTask(accessor as never, {
+		await executeTask(accessor, {
 			id: "task-1",
 			name: "task-task-1",
 			prompt: "test prompt",
@@ -95,8 +102,12 @@ describe("executeTask", () => {
 
 		const run = db.prepare(
 			`SELECT status, error FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1`,
-		).get("task-1") as { status: string; error: string | null } | undefined;
+		).get("task-1");
 
+		expect(isTaskRunRow(run)).toBe(true);
+		if (!isTaskRunRow(run)) {
+			throw new Error("expected task run row");
+		}
 		expect(run?.status).toBe("failed");
 		expect(run?.error).toContain("config read failed");
 	});
