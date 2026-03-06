@@ -4,6 +4,7 @@
  * Background service for memory, API, and dashboard hosting
  */
 
+import type { Database } from "bun:sqlite";
 import { spawn } from "child_process";
 import { createHash } from "crypto";
 import {
@@ -180,6 +181,7 @@ let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 const projectionInFlight = new Map<number, Promise<void>>();
 const projectionErrors = new Map<number, { message: string; expires: number }>();
 const PROJECTION_ERROR_TTL_MS = 30_000;
+let hasMemoriesSessionIdColumnCache: boolean | null = null;
 
 // Auth state — initialized lazily in main(), but middleware reads from here
 let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
@@ -188,6 +190,19 @@ let authForgetLimiter = new AuthRateLimiter(60_000, 30);
 let authModifyLimiter = new AuthRateLimiter(60_000, 60);
 let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
 let authAdminLimiter = new AuthRateLimiter(60_000, 10);
+
+function hasMemoriesSessionIdColumn(db: Database): boolean {
+	if (hasMemoriesSessionIdColumnCache !== null) {
+		return hasMemoriesSessionIdColumnCache;
+	}
+
+	hasMemoriesSessionIdColumnCache = (
+		db.prepare("PRAGMA table_info(memories)").all() as Array<{
+			name?: unknown;
+		}>
+	).some((column) => column.name === "session_id");
+	return hasMemoriesSessionIdColumnCache;
+}
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
 	if (!existsSync(packageJsonPath)) {
@@ -2334,12 +2349,7 @@ app.get("/api/memory/:id", (c) => {
 	}
 
 	const row = getDbAccessor().withReadDb((db) => {
-		const hasSessionIdColumn = (
-			db.prepare("PRAGMA table_info(memories)").all() as Array<{
-				name?: unknown;
-			}>
-		).some((column) => column.name === "session_id");
-		const sessionSelect = hasSessionIdColumn
+		const sessionSelect = hasMemoriesSessionIdColumn(db)
 			? "session_id,"
 			: "NULL AS session_id,";
 
