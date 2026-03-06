@@ -34,7 +34,9 @@ function formatRelativeTime(iso: string | null): string {
 }
 
 let harnessLabel = $derived(
-	task.harness === "claude-code" ? "claude" : task.harness === "codex" ? "codex" : "opencode",
+	task.harness === "claude-code" ? "\u26A1 claude" :
+	task.harness === "codex" ? "\u26A1 codex" :
+	"\u26A1 opencode",
 );
 
 let nextRunLabel = $derived(formatRelativeTime(task.next_run_at));
@@ -46,8 +48,12 @@ let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 	onclick={onclick}
 >
 	<Card.Root
-		class="bg-[var(--sig-surface-raised)] border-[var(--sig-border)]
-			hover:border-[var(--sig-border-strong)] transition-colors
+		class="bg-[var(--sig-surface-raised)]
+			{columnKey === 'running' ? 'border-[var(--rpg-teal)]' : ''}
+			{columnKey === 'failed' ? 'border-[#ef4444]' : ''}
+			{columnKey === 'scheduled' ? 'border-[var(--sig-border)]' : ''}
+			{columnKey === 'completed' ? 'border-[#22c55e]/40' : ''}
+			hover:border-[var(--rpg-gold)] transition-colors
 			{!task.enabled ? 'opacity-50' : ''}"
 	>
 		<Card.Content class="p-3 space-y-2">
@@ -77,7 +83,7 @@ let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 				{#if columnKey === "scheduled"}
 					<span>next: {nextRunLabel}</span>
 				{:else if columnKey === "running"}
-					<span class="text-[var(--sig-warning, #f59e0b)]">running...</span>
+					<span style="color: var(--rpg-teal)" class="animate-pulse">&#x27F3; On Quest...</span>
 				{:else if columnKey === "completed"}
 					<span>exit 0 · {lastRunLabel}</span>
 				{:else if columnKey === "failed"}

@@ -40,10 +40,10 @@ let failed = $derived(
 let disabled = $derived(tasks.filter((t) => !t.enabled));
 
 const columns = [
-	{ key: "scheduled", label: "Scheduled", color: "var(--sig-accent)" },
-	{ key: "running", label: "Running", color: "var(--sig-warning, #f59e0b)" },
-	{ key: "completed", label: "Completed", color: "var(--sig-success)" },
-	{ key: "failed", label: "Failed", color: "var(--sig-error, #ef4444)" },
+	{ key: "scheduled", label: "Active Quests", color: "var(--rpg-gold)" },
+	{ key: "running", label: "In Progress", color: "var(--rpg-teal)" },
+	{ key: "completed", label: "Completed", color: "#22c55e" },
+	{ key: "failed", label: "Failed", color: "#ef4444" },
 ] as const;
 
 function getColumnTasks(key: string): ScheduledTask[] {
@@ -74,9 +74,9 @@ function getColumnTasks(key: string): ScheduledTask[] {
 		class="flex flex-col items-center justify-center h-full gap-2
 			text-[var(--sig-text-muted)]"
 	>
-		<span class="text-[13px]">No scheduled tasks yet</span>
-		<span class="text-[11px]">
-			Create one to start automating agent workflows
+		<div class="rpg-text-gold sig-heading mb-1">&#x2694; Quest Board Empty</div>
+		<span class="text-[11px] text-[var(--sig-text-muted)]">
+			Issue your first quest to begin the agent's journey
 		</span>
 	</div>
 {:else}
@@ -126,7 +126,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 						text-[var(--sig-text-muted)]
 						font-[family-name:var(--font-display)]"
 				>
-					Disabled
+					&#x2298; Dormant Quests
 				</span>
 				<span
 					class="text-[10px] text-[var(--sig-text-muted)]

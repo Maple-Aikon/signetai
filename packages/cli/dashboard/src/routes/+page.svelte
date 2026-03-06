@@ -263,11 +263,12 @@ onMount(() => {
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 gap-1.5 text-[11px]"
+						class="bg-[var(--rpg-gold)] text-black hover:bg-[#fbbf24] border-none
+							font-bold uppercase text-[11px] tracking-[0.06em] h-7 gap-1.5"
 						onclick={() => openForm()}
 					>
 						<Plus class="size-3.5" />
-						New Task
+						&#x2694; New Quest
 					</Button>
 				{/if}
 			</div>
