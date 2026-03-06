@@ -39,8 +39,10 @@ export const sourceColors: Record<string, string> = {
 	clawdbot: "#a78bfa",
 	daemon: "#22c55e",
 	"signet-daemon": "#22c55e",
-	openclaw: "#4ade80",
+	openclaw: "#facc15",
+	"openclaw-memory": "#facc15",
 	opencode: "#60a5fa",
+	user: "#ef4444",
 	manual: "#f472b6",
 	unknown: "#737373",
 };
@@ -59,7 +61,7 @@ type NewnessBucket = "minutes" | "hours" | "week" | "older";
 
 export type RelationKind = "similar" | "dissimilar";
 
-export type NodeColorMode = "source" | "newness";
+export type NodeColorMode = "source" | "newness" | "none";
 
 export interface EmbeddingRelation {
 	id: string;
@@ -418,10 +420,17 @@ export function nodeFillStyle(
 
 	if (selectedId === id) return "rgba(255, 255, 255, 0.95)";
 	if (outsideLens) return dimmed ? "rgba(80, 80, 80, 0.08)" : "rgba(95, 95, 95, 0.15)";
-	if (relation === "similar") return dimmed ? "rgba(129, 180, 255, 0.35)" : "rgba(129, 180, 255, 0.9)";
-	if (relation === "dissimilar") return dimmed ? "rgba(255, 146, 146, 0.35)" : "rgba(255, 146, 146, 0.9)";
+	if (relation === "similar") {
+		if (colorMode === "none") return dimmed ? "rgba(160, 170, 185, 0.3)" : "rgba(198, 210, 228, 0.84)";
+		return dimmed ? "rgba(129, 180, 255, 0.35)" : "rgba(129, 180, 255, 0.9)";
+	}
+	if (relation === "dissimilar") {
+		if (colorMode === "none") return dimmed ? "rgba(165, 150, 150, 0.28)" : "rgba(208, 190, 190, 0.8)";
+		return dimmed ? "rgba(255, 146, 146, 0.35)" : "rgba(255, 146, 146, 0.9)";
+	}
 	if (isPinned) return dimmed ? "rgba(220, 220, 220, 0.42)" : "rgba(235, 235, 235, 0.95)";
 	if (dimmed) return "rgba(120, 120, 120, 0.2)";
+	if (colorMode === "none") return "rgba(168, 168, 168, 0.82)";
 	if (colorMode === "newness") {
 		if (newnessBucket(node.data.createdAt, nowMs) === "older") {
 			const source = node.data.who ?? "unknown";
@@ -474,15 +483,17 @@ export function nodeColor3D(
 	lastSeenMs: number | null,
 	sourceFocusSources: Set<string> | null,
 ): string {
+	const noColorMode = colorMode === "none";
 	if (selectedId === id) return "#ffffff";
 	if (lensActive && !lensIds.has(id)) return "#3b3b3b";
 	const relation = relations.get(id) ?? null;
-	if (relation === "similar") return "#81b4ff";
-	if (relation === "dissimilar") return "#ff9292";
+	if (relation === "similar") return noColorMode ? "#c6d2e4" : "#81b4ff";
+	if (relation === "dissimilar") return noColorMode ? "#cfbcbc" : "#ff9292";
 	if (pinnedIds.has(id)) return "#e5e7eb";
 	const dimmed = filterIds !== null && !filterIds.has(id);
 	if (dimmed) return "#5b5b5b";
-	if (showNewSinceLastSeen && isNewSinceLastSeen(createdAt, lastSeenMs)) return "#f6c26b";
+	if (!noColorMode && showNewSinceLastSeen && isNewSinceLastSeen(createdAt, lastSeenMs)) return "#f6c26b";
+	if (noColorMode) return "#a8a8a8";
 	if (colorMode === "newness") {
 		if (newnessBucket(createdAt, nowMs) === "older") {
 			if (sourceFocusSources !== null && sourceFocusSources.has(who)) {

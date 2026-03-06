@@ -102,8 +102,10 @@ let sourcesMenuOpen = $state(true);
 const LEGEND_PRIORITY_SOURCES = ["daemon", "user", "opencode"] as const;
 const LEGEND_PRIORITY_SOURCE_SET = new Set<string>(LEGEND_PRIORITY_SOURCES);
 
-const NODE_COLOR_MODE_STORAGE_KEY = "signet-constellation-color-mode";
-const NEW_SINCE_STORAGE_KEY = "signet-constellation-new-since";
+const NODE_COLOR_MODE_SESSION_STORAGE_KEY = "signet-constellation-color-mode-session";
+const NEW_SINCE_SESSION_STORAGE_KEY = "signet-constellation-new-since-session";
+const LEGACY_NODE_COLOR_MODE_STORAGE_KEY = "signet-constellation-color-mode";
+const LEGACY_NEW_SINCE_STORAGE_KEY = "signet-constellation-new-since";
 const LAST_SEEN_STORAGE_KEY = "signet-constellation-last-seen";
 
 type TimeFilterPreset = "all" | "24h" | "7d" | "30d" | "90d" | "custom";
@@ -136,7 +138,7 @@ let activeNeighbors = $state<EmbeddingRelation[]>([]);
 let loadingGlobalSimilar = $state(false);
 let globalSimilar = $state<Memory[]>([]);
 
-let nodeColorMode = $state<NodeColorMode>("newness");
+let nodeColorMode = $state<NodeColorMode>("source");
 let showNewSinceLastSeen = $state(false);
 let lastSeenMs = $state<number | null>(null);
 let lastSeenWriteMs = $state<number | null>(null);
@@ -1252,28 +1254,59 @@ $effect(() => {
 $effect(() => {
 	if (typeof window === "undefined" || viewSettingsHydrated) return;
 	try {
-		const rawMode = window.localStorage.getItem(NODE_COLOR_MODE_STORAGE_KEY);
-		if (rawMode === "source" || rawMode === "newness") nodeColorMode = rawMode;
-		const rawNewSince = window.localStorage.getItem(NEW_SINCE_STORAGE_KEY);
-		if (rawNewSince === "true" || rawNewSince === "false") {
-			showNewSinceLastSeen = rawNewSince === "true";
+		const rawMode = window.sessionStorage.getItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY);
+		if (rawMode === "source" || rawMode === "newness" || rawMode === "none") nodeColorMode = rawMode;
+		const rawNewSince = window.sessionStorage.getItem(NEW_SINCE_SESSION_STORAGE_KEY);
+		if (rawNewSince === "true") {
+			showNewSinceLastSeen = true;
 		}
+	} catch {
+		// Ignore sessionStorage read failures and keep in-memory defaults.
+	}
+	try {
 		const rawLastSeen = window.localStorage.getItem(LAST_SEEN_STORAGE_KEY);
 		if (rawLastSeen) {
 			const parsed = Number.parseInt(rawLastSeen, 10);
 			if (!Number.isNaN(parsed)) lastSeenMs = parsed;
 		}
-	} finally {
-		viewSettingsHydrated = true;
+	} catch {
+		// Ignore localStorage read failures and keep in-memory defaults.
 	}
+	try {
+		window.localStorage.removeItem(LEGACY_NODE_COLOR_MODE_STORAGE_KEY);
+		window.localStorage.removeItem(LEGACY_NEW_SINCE_STORAGE_KEY);
+	} catch {
+		// Ignore storage cleanup failures.
+	}
+	viewSettingsHydrated = true;
 });
 
 $effect(() => {
 	if (typeof window === "undefined" || !viewSettingsHydrated) return;
-	window.localStorage.setItem(NODE_COLOR_MODE_STORAGE_KEY, nodeColorMode);
-	window.localStorage.setItem(NEW_SINCE_STORAGE_KEY, String(showNewSinceLastSeen));
-	if (lastSeenWriteMs !== null) {
-		window.localStorage.setItem(LAST_SEEN_STORAGE_KEY, String(lastSeenWriteMs));
+	try {
+		if (nodeColorMode === "source") {
+			window.sessionStorage.removeItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY);
+		} else {
+			window.sessionStorage.setItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY, nodeColorMode);
+		}
+	} catch {
+		// Ignore sessionStorage write failures and keep in-memory state.
+	}
+	try {
+		if (showNewSinceLastSeen && nodeColorMode !== "none") {
+			window.sessionStorage.setItem(NEW_SINCE_SESSION_STORAGE_KEY, "true");
+		} else {
+			window.sessionStorage.removeItem(NEW_SINCE_SESSION_STORAGE_KEY);
+		}
+	} catch {
+		// Ignore sessionStorage write failures and keep in-memory state.
+	}
+	try {
+		if (lastSeenWriteMs !== null) {
+			window.localStorage.setItem(LAST_SEEN_STORAGE_KEY, String(lastSeenWriteMs));
+		}
+	} catch {
+		// Ignore localStorage write failures and keep in-memory state.
 	}
 });
 
@@ -1605,7 +1638,7 @@ $effect(() => {
 				<div class="pointer-events-auto border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.72)] px-2 py-1.5">
 					<div class="text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[var(--sig-text-muted)] mb-1">Legend</div>
 					<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
-						<span class="text-[var(--sig-text)]">Color</span> = {nodeColorMode === "newness" ? "newness" : "source"}
+						<span class="text-[var(--sig-text)]">Color</span> = {nodeColorMode === "none" ? "off" : nodeColorMode === "newness" ? "by recency" : "by source"}
 					</div>
 					{#if nodeColorMode === "newness"}
 						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--sig-text-muted)] mb-1.5">
@@ -1621,7 +1654,7 @@ $effect(() => {
 								</span>
 							{/each}
 						</div>
-					{:else}
+					{:else if nodeColorMode === "source"}
 						<div class="flex flex-wrap gap-1 mb-1.5">
 							{#each legendSourceCounts as source}
 								<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
@@ -1629,6 +1662,10 @@ $effect(() => {
 									{source.who} {source.count}
 								</span>
 							{/each}
+						</div>
+					{:else}
+						<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1.5">
+							No color applied - all nodes are shown in gray.
 						</div>
 					{/if}
 					<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
@@ -1640,7 +1677,7 @@ $effect(() => {
 						<span class="inline-block w-[12px] h-[12px] rounded-full border border-[rgba(255,255,255,0.32)]"></span>
 						<span>low to high</span>
 					</div>
-					{#if showNewSinceLastSeen}
+					{#if showNewSinceLastSeen && nodeColorMode !== "none"}
 						<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
 							<span class="text-[var(--sig-text)]">Outline</span> = new since last seen
 						</div>
@@ -1828,7 +1865,21 @@ $effect(() => {
 								<div class="flex flex-wrap gap-1">
 									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'newness' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (nodeColorMode = "newness")}>Newness</button>
 									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'source' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (nodeColorMode = "source")}>Source</button>
-									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNewSinceLastSeen ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (showNewSinceLastSeen = !showNewSinceLastSeen)}>New since last seen</button>
+									<button
+										class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'none' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+										onclick={() => {
+											nodeColorMode = "none";
+											showNewSinceLastSeen = false;
+										}}
+									>
+										None
+									</button>
+								</div>
+							</div>
+							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5">
+								<div class="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Overlays</div>
+								<div class="flex flex-wrap gap-1">
+									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNewSinceLastSeen && nodeColorMode !== 'none' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'} {nodeColorMode === 'none' ? 'opacity-60 cursor-not-allowed' : ''}" onclick={() => (showNewSinceLastSeen = !showNewSinceLastSeen)} disabled={nodeColorMode === "none"}>New since last seen</button>
 								</div>
 							</div>
 							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5">
