@@ -181,8 +181,8 @@
 		<!-- Platform Harnesses -->
 		<section>
 			<div class="flex items-center justify-between mb-3 gap-3">
-				<h3 class="sig-label uppercase tracking-[0.1em]">
-					Platform Harnesses
+				<h3 class="sig-label uppercase tracking-[0.1em] rpg-text-gold">
+					&#x26A1; Combat Harnesses
 				</h3>
 				<Button
 					variant="outline"
@@ -191,19 +191,21 @@
 					class="sig-meta uppercase tracking-[0.08em] h-auto px-2 py-1"
 					onclick={triggerHarnessResync}
 				>
-					{harnessResyncing ? "Re-syncing..." : "Re-sync Harnesses"}
+					{harnessResyncing ? "\u27F3 Syncing..." : "\u27F3 Re-forge Harnesses"}
 				</Button>
 			</div>
 			<div class="grid gap-2">
 				{#each harnesses as h (h.id)}
 					<div
-						class="flex items-center gap-3 px-3 py-2.5
+						class="hud-panel flex items-center gap-3 px-3 py-2.5
 							border border-[var(--sig-border)]
-							bg-[var(--sig-surface-raised)]"
+							bg-[var(--sig-surface-raised)]
+							hover:border-[var(--rpg-gold)] transition-colors"
 					>
 						<span
 							class="inline-block h-2 w-2 shrink-0"
-							class:bg-[var(--sig-success)]={h.exists}
+							class:bg-[var(--rpg-teal)]={h.exists}
+							class:animate-pulse={h.exists}
 							class:border={!h.exists}
 							class:border-[var(--sig-text-muted)]={!h.exists}
 						></span>
@@ -240,8 +242,8 @@
 		<!-- Document Connectors -->
 		<section>
 			<div class="flex items-center justify-between mb-3 gap-3">
-				<h3 class="sig-label uppercase tracking-[0.1em]">
-					Document Connectors
+				<h3 class="sig-label uppercase tracking-[0.1em] rpg-text-teal">
+					&#x27F3; Data Relays
 				</h3>
 				<Button
 					variant="outline"
@@ -250,13 +252,13 @@
 					class="sig-meta uppercase tracking-[0.08em] h-auto px-2 py-1"
 					onclick={triggerConnectorsResync}
 				>
-					{connectorsResyncing ? "Re-syncing..." : "Re-sync Connectors"}
+					{connectorsResyncing ? "\u27F3 Syncing..." : "\u27F3 Re-bind Relays"}
 				</Button>
 			</div>
 			{#if connectors.length === 0}
 				<div class="flex items-center justify-center py-8
 					sig-label border border-dashed border-[var(--sig-border)]">
-					No document connectors configured
+					<span class="rpg-text-teal sig-heading">&#x27F3; No Relays Bound</span>
 				</div>
 			{:else}
 				<div class="grid gap-2">

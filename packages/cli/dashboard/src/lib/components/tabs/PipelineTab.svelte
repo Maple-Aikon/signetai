@@ -145,10 +145,10 @@
 	});
 
 	const modeColors: Record<string, string> = {
-		"controlled-write": "border-[#4ade80] text-[#4ade80]",
-		shadow: "border-[#fbbf24] text-[#fbbf24]",
+		"controlled-write": "border-[var(--rpg-teal)] text-[var(--rpg-teal)]",
+		shadow: "border-[var(--rpg-gold)] text-[var(--rpg-gold)]",
 		frozen: "border-[#94a3b8] text-[#94a3b8]",
-		disabled: "border-[#f87171] text-[#f87171]",
+		disabled: "border-[#ef4444] text-[#ef4444]",
 		unknown: "border-[var(--sig-border)] text-[var(--sig-text-muted)]",
 	};
 
@@ -342,7 +342,7 @@
 					class:animate-pulse={pipeline.connected}
 				></span>
 				<span class="sig-eyebrow">
-					{pipeline.connected ? "LIVE" : "DISCONNECTED"}
+					{pipeline.connected ? "\u26A1 FORGE ACTIVE" : "\u2298 FORGE OFFLINE"}
 				</span>
 			</div>
 
@@ -385,8 +385,8 @@
 			<!-- Feed header -->
 			<div class="px-3 py-2 border-b border-[var(--sig-border)] space-y-2">
 				<div class="flex items-center justify-between gap-2">
-					<span class="sig-heading text-[10px]">
-						Live Feed
+					<span class="sig-heading text-[10px] rpg-text-gold">
+						&#x2694; Forge Events
 					</span>
 					<div class="flex items-center gap-2">
 						<span class="sig-meta">
@@ -566,7 +566,7 @@
 				{/each}
 				{#if pipeline.feed.length === 0}
 					<div class="flex items-center justify-center h-full sig-label italic">
-						Waiting for events...
+						&#x27F3; The forge awaits...
 					</div>
 				{/if}
 			</div>

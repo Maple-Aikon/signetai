@@ -466,13 +466,13 @@ $effect(() => {
 					{/if}
 					<span class={`sig-label font-medium ${logsStreaming ? "text-[var(--sig-success)] [animation:pulse_2s_infinite]" : logsReconnecting || logsConnecting ? "text-[var(--sig-accent)] [animation:pulse_2s_infinite]" : "text-[var(--sig-danger)]"}`}>
 						{#if logsStreaming}
-							● Live
+							&#x26A1; Live Feed
 						{:else if logsReconnecting}
-							↺ Reconnecting
+							&#x27F3; Restoring Link...
 						{:else if logsConnecting}
-							◌ Connecting
+							&#x25CC; Connecting...
 						{:else}
-							● Offline
+							&#x2298; Feed Offline
 						{/if}
 					</span>
 					<Button
@@ -503,7 +503,7 @@ $effect(() => {
 					{:else if logsError}
 						<div class="py-[var(--space-xl)] text-center text-[var(--sig-danger)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">{logsError}</div>
 					{:else if logs.length === 0}
-						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">No logs found</div>
+						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)] rpg-text-gold">&#x2298; The Feed Is Silent</div>
 					{:else}
 						{#each logs as log, i}
 							<button
@@ -603,7 +603,7 @@ $effect(() => {
 	background:
 		radial-gradient(
 			circle at 86% -18%,
-			color-mix(in srgb, var(--sig-accent) 16%, transparent),
+			color-mix(in srgb, var(--rpg-gold) 12%, transparent),
 			transparent 46%
 		),
 		linear-gradient(
@@ -632,11 +632,11 @@ $effect(() => {
 }
 
 .log-row.log-level--info {
-	--log-level-color: var(--sig-accent);
+	--log-level-color: var(--rpg-teal);
 }
 
 .log-row.log-level--warn {
-	--log-level-color: var(--sig-accent-hover);
+	--log-level-color: var(--rpg-gold);
 }
 
 .log-row.log-level--error {
@@ -648,11 +648,11 @@ $effect(() => {
 }
 
 .log-level--info {
-	color: var(--sig-accent);
+	color: var(--rpg-teal);
 }
 
 .log-level--warn {
-	color: var(--sig-accent-hover);
+	color: var(--rpg-gold);
 }
 
 .log-level--error {

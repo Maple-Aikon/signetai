@@ -107,7 +107,7 @@
 		rx="6"
 		ry="6"
 		fill={active ? groupColor + "18" : "var(--sig-surface-raised)"}
-		stroke={active ? groupColor : strokeColor}
+		stroke={selected ? '#f59e0b' : active ? groupColor : strokeColor}
 		stroke-width={selected ? 2.5 : active ? 1.5 : 1}
 	/>
 
@@ -218,7 +218,7 @@
 		filter: brightness(1.2);
 	}
 	.pipeline-node--selected .node-rect {
-		filter: brightness(1.3);
+		filter: brightness(1.3) drop-shadow(0 0 6px rgba(245,158,11,0.6));
 	}
 	.pipeline-node--active {
 		filter: drop-shadow(0 0 8px var(--glow, rgba(255,255,255,0.15)));
