@@ -2,6 +2,15 @@
 
 All notable changes to Signet are documented here.
 
+## [0.42.0] - 2026-03-06
+
+### Bug Fixes
+
+- **synthesis**: use JSON.parse for content guard instead of startsWith
+- **synthesis**: filter session files by mtime for incremental merges
+- **synthesis**: read session summaries instead of raw DB facts
+
+
 ## [0.41.0] - 2026-03-06
 
 ### Features
