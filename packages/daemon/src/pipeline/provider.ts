@@ -433,8 +433,6 @@ export function createCodexProvider(
 				throw new Error(`codex exit ${exitCode}: ${stderr.slice(0, 300)}`);
 			}
 			return parseCodexJsonl(stdout);
-		} catch (e) {
-			throw e;
 		} finally {
 			clearTimeout(timer);
 		}
