@@ -56,8 +56,9 @@ export async function spawnTask(
 	workingDirectory: string | null,
 	timeoutMs: number = DEFAULT_TIMEOUT_MS,
 	hooks?: SpawnHooks,
+	model?: string,
 ): Promise<SpawnResult> {
-	const [bin, args] = buildCommand(harness, prompt);
+	const [bin, args] = buildCommand(harness, prompt, model);
 	const resolvedBin = Bun.which(bin);
 
 	if (resolvedBin === null) {

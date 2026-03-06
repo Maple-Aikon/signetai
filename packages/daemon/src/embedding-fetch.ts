@@ -33,6 +33,18 @@ export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 	return cfg.base_url;
 }
 
+export function requiresOpenAiApiKey(baseUrl: string): boolean {
+	try {
+		const parsed = new URL(baseUrl.trim());
+		return (
+			(parsed.protocol === "https:" || parsed.protocol === "http:") &&
+			parsed.hostname === "api.openai.com"
+		);
+	} catch {
+		return false;
+	}
+}
+
 export async function resolveEmbeddingApiKey(
 	rawApiKey: string | undefined,
 ): Promise<string> {
@@ -102,13 +114,19 @@ export async function fetchEmbedding(
 		}
 
 		const apiKey = await resolveEmbeddingApiKey(cfg.api_key);
-		if (!apiKey) return null;
 		const baseUrl = resolveEmbeddingBaseUrl(cfg);
+		if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
+			logger.warn(
+				"embedding",
+				"No API key configured for OpenAI embeddings, skipping request to api.openai.com",
+			);
+			return null;
+		}
 		const res = await fetch(`${baseUrl.replace(/\/$/, "")}/embeddings`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKey}`,
+				...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
 			},
 			body: JSON.stringify({ model: cfg.model, input: text }),
 			signal: AbortSignal.timeout(30000),

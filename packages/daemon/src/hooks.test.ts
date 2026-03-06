@@ -24,4 +24,13 @@ describe("normalizeCodexTranscript", () => {
 		expect(assistantLines).toHaveLength(1);
 		expect(assistantLines[0]).toBe("Assistant: Hi there");
 	});
+
+	it("ignores nested item.completed payloads inside response_item events", () => {
+		const raw = [
+			'{"type":"response_item","payload":{"type":"item.completed","item":{"type":"agent_message","text":"nested"}}}',
+			'{"type":"item.completed","item":{"type":"agent_message","text":"top-level"}}',
+		].join("\n");
+
+		expect(normalizeCodexTranscript(raw)).toBe("Assistant: top-level");
+	});
 });

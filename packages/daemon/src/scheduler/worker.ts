@@ -5,7 +5,11 @@
  * Polls every 15 seconds (cron granularity is minutes).
  */
 
+import type { TaskHarness } from "@signet/core";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { DbAccessor, ReadDb } from "../db-accessor";
+import { loadMemoryConfig } from "../memory-config";
 import type { WorkerHandle } from "../pipeline/worker";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
@@ -15,6 +19,19 @@ import { logger } from "../logger";
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+const TASK_MODEL_CACHE_TTL_MS = 5_000;
+
+interface TaskModelCacheEntry {
+	readonly model: string | undefined;
+	readonly expiresAt: number;
+}
+
+const taskModelCache = new Map<string, TaskModelCacheEntry>();
+
+function isTaskHarness(value: string): value is TaskHarness {
+	return value === "claude-code" || value === "opencode" || value === "codex";
+}
 
 export interface DueTaskRow {
 	readonly id: string;
@@ -51,6 +68,33 @@ export function selectDueTasks(
 			 LIMIT ?`,
 		)
 		.all(nowIso, limit) as ReadonlyArray<DueTaskRow>;
+}
+
+export function resolveTaskModel(
+	harness: DueTaskRow["harness"],
+	agentsDir: string = AGENTS_DIR,
+): string | undefined {
+	if (harness !== "codex") return undefined;
+
+	const now = Date.now();
+	const cached = taskModelCache.get(agentsDir);
+	if (cached && cached.expiresAt > now) {
+		return cached.model;
+	}
+
+	const cfg = loadMemoryConfig(agentsDir);
+	const model = cfg.pipelineV2.extraction.provider === "codex"
+		? cfg.pipelineV2.extraction.model
+		: undefined;
+	taskModelCache.set(agentsDir, {
+		model,
+		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
+	});
+	return model;
+}
+
+export function clearTaskModelCache(): void {
+	taskModelCache.clear();
 }
 
 /** Start the scheduler worker. Returns a handle to stop it. */
@@ -128,7 +172,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 }
 
 /** Lease and execute a single task. */
-async function executeTask(
+export async function executeTask(
 	db: DbAccessor,
 	task: DueTaskRow,
 ): Promise<void> {
@@ -184,8 +228,12 @@ async function executeTask(
 	// Spawn the process
 	let result: SpawnResult;
 	try {
+		if (!isTaskHarness(task.harness)) {
+			throw new Error(`Unsupported harness: ${task.harness}`);
+		}
+		const model = resolveTaskModel(task.harness);
 		result = await spawnTask(
-			task.harness as "claude-code" | "opencode" | "codex",
+			task.harness,
 			effectivePrompt,
 			task.working_directory,
 			undefined,
@@ -211,6 +259,7 @@ async function executeTask(
 					});
 				},
 			},
+			model,
 		);
 	} catch (err) {
 		result = {
