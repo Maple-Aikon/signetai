@@ -452,22 +452,28 @@ let isInstalled = $derived(
 		border-color: var(--sig-accent);
 	}
 
-	/* Rarity borders override */
-	.card.rarity-legendary {
-		border-color: var(--rarity-legendary);
-		box-shadow: var(--rarity-legendary-glow);
+	/* Rarity borders override — bold left accent */
+	.card.rarity-common {
+		border-left: 2px solid var(--rarity-common);
 	}
-	.card.rarity-epic {
-		border-color: var(--rarity-epic);
-		box-shadow: var(--rarity-epic-glow);
+	.card.rarity-uncommon {
+		border-left: 2px solid var(--rarity-uncommon);
+		box-shadow: var(--rarity-uncommon-glow);
 	}
 	.card.rarity-rare {
+		border-left: 2px solid var(--rarity-rare);
 		border-color: var(--rarity-rare);
 		box-shadow: var(--rarity-rare-glow);
 	}
-	.card.rarity-uncommon {
-		border-color: var(--rarity-uncommon);
-		box-shadow: var(--rarity-uncommon-glow);
+	.card.rarity-epic {
+		border-left: 2px solid var(--rarity-epic);
+		border-color: var(--rarity-epic);
+		box-shadow: var(--rarity-epic-glow);
+	}
+	.card.rarity-legendary {
+		border-left: 3px solid var(--rarity-legendary);
+		border-color: var(--rarity-legendary);
+		box-shadow: var(--rarity-legendary-glow);
 	}
 
 	.rarity-badge-sm {

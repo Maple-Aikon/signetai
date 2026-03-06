@@ -42,6 +42,14 @@ const {
 
 let xpPercent = $derived(Math.min(100, Math.round((memCount / 500) * 100)));
 
+let agentLevel = $derived((): { level: number; title: string } => {
+	if (memCount >= 5000) return { level: 5, title: 'ORACLE' };
+	if (memCount >= 1000) return { level: 4, title: 'CHRONICLER' };
+	if (memCount >= 500)  return { level: 3, title: 'ARCHIVIST' };
+	if (memCount >= 100)  return { level: 2, title: 'APPRENTICE' };
+	return { level: 1, title: 'INITIATE' };
+});
+
 function maybePrefetchEmbeddings(id: string): void {
 	if (id !== "memory") return;
 	onprefetchembeddings?.();
@@ -107,6 +115,10 @@ function handleClick(item: NavItem): void {
 										transition-[width] duration-700 ease-out"
 										style="width: {xpPercent}%"></div>
 								</div>
+								<span class="text-[9px] font-[family-name:var(--font-mono)]
+									text-[var(--rpg-gold)] tracking-[0.08em] uppercase mt-0.5">
+									LVL {agentLevel().level} &middot; {agentLevel().title}
+								</span>
 							</div>
 						</div>
 					{/snippet}
@@ -155,6 +167,7 @@ function handleClick(item: NavItem): void {
 						class:animate-pulse={!!daemonStatus}
 						class:border={!daemonStatus}
 						class:border-[var(--sig-text-muted)]={!daemonStatus}
+						style={daemonStatus ? 'box-shadow: 0 0 6px var(--rpg-teal)' : ''}
 					></span>
 					<span
 						class="text-[10px] tracking-[0.1em] uppercase

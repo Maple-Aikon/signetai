@@ -281,15 +281,16 @@ $effect(() => {
 <div class="store-shell">
 	<section class="hero">
 		<div class="hero-main">
-			<h2>
+			<h2 style="color: var(--rpg-gold)">
 				{section === "skills"
 					? "Equip your agent with legendary skill packs"
-					: "Connect relay servers and wield production tools"}
+					: "Discover and connect your MCP tool servers"}
 			</h2>
+			<div class="w-12 h-[2px] bg-[var(--rpg-gold)] opacity-60 mt-1 mb-2"></div>
 			<p>
 				{section === "skills"
 					? "Install trusted abilities, compare loadouts, and forge your optimal build."
-					: "Bind relay servers, monitor active channels, and rate your arsenal."}
+					: "Browse the registry, install tools, and build your arsenal."}
 			</p>
 			<div class="hero-actions">
 				<Button

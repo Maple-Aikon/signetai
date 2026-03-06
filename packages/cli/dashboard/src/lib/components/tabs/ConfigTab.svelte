@@ -212,6 +212,11 @@
 			<span class="sig-label mt-1">Character sheet is empty</span>
 		</div>
 	{:else}
+		<!-- Stat chips -->
+		<div class="flex gap-3 px-4 py-2 border-b border-[var(--sig-border)]">
+			<span class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--rpg-gold)] uppercase tracking-wider">&#x25C8; {mdFiles.length} files</span>
+			<span class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)] uppercase tracking-wider">Agent Identity &amp; Lore</span>
+		</div>
 		<!-- File header with navigation -->
 		<header class="file-header">
 			<div class="header-left">

@@ -177,7 +177,7 @@ onMount(() => {
 		>
 			<div class="flex items-center gap-2">
 				<Sidebar.Trigger class="-ml-1" />
-				<span class="sig-heading">
+				<span class="sig-heading" style="color: var(--rpg-gold)">
 					{PAGE_HEADERS[activeTab].title}
 				</span>
 				{#if !isMemoryGroup(activeTab) && !isEngineGroup(activeTab)}
@@ -271,6 +271,7 @@ onMount(() => {
 				{/if}
 			</div>
 		</header>
+		<div class="w-12 h-[2px] bg-[var(--rpg-gold)] opacity-60 mx-4 mt-0 mb-0"></div>
 
 		<ExtensionBanner />
 
