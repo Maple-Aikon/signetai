@@ -1429,7 +1429,7 @@ export function handleSessionEnd(
 	return { memoriesSaved: 0, queued: true, jobId };
 }
 
-function normalizeCodexTranscript(raw: string): string {
+export function normalizeCodexTranscript(raw: string): string {
 	const lines: string[] = [];
 
 	for (const row of raw.split(/\r?\n/)) {
@@ -1472,6 +1472,17 @@ function normalizeCodexTranscript(raw: string): string {
 				}
 				if (msg.type === "agent_message" && typeof msg.message === "string") {
 					lines.push(`Assistant: ${msg.message.trim()}`);
+				}
+			}
+			continue;
+		}
+
+		if (event.type === "item.completed") {
+			const item = event.item;
+			if (typeof item === "object" && item !== null) {
+				const record = item as Record<string, unknown>;
+				if (record.type === "agent_message" && typeof record.text === "string") {
+					lines.push(`Assistant: ${record.text.trim()}`);
 				}
 			}
 			continue;

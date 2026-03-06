@@ -76,7 +76,7 @@ function isKnownPreset(model: string): boolean {
 }
 
 function defaultModelForProvider(provider: ExtractionProvider): string {
-	return EXTRACTION_MODEL_PRESETS[provider][0].value;
+	return EXTRACTION_MODEL_PRESETS[provider][0]?.value ?? "";
 }
 
 function setNum(path: string[]) {
