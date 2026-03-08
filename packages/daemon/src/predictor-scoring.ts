@@ -10,11 +10,12 @@
  */
 
 import type { PredictorConfig } from "@signet/core";
-import type { ReadDb, DbAccessor } from "./db-accessor";
+import type { DbAccessor } from "./db-accessor";
 import type { PredictorClient, PredictorStatus, ScoreParams } from "./predictor-client";
 import type { PredictorState } from "./predictor-state";
 import { computeEffectiveAlpha } from "./predictor-state";
 import { logger } from "./logger";
+import { PREDICTOR_FEATURE_DIMENSIONS } from "./structural-features";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +57,7 @@ function blobToVector(buf: Uint8Array): ReadonlyArray<number> {
 export function loadEmbeddings(
 	accessor: DbAccessor,
 	memoryIds: ReadonlyArray<string>,
+	expectedDimensions?: number,
 ): Map<string, ReadonlyArray<number>> {
 	if (memoryIds.length === 0) return new Map();
 
@@ -75,7 +77,10 @@ export function loadEmbeddings(
 
 		for (const row of rows) {
 			if (row.vector) {
-				result.set(row.source_id, blobToVector(row.vector));
+				const vector = blobToVector(row.vector);
+				if (expectedDimensions === undefined || vector.length === expectedDimensions) {
+					result.set(row.source_id, vector);
+				}
 			}
 		}
 		return result;
@@ -90,9 +95,10 @@ export function buildContextEmbedding(
 	accessor: DbAccessor,
 	candidateIds: ReadonlyArray<string>,
 	limit: number,
+	expectedDimensions?: number,
 ): ReadonlyArray<number> | null {
 	const topIds = candidateIds.slice(0, limit);
-	const embeddings = loadEmbeddings(accessor, topIds);
+	const embeddings = loadEmbeddings(accessor, topIds, expectedDimensions);
 
 	if (embeddings.size === 0) return null;
 
@@ -125,10 +131,7 @@ export function buildContextEmbedding(
 // Cosine similarity
 // ---------------------------------------------------------------------------
 
-function cosineSimilarity(
-	a: ReadonlyArray<number>,
-	b: ReadonlyArray<number>,
-): number {
+function cosineSimilarity(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
 	if (a.length !== b.length || a.length === 0) return 0;
 	let dot = 0;
 	let normA = 0;
@@ -171,10 +174,7 @@ export function rrfFuse(
 	}
 
 	// Union of all IDs
-	const allIds = new Set([
-		...baselineRanking.map((r) => r.id),
-		...predictorRanking.map((r) => r.id),
-	]);
+	const allIds = new Set([...baselineRanking.map((r) => r.id), ...predictorRanking.map((r) => r.id)]);
 	const fallbackRank = allIds.size + 1;
 
 	const result = new Map<
@@ -210,9 +210,9 @@ export function rrfFuse(
 export function applyTopicDiversity(
 	candidates: ReadonlyArray<RankedCandidate>,
 	embeddingById: ReadonlyMap<string, ReadonlyArray<number>>,
-	threshold: number = 0.85,
-	decay: number = 0.5,
-	floor: number = 0.1,
+	threshold = 0.85,
+	decay = 0.5,
+	floor = 0.1,
 ): ReadonlyArray<RankedCandidate> {
 	// Work with mutable copies sorted by fusedScore descending
 	const sorted = [...candidates].sort((a, b) => b.fusedScore - a.fusedScore);
@@ -239,7 +239,7 @@ export function applyTopicDiversity(
 		}
 
 		if (overlapCount > 0) {
-			const factor = (1 - floor) * Math.pow(decay, overlapCount) + floor;
+			const factor = (1 - floor) * decay ** overlapCount + floor;
 			adjusted.push({
 				...candidate,
 				fusedScore: candidate.fusedScore * factor,
@@ -357,9 +357,9 @@ function getDistinctSessionCount(accessor: DbAccessor | null): number | null {
 	if (accessor === null) return null;
 	try {
 		return accessor.withReadDb((db) => {
-			const row = db
-				.prepare("SELECT COUNT(DISTINCT session_key) AS cnt FROM predictor_training_pairs")
-				.get() as { cnt: number } | undefined;
+			const row = db.prepare("SELECT COUNT(DISTINCT session_key) AS cnt FROM predictor_training_pairs").get() as
+				| { cnt: number }
+				| undefined;
 			return row?.cnt ?? 0;
 		});
 	} catch {
@@ -420,6 +420,7 @@ export interface PredictorScoringParams {
 	readonly config: PredictorConfig | undefined;
 	readonly state: PredictorState;
 	readonly candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null;
+	readonly nativeEmbeddingDimensions: number;
 	readonly project: string | undefined;
 }
 
@@ -435,9 +436,7 @@ export interface PredictorScoringParams {
  * Returns ranked candidates with fused scores, whether predictor was used,
  * and the exploration ID if applicable.
  */
-export async function runPredictorScoring(
-	params: PredictorScoringParams,
-): Promise<ScoringResult> {
+export async function runPredictorScoring(params: PredictorScoringParams): Promise<ScoringResult> {
 	const {
 		candidates,
 		accessor,
@@ -446,6 +445,7 @@ export async function runPredictorScoring(
 		config,
 		state,
 		candidateFeatures,
+		nativeEmbeddingDimensions,
 	} = params;
 
 	// Baseline ranking: preserve input order (already sorted by project match + effScore)
@@ -456,9 +456,24 @@ export async function runPredictorScoring(
 
 	// Load embeddings for all candidates (needed for context embedding + diversity)
 	const allIds = candidates.map((c) => c.id);
-	const embeddingById = accessor !== null
-		? loadEmbeddings(accessor, allIds)
-		: new Map<string, ReadonlyArray<number>>();
+	const embeddingById =
+		accessor !== null
+			? loadEmbeddings(accessor, allIds, nativeEmbeddingDimensions)
+			: new Map<string, ReadonlyArray<number>>();
+
+	const validatedCandidateFeatures =
+		candidateFeatures !== null &&
+		candidateFeatures.length === candidates.length &&
+		candidateFeatures.every((row) => row.length === PREDICTOR_FEATURE_DIMENSIONS)
+			? candidateFeatures
+			: null;
+	if (candidateFeatures !== null && validatedCandidateFeatures === null) {
+		logger.warn("predictor", "Skipping predictor features with invalid dimensions", {
+			candidateCount: candidates.length,
+			featureRowCount: candidateFeatures.length,
+			expectedDimensions: PREDICTOR_FEATURE_DIMENSIONS,
+		});
+	}
 
 	// Default: no predictor
 	const alpha = computeEffectiveAlpha(state);
@@ -467,43 +482,37 @@ export async function runPredictorScoring(
 	let fetchedPredictorStatus: PredictorStatus | null = null;
 
 	// Step 1: Check predictor availability (needs accessor for embeddings)
-	if (
-		config?.enabled &&
-		predictorClient !== null &&
-		predictorClient.isAlive() &&
-		accessor !== null
-	) {
+	if (config?.enabled && predictorClient !== null && predictorClient.isAlive() && accessor !== null) {
 		try {
 			const predictorStatus = await predictorClient.status();
 			fetchedPredictorStatus = predictorStatus;
 
-			if (predictorStatus !== null && predictorStatus.trained) {
+			if (
+				predictorStatus?.trained &&
+				predictorStatus.native_dimensions === nativeEmbeddingDimensions &&
+				predictorStatus.feature_dimensions === PREDICTOR_FEATURE_DIMENSIONS
+			) {
 				// NOTE: We call the predictor even during cold start (when alpha=1.0
 				// gives it zero influence on injection order). This is intentional —
 				// predictor scores are recorded in session_memories so Sprint 3 can
 				// compute NDCG@10 comparisons at session-end for training feedback.
 
 				// Step 2: Build context embedding
-				const topBaselineIds = candidates
-					.slice(0, 10)
-					.map((c) => c.id);
-				const contextEmbedding = buildContextEmbedding(
-					accessor,
-					topBaselineIds,
-					10,
-				);
+				const topBaselineIds = candidates.slice(0, 10).map((c) => c.id);
+				const contextEmbedding = buildContextEmbedding(accessor, topBaselineIds, 10, nativeEmbeddingDimensions);
 
 				if (contextEmbedding !== null) {
 					// Step 3: Prepare candidate embeddings and score
-					const candidateEmbeddings: Array<ReadonlyArray<number> | null> =
-						allIds.map((id) => embeddingById.get(id) ?? null);
+					const candidateEmbeddings: Array<ReadonlyArray<number> | null> = allIds.map(
+						(id) => embeddingById.get(id) ?? null,
+					);
 
 					const scoreParams: ScoreParams = {
 						agent_id: agentId,
 						context_embedding: contextEmbedding,
 						candidate_ids: allIds,
 						candidate_embeddings: candidateEmbeddings,
-						candidate_features: candidateFeatures ?? undefined,
+						candidate_features: validatedCandidateFeatures ?? undefined,
 					};
 
 					const scoreResult = await predictorClient.score(scoreParams);
@@ -516,6 +525,17 @@ export async function runPredictorScoring(
 						predictorUsed = true;
 					}
 				}
+			} else if (
+				predictorStatus !== null &&
+				(predictorStatus.native_dimensions !== nativeEmbeddingDimensions ||
+					predictorStatus.feature_dimensions !== PREDICTOR_FEATURE_DIMENSIONS)
+			) {
+				logger.warn("predictor", "Skipping predictor scoring due to sidecar dimension mismatch", {
+					expectedNativeDimensions: nativeEmbeddingDimensions,
+					actualNativeDimensions: predictorStatus.native_dimensions,
+					expectedFeatureDimensions: PREDICTOR_FEATURE_DIMENSIONS,
+					actualFeatureDimensions: predictorStatus.feature_dimensions,
+				});
 			}
 		} catch (err) {
 			// Fail open: predictor errors don't break session start
@@ -530,9 +550,7 @@ export async function runPredictorScoring(
 
 	if (predictorUsed && predictorScoresMap !== null) {
 		// Build predictor ranking sorted by predictor score descending
-		const predictorEntries = [...predictorScoresMap.entries()].sort(
-			(a, b) => b[1] - a[1],
-		);
+		const predictorEntries = [...predictorScoresMap.entries()].sort((a, b) => b[1] - a[1]);
 		const predictorRanking = predictorEntries.map(([id, score]) => ({
 			id,
 			score,
@@ -544,19 +562,16 @@ export async function runPredictorScoring(
 		// Build source map for quick lookup
 		const sourceById = new Map(candidates.map((c) => [c.id, c.source]));
 
-		rankedCandidates = [...fusedMap.entries()].map(
-			([id, { baselineRank, predictorRank, fusedScore }]) => ({
-				id,
-				baselineRank,
-				baselineScore:
-					baselineRanking.find((r) => r.id === id)?.score ?? 0,
-				predictorRank,
-				predictorScore: predictorScoresMap?.get(id) ?? null,
-				fusedScore,
-				source: sourceById.get(id) ?? DEFAULT_SOURCE,
-				embedding: embeddingById.get(id) ?? null,
-			}),
-		);
+		rankedCandidates = [...fusedMap.entries()].map(([id, { baselineRank, predictorRank, fusedScore }]) => ({
+			id,
+			baselineRank,
+			baselineScore: baselineRanking.find((r) => r.id === id)?.score ?? 0,
+			predictorRank,
+			predictorScore: predictorScoresMap?.get(id) ?? null,
+			fusedScore,
+			source: sourceById.get(id) ?? DEFAULT_SOURCE,
+			embedding: embeddingById.get(id) ?? null,
+		}));
 	} else {
 		// Pure baseline: use rank-based fusedScore to preserve input ordering
 		// (which includes project-match-first boost from getAllScoredCandidates).
@@ -577,9 +592,7 @@ export async function runPredictorScoring(
 	}
 
 	// Step 5: Topic diversity decay
-	rankedCandidates = [
-		...applyTopicDiversity(rankedCandidates, embeddingById),
-	];
+	rankedCandidates = [...applyTopicDiversity(rankedCandidates, embeddingById)];
 
 	// Exploration is done after top-k selection in the caller
 	return {

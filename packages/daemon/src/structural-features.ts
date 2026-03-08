@@ -1,11 +1,9 @@
 import type { DbAccessor } from "./db-accessor";
 import { getStructuralDensity } from "./knowledge-graph";
 
-export type StructuralCandidateSource =
-	| "effective"
-	| "fts_only"
-	| "ka_traversal"
-	| "ka_traversal_pinned";
+export const PREDICTOR_FEATURE_DIMENSIONS = 17;
+
+export type StructuralCandidateSource = "effective" | "fts_only" | "ka_traversal" | "ka_traversal_pinned";
 
 export interface StructuralFeatures {
 	/** Hashed entity ID (0-255, for embedding table lookup) */
@@ -155,20 +153,11 @@ export function buildCandidateFeatures(
 	const candidateIds = candidates.map((candidate) => candidate.id);
 	const sourceById = new Map<string, StructuralCandidateSource>();
 	for (const candidate of candidates) {
-		if (
-			candidate.source === "effective" ||
-			candidate.source === "fts_only" ||
-			candidate.source === "ka_traversal"
-		) {
+		if (candidate.source === "effective" || candidate.source === "fts_only" || candidate.source === "ka_traversal") {
 			sourceById.set(candidate.id, candidate.source);
 		}
 	}
-	const structuralById = getStructuralFeatures(
-		accessor,
-		candidateIds,
-		agentId,
-		sourceById,
-	);
+	const structuralById = getStructuralFeatures(accessor, candidateIds, agentId, sourceById);
 	const embeddedIds = accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
@@ -190,7 +179,7 @@ export function buildCandidateFeatures(
 	return candidates.map((candidate) => {
 		const structural = structuralById.get(candidate.id) ?? null;
 		const source = structural?.candidateSource ?? candidate.source ?? null;
-		return [
+		const vector = [
 			Math.log(daysSince(candidate.createdAt, nowMs) + 1),
 			candidate.importance,
 			Math.log(candidate.accessCount + 1),
@@ -209,5 +198,11 @@ export function buildCandidateFeatures(
 			Math.log((structural?.structuralDensity ?? 0) + 1),
 			source === "ka_traversal" ? 1 : 0,
 		];
+		if (vector.length !== PREDICTOR_FEATURE_DIMENSIONS) {
+			throw new Error(
+				`predictor feature vector dimension mismatch: expected ${PREDICTOR_FEATURE_DIMENSIONS}, got ${vector.length}`,
+			);
+		}
+		return vector;
 	});
 }

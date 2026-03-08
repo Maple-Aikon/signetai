@@ -24,10 +24,12 @@ struct PredictorService {
 }
 
 impl PredictorService {
-    fn new() -> Self {
+    fn new(native_dim: usize) -> Self {
         let mut tape = Tape::new();
         let mut rng = Rng::new(0x51_9e7);
-        let model = CrossAttentionScorer::new(&mut tape, &mut rng, ScorerConfig::default());
+        let mut config = ScorerConfig::default();
+        config.native_dim = native_dim;
+        let model = CrossAttentionScorer::new(&mut tape, &mut rng, config);
         let optimizer = Adam::new(&tape, 1e-3);
         Self {
             tape,
@@ -41,11 +43,14 @@ impl PredictorService {
     }
 
     fn status(&self) -> StatusResult {
+        let config = self.model.config();
         StatusResult {
             trained: self.train_steps > 0,
             training_pairs: self.training_pairs,
             model_version: self.model_version,
             last_trained: self.last_trained.clone(),
+            native_dimensions: config.native_dim,
+            feature_dimensions: config.extra_features,
         }
     }
 
@@ -287,8 +292,9 @@ impl PredictorService {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let checkpoint_path = find_arg(&args, "--checkpoint");
+    let native_dim = parse_usize_arg(&args, "--native-dim").unwrap_or(768);
 
-    let mut service = PredictorService::new();
+    let mut service = PredictorService::new(native_dim);
 
     if let Some(ref path) = checkpoint_path {
         let p = std::path::Path::new(path);
@@ -383,6 +389,13 @@ fn main() {
             }
         }
     }
+}
+
+fn parse_usize_arg(args: &[String], flag: &str) -> Option<usize> {
+    args.windows(2)
+        .find(|window| window[0] == flag)
+        .and_then(|window| window[1].parse::<usize>().ok())
+        .filter(|value| *value > 0)
 }
 
 fn handle_rpc<P, R, F>(

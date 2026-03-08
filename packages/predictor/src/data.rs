@@ -219,7 +219,11 @@ fn build_features(row: &CandidateRow, session: &SessionRow, session_gap_days: f6
     let aspect_slot = row.aspect_slot.unwrap_or(0) as f64 / 255.0;
     let is_constraint = if row.is_constraint { 1.0 } else { 0.0 };
     let structural_density = (row.structural_density.unwrap_or(0) as f64 + 1.0).ln();
-    let is_ka_traversal = if row.source == "ka_traversal" { 1.0 } else { 0.0 };
+    let is_ka_traversal = if row.source == "ka_traversal" {
+        1.0
+    } else {
+        0.0
+    };
     let safe_session_gap_days = session_gap_days.max(0.0);
 
     vec![
@@ -366,8 +370,10 @@ pub fn load_training_samples(
     )?;
 
     let qualifying: Vec<SessionRow> = {
-        let mut rows =
-            stmt.query(rusqlite::params![config.min_scorer_confidence, limit as i64])?;
+        let mut rows = stmt.query(rusqlite::params![
+            config.min_scorer_confidence,
+            limit as i64
+        ])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             out.push(SessionRow {

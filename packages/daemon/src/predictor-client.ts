@@ -8,12 +8,14 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { createInterface, type Interface } from "node:readline";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { PredictorConfig } from "@signet/core";
+import { type Interface, createInterface } from "node:readline";
+import { DEFAULT_EMBEDDING_DIMENSIONS, type PredictorConfig } from "@signet/core";
 import { logger } from "./logger";
+
+export type PredictorSpawn = (binaryPath: string, args: ReadonlyArray<string>) => ChildProcess;
 
 // ---------------------------------------------------------------------------
 // Public types (mirror the Rust protocol)
@@ -59,6 +61,8 @@ export interface PredictorStatus {
 	readonly training_pairs: number;
 	readonly model_version: number;
 	readonly last_trained: string | null;
+	readonly native_dimensions: number;
+	readonly feature_dimensions: number;
 }
 
 export interface PredictorClient {
@@ -179,6 +183,8 @@ function parsePredictorStatus(value: unknown): PredictorStatus | null {
 		typeof value.trained !== "boolean" ||
 		typeof value.training_pairs !== "number" ||
 		typeof value.model_version !== "number" ||
+		typeof value.native_dimensions !== "number" ||
+		typeof value.feature_dimensions !== "number" ||
 		(value.last_trained !== null && typeof value.last_trained !== "string")
 	) {
 		return null;
@@ -188,6 +194,8 @@ function parsePredictorStatus(value: unknown): PredictorStatus | null {
 		training_pairs: value.training_pairs,
 		model_version: value.model_version,
 		last_trained: typeof value.last_trained === "string" ? value.last_trained : null,
+		native_dimensions: value.native_dimensions,
+		feature_dimensions: value.feature_dimensions,
 	};
 }
 
@@ -205,8 +213,57 @@ const MAX_RESTART_ATTEMPTS = 3;
 const CRASH_WINDOW_MS = 3600_000; // 1 hour
 const CRASH_RECOVERY_MS = CRASH_WINDOW_MS * 2; // 2 hours — auto-reset cooldown
 
+interface ExistingBinary {
+	readonly path: string;
+	readonly mtimeMs: number;
+}
+
+function getExistingBinary(path: string): ExistingBinary | null {
+	try {
+		const stat = statSync(path);
+		if (!stat.isFile()) return null;
+		return { path, mtimeMs: stat.mtimeMs };
+	} catch {
+		return null;
+	}
+}
+
+function newestExistingBinary(candidates: ReadonlyArray<string>): string | null {
+	const existing = candidates
+		.map((candidate) => getExistingBinary(candidate))
+		.filter((entry): entry is ExistingBinary => entry !== null)
+		.sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
+	return existing[0]?.path ?? null;
+}
+
+function localBinaryCandidates(): ReadonlyArray<string> {
+	const monoRoot = join(import.meta.dir, "..", "..", "..");
+	const repoCandidates = [
+		join(monoRoot, "packages", "predictor", "target", "release", "signet-predictor"),
+		join(monoRoot, "packages", "predictor", "target", "release", "predictor"),
+		join(monoRoot, "packages", "predictor", "target", "debug", "signet-predictor"),
+		join(monoRoot, "packages", "predictor", "target", "debug", "predictor"),
+	];
+	const cwdCandidates = [
+		join(process.cwd(), "packages", "predictor", "target", "release", "signet-predictor"),
+		join(process.cwd(), "packages", "predictor", "target", "release", "predictor"),
+		join(process.cwd(), "packages", "predictor", "target", "debug", "signet-predictor"),
+		join(process.cwd(), "packages", "predictor", "target", "debug", "predictor"),
+	];
+	return [...new Set([...repoCandidates, ...cwdCandidates])];
+}
+
 function resolveBinaryPath(configured: string | undefined): string | null {
-	if (configured) return configured;
+	if (configured) {
+		return getExistingBinary(configured)?.path ?? null;
+	}
+
+	// In source-tree development, prefer the freshest local build over a
+	// stale globally-installed or old release artifact.
+	const localBinary = newestExistingBinary(localBinaryCandidates());
+	if (localBinary !== null) {
+		return localBinary;
+	}
 
 	// Check PATH via Bun.which (available in Bun runtime)
 	if (typeof globalThis.Bun !== "undefined") {
@@ -216,33 +273,39 @@ function resolveBinaryPath(configured: string | undefined): string | null {
 		}
 	}
 
-	// Fallback: check relative to monorepo root (2 dirs up from packages/daemon/src)
-	const monoRoot = join(import.meta.dir, "..", "..", "..");
-	const candidates = [
-		join(monoRoot, "packages", "predictor", "target", "release", "signet-predictor"),
-		join(monoRoot, "packages", "predictor", "target", "release", "predictor"),
-		join(process.cwd(), "packages", "predictor", "target", "release", "signet-predictor"),
-		join(process.cwd(), "packages", "predictor", "target", "release", "predictor"),
-	];
-	for (const candidate of candidates) {
-		try {
-			const stat = statSync(candidate);
-			if (stat.isFile()) return candidate;
-		} catch {
-			// not found, continue
-		}
-	}
-
 	return null;
+}
+
+export function resolvePredictorCheckpointPath(config: Pick<PredictorConfig, "checkpointPath">): string {
+	return config.checkpointPath ?? defaultCheckpointPath();
 }
 
 function defaultCheckpointPath(): string {
 	return join(homedir(), ".agents", "memory", "predictor", "model.bin");
 }
 
+function describeStatusResult(result: unknown): Record<string, unknown> {
+	if (isRecord(result)) {
+		const raw = JSON.stringify(result);
+		return {
+			keys: Object.keys(result),
+			raw: raw.length > 200 ? `${raw.slice(0, 200)}...` : raw,
+		};
+	}
+	return {
+		type: typeof result,
+		raw: String(result),
+	};
+}
+
 export function createPredictorClient(
 	config: PredictorConfig,
-	agentId: string = "default",
+	agentId = "default",
+	nativeEmbeddingDimensions: number = DEFAULT_EMBEDDING_DIMENSIONS,
+	spawnPredictor: PredictorSpawn = (binaryPath, args) =>
+		spawn(binaryPath, [...args], {
+			stdio: ["pipe", "pipe", "pipe"],
+		}),
 ): PredictorClient {
 	let proc: ChildProcess | null = null;
 	let rl: Interface | null = null;
@@ -275,9 +338,7 @@ export function createPredictorClient(
 	function checkCrashRecovery(): void {
 		if (!_crashDisabled) return;
 		const now = Date.now();
-		const lastCrash = crashTimestamps.length > 0
-			? crashTimestamps[crashTimestamps.length - 1]
-			: 0;
+		const lastCrash = crashTimestamps.length > 0 ? crashTimestamps[crashTimestamps.length - 1] : 0;
 		if (lastCrash > 0 && now - lastCrash > CRASH_RECOVERY_MS) {
 			_crashDisabled = false;
 			restartAttempts = 0;
@@ -349,7 +410,7 @@ export function createPredictorClient(
 
 			const json = JSON.stringify(request);
 			try {
-				proc.stdin.write(json + "\n");
+				proc.stdin.write(`${json}\n`);
 			} catch (err) {
 				pending.delete(id);
 				clearTimeout(timer);
@@ -365,18 +426,18 @@ export function createPredictorClient(
 			return null;
 		}
 
-		const args: string[] = [];
-		const checkpointPath = config.checkpointPath ?? defaultCheckpointPath();
+		const args = [...(config.binaryArgs ?? [])];
+		const checkpointPath = resolvePredictorCheckpointPath(config);
+		args.push("--native-dim", String(nativeEmbeddingDimensions));
 		args.push("--checkpoint", checkpointPath);
 
 		logger.info("predictor", "Spawning predictor sidecar", {
 			binary: binaryPath,
+			nativeDimensions: nativeEmbeddingDimensions,
 			checkpoint: checkpointPath,
 		});
 
-		const child = spawn(binaryPath, args, {
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+		const child = spawnPredictor(binaryPath, args);
 
 		// Read stdout line-by-line for JSON-RPC responses
 		if (!child.stdout) {
@@ -470,19 +531,23 @@ export function createPredictorClient(
 			// Wait for initial status response to confirm sidecar is ready
 			try {
 				const result = await sendRequest("status", {}, 5000);
-				if (isRecord(result)) {
-					logger.info("predictor", "Sidecar ready", result);
+				const parsed = parsePredictorStatus(result);
+				if (parsed !== null) {
+					logger.info("predictor", "Sidecar ready", parsed);
 				} else {
+					logger.warn(
+						"predictor",
+						"Sidecar status response schema mismatch; predictor binary may be stale",
+						describeStatusResult(result),
+					);
 					logger.info("predictor", "Sidecar ready");
 				}
 			} catch (err) {
 				// Fail open: if sidecar doesn't respond in time, leave
 				// it running (it may come alive later) but don't throw.
-				logger.warn(
-					"predictor",
-					"Sidecar did not respond to initial status check",
-					{ error: err instanceof Error ? err.message : String(err) },
-				);
+				logger.warn("predictor", "Sidecar did not respond to initial status check", {
+					error: err instanceof Error ? err.message : String(err),
+				});
 			}
 		},
 
@@ -568,7 +633,15 @@ export function createPredictorClient(
 			if (!client.isAlive()) return null;
 			try {
 				const result = await sendRequest("status", {}, 5000);
-				return parsePredictorStatus(result);
+				const parsed = parsePredictorStatus(result);
+				if (parsed === null) {
+					logger.warn(
+						"predictor",
+						"Status response schema mismatch; predictor binary may be stale",
+						describeStatusResult(result),
+					);
+				}
+				return parsed;
 			} catch (err) {
 				logger.debug("predictor", "Status request failed", {
 					error: err instanceof Error ? err.message : String(err),

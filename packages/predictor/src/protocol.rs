@@ -129,10 +129,16 @@ pub struct StatusResult {
     pub training_pairs: usize,
     pub model_version: u64,
     pub last_trained: Option<String>,
+    pub native_dimensions: usize,
+    pub feature_dimensions: usize,
 }
 
-fn default_limit() -> usize { 5000 }
-fn default_epochs() -> usize { 3 }
+fn default_limit() -> usize {
+    5000
+}
+fn default_epochs() -> usize {
+    3
+}
 
 #[derive(Debug, Deserialize)]
 pub struct TrainFromDbParams {

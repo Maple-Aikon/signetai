@@ -273,6 +273,7 @@ export interface PredictorConfig {
 	readonly explorationRate: number;
 	readonly driftResetWindow: number;
 	readonly binaryPath?: string;
+	readonly binaryArgs?: ReadonlyArray<string>;
 	readonly checkpointPath?: string;
 }
 
@@ -334,32 +335,13 @@ export const MEMORY_TYPES = [
 ] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
 
-export const EXTRACTION_STATUSES = [
-	"none",
-	"pending",
-	"completed",
-	"failed",
-] as const;
+export const EXTRACTION_STATUSES = ["none", "pending", "completed", "failed"] as const;
 export type ExtractionStatus = (typeof EXTRACTION_STATUSES)[number];
 
-export const JOB_STATUSES = [
-	"pending",
-	"leased",
-	"completed",
-	"failed",
-	"dead",
-] as const;
+export const JOB_STATUSES = ["pending", "leased", "completed", "failed", "dead"] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
-export const HISTORY_EVENTS = [
-	"created",
-	"updated",
-	"deleted",
-	"recovered",
-	"merged",
-	"none",
-	"split",
-] as const;
+export const HISTORY_EVENTS = ["created", "updated", "deleted", "recovered", "merged", "none", "split"] as const;
 export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
 
 export const DECISION_ACTIONS = ["add", "update", "delete", "none"] as const;
@@ -370,12 +352,7 @@ export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 export const TASK_HARNESSES = ["claude-code", "opencode", "codex"] as const;
 export type TaskHarness = (typeof TASK_HARNESSES)[number];
 
-export const TASK_RUN_STATUSES = [
-	"pending",
-	"running",
-	"completed",
-	"failed",
-] as const;
+export const TASK_RUN_STATUSES = ["pending", "running", "completed", "failed"] as const;
 export type TaskRunStatus = (typeof TASK_RUN_STATUSES)[number];
 
 export interface ScheduledTask {
@@ -569,10 +546,7 @@ export interface DecisionResult {
 
 // -- Knowledge Architecture types --
 
-export const ENTITY_TYPES = [
-	"person", "project", "system", "tool",
-	"concept", "skill", "task", "unknown",
-] as const;
+export const ENTITY_TYPES = ["person", "project", "system", "tool", "concept", "skill", "task", "unknown"] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 export const ATTRIBUTE_KINDS = ["attribute", "constraint"] as const;
@@ -581,14 +555,10 @@ export type AttributeKind = (typeof ATTRIBUTE_KINDS)[number];
 export const ATTRIBUTE_STATUSES = ["active", "superseded", "deleted"] as const;
 export type AttributeStatus = (typeof ATTRIBUTE_STATUSES)[number];
 
-export const DEPENDENCY_TYPES = [
-	"uses", "requires", "owned_by", "blocks", "informs",
-] as const;
+export const DEPENDENCY_TYPES = ["uses", "requires", "owned_by", "blocks", "informs"] as const;
 export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
 
-export const TASK_STATUSES = [
-	"open", "in_progress", "blocked", "done", "cancelled",
-] as const;
+export const TASK_STATUSES = ["open", "in_progress", "blocked", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export interface EntityAspect {

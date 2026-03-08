@@ -37,11 +37,7 @@ import {
 	runPredictorScoring,
 } from "./predictor-scoring";
 import { propagateMemoryStatus } from "./knowledge-graph";
-import {
-	resolveFocalEntities,
-	setTraversalStatus,
-	traverseKnowledgeGraph,
-} from "./pipeline/graph-traversal";
+import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
 import {
 	applyFtsOverlapFeedback,
 	decayAspectWeights,
@@ -268,22 +264,14 @@ export function inferType(content: string): string {
 }
 
 /** Decay-weighted score: pinned items always score 1.0 */
-export function effectiveScore(
-	importance: number,
-	createdAt: string,
-	pinned: boolean,
-): number {
+export function effectiveScore(importance: number, createdAt: string, pinned: boolean): number {
 	if (pinned) return 1.0;
-	const ageDays =
-		(Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+	const ageDays = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
 	return importance * 0.95 ** ageDays;
 }
 
 /** Truncate rows to fit a character budget, preserving the input type */
-export function selectWithBudget<T extends { content: string }>(
-	rows: ReadonlyArray<T>,
-	charBudget: number,
-): T[] {
+export function selectWithBudget<T extends { content: string }>(rows: ReadonlyArray<T>, charBudget: number): T[] {
 	const selected: T[] = [];
 	let used = 0;
 	for (const row of rows) {
@@ -302,9 +290,7 @@ function getSessionGapSummary(): string | undefined {
 		return getDbAccessor().withReadDb((db) => {
 			// Find last completed session end time
 			const lastSession = db
-				.prepare(
-					"SELECT MAX(completed_at) as last_end FROM summary_jobs WHERE status = 'completed'",
-				)
+				.prepare("SELECT MAX(completed_at) as last_end FROM summary_jobs WHERE status = 'completed'")
 				.get() as { last_end: string | null } | undefined;
 
 			if (!lastSession?.last_end) return undefined;
@@ -326,16 +312,12 @@ function getSessionGapSummary(): string | undefined {
 
 			// Count new memories since last session
 			const memCount = db
-				.prepare(
-					"SELECT COUNT(*) as cnt FROM memories WHERE created_at > ? AND is_deleted = 0",
-				)
+				.prepare("SELECT COUNT(*) as cnt FROM memories WHERE created_at > ? AND is_deleted = 0")
 				.get(lastEnd) as { cnt: number };
 
 			// Count sessions since last session
 			const sessionCount = db
-				.prepare(
-					"SELECT COUNT(*) as cnt FROM summary_jobs WHERE completed_at > ? AND status = 'completed'",
-				)
+				.prepare("SELECT COUNT(*) as cnt FROM summary_jobs WHERE completed_at > ? AND status = 'completed'")
 				.get(lastEnd) as { cnt: number };
 
 			return `[since last session: ${memCount.cnt} new memories, ${sessionCount.cnt} sessions captured, last active ${gapStr}]`;
@@ -356,9 +338,7 @@ export function isDuplicate(db: Database, content: string): boolean {
 	try {
 		const ftsQuery = words.slice(0, 10).join(" OR ");
 		const rows = db
-			.prepare(
-				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? LIMIT 10",
-			)
+			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ? LIMIT 10")
 			.all(ftsQuery) as Array<{ content: string }>;
 
 		const inputWords = new Set(words);
@@ -381,10 +361,7 @@ export function isDuplicate(db: Database, content: string): boolean {
 	return false;
 }
 
-function readIdentityFile(
-	fileName: string,
-	charBudget: number,
-): string | undefined {
+function readIdentityFile(fileName: string, charBudget: number): string | undefined {
 	const filePath = join(AGENTS_DIR, fileName);
 	if (!existsSync(filePath)) return undefined;
 
@@ -434,19 +411,17 @@ function clampScore01(value: number): number {
 	return Math.max(0, Math.min(1, value));
 }
 
-function fetchTraversalCandidates(
-	memoryIds: ReadonlyArray<string>,
-	agentId: string,
-): ScoredMemory[] {
+function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): ScoredMemory[] {
 	if (memoryIds.length === 0 || !existsSync(MEMORY_DB)) return [];
 
 	try {
 		const placeholders = memoryIds.map(() => "?").join(", ");
-		return getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT
+		return getDbAccessor()
+			.withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT
 							 m.id,
 							 m.content,
 							 m.type,
@@ -474,12 +449,13 @@ function fetchTraversalCandidates(
 							 m.project,
 							 m.created_at,
 							 m.access_count`,
-					)
-					.all(agentId, ...memoryIds) as ScoredMemory[],
-		).map((row) => ({
-			...row,
-			effScore: clampScore01(row.effScore),
-		}));
+						)
+						.all(agentId, ...memoryIds) as ScoredMemory[],
+			)
+			.map((row) => ({
+				...row,
+				effScore: clampScore01(row.effScore),
+			}));
 	} catch {
 		return [];
 	}
@@ -495,23 +471,14 @@ function buildActiveConstraintsSection(
 ): string {
 	if (constraints.length === 0) return "";
 
-	const header =
-		"\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
-	const fullLines = constraints.map(
-		(item) => `- [${item.entityName}] ${item.content}\n`,
-	);
+	const header = "\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
+	const fullLines = constraints.map((item) => `- [${item.entityName}] ${item.content}\n`);
 	const fullSection = `${header}${fullLines.join("")}`.trimEnd();
 	if (charBudget <= 0 || fullSection.length <= charBudget) return fullSection;
 
-	const fixedOverhead = constraints.reduce(
-		(acc, item) => acc + `- [${item.entityName}] \n`.length,
-		header.length,
-	);
+	const fixedOverhead = constraints.reduce((acc, item) => acc + `- [${item.entityName}] \n`.length, header.length);
 	const availableForContent = Math.max(0, charBudget - fixedOverhead);
-	const perConstraintBudget = Math.max(
-		24,
-		Math.floor(availableForContent / constraints.length),
-	);
+	const perConstraintBudget = Math.max(24, Math.floor(availableForContent / constraints.length));
 	const compressedLines = constraints.map((item) => {
 		const content =
 			item.content.length <= perConstraintBudget
@@ -538,10 +505,7 @@ function buildActiveConstraintsSection(
  * sorted by project match + score. No budget applied — caller
  * handles truncation via selectWithBudget().
  */
-export function getAllScoredCandidates(
-	project: string | undefined,
-	limit: number,
-): ScoredMemory[] {
+export function getAllScoredCandidates(project: string | undefined, limit: number): ScoredMemory[] {
 	if (!existsSync(MEMORY_DB)) return [];
 
 	try {
@@ -591,11 +555,7 @@ export function getAllScoredCandidates(
 }
 
 /** Backwards-compatible wrapper: scored candidates + budget selection */
-function getProjectMemories(
-	project: string | undefined,
-	limit: number,
-	charBudget: number,
-): ScoredMemory[] {
+function getProjectMemories(project: string | undefined, limit: number, charBudget: number): ScoredMemory[] {
 	const candidates = getAllScoredCandidates(project, limit);
 	return selectWithBudget(candidates.slice(0, limit), charBudget);
 }
@@ -816,8 +776,7 @@ function loadIdentity(): { name: string; description?: string } {
 		try {
 			const content = readFileSync(identityMd, "utf-8");
 			const nameMatch = content.match(/name:\s*(.+)/i);
-			const descMatch =
-				content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
+			const descMatch = content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
 			return {
 				name: nameMatch?.[1]?.trim() || "Agent",
 				description: descMatch?.[1]?.trim(),
@@ -899,13 +858,15 @@ function getMemoriesSince(
 	try {
 		const sinceIso = new Date(sinceMs).toISOString();
 		const rows = getDbAccessor().withReadDb((db) => {
-			return db.prepare(`
+			return db
+				.prepare(`
 				SELECT id, content, type, importance, created_at
 				FROM memories
 				WHERE is_deleted = 0 AND created_at > ?
 				ORDER BY created_at DESC
 				LIMIT ?
-			`).all(sinceIso, limit) as Array<{
+			`)
+				.all(sinceIso, limit) as Array<{
 				id: string;
 				content: string;
 				type: string;
@@ -931,9 +892,7 @@ function getMemoriesSince(
 // Hook Handlers
 // ============================================================================
 
-export async function handleSessionStart(
-	req: SessionStartRequest,
-): Promise<SessionStartResponse> {
+export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {
 	const start = Date.now();
 	const config = loadHooksConfig().sessionStart || {};
 	const includeIdentity = config.includeIdentity !== false;
@@ -979,8 +938,7 @@ export async function handleSessionStart(
 
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
-	const traversalEnabled =
-		memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
+	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
 	const traversalRuntimeCfg = {
 		maxAspectsPerEntity: traversalCfg?.maxAspectsPerEntity ?? 10,
 		maxAttributesPerAspect: traversalCfg?.maxAttributesPerAspect ?? 20,
@@ -1001,12 +959,7 @@ export async function handleSessionStart(
 	);
 
 	const traversalAgentId = req.agentId ?? "default";
-	let traversalFocalSource:
-		| "project"
-		| "checkpoint"
-		| "query"
-		| "session_key"
-		| null = null;
+	let traversalFocalSource: "project" | "checkpoint" | "query" | "session_key" | null = null;
 	let traversalEntities = 0;
 	let traversalEntityNames: ReadonlyArray<string> = [];
 	let traversalTraversedEntities = 0;
@@ -1034,12 +987,7 @@ export async function handleSessionStart(
 
 			if (focal.entityIds.length > 0) {
 				const traversalResult = getDbAccessor().withReadDb((db) =>
-					traverseKnowledgeGraph(
-						focal.entityIds,
-						db,
-						traversalAgentId,
-						traversalRuntimeCfg,
-					),
+					traverseKnowledgeGraph(focal.entityIds, db, traversalAgentId, traversalRuntimeCfg),
 				);
 				traversalTimedOut = traversalResult.timedOut;
 				traversalTraversedEntities = traversalResult.entityCount;
@@ -1054,10 +1002,7 @@ export async function handleSessionStart(
 					}
 				}
 
-				const traversalRows = fetchTraversalCandidates(
-					[...traversalResult.memoryIds],
-					traversalAgentId,
-				);
+				const traversalRows = fetchTraversalCandidates([...traversalResult.memoryIds], traversalAgentId);
 				for (const row of traversalRows) {
 					const existing = candidateById.get(row.id);
 					if (existing) {
@@ -1124,12 +1069,7 @@ export async function handleSessionStart(
 
 	// Get structural features for candidate feature vectors
 	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
-	const structuralById = getStructuralFeatures(
-		getDbAccessor(),
-		candidateIdsForFeatures,
-		agentId,
-		candidateSourceById,
-	);
+	const structuralById = getStructuralFeatures(getDbAccessor(), candidateIdsForFeatures, agentId, candidateSourceById);
 
 	// Build candidate feature vectors using the canonical 17-element FeatureVector shape
 	// (same contract as buildCandidateFeatures / structural-features.ts).
@@ -1137,46 +1077,44 @@ export async function handleSessionStart(
 	const featureNow = new Date();
 	const sessionGapDays = (() => {
 		try {
-			const row = getDbAccessor().withReadDb((db) =>
-				db
-					.prepare(
-						`SELECT MAX(created_at) AS last_end
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT MAX(created_at) AS last_end
 						 FROM session_checkpoints
 						 WHERE trigger = 'session_end'`,
-					)
-					.get() as { last_end: string | null } | undefined,
+						)
+						.get() as { last_end: string | null } | undefined,
 			);
-			return row?.last_end
-				? Math.max(0, (Date.now() - new Date(row.last_end).getTime()) / 86_400_000)
-				: 0;
+			return row?.last_end ? Math.max(0, (Date.now() - new Date(row.last_end).getTime()) / 86_400_000) : 0;
 		} catch {
 			return 0;
 		}
 	})();
-	const candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null =
-		predictorConfig?.enabled
-			? buildCandidateFeatures(
-					getDbAccessor(),
-					mergedCandidates.map((c) => ({
-						id: c.id,
-						importance: c.importance,
-						createdAt: c.created_at,
-						accessCount: c.access_count,
-						lastAccessed: null,
-						pinned: c.pinned === 1,
-						isSuperseded: false,
-						source: candidateSourceById.get(c.id),
-					})),
-					agentId,
-					{
-						projectSlot: 0,
-						timeOfDay: featureNow.getHours() + featureNow.getMinutes() / 60,
-						dayOfWeek: featureNow.getDay(),
-						monthOfYear: featureNow.getMonth(),
-						sessionGapDays,
-					},
-				)
-			: null;
+	const candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null = predictorConfig?.enabled
+		? buildCandidateFeatures(
+				getDbAccessor(),
+				mergedCandidates.map((c) => ({
+					id: c.id,
+					importance: c.importance,
+					createdAt: c.created_at,
+					accessCount: c.access_count,
+					lastAccessed: null,
+					pinned: c.pinned === 1,
+					isSuperseded: false,
+					source: candidateSourceById.get(c.id),
+				})),
+				agentId,
+				{
+					projectSlot: 0,
+					timeOfDay: featureNow.getHours() + featureNow.getMinutes() / 60,
+					dayOfWeek: featureNow.getDay(),
+					monthOfYear: featureNow.getMonth(),
+					sessionGapDays,
+				},
+			)
+		: null;
 
 	// Run predictor scoring (async — calls sidecar if available)
 	const predictorScoreStart = Date.now();
@@ -1188,15 +1126,14 @@ export async function handleSessionStart(
 		config: predictorConfig,
 		state: predictorState,
 		candidateFeatures,
+		nativeEmbeddingDimensions: memoryCfg.embedding.dimensions,
 		project: req.project,
 	});
 	const predictorScoreMs = Date.now() - predictorScoreStart;
 	recordPredictorLatency("predictor_score", predictorScoreMs);
 
 	// Build ranked-candidate lookup for fused scores
-	const rankedById = new Map<string, RankedCandidate>(
-		scoringResult.candidates.map((rc) => [rc.id, rc]),
-	);
+	const rankedById = new Map<string, RankedCandidate>(scoringResult.candidates.map((rc) => [rc.id, rc]));
 
 	// Re-sort merged candidates by fused score from predictor pipeline
 	const sortedCandidates = [...mergedCandidates].sort((a, b) => {
@@ -1210,12 +1147,7 @@ export async function handleSessionStart(
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
-	const predictedMemories = getPredictedContextMemories(
-		req.project,
-		10,
-		600,
-		existingIds,
-	);
+	const predictedMemories = getPredictedContextMemories(req.project, 10, 600, existingIds);
 	if (predictedMemories.length > 0) {
 		memories.push(...predictedMemories);
 	}
@@ -1224,11 +1156,7 @@ export async function handleSessionStart(
 	let exploredId: string | null = null;
 	if (scoringResult.predictorUsed && predictorState.coldStartExited) {
 		const injectedIds = new Set(memories.map((m) => m.id));
-		const exploration = maybeExplore(
-			scoringResult.candidates,
-			injectedIds,
-			predictorConfig?.explorationRate ?? 0.05,
-		);
+		const exploration = maybeExplore(scoringResult.candidates, injectedIds, predictorConfig?.explorationRate ?? 0.05);
 		exploredId = exploration.exploredId;
 		if (exploredId !== null) {
 			// Remove the displaced memory from the array to maintain budget
@@ -1286,22 +1214,20 @@ export async function handleSessionStart(
 	const injectedSet = new Set(memories.map((m) => m.id));
 	const allCandidateIdsForRecording = [
 		...mergedCandidates.map((c) => c.id),
-		...predictedMemories
-			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
-			.map((m) => m.id),
+		...predictedMemories.filter((m) => !mergedCandidates.some((c) => c.id === m.id)).map((m) => m.id),
 	];
 	// Re-fetch structural features for any predicted memories not in the first batch
-	const fullStructuralById = allCandidateIdsForRecording.length > candidateIdsForFeatures.length
-		? getStructuralFeatures(getDbAccessor(), allCandidateIdsForRecording, agentId, candidateSourceById)
-		: structuralById;
+	const fullStructuralById =
+		allCandidateIdsForRecording.length > candidateIdsForFeatures.length
+			? getStructuralFeatures(getDbAccessor(), allCandidateIdsForRecording, agentId, candidateSourceById)
+			: structuralById;
 
 	const candidatesForRecording = [
 		...mergedCandidates.map((c) => {
 			const ranked = rankedById.get(c.id);
 			const sf = fullStructuralById.get(c.id);
-			const source = exploredId === c.id
-				? ("exploration" as const)
-				: (candidateSourceById.get(c.id) ?? ("effective" as const));
+			const source =
+				exploredId === c.id ? ("exploration" as const) : (candidateSourceById.get(c.id) ?? ("effective" as const));
 			return {
 				id: c.id,
 				effScore: c.effScore,
@@ -1363,21 +1289,13 @@ export async function handleSessionStart(
 		injectParts.push("\n## Agent Instructions\n");
 		injectParts.push(agentsMdContent);
 	} else if (identity.name !== "Agent" || identity.description) {
-		injectParts.push(
-			`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`,
-		);
+		injectParts.push(`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`);
 	}
 
 	// Inject additional identity files
-	const soulContent = includeIdentity
-		? readIdentityFile("SOUL.md", 4000)
-		: undefined;
-	const identityContent = includeIdentity
-		? readIdentityFile("IDENTITY.md", 2000)
-		: undefined;
-	const userContent = includeIdentity
-		? readIdentityFile("USER.md", 6000)
-		: undefined;
+	const soulContent = includeIdentity ? readIdentityFile("SOUL.md", 4000) : undefined;
+	const identityContent = includeIdentity ? readIdentityFile("IDENTITY.md", 2000) : undefined;
+	const userContent = includeIdentity ? readIdentityFile("USER.md", 6000) : undefined;
 
 	if (soulContent) {
 		injectParts.push("\n## Soul\n");
@@ -1421,9 +1339,7 @@ export async function handleSessionStart(
 			const withinMs = 4 * 60 * 60 * 1000; // 4 hours
 
 			// Priority 1: session key lineage (same or previous session)
-			let checkpoint = req.sessionKey
-				? getLatestCheckpointBySession(dbAcc, req.sessionKey)
-				: undefined;
+			let checkpoint = req.sessionKey ? getLatestCheckpointBySession(dbAcc, req.sessionKey) : undefined;
 
 			// Priority 2: normalized project path
 			if (!checkpoint) {
@@ -1439,10 +1355,7 @@ export async function handleSessionStart(
 			}
 
 			if (checkpoint) {
-				const recoveryText = formatRecoveryDigest(
-					checkpoint,
-					continuityCfg.recoveryBudgetChars,
-				);
+				const recoveryText = formatRecoveryDigest(checkpoint, continuityCfg.recoveryBudgetChars);
 				// Store separately — appended after budget truncation to guarantee space
 				recoverySection = `\n## Session Recovery Context\n${recoveryText}`;
 			}
@@ -1464,9 +1377,7 @@ export async function handleSessionStart(
 		const secretNames = listSecrets();
 		if (secretNames.length > 0) {
 			injectParts.push("\n## Available Secrets\n");
-			injectParts.push(
-				"Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n",
-			);
+			injectParts.push("Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n");
 			for (const name of secretNames) {
 				injectParts.push(`- ${name}`);
 			}
@@ -1524,9 +1435,7 @@ export async function handleSessionStart(
 	};
 }
 
-export function handlePreCompaction(
-	req: PreCompactionRequest,
-): PreCompactionResponse {
+export function handlePreCompaction(req: PreCompactionRequest): PreCompactionResponse {
 	const config = loadHooksConfig().preCompaction || {};
 
 	logger.info("hooks", "Pre-compaction hook", {
@@ -1534,9 +1443,7 @@ export function handlePreCompaction(
 		messageCount: req.messageCount,
 	});
 
-	const guidelines =
-		config.summaryGuidelines ||
-		(getDefaultConfig().preCompaction?.summaryGuidelines ?? "");
+	const guidelines = config.summaryGuidelines || (getDefaultConfig().preCompaction?.summaryGuidelines ?? "");
 
 	let summaryPrompt = `Pre-compaction memory flush. Store durable memories now.
 
@@ -1571,24 +1478,26 @@ ${guidelines}
 		try {
 			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
 			const digest = formatPreCompactionDigest(snap, req.sessionContext);
-			writeCheckpoint(getDbAccessor(), {
-				sessionKey: snap.sessionKey,
-				harness: snap.harness,
-				project: snap.project,
-				projectNormalized: snap.projectNormalized,
-				trigger: "pre_compaction",
-				digest,
-				promptCount: snap.promptCount,
-				memoryQueries: snap.pendingQueries,
-				recentRemembers: snap.pendingRemembers,
-				focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
-				focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
-				activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
-				surfacedConstraintCount:
-					snap.structuralSnapshot?.surfacedConstraintCount,
-				traversalMemoryCount:
-					snap.structuralSnapshot?.traversalMemoryCount,
-			}, cfg.maxCheckpointsPerSession);
+			writeCheckpoint(
+				getDbAccessor(),
+				{
+					sessionKey: snap.sessionKey,
+					harness: snap.harness,
+					project: snap.project,
+					projectNormalized: snap.projectNormalized,
+					trigger: "pre_compaction",
+					digest,
+					promptCount: snap.promptCount,
+					memoryQueries: snap.pendingQueries,
+					recentRemembers: snap.pendingRemembers,
+					focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
+					focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
+					activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
+					surfacedConstraintCount: snap.structuralSnapshot?.surfacedConstraintCount,
+					traversalMemoryCount: snap.structuralSnapshot?.traversalMemoryCount,
+				},
+				cfg.maxCheckpointsPerSession,
+			);
 		} catch (err) {
 			logger.warn("hooks", "Pre-compaction checkpoint write failed", {
 				error: err instanceof Error ? err.message : String(err),
@@ -1792,24 +1701,18 @@ interface RecallQueryShape {
 }
 
 function extractSubstantiveWords(text: string): string[] {
-	const cleaned = stripUntrustedMetadata(text)
-		.replace(/<@!?\d+>/g, ""); // strip Discord mention tags
+	const cleaned = stripUntrustedMetadata(text).replace(/<@!?\d+>/g, ""); // strip Discord mention tags
 
 	// Preserve hyphenated identifiers (e.g., "KA-6", "pre-compaction")
-	const hyphenated = (
-		cleaned.match(/[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/g) || []
-	).map((t) => t.toLowerCase());
+	const hyphenated = (cleaned.match(/[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/g) || []).map((t) =>
+		t.toLowerCase(),
+	);
 
 	// Standard word extraction
 	const words = cleaned
 		.toLowerCase()
 		.split(/\W+/)
-		.filter(
-			(word) =>
-				word.length >= 3 &&
-				!RECALL_STOPWORDS.has(word) &&
-				!/^\d+$/.test(word),
-		);
+		.filter((word) => word.length >= 3 && !RECALL_STOPWORDS.has(word) && !/^\d+$/.test(word));
 
 	// Deduplicate: hyphenated first (more specific), then words
 	const seen = new Set<string>();
@@ -1823,10 +1726,7 @@ function extractSubstantiveWords(text: string): string[] {
 	return result;
 }
 
-function buildRecallQueryShape(
-	userPrompt: string,
-	lastAssistantMessage?: string,
-): RecallQueryShape {
+function buildRecallQueryShape(userPrompt: string, lastAssistantMessage?: string): RecallQueryShape {
 	const userTerms = extractSubstantiveWords(userPrompt);
 
 	// Pre-clean assistant message: strip metadata, mentions, signet blocks
@@ -1836,18 +1736,13 @@ function buildRecallQueryShape(
 				.replace(/\[signet:recall[^\]]*\]/g, "")
 				.replace(/<memory-feedback>[\s\S]*?<\/memory-feedback>/g, "")
 		: undefined;
-	const assistantTerms = cleanedAssistant
-		? extractSubstantiveWords(cleanedAssistant)
-		: [];
+	const assistantTerms = cleanedAssistant ? extractSubstantiveWords(cleanedAssistant) : [];
 
 	// User terms get priority — assistant capped proportionally
 	const seen = new Set(userTerms);
 	const supplemental = assistantTerms.filter((t) => !seen.has(t));
 	const maxSupplemental = Math.max(2, userTerms.length);
-	const keywordTerms = [
-		...userTerms,
-		...supplemental.slice(0, maxSupplemental),
-	].slice(0, 12);
+	const keywordTerms = [...userTerms, ...supplemental.slice(0, maxSupplemental)].slice(0, 12);
 
 	const vectorQuery = stripUntrustedMetadata(userPrompt).trim().slice(0, 200);
 	return { keywordTerms, vectorQuery };
@@ -1865,15 +1760,10 @@ function resolveRecallUserMessage(req: UserPromptSubmitRequest): string {
 	return stripUntrustedMetadata(raw).trim();
 }
 
-export async function handleUserPromptSubmit(
-	req: UserPromptSubmitRequest,
-): Promise<UserPromptSubmitResponse> {
+export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Promise<UserPromptSubmitResponse> {
 	const start = Date.now();
 	const userMessage = resolveRecallUserMessage(req);
-	const { keywordTerms, vectorQuery } = buildRecallQueryShape(
-		userMessage,
-		req.lastAssistantMessage,
-	);
+	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage, req.lastAssistantMessage);
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
@@ -1891,7 +1781,7 @@ export async function handleUserPromptSubmit(
 		} catch (e) {
 			// Fail-open: never break the hook for feedback errors
 			logger.warn("hooks", "Failed to process memory_feedback", {
-				error: (e instanceof Error) ? e.message : String(e),
+				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 	}
@@ -1922,10 +1812,8 @@ export async function handleUserPromptSubmit(
 						focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
 						focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
 						activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
-						surfacedConstraintCount:
-							snap.structuralSnapshot?.surfacedConstraintCount,
-						traversalMemoryCount:
-							snap.structuralSnapshot?.traversalMemoryCount,
+						surfacedConstraintCount: snap.structuralSnapshot?.surfacedConstraintCount,
+						traversalMemoryCount: snap.structuralSnapshot?.traversalMemoryCount,
 					},
 					cfg.maxCheckpointsPerSession,
 				);
@@ -1933,11 +1821,7 @@ export async function handleUserPromptSubmit(
 		}
 	}
 
-	if (
-		keywordTerms.length < 1 ||
-		vectorQuery.length === 0 ||
-		!existsSync(MEMORY_DB)
-	) {
+	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(MEMORY_DB)) {
 		return { inject: "", memoryCount: 0 };
 	}
 
@@ -1954,11 +1838,7 @@ export async function handleUserPromptSubmit(
 			fetchEmbedding,
 		);
 
-		if (
-			recall.results.length === 0 ||
-			typeof recall.results[0]?.score !== "number" ||
-			recall.results[0].score < 0.4
-		) {
+		if (recall.results.length === 0 || typeof recall.results[0]?.score !== "number" || recall.results[0].score < 0.4) {
 			return { inject: "", memoryCount: 0 };
 		}
 
@@ -2045,9 +1925,7 @@ export async function handleUserPromptSubmit(
 // Session End
 // ============================================================================
 
-export function handleSessionEnd(
-	req: SessionEndRequest,
-): SessionEndResponse {
+export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = "default";
 
@@ -2079,24 +1957,26 @@ export function handleSessionEnd(
 	if (snap && snap.totalPromptCount > 0) {
 		try {
 			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
-			writeCheckpoint(getDbAccessor(), {
-				sessionKey: snap.sessionKey,
-				harness: snap.harness,
-				project: snap.project,
-				projectNormalized: snap.projectNormalized,
-				trigger: "session_end",
-				digest: formatSessionEndDigest(snap),
-				promptCount: snap.totalPromptCount,
-				memoryQueries: snap.pendingQueries,
-				recentRemembers: snap.pendingRemembers,
-				focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
-				focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
-				activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
-				surfacedConstraintCount:
-					snap.structuralSnapshot?.surfacedConstraintCount,
-				traversalMemoryCount:
-					snap.structuralSnapshot?.traversalMemoryCount,
-			}, cfg.maxCheckpointsPerSession);
+			writeCheckpoint(
+				getDbAccessor(),
+				{
+					sessionKey: snap.sessionKey,
+					harness: snap.harness,
+					project: snap.project,
+					projectNormalized: snap.projectNormalized,
+					trigger: "session_end",
+					digest: formatSessionEndDigest(snap),
+					promptCount: snap.totalPromptCount,
+					memoryQueries: snap.pendingQueries,
+					recentRemembers: snap.pendingRemembers,
+					focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
+					focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
+					activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
+					surfacedConstraintCount: snap.structuralSnapshot?.surfacedConstraintCount,
+					traversalMemoryCount: snap.structuralSnapshot?.traversalMemoryCount,
+				},
+				cfg.maxCheckpointsPerSession,
+			);
 		} catch (err) {
 			logger.warn("hooks", "Session-end checkpoint write failed", {
 				error: err instanceof Error ? err.message : String(err),
@@ -2117,10 +1997,7 @@ export function handleSessionEnd(
 	if (req.transcriptPath && existsSync(req.transcriptPath)) {
 		try {
 			const rawTranscript = readFileSync(req.transcriptPath, "utf-8");
-			transcript =
-				req.harness === "codex"
-					? normalizeCodexTranscript(rawTranscript)
-					: rawTranscript;
+			transcript = req.harness === "codex" ? normalizeCodexTranscript(rawTranscript) : rawTranscript;
 		} catch {
 			logger.warn("hooks", "Could not read transcript", {
 				path: req.transcriptPath,
@@ -2132,47 +2009,28 @@ export function handleSessionEnd(
 	let feedbackFtsConfirmations = 0;
 	let feedbackDecayedAspects = 0;
 	let feedbackPropagatedAttributes = 0;
-	if (
-		sessionKey &&
-		memoryCfg.pipelineV2.graph.enabled &&
-		memoryCfg.pipelineV2.feedback.enabled
-	) {
+	if (sessionKey && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
 		try {
-			const feedback = applyFtsOverlapFeedback(
-				getDbAccessor(),
-				sessionKey,
-				agentId,
-				{
-					delta: memoryCfg.pipelineV2.feedback.ftsWeightDelta,
-					maxWeight: memoryCfg.pipelineV2.feedback.maxAspectWeight,
-					minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
-				},
-			);
+			const feedback = applyFtsOverlapFeedback(getDbAccessor(), sessionKey, agentId, {
+				delta: memoryCfg.pipelineV2.feedback.ftsWeightDelta,
+				maxWeight: memoryCfg.pipelineV2.feedback.maxAspectWeight,
+				minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
+			});
 			feedbackAspectsUpdated = feedback.aspectsUpdated;
 			feedbackFtsConfirmations = feedback.totalFtsConfirmations;
 
 			if (
 				memoryCfg.pipelineV2.feedback.decayEnabled &&
-				shouldRunSessionDecay(
-					agentId,
-					memoryCfg.pipelineV2.feedback.decayIntervalSessions,
-				)
+				shouldRunSessionDecay(agentId, memoryCfg.pipelineV2.feedback.decayIntervalSessions)
 			) {
-				feedbackDecayedAspects = decayAspectWeights(
-					getDbAccessor(),
-					agentId,
-					{
-						decayRate: memoryCfg.pipelineV2.feedback.decayRate,
-						minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
-						staleDays: memoryCfg.pipelineV2.feedback.staleDays,
-					},
-				);
+				feedbackDecayedAspects = decayAspectWeights(getDbAccessor(), agentId, {
+					decayRate: memoryCfg.pipelineV2.feedback.decayRate,
+					minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
+					staleDays: memoryCfg.pipelineV2.feedback.staleDays,
+				});
 			}
 
-			feedbackPropagatedAttributes = propagateMemoryStatus(
-				getDbAccessor(),
-				agentId,
-			);
+			feedbackPropagatedAttributes = propagateMemoryStatus(getDbAccessor(), agentId);
 			recordFeedbackTelemetry({
 				feedbackDecayedAspects,
 				feedbackPropagatedAttributes,
@@ -2191,10 +2049,7 @@ export function handleSessionEnd(
 
 	// Truncate long transcripts for the LLM
 	const maxChars = 12000;
-	const truncated =
-		transcript.length > maxChars
-			? `${transcript.slice(0, maxChars)}\n[truncated]`
-			: transcript;
+	const truncated = transcript.length > maxChars ? `${transcript.slice(0, maxChars)}\n[truncated]` : transcript;
 
 	// Queue for async processing by the summary worker instead of
 	// blocking on LLM inference. The worker produces both a dated
@@ -2249,11 +2104,12 @@ export function normalizeCodexTranscript(raw: string): string {
 			if (typeof payload === "object" && payload !== null) {
 				const meta = payload as Record<string, unknown>;
 				const cwd = typeof meta.cwd === "string" ? meta.cwd : "";
-				const model = typeof meta.model === "string"
-					? meta.model
-					: typeof meta.model_provider === "string"
-						? meta.model_provider
-						: "";
+				const model =
+					typeof meta.model === "string"
+						? meta.model
+						: typeof meta.model_provider === "string"
+							? meta.model_provider
+							: "";
 				if (cwd || model) {
 					lines.push(`Session: cwd=${cwd || "unknown"}, model=${model || "unknown"}`);
 				}
@@ -2338,11 +2194,9 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 			// Idempotency check inside write tx to eliminate races
 			if (req.idempotencyKey) {
 				try {
-					const existing = db
-						.prepare(
-							"SELECT id FROM memories WHERE idempotency_key = ?",
-						)
-						.get(req.idempotencyKey) as { id: string } | undefined;
+					const existing = db.prepare("SELECT id FROM memories WHERE idempotency_key = ?").get(req.idempotencyKey) as
+						| { id: string }
+						| undefined;
 
 					if (existing) {
 						logger.info("hooks", "Idempotency hit, returning existing", {
@@ -2449,9 +2303,7 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 						   LIMIT ?`;
 
 					found = req.project
-						? (db
-								.prepare(baseQuery)
-								.all(ftsQuery, req.project, limit) as RecallRow[])
+						? (db.prepare(baseQuery).all(ftsQuery, req.project, limit) as RecallRow[])
 						: (db.prepare(baseQuery).all(ftsQuery, limit) as RecallRow[]);
 				}
 			} catch {
@@ -2474,9 +2326,7 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 					   LIMIT ?`;
 
 				found = req.project
-					? (db
-							.prepare(baseQuery)
-							.all(likePattern, req.project, limit) as RecallRow[])
+					? (db.prepare(baseQuery).all(likePattern, req.project, limit) as RecallRow[])
 					: (db.prepare(baseQuery).all(likePattern, limit) as RecallRow[]);
 			}
 
@@ -2513,8 +2363,7 @@ export function writeMemoryMd(content: string): { ok: true } | { ok: false; erro
 		try {
 			JSON.parse(trimmed);
 			// Parsed successfully — it's JSON, not markdown
-			logger.error("hooks", "Refusing to write JSON to MEMORY.md",
-				undefined, { preview: trimmed.slice(0, 200) });
+			logger.error("hooks", "Refusing to write JSON to MEMORY.md", undefined, { preview: trimmed.slice(0, 200) });
 			return { ok: false, error: "Refusing to write JSON to MEMORY.md" };
 		} catch {
 			// Not valid JSON — markdown that starts with [ or { is fine

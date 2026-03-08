@@ -64,10 +64,31 @@ function toggleTheme() {
 
 // --- Memory display ---
 const memoryDocs = $derived(data.memories ?? []);
+const totalMemoryDocs = $derived(data.memoryStats?.total ?? memoryDocs.length);
 
 const displayMemories = $derived(
 	mem.similarSourceId ? mem.similarResults : mem.searched || hasActiveFilters() ? mem.results : memoryDocs,
 );
+
+const memoryDocumentsLabel = $derived.by(() => {
+	if (mem.similarSourceId || mem.searched || hasActiveFilters()) {
+		return `${displayMemories.length} documents`;
+	}
+	if (totalMemoryDocs > memoryDocs.length) {
+		return `${memoryDocs.length} recent of ${totalMemoryDocs}`;
+	}
+	return `${displayMemories.length} documents`;
+});
+
+const memoryFooterLabel = $derived.by(() => {
+	if (mem.similarSourceId || mem.searched || hasActiveFilters()) {
+		return `${displayMemories.length} memory documents`;
+	}
+	if (totalMemoryDocs > memoryDocs.length) {
+		return `${memoryDocs.length} recent of ${totalMemoryDocs} memory documents`;
+	}
+	return `${displayMemories.length} memory documents`;
+});
 
 // --- Filter reactivity ---
 $effect(() => {
@@ -614,7 +635,7 @@ function handlePageClick(e: MouseEvent) {
 			<div class="flex items-center gap-3">
 				{#if activeTab === "memory"}
 					<span class="sig-label">
-						{displayMemories.length} documents
+						{memoryDocumentsLabel}
 					</span>
 					{#if mem.searching}
 						<span class="sig-label">
@@ -851,7 +872,7 @@ function handlePageClick(e: MouseEvent) {
 					>Ctrl+S</kbd> save
 				</span>
 			{:else if activeTab === "memory"}
-				<span>{displayMemories.length} memory documents</span>
+				<span>{memoryFooterLabel}</span>
 				<span>
 					{#if mem.searching}
 						semantic search in progress

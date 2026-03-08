@@ -66,12 +66,18 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import {
+	type DiagnosticsReport,
 	type PredictorHealthParams,
 	createProviderTracker,
 	getDiagnostics,
 	getPredictorHealth,
 } from "./diagnostics";
-import { fetchEmbedding, resolveEmbeddingBaseUrl, resolveEmbeddingApiKey, setNativeFallbackToOllama } from "./embedding-fetch";
+import {
+	fetchEmbedding,
+	resolveEmbeddingBaseUrl,
+	resolveEmbeddingApiKey,
+	setNativeFallbackToOllama,
+} from "./embedding-fetch";
 import { detectDrift } from "./predictor-comparison";
 import { getPredictorState } from "./predictor-state";
 import { buildEmbeddingHealth } from "./embedding-health";
@@ -80,10 +86,7 @@ import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
 import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type LogEntry, logger } from "./logger";
-import {
-	type EmbeddingConfig,
-	loadMemoryConfig,
-} from "./memory-config";
+import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import {
 	getAttributesForAspectFiltered,
 	getKnowledgeGraphForConstellation,
@@ -114,7 +117,7 @@ import {
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { getTraversalStatus, invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
-import { type PredictorClient, createPredictorClient } from "./predictor-client";
+import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
 import {
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -150,7 +153,14 @@ import {
 	listComparisons,
 	listTrainingRuns,
 } from "./predictor-comparisons";
-import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, startSchedulerWorker, validateCron } from "./scheduler";
+import {
+	CRON_PRESETS,
+	computeNextRun,
+	isHarnessAvailable,
+	resolveSkillPrompt,
+	startSchedulerWorker,
+	validateCron,
+} from "./scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "./scheduler/task-stream";
 import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "./secrets.js";
 import {
@@ -212,6 +222,13 @@ let predictorClientRef: PredictorClient | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
+let diagnosticsCache:
+	| {
+			readonly report: DiagnosticsReport;
+			readonly expiresAt: number;
+	  }
+	| null = null;
+const DIAGNOSTICS_CACHE_TTL_MS = 2000;
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
@@ -246,11 +263,28 @@ export function getPredictorClient(): PredictorClient | null {
 }
 
 /** Record predictor latency from hooks (exposed for cross-module use). */
-export function recordPredictorLatency(
-	operation: "predictor_score" | "predictor_train",
-	ms: number,
-): void {
+export function recordPredictorLatency(operation: "predictor_score" | "predictor_train", ms: number): void {
 	analyticsCollector.recordLatency(operation, ms);
+}
+
+function invalidateDiagnosticsCache(): void {
+	diagnosticsCache = null;
+}
+
+function getCachedDiagnosticsReport(): DiagnosticsReport {
+	const now = Date.now();
+	if (diagnosticsCache !== null && diagnosticsCache.expiresAt > now) {
+		return diagnosticsCache.report;
+	}
+
+	const report = getDbAccessor().withReadDb((db) =>
+		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()),
+	);
+	diagnosticsCache = {
+		report,
+		expiresAt: now + DIAGNOSTICS_CACHE_TTL_MS,
+	};
+	return report;
 }
 
 /**
@@ -262,9 +296,15 @@ function buildPredictorHealthParams(): PredictorHealthParams {
 	const predictorCfg = cfg.pipelineV2.predictor;
 	if (!predictorCfg?.enabled) {
 		return {
-			enabled: false, sidecarAlive: false, crashCount: 0,
-			crashDisabled: false, modelVersion: 0, trainingSessions: 0,
-			successRate: 0, alpha: 1.0, coldStartExited: false,
+			enabled: false,
+			sidecarAlive: false,
+			crashCount: 0,
+			crashDisabled: false,
+			modelVersion: 0,
+			trainingSessions: 0,
+			successRate: 0,
+			alpha: 1.0,
+			coldStartExited: false,
 			lastTrainedAt: null,
 		};
 	}
@@ -277,12 +317,15 @@ function buildPredictorHealthParams(): PredictorHealthParams {
 	let trainingSessions = 0;
 	let modelVersion = 0;
 	try {
-		const row = getDbAccessor().withReadDb((db) =>
-			db.prepare(
-				`SELECT COUNT(*) as cnt, MAX(model_version) as ver
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT COUNT(*) as cnt, MAX(model_version) as ver
 				 FROM predictor_training_log
 				 WHERE agent_id = ?`,
-			).get(agentId) as { cnt: number; ver: number | null } | undefined,
+					)
+					.get(agentId) as { cnt: number; ver: number | null } | undefined,
 		);
 		trainingSessions = row?.cnt ?? 0;
 		modelVersion = row?.ver ?? 0;
@@ -292,9 +335,7 @@ function buildPredictorHealthParams(): PredictorHealthParams {
 
 	// Latency from analytics collector
 	const latencySnapshot = analyticsCollector.getLatency();
-	const avgScoreLatencyMs = latencySnapshot.predictor_score.p50 > 0
-		? latencySnapshot.predictor_score.p50
-		: undefined;
+	const avgScoreLatencyMs = latencySnapshot.predictor_score.p50 > 0 ? latencySnapshot.predictor_score.p50 : undefined;
 
 	// Drift detection (fail-open: false on error)
 	let driftDetected = false;
@@ -2380,9 +2421,7 @@ app.get("/api/memory/:id", (c) => {
 	}
 
 	const row = getDbAccessor().withReadDb((db) => {
-		const sessionSelect = hasMemoriesSessionIdColumn(db)
-			? "session_id,"
-			: "NULL AS session_id,";
+		const sessionSelect = hasMemoriesSessionIdColumn(db) ? "session_id," : "NULL AS session_id,";
 
 		return db
 			.prepare(
@@ -2404,10 +2443,10 @@ app.get("/api/memory/:id", (c) => {
 		typeof row.session_id === "string"
 			? row.session_id
 			: typeof row.source_id === "string" &&
-				  typeof row.source_type === "string" &&
-				  row.source_type.startsWith("session")
-			? row.source_id
-			: undefined;
+					typeof row.source_type === "string" &&
+					row.source_type.startsWith("session")
+				? row.source_id
+				: undefined;
 
 	return c.json({
 		...row,
@@ -3794,10 +3833,7 @@ type ConnectorSyncStartOutcome =
 	| { status: "unsupported"; provider: string }
 	| { status: "error"; error: string };
 
-function startConnectorSync(
-	connectorId: string,
-	mode: "incremental" | "full",
-): ConnectorSyncStartOutcome {
+function startConnectorSync(connectorId: string, mode: "incremental" | "full"): ConnectorSyncStartOutcome {
 	const accessor = getDbAccessor();
 	const connectorRow = getConnector(accessor, connectorId);
 	if (!connectorRow) {
@@ -3819,9 +3855,7 @@ function startConnectorSync(
 		parsed === null ||
 		!("provider" in parsed) ||
 		typeof (parsed as Record<string, unknown>).provider !== "string" ||
-		!(CONNECTOR_PROVIDERS as readonly string[]).includes(
-			(parsed as Record<string, unknown>).provider as string,
-		)
+		!(CONNECTOR_PROVIDERS as readonly string[]).includes((parsed as Record<string, unknown>).provider as string)
 	) {
 		return { status: "error", error: "Invalid connector config" };
 	}
@@ -3987,15 +4021,18 @@ app.post("/api/connectors/resync", async (c) => {
 		});
 	} catch (e) {
 		logger.error("connectors", "Failed to trigger bulk resync", e instanceof Error ? e : new Error(String(e)));
-		return c.json({
-			status: "error",
-			error: "Failed to trigger connector re-sync",
-			total: 0,
-			started: 0,
-			alreadySyncing: 0,
-			unsupported: 0,
-			failed: 0,
-		}, 500);
+		return c.json(
+			{
+				status: "error",
+				error: "Failed to trigger connector re-sync",
+				total: 0,
+				started: 0,
+				alreadySyncing: 0,
+				unsupported: 0,
+				failed: 0,
+			},
+			500,
+		);
 	}
 });
 
@@ -4582,10 +4619,8 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 	try {
 		const body = (await c.req.json()) as UserPromptSubmitRequest;
 
-		const hasUserMessage =
-			typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
-		const hasUserPrompt =
-			typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
+		const hasUserMessage = typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
+		const hasUserPrompt = typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
 
 		if (!body.harness || (!hasUserMessage && !hasUserPrompt)) {
 			return c.json({ error: "harness and userMessage or userPrompt are required" }, 400);
@@ -5216,7 +5251,19 @@ app.post("/api/tasks", async (c) => {
 			 (id, name, prompt, cron_expression, harness, working_directory,
 			  enabled, next_run_at, skill_name, skill_mode, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-		).run(id, name, prompt, cronExpression, harness, workingDirectory || null, nextRunAt, skillName || null, skillMode || null, now, now);
+		).run(
+			id,
+			name,
+			prompt,
+			cronExpression,
+			harness,
+			workingDirectory || null,
+			nextRunAt,
+			skillName || null,
+			skillMode || null,
+			now,
+			now,
+		);
 	});
 
 	logger.info("scheduler", `Task created: ${name}`, { taskId: id });
@@ -5274,8 +5321,8 @@ app.patch("/api/tasks/:id", async (c) => {
 				: existing.next_run_at
 			: existing.next_run_at;
 
-	const skillName = body.skillName !== undefined ? (body.skillName || null) : existing.skill_name;
-	const skillMode = body.skillMode !== undefined ? (body.skillMode || null) : existing.skill_mode;
+	const skillName = body.skillName !== undefined ? body.skillName || null : existing.skill_name;
+	const skillMode = body.skillMode !== undefined ? body.skillMode || null : existing.skill_mode;
 
 	if (skillName && (skillName.includes("/") || skillName.includes(".."))) {
 		return c.json({ error: "Invalid skill name" }, 400);
@@ -5365,8 +5412,8 @@ app.post("/api/tasks/:id/run", async (c) => {
 
 	// Narrow task fields from raw SQL result
 	const taskPrompt = typeof task.prompt === "string" ? task.prompt : null;
-	const taskHarness = task.harness === "claude-code" || task.harness === "opencode" || task.harness === "codex"
-		? task.harness : null;
+	const taskHarness =
+		task.harness === "claude-code" || task.harness === "opencode" || task.harness === "codex" ? task.harness : null;
 	if (!taskPrompt || !taskHarness) {
 		return c.json({ error: "Task has invalid prompt or harness" }, 500);
 	}
@@ -5380,34 +5427,28 @@ app.post("/api/tasks/:id/run", async (c) => {
 	// Spawn in background (don't await)
 	import("./scheduler/spawn").then((mod) => {
 		mod
-			.spawnTask(
-				taskHarness,
-				effectivePrompt,
-				taskWorkingDir,
-				undefined,
-				{
-					onStdoutChunk: (chunk) => {
-						emitTaskStream({
-							type: "run-output",
-							taskId,
-							runId,
-							stream: "stdout",
-							chunk,
-							timestamp: new Date().toISOString(),
-						});
-					},
-					onStderrChunk: (chunk) => {
-						emitTaskStream({
-							type: "run-output",
-							taskId,
-							runId,
-							stream: "stderr",
-							chunk,
-							timestamp: new Date().toISOString(),
-						});
-					},
+			.spawnTask(taskHarness, effectivePrompt, taskWorkingDir, undefined, {
+				onStdoutChunk: (chunk) => {
+					emitTaskStream({
+						type: "run-output",
+						taskId,
+						runId,
+						stream: "stdout",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
 				},
-			)
+				onStderrChunk: (chunk) => {
+					emitTaskStream({
+						type: "run-output",
+						taskId,
+						runId,
+						stream: "stderr",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				},
+			})
 			.then((result) => {
 				const completedAt = new Date().toISOString();
 				const status =
@@ -5474,7 +5515,7 @@ app.get("/api/status", (c) => {
 
 	let health: { score: number; status: string } | undefined;
 	try {
-		const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
+		const report = getCachedDiagnosticsReport();
 		health = report.composite;
 	} catch {
 		// DB not ready yet — omit health
@@ -5495,7 +5536,9 @@ app.get("/api/status", (c) => {
 				break;
 			}
 		}
-	} catch { /* ignore parse errors */ }
+	} catch {
+		/* ignore parse errors */
+	}
 
 	return c.json({
 		status: "running",
@@ -5550,7 +5593,9 @@ app.get("/api/home/greeting", async (c) => {
 	let soulContent = "";
 	try {
 		soulContent = readFileSync(soulPath, "utf-8").slice(0, 500);
-	} catch { /* no soul file */ }
+	} catch {
+		/* no soul file */
+	}
 
 	const hour = new Date().getHours();
 	const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
@@ -5565,7 +5610,9 @@ app.get("/api/home/greeting", async (c) => {
 			greetingCache = { greeting, cachedAt: new Date().toISOString(), expires: now + 3600000 };
 			return c.json({ greeting: greetingCache.greeting, cachedAt: greetingCache.cachedAt });
 		}
-	} catch { /* LLM unavailable */ }
+	} catch {
+		/* LLM unavailable */
+	}
 
 	// Fallback
 	const fallback = `good ${timeOfDay}`;
@@ -5578,13 +5625,13 @@ app.get("/api/home/greeting", async (c) => {
 // ============================================================================
 
 app.get("/api/diagnostics", (c) => {
-	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
+	const report = getCachedDiagnosticsReport();
 	return c.json(report);
 });
 
 app.get("/api/diagnostics/:domain", (c) => {
 	const domain = c.req.param("domain");
-	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
+	const report = getCachedDiagnosticsReport();
 
 	const domainData = report[domain as keyof typeof report];
 	if (!domainData || typeof domainData === "string") {
@@ -5622,16 +5669,14 @@ app.get("/api/pipeline/status", (c) => {
 			return out;
 		};
 
-		const diagnostics = getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams());
-
 		return {
 			queues: {
 				memory: toCountMap(memoryRows),
 				summary: toCountMap(summaryRows),
 			},
-			diagnostics,
 		};
 	});
+	const diagnostics = getCachedDiagnosticsReport();
 
 	const pipelineV2 = cfg.pipelineV2;
 	const mode = !pipelineV2.enabled
@@ -5643,9 +5688,9 @@ app.get("/api/pipeline/status", (c) => {
 				: "controlled-write";
 
 	// Predictor sidecar snapshot for pipeline overview
-	const predictorHealth = buildPredictorHealthParams();
+	const predictorHealth = diagnostics.predictor;
 	const predictorSnapshot = {
-		running: predictorHealth.enabled && predictorHealth.sidecarAlive,
+		running: predictorHealth.status !== "disabled" && predictorHealth.sidecarAlive,
 		modelReady: predictorHealth.coldStartExited,
 		coldStartExited: predictorHealth.coldStartExited,
 		successRate: predictorHealth.successRate,
@@ -5655,15 +5700,13 @@ app.get("/api/pipeline/status", (c) => {
 	return c.json({
 		workers: getPipelineWorkerStatus(),
 		queues: dbData.queues,
-		diagnostics: dbData.diagnostics,
+		diagnostics,
 		latency: analyticsCollector.getLatency(),
 		errorSummary: analyticsCollector.getErrorSummary(),
 		mode,
 		feedback: getFeedbackTelemetry(),
 		traversal: {
-			enabled:
-				pipelineV2.graph.enabled &&
-				(pipelineV2.traversal?.enabled ?? true),
+			enabled: pipelineV2.graph.enabled && (pipelineV2.traversal?.enabled ?? true),
 			lastRun: getTraversalStatus(),
 		},
 		predictor: predictorSnapshot,
@@ -5861,14 +5904,10 @@ app.post("/api/repair/reclassify-entities", async (c) => {
 	} catch {
 		// provider not initialized
 	}
-	const result = await reclassifyEntities(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-		provider,
-		{ batchSize, dryRun },
-	);
+	const result = await reclassifyEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, provider, {
+		batchSize,
+		dryRun,
+	});
 	return c.json(result, repairHttpStatus(result));
 });
 
@@ -5905,13 +5944,11 @@ app.post("/api/repair/prune-singleton-entities", async (c) => {
 	} catch {
 		// no body or invalid JSON — use defaults
 	}
-	const result = pruneSingletonExtractedEntities(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-		{ batchSize, dryRun, maxMentions },
-	);
+	const result = pruneSingletonExtractedEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		batchSize,
+		dryRun,
+		maxMentions,
+	});
 	return c.json(result, repairHttpStatus(result));
 });
 
@@ -5974,9 +6011,7 @@ app.get("/api/knowledge/entities", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 	const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
-	const limit = Number.isFinite(limitParam)
-		? Math.min(Math.max(limitParam, 1), 200)
-		: 50;
+	const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
 	const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 
 	return c.json({
@@ -5996,11 +6031,7 @@ app.post("/api/knowledge/entities/:id/pin", async (c) => {
 	return requirePermission("modify", authConfig)(c, async () => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		pinEntity(getDbAccessor(), c.req.param("id"), agentId);
-		const entity = getKnowledgeEntityDetail(
-			getDbAccessor(),
-			c.req.param("id"),
-			agentId,
-		);
+		const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
 		if (!entity?.entity.pinnedAt) {
 			return c.json({ error: "Entity not found" }, 404);
 		}
@@ -6023,29 +6054,20 @@ app.get("/api/knowledge/entities/pinned", (c) => {
 
 app.get("/api/knowledge/entities/health", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
-	const minComparisonsParam = Number.parseInt(
-		c.req.query("min_comparisons") ?? "3",
-		10,
-	);
+	const minComparisonsParam = Number.parseInt(c.req.query("min_comparisons") ?? "3", 10);
 	return c.json(
 		getEntityHealth(
 			getDbAccessor(),
 			agentId,
 			c.req.query("since") ?? undefined,
-			Number.isFinite(minComparisonsParam)
-				? Math.max(minComparisonsParam, 1)
-				: 3,
+			Number.isFinite(minComparisonsParam) ? Math.max(minComparisonsParam, 1) : 3,
 		),
 	);
 });
 
 app.get("/api/knowledge/entities/:id", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
-	const entity = getKnowledgeEntityDetail(
-		getDbAccessor(),
-		c.req.param("id"),
-		agentId,
-	);
+	const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
 	if (!entity) {
 		return c.json({ error: "Entity not found" }, 404);
 	}
@@ -6055,11 +6077,7 @@ app.get("/api/knowledge/entities/:id", (c) => {
 app.get("/api/knowledge/entities/:id/aspects", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	return c.json({
-		items: getEntityAspectsWithCounts(
-			getDbAccessor(),
-			c.req.param("id"),
-			agentId,
-		),
+		items: getEntityAspectsWithCounts(getDbAccessor(), c.req.param("id"), agentId),
 	});
 });
 
@@ -6067,9 +6085,7 @@ app.get("/api/knowledge/entities/:id/aspects/:aspectId/attributes", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 	const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
-	const limit = Number.isFinite(limitParam)
-		? Math.min(Math.max(limitParam, 1), 200)
-		: 50;
+	const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
 	const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 	const kind = c.req.query("kind");
 	const status = c.req.query("status");
@@ -6079,14 +6095,8 @@ app.get("/api/knowledge/entities/:id/aspects/:aspectId/attributes", (c) => {
 			entityId: c.req.param("id"),
 			aspectId: c.req.param("aspectId"),
 			agentId,
-			kind:
-				kind === "attribute" || kind === "constraint" ? kind : undefined,
-			status:
-				status === "active" ||
-				status === "superseded" ||
-				status === "deleted"
-					? status
-					: undefined,
+			kind: kind === "attribute" || kind === "constraint" ? kind : undefined,
+			status: status === "active" || status === "superseded" || status === "deleted" ? status : undefined,
 			limit,
 			offset,
 		}),
@@ -6099,9 +6109,7 @@ app.get("/api/knowledge/entities/:id/dependencies", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	const directionQuery = c.req.query("direction");
 	const direction =
-		directionQuery === "incoming" ||
-		directionQuery === "outgoing" ||
-		directionQuery === "both"
+		directionQuery === "incoming" || directionQuery === "outgoing" || directionQuery === "both"
 			? directionQuery
 			: "both";
 	return c.json({
@@ -6161,7 +6169,9 @@ app.get("/api/analytics/logs", (c) => {
 });
 
 app.get("/api/analytics/memory-safety", (c) => {
-	const mutationHealth = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
+	const mutationHealth = getDbAccessor().withReadDb((db) =>
+		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()),
+	);
 	const recentMutationErrors = analyticsCollector.getErrors({
 		stage: "mutation",
 		limit: 50,
@@ -6264,9 +6274,7 @@ app.get("/api/predictor/comparisons", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 	const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
-	const limit = Number.isFinite(limitParam)
-		? Math.min(Math.max(limitParam, 1), 200)
-		: 50;
+	const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
 	const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 
 	const result = listComparisons(getDbAccessor(), {
@@ -6290,9 +6298,7 @@ app.get("/api/predictor/comparisons", (c) => {
 app.get("/api/predictor/training", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
-	const limit = Number.isFinite(limitParam)
-		? Math.min(Math.max(limitParam, 1), 100)
-		: 20;
+	const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 20;
 
 	return c.json({
 		items: listTrainingRuns(getDbAccessor(), agentId, limit),
@@ -6300,15 +6306,16 @@ app.get("/api/predictor/training", (c) => {
 });
 
 app.get("/api/predictor/training-pairs-count", (c) => {
-	const count = getDbAccessor().withReadDb((db) =>
-		(db.prepare("SELECT COUNT(*) as c FROM predictor_training_pairs").get() as { c: number }).c
+	const count = getDbAccessor().withReadDb(
+		(db) => (db.prepare("SELECT COUNT(*) as c FROM predictor_training_pairs").get() as { c: number }).c,
 	);
 	return c.json({ count });
 });
 
 app.post("/api/predictor/train", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
-	if (!cfg.pipelineV2.predictor?.enabled) {
+	const predictorCfg = cfg.pipelineV2.predictor;
+	if (!predictorCfg?.enabled) {
 		return c.json({ error: "Predictor is not enabled" }, 400);
 	}
 	const client = getPredictorClient();
@@ -6317,15 +6324,27 @@ app.post("/api/predictor/train", async (c) => {
 	}
 
 	let body: Record<string, unknown> = {};
-	try { body = await c.req.json(); } catch { /* no body */ }
+	try {
+		body = await c.req.json();
+	} catch {
+		/* no body */
+	}
 	const limit = typeof body.limit === "number" ? body.limit : 5000;
 	const epochs = typeof body.epochs === "number" ? body.epochs : 3;
 
 	const dbPath = join(AGENTS_DIR, "memory", "memories.db");
-	const result = await client.trainFromDb({ db_path: dbPath, limit, epochs });
+	const checkpointPath = resolvePredictorCheckpointPath(predictorCfg);
+	const result = await client.trainFromDb({
+		db_path: dbPath,
+		checkpoint_path: checkpointPath,
+		limit,
+		epochs,
+	});
 	if (!result) {
 		return c.json({ error: "Training did not return a result" }, 500);
 	}
+
+	const checkpointSaved = result.checkpoint_saved || (await client.saveCheckpoint(checkpointPath));
 
 	// Record the run in the training log and update state
 	const agentId = "default";
@@ -6341,8 +6360,13 @@ app.post("/api/predictor/train", async (c) => {
 		canaryTopkChurn: result.canary_topk_stability,
 	});
 	updatePredictorState(agentId, { lastTrainingAt: new Date().toISOString() });
+	invalidateDiagnosticsCache();
 
-	return c.json(result);
+	return c.json({
+		...result,
+		checkpoint_path: checkpointPath,
+		checkpoint_saved: checkpointSaved,
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -6424,12 +6448,27 @@ app.get("/api/telemetry/training-export", async (c) => {
 
 	if (format === "csv") {
 		const header = [
-			"id", "agent_id", "session_key", "memory_id",
-			"recency_days", "access_count", "importance", "decay_factor",
-			"embedding_similarity", "entity_slot", "aspect_slot",
-			"is_constraint", "structural_density", "fts_hit_count",
-			"agent_relevance_score", "continuity_score", "fts_overlap_score",
-			"combined_label", "was_injected", "predictor_rank", "baseline_rank",
+			"id",
+			"agent_id",
+			"session_key",
+			"memory_id",
+			"recency_days",
+			"access_count",
+			"importance",
+			"decay_factor",
+			"embedding_similarity",
+			"entity_slot",
+			"aspect_slot",
+			"is_constraint",
+			"structural_density",
+			"fts_hit_count",
+			"agent_relevance_score",
+			"continuity_score",
+			"fts_overlap_score",
+			"combined_label",
+			"was_injected",
+			"predictor_rank",
+			"baseline_rank",
 			"created_at",
 		].join(",");
 
@@ -6442,25 +6481,34 @@ app.get("/api/telemetry/training-export", async (c) => {
 			return str;
 		}
 
-		const rows = pairs.map((p) => [
-			p.id, p.agentId, p.sessionKey, p.memoryId,
-			p.features.recencyDays, p.features.accessCount,
-			p.features.importance, p.features.decayFactor,
-			p.features.embeddingSimilarity ?? "",
-			p.features.entitySlot ?? "",
-			p.features.aspectSlot ?? "",
-			p.features.isConstraint ? 1 : 0,
-			p.features.structuralDensity ?? "",
-			p.features.ftsHitCount,
-			p.label.agentRelevanceScore ?? "",
-			p.label.continuityScore ?? "",
-			p.label.ftsOverlapScore ?? "",
-			p.label.combined,
-			p.wasInjected ? 1 : 0,
-			p.predictorRank ?? "",
-			p.baselineRank ?? "",
-			p.createdAt,
-		].map(csvEscape).join(","));
+		const rows = pairs.map((p) =>
+			[
+				p.id,
+				p.agentId,
+				p.sessionKey,
+				p.memoryId,
+				p.features.recencyDays,
+				p.features.accessCount,
+				p.features.importance,
+				p.features.decayFactor,
+				p.features.embeddingSimilarity ?? "",
+				p.features.entitySlot ?? "",
+				p.features.aspectSlot ?? "",
+				p.features.isConstraint ? 1 : 0,
+				p.features.structuralDensity ?? "",
+				p.features.ftsHitCount,
+				p.label.agentRelevanceScore ?? "",
+				p.label.continuityScore ?? "",
+				p.label.ftsOverlapScore ?? "",
+				p.label.combined,
+				p.wasInjected ? 1 : 0,
+				p.predictorRank ?? "",
+				p.baselineRank ?? "",
+				p.createdAt,
+			]
+				.map(csvEscape)
+				.join(","),
+		);
 
 		return c.text([header, ...rows].join("\n"), 200, {
 			"Content-Type": "text/csv",
@@ -8068,10 +8116,10 @@ async function main() {
 							model: memoryCfg.pipelineV2.extraction.model || "gpt-5.3-codex",
 							defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 						})
-				: createOllamaProvider({
-						model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
-						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-					});
+					: createOllamaProvider({
+							model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
+							defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+						});
 	initLlmProvider(llmProvider);
 
 	// Create synthesis provider — separate from extraction because synthesis
@@ -8208,13 +8256,9 @@ async function main() {
 		};
 		setTimeout(() => {
 			try {
-				const result = structuralBackfill(
-					getDbAccessor(),
-					memoryCfg.pipelineV2,
-					backfillCtx,
-					repairLimiter,
-					{ batchSize: 50 },
-				);
+				const result = structuralBackfill(getDbAccessor(), memoryCfg.pipelineV2, backfillCtx, repairLimiter, {
+					batchSize: 50,
+				});
 				if (result.affected > 0) {
 					logger.info("pipeline", "Structural backfill completed", {
 						affected: result.affected,
@@ -8233,7 +8277,7 @@ async function main() {
 	if (memoryCfg.pipelineV2.predictor?.enabled) {
 		const predictorCfg = memoryCfg.pipelineV2.predictor;
 		try {
-			const client = createPredictorClient(predictorCfg);
+			const client = createPredictorClient(predictorCfg, "default", memoryCfg.embedding.dimensions);
 			await client.start();
 			predictorClientRef = client;
 			logger.info("predictor", "Predictor sidecar started");
@@ -8253,7 +8297,11 @@ async function main() {
 			embeddingConfig: memoryCfg.embedding,
 			fetchEmbedding,
 			getProvider: () => {
-				try { return getLlmProvider(); } catch { return null; }
+				try {
+					return getLlmProvider();
+				} catch {
+					return null;
+				}
 			},
 			agentsDir: AGENTS_DIR,
 		});
@@ -8287,7 +8335,9 @@ async function main() {
 		const daemonScript = process.argv[1] ?? "";
 		if (!daemonScript) {
 			logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");
-			setTimeout(() => { process.exit(0); }, 500);
+			setTimeout(() => {
+				process.exit(0);
+			}, 500);
 			return;
 		}
 
@@ -8309,7 +8359,9 @@ async function main() {
 		replacement.unref();
 
 		logger.info("daemon", "Replacement daemon spawned, exiting current process");
-		setTimeout(() => { process.exit(0); }, 500);
+		setTimeout(() => {
+			process.exit(0);
+		}, 500);
 	});
 	initFeatureFlags(AGENTS_DIR);
 	startUpdateTimer();
@@ -8349,7 +8401,10 @@ async function main() {
 						previousVersion,
 						currentVersion: CURRENT_VERSION,
 					});
-					logger.info("daemon", "What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)");
+					logger.info(
+						"daemon",
+						"What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)",
+					);
 				}
 			} catch {
 				// Best effort — DAEMON_DIR might not exist yet in edge cases

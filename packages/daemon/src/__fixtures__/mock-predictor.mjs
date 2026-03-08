@@ -9,19 +9,24 @@
  *   --slow=<ms>  Delay responses by N ms
  */
 
-import { createInterface } from "node:readline";
-
 const args = process.argv.slice(2);
 const hang = args.includes("--hang");
 const crash = args.includes("--crash");
 const slowArg = args.find((a) => a.startsWith("--slow="));
 const slowMs = slowArg ? parseInt(slowArg.split("=")[1], 10) : 0;
+const nativeDimIndex = args.indexOf("--native-dim");
+const nativeDim =
+	nativeDimIndex >= 0 && nativeDimIndex + 1 < args.length
+		? parseInt(args[nativeDimIndex + 1], 10)
+		: 768;
 
 let requestCount = 0;
 
-const rl = createInterface({ input: process.stdin });
+process.stdin.resume();
+process.stdin.setEncoding("utf8");
+let buffer = "";
 
-rl.on("line", (line) => {
+function handleLine(line) {
 	if (line.trim().length === 0) return;
 
 	let req;
@@ -53,6 +58,8 @@ rl.on("line", (line) => {
 					training_pairs: 0,
 					model_version: 1,
 					last_trained: null,
+					native_dimensions: Number.isFinite(nativeDim) ? nativeDim : 768,
+					feature_dimensions: 17,
 				};
 				break;
 
@@ -106,8 +113,19 @@ rl.on("line", (line) => {
 	} else {
 		respond();
 	}
+}
+
+process.stdin.on("data", (chunk) => {
+	buffer += chunk;
+	let newlineIndex = buffer.indexOf("\n");
+	while (newlineIndex !== -1) {
+		const line = buffer.slice(0, newlineIndex);
+		buffer = buffer.slice(newlineIndex + 1);
+		handleLine(line);
+		newlineIndex = buffer.indexOf("\n");
+	}
 });
 
-rl.on("close", () => {
+process.stdin.on("end", () => {
 	process.exit(0);
 });

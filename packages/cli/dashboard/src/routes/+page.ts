@@ -31,31 +31,10 @@ async function getAllMemories(): Promise<{
 	memories: Memory[];
 	stats: MemoryStats;
 }> {
-	const pageSize = 250;
-	const firstPage = await getMemories(pageSize, 0);
-	const total = firstPage.stats.total;
-
-	if (total <= firstPage.memories.length) {
-		return firstPage;
-	}
-
-	const memories = [...firstPage.memories];
-	let offset = firstPage.memories.length;
-
-	while (offset < total) {
-		const page = await getMemories(pageSize, offset);
-		if (page.memories.length === 0) {
-			break;
-		}
-
-		memories.push(...page.memories);
-		offset += page.memories.length;
-	}
-
-	return {
-		memories,
-		stats: firstPage.stats,
-	};
+	// Do not block initial dashboard render on a full-table memory scan.
+	// The memory tab can search against the daemon, and the home tab only
+	// needs a recent slice for summaries/insights.
+	return getMemories(250, 0);
 }
 
 export const load: PageLoad = async (): Promise<PageData> => {
