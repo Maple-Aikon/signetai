@@ -416,7 +416,10 @@ function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
 		e.preventDefault();
 		e.stopPropagation();
 		focusedSecretIndex = -1;
-		(e.target as HTMLElement).blur();
+		if (e.target instanceof HTMLElement) {
+			e.target.blur();
+		}
+		returnToSidebar();
 	}
 }
 

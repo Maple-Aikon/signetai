@@ -464,15 +464,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 			e.preventDefault();
 			if (cards.length === 0) return;
 
-			// If no card focused or on first card of row
-function handleGlobalKey(e: KeyboardEvent) {
-	// Only handle events when Marketplace (skills) tab is active
-	if (nav.activeTab !== "skills") return;
-
-	if (e.defaultPrevented) return;
-
-	const target = e.target as HTMLElement;
-
+			// If no card focused, navigate to previous section or sidebar
+			if (focusedCardIndex === -1) {
 				if (section === "skills") {
 					returnToSidebar();
 				} else if (section === "mcp") {
