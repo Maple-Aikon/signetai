@@ -61,6 +61,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump version
+        id: bump_version
         if: steps.changes.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -88,6 +89,7 @@ jobs:
 
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
           echo "BUMP_LEVEL=$BUMP" >> $GITHUB_ENV
+          echo "bump_level=$BUMP" >> $GITHUB_OUTPUT
           rm -f .bump-level
 
           PACKAGE_FILES=$(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
@@ -99,31 +101,6 @@ jobs:
           git commit -m "chore: release $NEW_VERSION"
           git tag "v$NEW_VERSION"
 
-      - name: Publish to npm
-        if: steps.changes.outputs.skip != 'true'
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
-          CURRENT=$(npm view signetai version 2>/dev/null || echo "0.0.0")
-          if [ "$CURRENT" = "$NEW_VERSION" ]; then
-            echo "signetai@$NEW_VERSION already published, skipping"
-          else
-            cd packages/signetai && npm publish --tag next --access public
-            cd ../adapters/openclaw && npm publish --tag next --access public || true
-          fi
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
-
-      - name: Promote to latest
-        if: steps.changes.outputs.skip != 'true' && env.BUMP_LEVEL != 'major'
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
-          npm dist-tag add signetai@${{ env.NEW_VERSION }} latest
-          npm dist-tag add @signetai/signet-memory-openclaw@${{ env.NEW_VERSION }} latest || true
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
-
       - name: Push version bump
         if: steps.changes.outputs.skip != 'true'
         run: |
@@ -134,12 +111,14 @@ jobs:
           git push origin HEAD:main
           git push origin "v$NEW_VERSION"
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (draft)
         id: create_release
         if: steps.changes.outputs.skip != 'true'
         run: |
           NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION" 2>/dev/null || echo "See CHANGELOG.md for details")
-          gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" --notes "$NOTES"
+          # Create as draft — predictor assets are uploaded by build-predictor
+          # before the publish job promotes this to non-draft and publishes npm.
+          gh release create "v$NEW_VERSION" --draft --title "v$NEW_VERSION" --notes "$NOTES"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -147,6 +126,7 @@ jobs:
     outputs:
       version: ${{ steps.create_release.outputs.version }}
       skip: ${{ steps.changes.outputs.skip }}
+      bump_level: ${{ steps.bump_version.outputs.bump_level }}
 
   build-predictor:
     needs: release
@@ -194,5 +174,58 @@ jobs:
           [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           BINARY="packages/predictor/target/${RELEASE_TARGET}/release/signet-predictor${EXT}"
           gh release upload "v${RELEASE_VERSION}" "${BINARY}#${RELEASE_ASSET}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: [release, build-predictor]
+    runs-on: ubuntu-latest
+    # Run even if some build-predictor matrix legs fail — partial binary
+    # coverage is better than blocking the entire release. Release job must
+    # have succeeded for there to be anything to publish.
+    if: always() && needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    permissions:
+      contents: write
+    env:
+      NEW_VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        run: bun run build
+
+      - name: Publish to npm
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
+          CURRENT=$(npm view signetai version 2>/dev/null || echo "0.0.0")
+          if [ "$CURRENT" = "$NEW_VERSION" ]; then
+            echo "signetai@$NEW_VERSION already published, skipping"
+          else
+            cd packages/signetai && npm publish --tag next --access public
+            cd ../adapters/openclaw && npm publish --tag next --access public || true
+          fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
+
+      - name: Promote to latest
+        if: needs.release.outputs.bump_level != 'major'
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
+          npm dist-tag add "signetai@${NEW_VERSION}" latest
+          npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" latest || true
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
+
+      - name: Publish release
+        run: gh release edit "v${NEW_VERSION}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

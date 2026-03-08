@@ -60,7 +60,11 @@ export function getTraversalStatus(): TraversalStatusSnapshot | null {
 	return lastTraversalStatus;
 }
 
-/** Reset the traversal table availability cache (call after migrations). */
+/**
+ * Reset cached traversal state after migrations.
+ * Also clears the last status snapshot so callers do not read stale telemetry
+ * after traversal tables are recreated or invalidated.
+ */
 export function invalidateTraversalCache(): void {
 	traversalTablesAvailableCache = null;
 	lastTraversalStatus = null;

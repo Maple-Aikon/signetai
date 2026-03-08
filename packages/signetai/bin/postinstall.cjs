@@ -77,7 +77,15 @@ async function downloadPredictor() {
 	if (!version) return;
 
 	const platform = process.platform;
-	const arch = process.arch === "arm64" ? "arm64" : "x64";
+	// Only attempt download for the four platform/arch tuples we actually publish.
+	// Anything outside this set would 404; fail open with a clear message instead.
+	const supportedTuples = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64"]);
+	const tuple = `${platform}:${process.arch}`;
+	if (!supportedTuples.has(tuple)) {
+		process.stdout.write(`  Downloading predictor sidecar... skipped (unsupported platform/arch: ${tuple})\n`);
+		return;
+	}
+	const arch = process.arch;
 	const ext = platform === "win32" ? ".exe" : "";
 	const assetName = `signet-predictor-${platform}-${arch}${ext}`;
 	const url = `https://github.com/Signet-AI/signetai/releases/download/v${version}/${assetName}`;
@@ -89,8 +97,8 @@ async function downloadPredictor() {
 		process.stdout.write(`  Downloading predictor sidecar...`);
 
 		function get(targetUrl, redirects) {
-			if (redirects > 5) { resolve(); return; }
-			https.get(targetUrl, (res) => {
+			if (redirects > 5) { process.stdout.write(` skipped (too many redirects)\n`); resolve(); return; }
+			const req = https.get(targetUrl, (res) => {
 				if (res.statusCode === 301 || res.statusCode === 302) {
 					res.resume();
 					const location = res.headers.location;
@@ -121,7 +129,11 @@ async function downloadPredictor() {
 					process.stdout.write(` skipped (write error)\n`);
 					resolve();
 				});
-			}).on("error", () => {
+			});
+			req.setTimeout(10_000, () => {
+				req.destroy(new Error("timeout"));
+			});
+			req.on("error", () => {
 				fs.unlink(dest, () => {});
 				process.stdout.write(` skipped (network unavailable)\n`);
 				resolve();

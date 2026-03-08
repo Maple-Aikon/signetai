@@ -9,6 +9,7 @@ dist/
 packages/cli/dashboard/build/
 packages/signetai/dist/
 packages/signetai/dashboard/
+packages/signetai/bin/signet-predictor-*
 *.tgz
 *.png
 !web/public/blog/*.png
