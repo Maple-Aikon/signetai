@@ -2,6 +2,7 @@
 import { Badge } from "$lib/components/ui/badge/index.js";
 import * as Switch from "$lib/components/ui/switch/index.js";
 import { fetchSessions, toggleSessionBypass, type SessionInfo } from "$lib/api";
+import { toast } from "$lib/stores/toast.svelte";
 
 let sessions: SessionInfo[] = $state([]);
 let loading = $state(true);
@@ -16,6 +17,8 @@ async function handleToggle(session: SessionInfo): Promise<void> {
 	const result = await toggleSessionBypass(session.key, !session.bypassed);
 	if (result) {
 		sessions = sessions.map((s) => (s.key === session.key ? { ...s, bypassed: result.bypassed } : s));
+	} else {
+		toast("Failed to toggle bypass", "error");
 	}
 }
 

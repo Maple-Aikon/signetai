@@ -4998,7 +4998,10 @@ app.post("/api/sessions/:key/bypass", async (c) => {
 	const enabled = (raw as Record<string, unknown>).enabled === true;
 
 	if (enabled) {
-		bypassSession(key);
+		const ok = bypassSession(key);
+		if (!ok) {
+			return c.json({ error: "Session not found or already released" }, 404);
+		}
 	} else {
 		unbypassSession(key);
 	}
