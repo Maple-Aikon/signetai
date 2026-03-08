@@ -2256,3 +2256,29 @@ export async function getConstellationOverlay(agentId = "default"): Promise<Cons
 		return null;
 	}
 }
+
+export interface ChangelogDoc {
+	html: string;
+	source: "github" | "local";
+	cachedAt: number;
+}
+
+export async function fetchChangelog(): Promise<ChangelogDoc | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/changelog`);
+		if (!res.ok) return null;
+		return (await res.json()) as ChangelogDoc;
+	} catch {
+		return null;
+	}
+}
+
+export async function fetchRoadmap(): Promise<ChangelogDoc | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/roadmap`);
+		if (!res.ok) return null;
+		return (await res.json()) as ChangelogDoc;
+	} catch {
+		return null;
+	}
+}

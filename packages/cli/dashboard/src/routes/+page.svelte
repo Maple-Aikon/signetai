@@ -793,7 +793,7 @@ function handlePageClick(e: MouseEvent) {
 					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "predictor"}
-				{#await import("$lib/components/tabs/PredictorTab.svelte")}
+				{#await import("$lib/components/predictor/PredictorTab.svelte")}
 					{@render skeletonCards()}
 				{:then module}
 					<module.default />
@@ -802,6 +802,14 @@ function handlePageClick(e: MouseEvent) {
 				{/await}
 			{:else if activeTab === "connectors"}
 				{#await import("$lib/components/tabs/ConnectorsTab.svelte")}
+					{@render skeletonList()}
+				{:then module}
+					<module.default />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
+			{:else if activeTab === "changelog"}
+				{#await import("$lib/components/tabs/ChangelogTab.svelte")}
 					{@render skeletonList()}
 				{:then module}
 					<module.default />
@@ -866,6 +874,9 @@ function handlePageClick(e: MouseEvent) {
 			{:else if activeTab === "connectors"}
 				<span>platform harnesses + data sources</span>
 				<span>connector health</span>
+			{:else if activeTab === "changelog"}
+				<span>roadmap + changelog</span>
+				<span>github.com/Signet-AI/signetai</span>
 			{/if}
 		</div>
 		{/if}

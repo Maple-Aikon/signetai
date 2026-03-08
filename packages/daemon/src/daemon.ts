@@ -4126,6 +4126,10 @@ mountMarketplaceRoutes(app);
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 mountMarketplaceReviewsRoutes(app);
 
+// Changelog + roadmap routes (proxies GitHub raw content with local fallback)
+import { mountChangelogRoutes } from "./routes/changelog.js";
+mountChangelogRoutes(app);
+
 // ============================================================================
 // Harnesses API
 // ============================================================================
@@ -6234,6 +6238,52 @@ app.get("/api/predictor/training", (c) => {
 	return c.json({
 		items: listTrainingRuns(getDbAccessor(), agentId, limit),
 	});
+});
+
+app.get("/api/predictor/training-pairs-count", (c) => {
+	const count = getDbAccessor().withReadDb((db) =>
+		(db.prepare("SELECT COUNT(*) as c FROM predictor_training_pairs").get() as { c: number }).c
+	);
+	return c.json({ count });
+});
+
+app.post("/api/predictor/train", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	if (!cfg.pipelineV2.predictor?.enabled) {
+		return c.json({ error: "Predictor is not enabled" }, 400);
+	}
+	const client = getPredictorClient();
+	if (!client || !client.isAlive()) {
+		return c.json({ error: "Predictor sidecar is not running" }, 503);
+	}
+
+	let body: Record<string, unknown> = {};
+	try { body = await c.req.json(); } catch { /* no body */ }
+	const limit = typeof body.limit === "number" ? body.limit : 5000;
+	const epochs = typeof body.epochs === "number" ? body.epochs : 3;
+
+	const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+	const result = await client.trainFromDb({ db_path: dbPath, limit, epochs });
+	if (!result) {
+		return c.json({ error: "Training did not return a result" }, 500);
+	}
+
+	// Record the run in the training log and update state
+	const agentId = "default";
+	const { recordTrainingRun } = await import("./predictor-comparisons");
+	const { updatePredictorState } = await import("./predictor-state");
+	recordTrainingRun(getDbAccessor(), {
+		agentId,
+		modelVersion: result.step,
+		loss: result.loss,
+		sampleCount: result.samples_used,
+		durationMs: result.duration_ms,
+		canaryScoreVariance: result.canary_score_variance,
+		canaryTopkChurn: result.canary_topk_stability,
+	});
+	updatePredictorState(agentId, { lastTrainingAt: new Date().toISOString() });
+
+	return c.json(result);
 });
 
 // ---------------------------------------------------------------------------

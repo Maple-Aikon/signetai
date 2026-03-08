@@ -19,7 +19,8 @@ export type TabId =
 	| "skills"
 	| "tasks"
 	| "connectors"
-	| "predictor";
+	| "predictor"
+	| "changelog";
 
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"settings",
@@ -34,6 +35,7 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"tasks",
 	"connectors",
 	"predictor",
+	"changelog",
 ]);
 
 // Alias map for path-style hashes (e.g. #memory/constellation -> embeddings)

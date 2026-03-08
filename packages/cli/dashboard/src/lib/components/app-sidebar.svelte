@@ -18,6 +18,7 @@ import {
 	setSidebarItem,
 	focusFirstPageElement,
 } from "$lib/stores/focus.svelte";
+import BookOpen from "@lucide/svelte/icons/book-open";
 import Brain from "@lucide/svelte/icons/brain";
 import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
@@ -64,6 +65,7 @@ const navItems: NavItem[] = [
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },
 	{ id: "tasks", label: "Tasks", icon: ListChecks },
+	{ id: "changelog", label: "Updates", icon: BookOpen },
 	{ id: "engine-group", label: "Engine", icon: Cog, group: "engine" },
 ];
 
