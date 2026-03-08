@@ -405,9 +405,12 @@ function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
 			focusedSecretIndex = index - 1;
 			focusSecretItem(focusedSecretIndex);
 		} else if (index === 0) {
-			// At first secret, return to page level
+			// At first secret — return to sidebar
 			focusedSecretIndex = -1;
-			(e.target as HTMLElement).blur();
+			if (e.target instanceof HTMLElement) {
+				e.target.blur();
+			}
+			returnToSidebar();
 		}
 	} else if (e.key === "ArrowLeft") {
 		e.preventDefault();

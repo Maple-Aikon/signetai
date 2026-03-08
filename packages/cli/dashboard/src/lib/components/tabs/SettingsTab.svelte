@@ -119,6 +119,7 @@
 	let currentSectionIndex = $derived(sections.findIndex((s) => s.id === activeSection) + 1);
 
 	function handleGlobalKey(e: KeyboardEvent) {
+		if (e.defaultPrevented) return;
 		const target = e.target as HTMLElement;
 		const isInputFocused = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
