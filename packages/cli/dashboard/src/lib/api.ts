@@ -147,6 +147,27 @@ export interface EmbeddingsResponse {
 }
 
 // ============================================================================
+// Session Types
+// ============================================================================
+
+export interface SessionInfo {
+	readonly key: string;
+	readonly runtimePath: string;
+	readonly claimedAt: string;
+	readonly bypassed: boolean;
+}
+
+export interface SessionListResponse {
+	readonly sessions: readonly SessionInfo[];
+	readonly count: number;
+}
+
+export interface SessionBypassResponse {
+	readonly key: string;
+	readonly bypassed: boolean;
+}
+
+// ============================================================================
 // API Functions
 // ============================================================================
 
@@ -166,6 +187,36 @@ export async function getHealth(): Promise<boolean> {
 		return response.ok;
 	} catch {
 		return false;
+	}
+}
+
+export async function fetchSessions(): Promise<SessionListResponse> {
+	try {
+		const response = await fetch(`${API_BASE}/api/sessions`);
+		if (!response.ok) return { sessions: [], count: 0 };
+		return await response.json();
+	} catch {
+		return { sessions: [], count: 0 };
+	}
+}
+
+export async function toggleSessionBypass(
+	key: string,
+	enabled: boolean,
+): Promise<SessionBypassResponse | null> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/sessions/${encodeURIComponent(key)}/bypass`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ enabled }),
+			},
+		);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
 	}
 }
 

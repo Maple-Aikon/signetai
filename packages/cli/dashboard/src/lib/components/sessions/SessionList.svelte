@@ -1,0 +1,87 @@
+<script lang="ts">
+import { Badge } from "$lib/components/ui/badge/index.js";
+import * as Switch from "$lib/components/ui/switch/index.js";
+import { fetchSessions, toggleSessionBypass, type SessionInfo } from "$lib/api";
+
+let sessions: SessionInfo[] = $state([]);
+let loading = $state(true);
+
+async function load(): Promise<void> {
+	const data = await fetchSessions();
+	sessions = [...data.sessions];
+	loading = false;
+}
+
+async function handleToggle(session: SessionInfo): Promise<void> {
+	const result = await toggleSessionBypass(session.key, !session.bypassed);
+	if (result) {
+		sessions = sessions.map((s) => (s.key === session.key ? { ...s, bypassed: result.bypassed } : s));
+	}
+}
+
+function formatRelativeTime(ts: string): string {
+	const deltaMs = Date.now() - new Date(ts).getTime();
+	if (!Number.isFinite(deltaMs) || deltaMs < 0) return "just now";
+	const sec = Math.floor(deltaMs / 1000);
+	if (sec < 60) return `${sec}s ago`;
+	const min = Math.floor(sec / 60);
+	if (min < 60) return `${min}m ago`;
+	const hr = Math.floor(min / 60);
+	if (hr < 24) return `${hr}h ago`;
+	return `${Math.floor(hr / 24)}d ago`;
+}
+
+$effect(() => {
+	load();
+	const interval = setInterval(load, 30_000);
+	return () => clearInterval(interval);
+});
+</script>
+
+{#if !loading && sessions.length > 0}
+	<div class="mb-4">
+		<div class="flex items-center gap-2 mb-2">
+			<span class="sig-heading">ACTIVE SESSIONS</span>
+			<Badge variant="outline" class="sig-badge px-1.5 py-0">
+				{sessions.length}
+			</Badge>
+		</div>
+		<div
+			class="rounded-md border border-[var(--sig-border)]"
+			style="background: var(--sig-surface)"
+		>
+			{#each sessions as session, i (session.key)}
+				{#if i > 0}
+					<div class="border-t border-[var(--sig-border)]"></div>
+				{/if}
+				<div class="flex items-center justify-between px-3 py-2 gap-3">
+					<div class="flex items-center gap-3 min-w-0">
+						<span
+							class="font-mono text-[var(--font-size-sm)] text-[var(--sig-text)] truncate"
+							title={session.key}
+						>
+							{session.key.slice(0, 12)}
+						</span>
+						<Badge variant="outline" class="sig-badge px-1.5 py-0 shrink-0">
+							{session.runtimePath}
+						</Badge>
+						<span class="sig-meta text-[var(--sig-text-muted)] shrink-0">
+							{formatRelativeTime(session.claimedAt)}
+						</span>
+					</div>
+					<div class="flex items-center gap-2 shrink-0">
+						<span class="sig-meta" class:text-[var(--sig-text-muted)]={!session.bypassed} class:text-[var(--sig-accent)]={session.bypassed}>
+							{session.bypassed ? "bypassed" : "active"}
+						</span>
+						<Switch.Root
+							checked={session.bypassed}
+							onCheckedChange={() => handleToggle(session)}
+						>
+							<Switch.Thumb />
+						</Switch.Root>
+					</div>
+				</div>
+			{/each}
+		</div>
+	</div>
+{/if}

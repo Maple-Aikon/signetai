@@ -6,6 +6,7 @@
 	import * as Popover from "$lib/components/ui/popover/index.js";
 	import PipelineGraph from "$lib/components/pipeline/PipelineGraph.svelte";
 	import PipelineDetailSheet from "$lib/components/pipeline/PipelineDetailSheet.svelte";
+	import SessionList from "$lib/components/sessions/SessionList.svelte";
 	import {
 		pipeline,
 		connectSSE,
@@ -370,6 +371,11 @@
 				</span>
 			{/if}
 		</div>
+	</div>
+
+	<!-- Active sessions bypass controls -->
+	<div class="px-4 pt-2">
+		<SessionList />
 	</div>
 
 	<!-- Main content: graph + feed -->

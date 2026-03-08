@@ -124,6 +124,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"mcp_server_scope_set",
 	"mcp_server_policy_get",
 	"mcp_server_policy_set",
+	"session_bypass",
 ]);
 
 const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
@@ -703,21 +704,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				"Scores from -1 (harmful) to 1 (directly helpful). 0 = unused.",
 			inputSchema: z.object({
 				session_key: z.string().describe("Current session key"),
-				ratings: z
-					.record(z.string(), z.number())
-					.describe("Map of memory ID to relevance score (-1 to 1)"),
+				ratings: z.record(z.string(), z.number()).describe("Map of memory ID to relevance score (-1 to 1)"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
 		async ({ session_key, ratings }) => {
-			const result = await daemonFetch<{ ok: boolean; recorded: number }>(
-				baseUrl,
-				"/api/memory/feedback",
-				{
-					method: "POST",
-					body: { sessionKey: session_key, feedback: ratings },
-				},
-			);
+			const result = await daemonFetch<{ ok: boolean; recorded: number }>(baseUrl, "/api/memory/feedback", {
+				method: "POST",
+				body: { sessionKey: session_key, feedback: ratings },
+			});
 			if (!result.ok) {
 				return errorResult(`Feedback failed: ${result.error}`);
 			}
@@ -1108,6 +1103,32 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 
 			return textResult(result.data.result ?? { success: true });
+		},
+	);
+
+	server.registerTool(
+		"session_bypass",
+		{
+			title: "Toggle Session Bypass",
+			description:
+				"Disable or re-enable Signet memory for the current session. " +
+				"When bypassed, all hooks return empty responses — no automatic " +
+				"memory injection, extraction, or recall. MCP tools like " +
+				"memory_search still work. Other sessions are unaffected.",
+			inputSchema: z.object({
+				session_key: z.string().describe("Session key to bypass"),
+				enabled: z.boolean().describe("true = bypass (disable hooks), false = re-enable"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ session_key, enabled }) => {
+			const result = await daemonFetch<{ key: string; bypassed: boolean }>(
+				baseUrl,
+				`/api/sessions/${encodeURIComponent(session_key)}/bypass`,
+				{ method: "POST", body: { enabled } },
+			);
+			if (!result.ok) return errorResult(`Bypass toggle failed: ${result.error}`);
+			return textResult(result.data);
 		},
 	);
 

@@ -4,11 +4,21 @@
  * Lightweight in-memory tracker that ensures exactly one runtime path
  * (plugin or legacy-hook) is active per session. Prevents duplicate
  * capture/recall when both paths are configured.
+ *
+ * Also tracks per-session bypass state — when bypassed, all hook
+ * endpoints return empty no-op responses while MCP tools still work.
  */
 
 import { logger } from "./logger";
 
 export type RuntimePath = "plugin" | "legacy";
+
+export interface SessionInfo {
+	readonly key: string;
+	readonly runtimePath: RuntimePath;
+	readonly claimedAt: string;
+	readonly bypassed: boolean;
+}
 
 interface SessionClaim {
 	readonly runtimePath: RuntimePath;
@@ -16,14 +26,13 @@ interface SessionClaim {
 	expiresAt: number;
 }
 
-type ClaimResult =
-	| { readonly ok: true }
-	| { readonly ok: false; readonly claimedBy: RuntimePath };
+type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly claimedBy: RuntimePath };
 
 const STALE_SESSION_MS = 4 * 60 * 60 * 1000; // 4 hours
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 
 const sessions = new Map<string, SessionClaim>();
+const bypassedSessions = new Set<string>();
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -31,10 +40,7 @@ let cleanupTimer: ReturnType<typeof setInterval> | null = null;
  * session is unclaimed or already claimed by the same path. Returns
  * ok:false with claimedBy if claimed by the other path.
  */
-export function claimSession(
-	sessionKey: string,
-	runtimePath: RuntimePath,
-): ClaimResult {
+export function claimSession(sessionKey: string, runtimePath: RuntimePath): ClaimResult {
 	const existing = sessions.get(sessionKey);
 
 	if (existing) {
@@ -74,9 +80,11 @@ export function claimSession(
 
 /**
  * Release a session claim. Called on session-end.
+ * Also cleans up bypass state for the session.
  */
 export function releaseSession(sessionKey: string): void {
 	const removed = sessions.delete(sessionKey);
+	bypassedSessions.delete(sessionKey);
 	if (removed) {
 		logger.info("session-tracker", "Session released", { sessionKey });
 	}
@@ -85,18 +93,70 @@ export function releaseSession(sessionKey: string): void {
 /**
  * Get the runtime path for a session, if claimed.
  */
-export function getSessionPath(
-	sessionKey: string,
-): RuntimePath | undefined {
+export function getSessionPath(sessionKey: string): RuntimePath | undefined {
 	const claim = sessions.get(sessionKey);
 	if (!claim) return undefined;
 
 	if (Date.now() > claim.expiresAt) {
 		sessions.delete(sessionKey);
+		bypassedSessions.delete(sessionKey);
 		return undefined;
 	}
 
 	return claim.runtimePath;
+}
+
+// ---------------------------------------------------------------------------
+// Bypass state
+// ---------------------------------------------------------------------------
+
+/** Enable bypass for a session — hooks return empty no-op responses. */
+export function bypassSession(sessionKey: string): boolean {
+	if (!sessions.has(sessionKey)) {
+		logger.warn("session-tracker", "Bypass requested for unknown session", { sessionKey });
+		return false;
+	}
+	bypassedSessions.add(sessionKey);
+	logger.info("session-tracker", "Session bypassed", { sessionKey });
+	return true;
+}
+
+/** Disable bypass for a session — hooks resume normal behavior. */
+export function unbypassSession(sessionKey: string): void {
+	bypassedSessions.delete(sessionKey);
+	logger.info("session-tracker", "Session bypass removed", { sessionKey });
+}
+
+/** Check whether a session is currently bypassed. */
+export function isSessionBypassed(sessionKey: string): boolean {
+	return bypassedSessions.has(sessionKey);
+}
+
+/** Get the set of all bypassed session keys. */
+export function getBypassedSessionKeys(): ReadonlySet<string> {
+	return bypassedSessions;
+}
+
+/** List all active sessions with full state. */
+export function getActiveSessions(): readonly SessionInfo[] {
+	const now = Date.now();
+	const result: SessionInfo[] = [];
+
+	for (const [key, claim] of sessions) {
+		if (now > claim.expiresAt) {
+			sessions.delete(key);
+			bypassedSessions.delete(key);
+			continue;
+		}
+		result.push({
+			key,
+			runtimePath: claim.runtimePath,
+			claimedAt: claim.claimedAt,
+			bypassed: bypassedSessions.has(key),
+		});
+	}
+
+	return result;
 }
 
 /**
@@ -109,6 +169,7 @@ function cleanupStaleSessions(): void {
 	for (const [key, claim] of sessions) {
 		if (now > claim.expiresAt) {
 			sessions.delete(key);
+			bypassedSessions.delete(key);
 			cleaned++;
 		}
 	}
@@ -143,4 +204,5 @@ export function activeSessionCount(): number {
 /** Reset all sessions (for testing). */
 export function resetSessions(): void {
 	sessions.clear();
+	bypassedSessions.clear();
 }
