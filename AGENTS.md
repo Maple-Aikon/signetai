@@ -147,6 +147,7 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 - Skills management
 - Git sync management
 - Hook lifecycle commands
+- Per-session bypass toggle (`signet bypass`)
 - Update checker
 
 **@signet/daemon** - Background service
@@ -399,6 +400,7 @@ bun run uninstall:service # Uninstall system service
 SIGNET_PATH    # Override ~/.agents/ data directory
 SIGNET_PORT    # Override daemon port (default: 3850)
 SIGNET_HOST    # Override daemon host (default: localhost)
+SIGNET_BYPASS  # Set to 1 to bypass all hooks (CLI exits immediately, daemon never contacted)
 OPENAI_API_KEY # Used when embedding provider is openai
 ```
 
@@ -415,7 +417,7 @@ bun src/cli.ts status    # Check status
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/api/status` | GET | Full daemon status |
+| `/api/status` | GET | Full daemon status (includes `bypassedSessions` count) |
 | `/api/features` | GET | Feature flags |
 | `/api/config` | GET/POST | Config files CRUD |
 | `/api/identity` | GET | Identity file read |
@@ -506,6 +508,9 @@ bun src/cli.ts status    # Check status
 | `/api/tasks/:id/run` | POST | Trigger immediate run |
 | `/api/tasks/:id/runs` | GET | Paginated run history |
 | `/api/tasks/:id/stream` | GET | SSE stream of task output |
+| `/api/sessions` | GET | List active sessions with bypass status |
+| `/api/sessions/:key` | GET | Get single session status |
+| `/api/sessions/:key/bypass` | POST | Toggle per-session bypass `{ enabled: boolean }` |
 | `/api/logs` | GET | Daemon log access |
 | `/api/logs/stream` | GET | SSE log streaming |
 | `/mcp` | ALL | MCP server (Streamable HTTP, memory + secret tools) |
@@ -592,6 +597,7 @@ packages/cli/dashboard/src/lib/
     memory/       # Memory feature components
     embeddings/   # Constellation / canvas views
     config/       # Config editor components (FormField, FormSection)
+    sessions/     # Session management and bypass toggle
     skills/       # Skills marketplace components
     tasks/        # Task scheduler components
     app-sidebar.svelte   # Main navigation sidebar
