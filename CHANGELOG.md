@@ -2,6 +2,25 @@
 
 All notable changes to Signet are documented here.
 
+## [0.46.0] - 2026-03-08
+
+### Features
+
+- add per-session bypass toggle for hook suppression
+
+### Bug Fixes
+
+- resolve merge conflict and address final review notes
+- error when --off used without session key
+- address reviewer feedback from CodeRabbit and Greptile
+- address PR feedback — TOCTOU guard and toast on toggle failure
+
+### Docs
+
+- add bypass toggle to API, CLI, hooks, MCP, and dashboard docs
+- add bypass toggle to API endpoints, env vars, and CLI docs
+
+
 ## [0.45.2] - 2026-03-08
 
 ### Features
