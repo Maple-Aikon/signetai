@@ -5186,6 +5186,7 @@ app.post("/api/cross-agent/messages", async (c) => {
 app.get("/api/cross-agent/stream", (c) => {
 	const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
 	const sessionKey = parseOptionalString(c.req.query("session_key"));
+	const project = parseOptionalString(c.req.query("project"));
 	const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
 	const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
 	const encoder = new TextEncoder();
@@ -5213,6 +5214,7 @@ app.get("/api/cross-agent/stream", (c) => {
 				type: "connected",
 				agentId,
 				sessionKey,
+				project,
 				timestamp: new Date().toISOString(),
 			});
 
@@ -5221,6 +5223,7 @@ app.get("/api/cross-agent/stream", (c) => {
 				presence: listAgentPresence({
 					agentId,
 					sessionKey,
+					project,
 					includeSelf,
 					limit: 50,
 				}),
@@ -5260,6 +5263,9 @@ app.get("/api/cross-agent/stream", (c) => {
 					if (!event.presence.sessionKey || event.presence.sessionKey === sessionKey) {
 						return;
 					}
+				}
+				if (event.type === "presence" && project && event.presence.project !== project) {
+					return;
 				}
 
 				writeEvent(event);
