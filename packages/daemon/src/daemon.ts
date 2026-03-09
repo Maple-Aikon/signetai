@@ -1124,6 +1124,12 @@ app.use("/memory/similar", async (c, next) => {
 app.use("/api/memory/timeline", async (c, next) => {
 	return requirePermission("recall", authConfig)(c, next);
 });
+app.use("/api/sessions/summaries", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+app.use("/api/knowledge/expand", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
 
 // Modify — with rate limiting
 app.use("/api/memory/modify", async (c, next) => {
@@ -5495,8 +5501,10 @@ app.get("/api/sessions/summaries", (c) => {
 	if (depthNum !== undefined && (Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0)) {
 		return c.json({ error: "depth must be a non-negative integer" }, 400);
 	}
-	const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
-	const offset = Number(c.req.query("offset") ?? "0");
+	const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
+	const offsetParsed = Number.parseInt(c.req.query("offset") ?? "0", 10);
+	const limit = Number.isFinite(limitParsed) ? Math.min(Math.max(limitParsed, 0), 200) : 50;
+	const offset = Number.isFinite(offsetParsed) ? Math.max(offsetParsed, 0) : 0;
 
 	// Check table exists
 	const tableExists = accessor.withReadDb((db) =>
@@ -6658,7 +6666,7 @@ app.get("/api/repair/cold-stats", (c) => {
 				COUNT(*) as total,
 				MIN(archived_at) as oldest,
 				MAX(archived_at) as newest,
-				SUM(LENGTH(content)) as total_bytes
+				SUM(LENGTH(CAST(content AS BLOB))) as total_bytes
 			FROM memories_cold
 		`).get() as { total: number; oldest: string | null; newest: string | null; total_bytes: number | null } | undefined;
 

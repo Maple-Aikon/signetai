@@ -145,11 +145,9 @@ export function applyLevel3Filter(
 	}
 
 	// Hash all fact content and check which already exist in the db
-	const hashToIndex = new Map<string, number>();
 	const hashes: string[] = [];
 	for (let i = 0; i < extraction.facts.length; i++) {
 		const normalized = normalizeAndHashContent(extraction.facts[i].content);
-		hashToIndex.set(normalized.contentHash, i);
 		hashes.push(normalized.contentHash);
 	}
 
@@ -175,16 +173,20 @@ export function applyLevel3Filter(
 		});
 	}
 
-	// Keep facts that are genuinely new OR are constraint-bearing
+	// Keep facts that are genuinely new OR are constraint-bearing.
+	// Also deduplicate within this pass so Level 2 duplicate emissions
+	// don't both survive when their hash is new to the DB.
 	const keptFacts: ExtractedFact[] = [];
 	const keptFactIndices = new Set<number>();
+	const seenHashes = new Set<string>();
 	for (let i = 0; i < extraction.facts.length; i++) {
 		const fact = extraction.facts[i];
 		const hash = hashes[i];
-		const isNew = !existingHashes.has(hash);
+		const isNew = !existingHashes.has(hash) && !seenHashes.has(hash);
 		if (isNew || isConstraintContent(fact)) {
 			keptFacts.push(fact);
 			keptFactIndices.add(i);
+			seenHashes.add(hash);
 		}
 	}
 

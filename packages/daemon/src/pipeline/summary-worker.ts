@@ -257,6 +257,13 @@ async function processJob(
 			.map((fact) => fact.content),
 	});
 
+	// Agent ID is hardcoded because summary_jobs and session_scores tables
+	// lack an agent_id column (pre-existing schema limitation). In a
+	// multi-agent deployment, all predictor comparisons route to the
+	// "default" bucket. Adding agent_id to these tables requires a schema
+	// migration and is tracked as future work.
+	const agentId = "default";
+
 	// Write to session_summaries DAG (depth 0 = session level)
 	try {
 		writeSummaryToDAG(accessor, job, result, agentId);
@@ -279,12 +286,6 @@ async function processJob(
 	// Runs after continuity scoring has written per-memory relevance scores
 	// and session_scores. Uses dynamic imports to avoid circular deps.
 	// memoryCfg already loaded at function entry (significance gate).
-	// Agent ID is hardcoded because summary_jobs and session_scores tables
-	// lack an agent_id column (pre-existing schema limitation). In a
-	// multi-agent deployment, all predictor comparisons route to the
-	// "default" bucket. Adding agent_id to these tables requires a schema
-	// migration and is tracked as future work.
-	const agentId = "default";
 	try {
 		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
 			const {
@@ -717,7 +718,7 @@ function writeSummaryToDAG(
 		const tokenCount = Math.ceil(result.summary.length / 4);
 
 		db.prepare(
-			`INSERT INTO session_summaries (
+			`INSERT OR REPLACE INTO session_summaries (
 				id, project, depth, kind, content, token_count,
 				earliest_at, latest_at, session_key, harness,
 				agent_id, created_at
