@@ -309,13 +309,11 @@ pub async fn quit_search_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Check for app updates. Returns the available version if an update
-/// exists, or None if already up to date.
-/// Currently stubbed — requires tauri-plugin-updater registration
-/// and a signing keypair (Phase 4).
+/// Check for app updates. Currently stubbed — requires
+/// tauri-plugin-updater and a signing keypair (Phase 4).
 #[tauri::command]
 pub async fn check_for_update(_app: AppHandle) -> Result<Option<String>, String> {
-    Err("Auto-update not yet configured. Install updates via npm.".to_string())
+    Ok(None) // No updater configured yet
 }
 
 #[tauri::command]

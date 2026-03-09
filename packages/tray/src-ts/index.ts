@@ -10,9 +10,9 @@ import {
 } from "./state";
 import { buildTrayUpdate, type TrayUpdate } from "./menu";
 
-// Respect SIGNET_PORT if set, otherwise default to 3850
-const DAEMON_PORT = 3850;
-const DAEMON_URL = `http://localhost:${DAEMON_PORT}`;
+// Port is hardcoded here because browser context can't read env vars.
+// The Rust side reads SIGNET_PORT for its own daemon probes.
+const DAEMON_URL = "http://localhost:3850";
 
 // Poll intervals (ms)
 const HEALTH_RUNNING_MS = 5_000;
@@ -52,7 +52,7 @@ async function pollHealth(): Promise<void> {
     fetchDiagnostics(DAEMON_URL);
     fetchEmbeddings(DAEMON_URL);
     // Auto-show the main window now that daemon is healthy
-    invoke("open_dashboard").catch(() => {});
+    invoke("open_dashboard").catch((e) => console.error("open_dashboard:", e));
   } else if (!alive && isRunning) {
     isRunning = false;
     resetState();

@@ -15,7 +15,7 @@ pub fn ensure_autostart() {
             "add", REG_KEY,
             "/v", VALUE_NAME,
             "/t", "REG_SZ",
-            "/d", &exe,
+            "/d", &format!("\"{}\"", exe),
             "/f",
         ])
         .output();
