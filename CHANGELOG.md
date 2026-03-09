@@ -2,6 +2,19 @@
 
 All notable changes to Signet are documented here.
 
+## [0.48.1] - 2026-03-09
+
+### Bug Fixes
+
+- **windows**: truncate embedding vectors before UMAP projection
+- **windows**: replace Bun.spawn with Node spawn for windowsHide support
+- **windows**: normalize path separators in memory file watcher
+
+### Docs
+
+- research docs, LCM patterns spec, ACP integration vision, README rewrite
+
+
 ## [0.48.0] - 2026-03-09
 
 ### Bug Fixes
