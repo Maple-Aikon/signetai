@@ -38,6 +38,11 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		model: "haiku",
 		timeout: 90000,
 		minConfidence: 0.7,
+		escalation: {
+			maxNewEntitiesPerChunk: 10,
+			maxNewAttributesPerEntity: 20,
+			level2MaxEntities: 5,
+		},
 	},
 	worker: {
 		pollMs: 2000,
@@ -147,6 +152,12 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		staleDays: 14,
 		decayIntervalSessions: 10,
 	},
+	significance: {
+		enabled: true,
+		minTurns: 5,
+		minEntityOverlap: 1,
+		noveltyThreshold: 0.15,
+	},
 	predictor: {
 		enabled: true,
 		trainIntervalSessions: 10,
@@ -202,6 +213,7 @@ export function loadPipelineConfig(
 
 	// Read nested sub-objects (may be undefined for old flat configs)
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
+	const escalationRaw = extractionRaw?.escalation as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
 	const graphRaw = raw.graph as Record<string, unknown> | undefined;
 	const traversalRaw = raw.traversal as Record<string, unknown> | undefined;
@@ -217,6 +229,7 @@ export function loadPipelineConfig(
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
+	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 
@@ -282,6 +295,26 @@ export function loadPipelineConfig(
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
 			),
+			escalation: {
+				maxNewEntitiesPerChunk: clampPositive(
+					escalationRaw?.maxNewEntitiesPerChunk,
+					1,
+					100,
+					d.extraction.escalation?.maxNewEntitiesPerChunk ?? 10,
+				),
+				maxNewAttributesPerEntity: clampPositive(
+					escalationRaw?.maxNewAttributesPerEntity,
+					1,
+					200,
+					d.extraction.escalation?.maxNewAttributesPerEntity ?? 20,
+				),
+				level2MaxEntities: clampPositive(
+					escalationRaw?.level2MaxEntities,
+					1,
+					50,
+					d.extraction.escalation?.level2MaxEntities ?? 5,
+				),
+			},
 		},
 
 		worker: {
@@ -705,6 +738,28 @@ export function loadPipelineConfig(
 				1,
 				1000,
 				d.feedback.decayIntervalSessions,
+			),
+		},
+
+		significance: {
+			enabled: resolveBool(
+				significanceRaw?.enabled, undefined, d.significance?.enabled ?? true,
+			),
+			minTurns: clampPositive(
+				significanceRaw?.minTurns,
+				1,
+				100,
+				d.significance?.minTurns ?? 5,
+			),
+			minEntityOverlap: clampPositive(
+				significanceRaw?.minEntityOverlap,
+				0,
+				100,
+				d.significance?.minEntityOverlap ?? 1,
+			),
+			noveltyThreshold: clampFraction(
+				significanceRaw?.noveltyThreshold,
+				d.significance?.noveltyThreshold ?? 0.15,
 			),
 		},
 

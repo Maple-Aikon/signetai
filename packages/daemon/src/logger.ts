@@ -44,6 +44,9 @@ export type LogCategory =
 	| "synthesis" // MEMORY.md synthesis worker
 	| "session-memories" // Session memory tracking
 	| "predictor" // Predictive memory scorer
+	| "maintenance" // Autonomous maintenance worker
+	| "retention" // Retention worker (decay + cold archival)
+	| "summary-condensation" // Session summary DAG condensation
 	| "system" // System events
 	| "update"; // Auto-update cycle
 

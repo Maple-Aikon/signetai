@@ -12,10 +12,12 @@ import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
+import { escalate } from "./extraction-escalation";
 import { detectSemanticContradiction } from "./contradiction";
 import { runShadowDecisions } from "./decision";
 import { logger } from "../logger";
 import { txIngestEnvelope, txModifyMemory, txForgetMemory } from "../transactions";
+import { archiveToCold } from "./retention-worker";
 import { normalizeAndHashContent } from "../content-normalization";
 import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
@@ -681,6 +683,9 @@ function applyPhaseCWrites(
 					continue;
 				}
 
+				// Archive the pre-update state to cold tier before modifying
+				archiveToCold(db, [targetId], "superseded");
+
 				const result = txModifyMemory(db, {
 					memoryId: targetId,
 					patch: {
@@ -734,6 +739,9 @@ function applyPhaseCWrites(
 					});
 					continue;
 				}
+
+				// Archive to cold tier before soft-deleting (lossless retention)
+				archiveToCold(db, [targetId], "pipeline_delete");
 
 				const now = new Date().toISOString();
 				const result = txForgetMemory(db, {
@@ -1018,8 +1026,26 @@ export function startWorker(
 
 		// Run extraction
 		const extractionStart = Date.now();
-		const extraction = await extractFactsAndEntities(row.content, instrumentedProvider);
+		const rawExtraction = await extractFactsAndEntities(row.content, instrumentedProvider);
 		const extractionMs = Date.now() - extractionStart;
+
+		// Escalation: check output volume and re-run or filter if noisy
+		const escalationThresholds = pipelineCfg.extraction.escalation ?? {
+			maxNewEntitiesPerChunk: 10,
+			maxNewAttributesPerEntity: 20,
+			level2MaxEntities: 5,
+		};
+
+		const escalated = await escalate(
+			row.content,
+			rawExtraction,
+			instrumentedProvider,
+			accessor,
+			"default",
+			escalationThresholds,
+		);
+
+		const extraction = escalated.result;
 
 		telemetry?.record("pipeline.extraction", {
 			factCount: extraction.facts.length,
@@ -1027,6 +1053,9 @@ export function startWorker(
 			warningCount: extraction.warnings.length,
 			durationMs: extractionMs,
 			model: pipelineCfg.extraction.model,
+			escalationLevel: escalated.level,
+			originalEntityCount: escalated.originalEntityCount,
+			originalFactCount: escalated.originalFactCount,
 		});
 
 		// Run shadow decisions on extracted facts

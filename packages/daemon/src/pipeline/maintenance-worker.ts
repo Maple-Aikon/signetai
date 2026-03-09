@@ -9,23 +9,25 @@
  */
 
 import type { DbAccessor } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { ProviderTracker, DiagnosticsReport } from "../diagnostics";
+import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
 import { propagateMemoryStatus } from "../knowledge-graph";
+import { getLlmProvider } from "../llm";
+import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
 import {
-	createRateLimiter,
-	requeueDeadJobs,
-	releaseStaleLeases,
-	checkFtsConsistency,
-	triggerRetentionSweep,
-	deduplicateMemories,
 	type RateLimiter,
 	type RepairContext,
 	type RepairResult,
+	checkFtsConsistency,
+	createRateLimiter,
+	deduplicateMemories,
+	releaseStaleLeases,
+	requeueDeadJobs,
+	triggerRetentionSweep,
 } from "../repair-actions";
-import { logger } from "../logger";
 import { decayAspectWeights, recordFeedbackTelemetry } from "./aspect-feedback";
+import { checkAndCondense } from "./summary-condensation";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,9 +58,7 @@ export interface RepairRecommendation {
 // Recommendation engine
 // ---------------------------------------------------------------------------
 
-function buildRecommendations(
-	report: DiagnosticsReport,
-): RepairRecommendation[] {
+function buildRecommendations(report: DiagnosticsReport): RepairRecommendation[] {
 	const recs: RepairRecommendation[] = [];
 
 	if (report.queue.deadRate > 0.01) {
@@ -84,9 +84,7 @@ function buildRecommendations(
 	}
 	if (report.storage.deletedTombstones > 0) {
 		const ratio =
-			report.storage.totalMemories > 0
-				? report.storage.deletedTombstones / report.storage.totalMemories
-				: 0;
+			report.storage.totalMemories > 0 ? report.storage.deletedTombstones / report.storage.totalMemories : 0;
 		if (ratio > 0.3) {
 			recs.push({
 				domain: "storage",
@@ -118,9 +116,7 @@ function getGraphAgentIds(accessor: DbAccessor): readonly string[] {
 			)
 			.all() as Array<Record<string, unknown>>;
 		const ids = rows.flatMap((row) =>
-			typeof row.agent_id === "string" && row.agent_id.length > 0
-				? [row.agent_id]
-				: [],
+			typeof row.agent_id === "string" && row.agent_id.length > 0 ? [row.agent_id] : [],
 		);
 		return ids.length > 0 ? ids : ["default"];
 	});
@@ -148,30 +144,14 @@ async function executeRecommendation(
 		case "releaseStaleLeases":
 			return releaseStaleLeases(deps.accessor, deps.cfg, ctx, deps.limiter);
 		case "checkFtsConsistency":
-			return checkFtsConsistency(
-				deps.accessor,
-				deps.cfg,
-				ctx,
-				deps.limiter,
-				true,
-			);
+			return checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true);
 		case "triggerRetentionSweep":
 			if (deps.retentionHandle) {
-				return triggerRetentionSweep(
-					deps.cfg,
-					ctx,
-					deps.limiter,
-					deps.retentionHandle,
-				);
+				return triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle);
 			}
 			return null;
 		case "deduplicateMemories":
-			return deduplicateMemories(
-				deps.accessor,
-				deps.cfg,
-				ctx,
-				deps.limiter,
-			);
+			return deduplicateMemories(deps.accessor, deps.cfg, ctx, deps.limiter);
 		default:
 			return null;
 	}
@@ -233,9 +213,7 @@ export function startMaintenanceWorker(
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
-		const report = accessor.withReadDb((db) =>
-			getDiagnostics(db, tracker),
-		);
+		const report = accessor.withReadDb((db) => getDiagnostics(db, tracker));
 
 		const recommendations = buildRecommendations(report);
 		const executed: RepairResult[] = [];
@@ -253,10 +231,7 @@ export function startMaintenanceWorker(
 							staleDays: cfg.feedback.staleDays,
 						});
 					}
-					feedbackPropagatedAttributes += propagateMemoryStatus(
-						accessor,
-						agentId,
-					);
+					feedbackPropagatedAttributes += propagateMemoryStatus(accessor, agentId);
 				}
 				recordFeedbackTelemetry({
 					feedbackDecayedAspects,
@@ -311,9 +286,7 @@ export function startMaintenanceWorker(
 
 		// Re-check health to evaluate improvement
 		if (executed.length > 0) {
-			const postReport = accessor.withReadDb((db) =>
-				getDiagnostics(db, tracker),
-			);
+			const postReport = accessor.withReadDb((db) => getDiagnostics(db, tracker));
 			const improved = postReport.composite.score > preScore;
 
 			for (const exec of executed) {
@@ -337,14 +310,41 @@ export function startMaintenanceWorker(
 						staleDays: cfg.feedback.staleDays,
 					});
 				}
-				feedbackPropagatedAttributes += propagateMemoryStatus(
-					accessor,
-					agentId,
-				);
+				feedbackPropagatedAttributes += propagateMemoryStatus(accessor, agentId);
 			}
 			recordFeedbackTelemetry({
 				feedbackDecayedAspects,
 				feedbackPropagatedAttributes,
+			});
+		}
+
+		// Check for summary condensation opportunities (session -> arc -> epoch)
+		try {
+			const tableRow = accessor.withReadDb((db) =>
+				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
+			);
+
+			if (tableRow) {
+				const projects = accessor.withReadDb(
+					(db) =>
+						db
+							.prepare(
+								`SELECT DISTINCT project FROM session_summaries
+							 WHERE kind = 'session' AND project IS NOT NULL`,
+							)
+							.all() as Array<{ project: string }>,
+				);
+
+				// Limit to 1 condensation per maintenance tick to avoid
+				// blocking the maintenance loop with O(n) LLM calls.
+				const provider = getLlmProvider();
+				for (const { project } of projects.slice(0, 1)) {
+					await checkAndCondense(accessor, provider, project, "default");
+				}
+			}
+		} catch (e) {
+			logger.warn("maintenance", "Summary condensation check failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 

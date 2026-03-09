@@ -40,6 +40,7 @@ export type {
 	DecisionAction,
 	PipelineFlag,
 	PipelineV2Config,
+	PipelineEscalationConfig,
 	PipelineExtractionConfig,
 	PipelineWorkerConfig,
 	PipelineGraphConfig,
@@ -70,6 +71,7 @@ export type {
 	EntityDependency,
 	TaskMeta,
 	PipelineStructuralConfig,
+	PipelineSignificanceConfig,
 } from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";

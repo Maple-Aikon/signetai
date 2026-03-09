@@ -33,6 +33,8 @@ import { up as predictorComparisonColumns } from "./024-predictor-comparison-col
 import { up as agentFeedback } from "./025-agent-feedback";
 import { up as predictorTrainingPairs } from "./026-predictor-training-pairs";
 import { up as backfillCanonicalNames } from "./027-backfill-canonical-names";
+import { up as losslessRetention } from "./028-lossless-retention";
+import { up as sessionSummaryDag } from "./029-session-summary-dag";
 
 // -- Public interface consumed by Database.init() --
 
@@ -167,6 +169,16 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 27,
 		name: "backfill-canonical-names",
 		up: backfillCanonicalNames,
+	},
+	{
+		version: 28,
+		name: "lossless-retention",
+		up: losslessRetention,
+	},
+	{
+		version: 29,
+		name: "session-summary-dag",
+		up: sessionSummaryDag,
 	},
 ];
 

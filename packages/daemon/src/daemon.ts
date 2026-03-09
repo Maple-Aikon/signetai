@@ -131,7 +131,12 @@ import {
 	stopPipeline,
 } from "./pipeline";
 import { getGraphBoostIds } from "./pipeline/graph-search";
-import { getTraversalStatus, invalidateTraversalCache } from "./pipeline/graph-traversal";
+import {
+	getTraversalStatus,
+	invalidateTraversalCache,
+	resolveFocalEntities,
+	traverseKnowledgeGraph,
+} from "./pipeline/graph-traversal";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
 import {
@@ -1117,6 +1122,12 @@ app.use("/memory/similar", async (c, next) => {
 	return requirePermission("recall", authConfig)(c, next);
 });
 app.use("/api/memory/timeline", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+app.use("/api/sessions/summaries", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+app.use("/api/knowledge/expand", async (c, next) => {
 	return requirePermission("recall", authConfig)(c, next);
 });
 
@@ -5481,6 +5492,80 @@ app.post("/api/sessions/:key/bypass", async (c) => {
 	return c.json({ key, bypassed: enabled });
 });
 
+// Session summaries DAG
+app.get("/api/sessions/summaries", (c) => {
+	const accessor = getDbAccessor();
+	const project = c.req.query("project");
+	const depthRaw = c.req.query("depth");
+	const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
+	if (depthNum !== undefined && (Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")) {
+		return c.json({ error: "depth must be a non-negative integer" }, 400);
+	}
+	const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
+	const offsetParsed = Number.parseInt(c.req.query("offset") ?? "0", 10);
+	const limit = Number.isFinite(limitParsed) ? Math.min(Math.max(limitParsed, 0), 200) : 50;
+	const offset = Number.isFinite(offsetParsed) ? Math.max(offsetParsed, 0) : 0;
+
+	// Check table exists
+	const tableExists = accessor.withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`,
+			)
+			.get(),
+	);
+	if (!tableExists) {
+		return c.json({ summaries: [], total: 0 });
+	}
+
+	return accessor.withReadDb((db) => {
+		let where = "WHERE 1=1";
+		const params: unknown[] = [];
+
+		if (project) {
+			where += " AND project = ?";
+			params.push(project);
+		}
+		if (depthNum !== undefined) {
+			where += " AND depth = ?";
+			params.push(depthNum);
+		}
+
+		const countRow = db
+			.prepare(
+				`SELECT COUNT(*) as cnt FROM session_summaries ${where}`,
+			)
+			.get(...params) as { cnt: number } | undefined;
+
+		const summaries = db
+			.prepare(
+				`SELECT id, project, depth, kind, content, token_count,
+				        earliest_at, latest_at, session_key, harness, agent_id, created_at
+				 FROM session_summaries
+				 ${where}
+				 ORDER BY latest_at DESC
+				 LIMIT ? OFFSET ?`,
+			)
+			.all(...params, limit, offset) as Array<Record<string, unknown>>;
+
+		const childCountStmt = db.prepare(
+			`SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?`,
+		);
+
+		const enriched = summaries.map((s) => {
+			const childRow = childCountStmt.get(s.id) as
+				| { cnt: number }
+				| undefined;
+			return { ...s, childCount: childRow?.cnt ?? 0 };
+		});
+
+		return c.json({
+			summaries: enriched,
+			total: countRow?.cnt ?? 0,
+		});
+	});
+});
+
 // ============================================================================
 // Git Sync API
 // ============================================================================
@@ -6466,6 +6551,17 @@ app.post("/api/repair/deduplicate", async (c) => {
 	return c.json(result, repairHttpStatus(result));
 });
 
+app.post("/api/repair/backfill-skipped", (c) => {
+	return c.json(
+		{
+			error: "not_implemented",
+			message:
+				"Backfill-skipped re-enqueue logic is pending. This endpoint is reserved for future implementation.",
+		},
+		501,
+	);
+});
+
 app.post("/api/repair/reclassify-entities", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
@@ -6549,6 +6645,47 @@ app.post("/api/repair/structural-backfill", async (c) => {
 		dryRun,
 	});
 	return c.json(result, repairHttpStatus(result));
+});
+
+app.get("/api/repair/cold-stats", (c) => {
+	const accessor = getDbAccessor();
+	return c.json(accessor.withReadDb((db) => {
+		// Check if table exists
+		const tableExists = db
+			.prepare(
+				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`,
+			)
+			.get();
+
+		if (!tableExists) {
+			return { count: 0, message: "Cold tier not yet initialized (migration pending)" };
+		}
+
+		const stats = db.prepare(`
+			SELECT
+				COUNT(*) as total,
+				MIN(archived_at) as oldest,
+				MAX(archived_at) as newest,
+				SUM(LENGTH(CAST(content AS BLOB)) + LENGTH(CAST(COALESCE(original_row_json, '') AS BLOB))) as total_bytes
+			FROM memories_cold
+		`).get() as { total: number; oldest: string | null; newest: string | null; total_bytes: number | null } | undefined;
+
+		const byReason = db.prepare(`
+			SELECT archived_reason, COUNT(*) as count
+			FROM memories_cold
+			GROUP BY archived_reason
+		`).all() as Array<{ archived_reason: string | null; count: number }>;
+
+		return {
+			count: stats?.total ?? 0,
+			oldest: stats?.oldest ?? null,
+			newest: stats?.newest ?? null,
+			totalBytes: stats?.total_bytes ?? 0,
+			byReason: Object.fromEntries(
+				byReason.map((r) => [r.archived_reason ?? "unknown", r.count]),
+			),
+		};
+	}));
 });
 
 // ============================================================================
@@ -6715,6 +6852,179 @@ app.get("/api/knowledge/traversal/status", (c) => {
 app.get("/api/knowledge/constellation", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
 	return c.json(getKnowledgeGraphForConstellation(getDbAccessor(), agentId));
+});
+
+app.post("/api/knowledge/expand", async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	const entityName = typeof body.entity === "string" ? body.entity.trim() : "";
+	const aspectFilter = typeof body.aspect === "string" ? body.aspect.trim() : undefined;
+	const maxTokens = typeof body.maxTokens === "number" ? Math.min(body.maxTokens, 10000) : 2000;
+
+	if (!entityName) {
+		return c.json({ error: "entity name is required" }, 400);
+	}
+
+	const agentId = "default";
+
+	const focal = getDbAccessor().withReadDb((db) =>
+		resolveFocalEntities(db, agentId, {
+			queryTokens: entityName.split(/\s+/),
+		}),
+	);
+
+	if (focal.entityIds.length === 0) {
+		return c.json(
+			{
+				error: `Entity "${entityName}" not found`,
+				entity: null,
+				constraints: [],
+				aspects: [],
+				dependencies: [],
+				memoryCount: 0,
+				memories: [],
+			},
+			404,
+		);
+	}
+
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const traversalCfg = cfg.pipelineV2.traversal ?? {
+		maxAspectsPerEntity: 10,
+		maxAttributesPerAspect: 20,
+		maxDependencyHops: 30,
+		minDependencyStrength: 0.3,
+		timeoutMs: 500,
+	};
+
+	const primaryEntityId = focal.entityIds[0];
+
+	return getDbAccessor().withReadDb((db) => {
+		const traversal = traverseKnowledgeGraph(focal.entityIds, db, agentId, {
+			maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+			maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+			maxDependencyHops: traversalCfg.maxDependencyHops,
+			minDependencyStrength: traversalCfg.minDependencyStrength,
+			timeoutMs: traversalCfg.timeoutMs,
+			aspectFilter: aspectFilter || undefined,
+		});
+
+		// Hydrate entity details
+		const entityRow = db
+			.prepare(
+				`SELECT id, name, entity_type, description
+				 FROM entities WHERE id = ?`,
+			)
+			.get(primaryEntityId) as
+			| {
+					id: string;
+					name: string;
+					entity_type: string;
+					description: string | null;
+			  }
+			| undefined;
+
+		// Get aspects with their attributes
+		const aspectFilterClause = aspectFilter ? "AND ea.canonical_name LIKE ?" : "";
+		const aspectArgs = aspectFilter
+			? [primaryEntityId, agentId, `%${aspectFilter}%`, traversalCfg.maxAspectsPerEntity]
+			: [primaryEntityId, agentId, traversalCfg.maxAspectsPerEntity];
+
+		const aspects = db
+			.prepare(
+				`SELECT ea.id, ea.canonical_name, ea.weight
+				 FROM entity_aspects ea
+				 WHERE ea.entity_id = ? AND ea.agent_id = ?
+				 ${aspectFilterClause}
+				 ORDER BY ea.weight DESC
+				 LIMIT ?`,
+			)
+			.all(...aspectArgs) as Array<{
+			id: string;
+			canonical_name: string;
+			weight: number;
+		}>;
+
+		const aspectsWithAttributes = aspects.map((aspect) => {
+			const attrs = db
+				.prepare(
+					`SELECT content, kind, importance, confidence
+					 FROM entity_attributes
+					 WHERE aspect_id = ? AND agent_id = ?
+					   AND status = 'active'
+					 ORDER BY importance DESC
+					 LIMIT ?`,
+				)
+				.all(aspect.id, agentId, traversalCfg.maxAttributesPerAspect) as Array<{
+				content: string;
+				kind: string;
+				importance: number;
+				confidence: number;
+			}>;
+			return {
+				name: aspect.canonical_name,
+				weight: aspect.weight,
+				attributes: attrs,
+			};
+		});
+
+		// Get dependencies
+		const deps = db
+			.prepare(
+				`SELECT e.name as target, ed.dependency_type as type,
+				        ed.strength
+				 FROM entity_dependencies ed
+				 JOIN entities e ON e.id = ed.target_entity_id
+				 WHERE ed.source_entity_id = ?
+				   AND ed.agent_id = ?
+				   AND ed.strength >= ?
+				 ORDER BY ed.strength DESC
+				 LIMIT ?`,
+			)
+			.all(primaryEntityId, agentId, traversalCfg.minDependencyStrength, traversalCfg.maxDependencyHops) as Array<{
+			target: string;
+			type: string;
+			strength: number;
+		}>;
+
+		// Hydrate memory content up to token budget
+		let tokenBudget = maxTokens;
+		const hydratedMemories: Array<{
+			id: string;
+			content: string;
+		}> = [];
+		for (const memId of traversal.memoryIds) {
+			if (tokenBudget <= 0) break;
+			const mem = db
+				.prepare(
+					`SELECT id, content FROM memories
+					 WHERE id = ? AND is_deleted = 0`,
+				)
+				.get(memId) as { id: string; content: string } | undefined;
+			if (mem) {
+				const approxTokens = Math.ceil(mem.content.length / 4);
+				if (approxTokens <= tokenBudget) {
+					hydratedMemories.push(mem);
+					tokenBudget -= approxTokens;
+				}
+			}
+		}
+
+		return c.json({
+			entity: entityRow
+				? {
+						id: entityRow.id,
+						name: entityRow.name,
+						type: entityRow.entity_type,
+						description: entityRow.description,
+					}
+				: null,
+			constraints: traversal.constraints,
+			aspects: aspectsWithAttributes,
+			dependencies: deps,
+			memoryCount: traversal.memoryIds.size,
+			memories: hydratedMemories,
+		});
+	});
 });
 
 // ============================================================================

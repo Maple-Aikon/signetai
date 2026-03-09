@@ -6,14 +6,14 @@
  */
 
 import {
-	MEMORY_TYPES,
-	type ExtractionResult,
-	type ExtractedFact,
 	type ExtractedEntity,
+	type ExtractedFact,
+	type ExtractionResult,
+	MEMORY_TYPES,
 	type MemoryType,
 } from "@signet/core";
-import type { LlmProvider } from "./provider";
 import { logger } from "../logger";
+import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -212,9 +212,7 @@ function validateFact(raw: unknown, warnings: string[]): ExtractedFact | null {
 	}
 
 	const typeStr = typeof obj.type === "string" ? obj.type : "fact";
-	const type: MemoryType = VALID_TYPES.has(typeStr)
-		? (typeStr as MemoryType)
-		: "fact";
+	const type: MemoryType = VALID_TYPES.has(typeStr) ? (typeStr as MemoryType) : "fact";
 	if (!VALID_TYPES.has(typeStr)) {
 		warnings.push(`Invalid type "${typeStr}", defaulting to "fact"`);
 	}
@@ -229,10 +227,7 @@ function validateFact(raw: unknown, warnings: string[]): ExtractedFact | null {
 	};
 }
 
-function validateEntity(
-	raw: unknown,
-	warnings: string[],
-): ExtractedEntity | null {
+function validateEntity(raw: unknown, warnings: string[]): ExtractedEntity | null {
 	if (typeof raw !== "object" || raw === null) {
 		warnings.push("Entity is not an object");
 		return null;
@@ -241,8 +236,7 @@ function validateEntity(
 	const obj = raw as Record<string, unknown>;
 
 	const source = typeof obj.source === "string" ? obj.source.trim() : "";
-	const relationship =
-		typeof obj.relationship === "string" ? obj.relationship.trim() : "";
+	const relationship = typeof obj.relationship === "string" ? obj.relationship.trim() : "";
 	const target = typeof obj.target === "string" ? obj.target.trim() : "";
 
 	if (!source || !target) {
@@ -271,15 +265,60 @@ function validateEntity(
 }
 
 // ---------------------------------------------------------------------------
+// Shared output parser — used by extractFactsAndEntities and escalation
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse raw LLM output into a validated ExtractionResult.
+ * Re-uses the same JSON recovery and validation logic as the main
+ * extraction path so Level 2 escalation produces identical structure.
+ */
+export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
+	const warnings: string[] = [];
+
+	const parsed = parseExtractionOutput(rawOutput);
+	if (parsed === null) {
+		const jsonStr = stripFences(rawOutput);
+		logger.warn("pipeline", "Failed to parse extraction JSON", {
+			preview: jsonStr.slice(0, 200),
+		});
+		return { facts: [], entities: [], warnings: ["Failed to parse LLM output as JSON"] };
+	}
+
+	if (typeof parsed !== "object" || parsed === null) {
+		return { facts: [], entities: [], warnings: ["LLM output is not an object"] };
+	}
+
+	const obj = parsed as Record<string, unknown>;
+
+	const rawFacts = Array.isArray(obj.facts) ? obj.facts : [];
+	const facts: ExtractedFact[] = [];
+	for (const raw of rawFacts.slice(0, MAX_FACTS)) {
+		const fact = validateFact(raw, warnings);
+		if (fact) facts.push(fact);
+	}
+	if (rawFacts.length > MAX_FACTS) {
+		warnings.push(`Truncated facts from ${rawFacts.length} to ${MAX_FACTS}`);
+	}
+
+	const rawEntities = Array.isArray(obj.entities) ? obj.entities : [];
+	const entities: ExtractedEntity[] = [];
+	for (const raw of rawEntities.slice(0, MAX_ENTITIES)) {
+		const entity = validateEntity(raw, warnings);
+		if (entity) entities.push(entity);
+	}
+	if (rawEntities.length > MAX_ENTITIES) {
+		warnings.push(`Truncated entities from ${rawEntities.length} to ${MAX_ENTITIES}`);
+	}
+
+	return { facts, entities, warnings };
+}
+
+// ---------------------------------------------------------------------------
 // Main extraction function
 // ---------------------------------------------------------------------------
 
-export async function extractFactsAndEntities(
-	input: string,
-	provider: LlmProvider,
-): Promise<ExtractionResult> {
-	const warnings: string[] = [];
-
+export async function extractFactsAndEntities(input: string, provider: LlmProvider): Promise<ExtractionResult> {
 	const trimmed = input.trim().replace(/\s+/g, " ");
 	if (trimmed.length < 20) {
 		return {
@@ -289,10 +328,7 @@ export async function extractFactsAndEntities(
 		};
 	}
 
-	const truncated =
-		trimmed.length > MAX_INPUT_CHARS
-			? `${trimmed.slice(0, MAX_INPUT_CHARS)}\n[truncated]`
-			: trimmed;
+	const truncated = trimmed.length > MAX_INPUT_CHARS ? `${trimmed.slice(0, MAX_INPUT_CHARS)}\n[truncated]` : trimmed;
 
 	const prompt = buildExtractionPrompt(truncated);
 
@@ -305,58 +341,13 @@ export async function extractFactsAndEntities(
 		throw new Error(`LLM extraction failed: ${msg}`);
 	}
 
-	const parsed = parseExtractionOutput(rawOutput);
-	if (parsed === null) {
-		const jsonStr = stripFences(rawOutput);
-		logger.warn("pipeline", "Failed to parse extraction JSON", {
-			preview: jsonStr.slice(0, 200),
-		});
-		return {
-			facts: [],
-			entities: [],
-			warnings: ["Failed to parse LLM output as JSON"],
-		};
-	}
-
-	if (typeof parsed !== "object" || parsed === null) {
-		return {
-			facts: [],
-			entities: [],
-			warnings: ["LLM output is not an object"],
-		};
-	}
-
-	const obj = parsed as Record<string, unknown>;
-
-	// Validate facts
-	const rawFacts = Array.isArray(obj.facts) ? obj.facts : [];
-	const facts: ExtractedFact[] = [];
-	for (const raw of rawFacts.slice(0, MAX_FACTS)) {
-		const fact = validateFact(raw, warnings);
-		if (fact) facts.push(fact);
-	}
-	if (rawFacts.length > MAX_FACTS) {
-		warnings.push(`Truncated facts from ${rawFacts.length} to ${MAX_FACTS}`);
-	}
-
-	// Validate entities
-	const rawEntities = Array.isArray(obj.entities) ? obj.entities : [];
-	const entities: ExtractedEntity[] = [];
-	for (const raw of rawEntities.slice(0, MAX_ENTITIES)) {
-		const entity = validateEntity(raw, warnings);
-		if (entity) entities.push(entity);
-	}
-	if (rawEntities.length > MAX_ENTITIES) {
-		warnings.push(
-			`Truncated entities from ${rawEntities.length} to ${MAX_ENTITIES}`,
-		);
-	}
+	const result = parseRawExtractionOutput(rawOutput);
 
 	logger.debug("pipeline", "Extraction complete", {
-		factCount: facts.length,
-		entityCount: entities.length,
-		warningCount: warnings.length,
+		factCount: result.facts.length,
+		entityCount: result.entities.length,
+		warningCount: result.warnings.length,
 	});
 
-	return { facts, entities, warnings };
+	return result;
 }

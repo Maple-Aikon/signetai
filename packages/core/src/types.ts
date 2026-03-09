@@ -142,11 +142,18 @@ export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
 
 // -- Pipeline v2 sub-config interfaces --
 
+export interface PipelineEscalationConfig {
+	readonly maxNewEntitiesPerChunk: number;
+	readonly maxNewAttributesPerEntity: number;
+	readonly level2MaxEntities: number;
+}
+
 export interface PipelineExtractionConfig {
 	readonly provider: "ollama" | "claude-code" | "opencode" | "codex";
 	readonly model: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
+	readonly escalation?: PipelineEscalationConfig;
 }
 
 export interface PipelineWorkerConfig {
@@ -253,6 +260,7 @@ export interface PipelineV2Config {
 	readonly procedural: PipelineProceduralConfig;
 	readonly structural: PipelineStructuralConfig;
 	readonly feedback: PipelineFeedbackConfig;
+	readonly significance?: PipelineSignificanceConfig;
 	readonly predictor?: PredictorConfig;
 	readonly predictorPipeline: PipelinePredictorConfig;
 }
@@ -318,6 +326,13 @@ export interface PipelineFeedbackConfig {
 	readonly decayRate: number;
 	readonly staleDays: number;
 	readonly decayIntervalSessions: number;
+}
+
+export interface PipelineSignificanceConfig {
+	readonly enabled: boolean;
+	readonly minTurns: number;
+	readonly minEntityOverlap: number;
+	readonly noveltyThreshold: number;
 }
 
 // -- Status/union constants --

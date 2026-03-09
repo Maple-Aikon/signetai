@@ -113,6 +113,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_modify",
 	"memory_forget",
 	"memory_feedback",
+	"knowledge_expand",
 	"agent_peers",
 	"agent_message_send",
 	"agent_message_inbox",
@@ -1278,6 +1279,43 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				{ method: "POST", body: { enabled } },
 			);
 			if (!result.ok) return errorResult(`Bypass toggle failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	// ------------------------------------------------------------------
+	// knowledge_expand — drill deeper into a knowledge graph entity
+	// ------------------------------------------------------------------
+	server.registerTool(
+		"knowledge_expand",
+		{
+			title: "Expand Entity",
+			description:
+				"Drill deeper into any entity in the knowledge graph. " +
+				"Returns structured context: constraints, aspects, " +
+				"attributes, dependencies, and related memories for " +
+				"the named entity.",
+			inputSchema: z.object({
+				entity_name: z.string().describe("Entity name to expand (e.g., 'signetai', 'predictive_scorer')"),
+				aspect_filter: z.string().optional().describe("Filter to a specific aspect by name substring"),
+				question: z.string().optional().describe("What you want to know about this entity (for context)"),
+				max_tokens: z.number().optional().describe("Response budget in tokens (default 2000)"),
+			}),
+		},
+		async ({ entity_name, aspect_filter, question, max_tokens }) => {
+			const result = await daemonFetch<unknown>(baseUrl, "/api/knowledge/expand", {
+				method: "POST",
+				body: {
+					entity: entity_name,
+					aspect: aspect_filter,
+					question,
+					maxTokens: max_tokens ?? 2000,
+				},
+			});
+
+			if (!result.ok) {
+				return errorResult(`Expand failed: ${result.error}`);
+			}
 			return textResult(result.data);
 		},
 	);

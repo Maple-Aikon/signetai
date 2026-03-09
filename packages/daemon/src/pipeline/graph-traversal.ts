@@ -28,6 +28,8 @@ export interface TraversalConfig {
 	readonly minDependencyStrength: number;
 	/** Timeout in ms (default 500) */
 	readonly timeoutMs: number;
+	/** Filter aspects by canonical_name substring (on-demand expansion) */
+	readonly aspectFilter?: string;
 }
 
 export interface FocalEntityResult {
@@ -71,7 +73,10 @@ export function invalidateTraversalCache(): void {
 }
 
 function normalizeToken(value: string): string {
-	return value.toLowerCase().replace(/[^a-z0-9_-]/g, "").trim();
+	return value
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]/g, "")
+		.trim();
 }
 
 function sanitizeEntityIds(ids: ReadonlyArray<string>): string[] {
@@ -150,11 +155,7 @@ function hasTraversalTables(db: ReadDb): boolean {
 	return available;
 }
 
-function resolveByProject(
-	db: ReadDb,
-	agentId: string,
-	projectPath: string,
-): string[] {
+function resolveByProject(db: ReadDb, agentId: string, projectPath: string): string[] {
 	const tokens = extractProjectTokens(projectPath);
 	if (tokens.length === 0) return [];
 
@@ -178,11 +179,7 @@ function resolveByProject(
 	return sanitizeEntityIds(rows.map((row) => row.id));
 }
 
-function resolveByQueryTokens(
-	db: ReadDb,
-	agentId: string,
-	queryTokens: ReadonlyArray<string>,
-): string[] {
+function resolveByQueryTokens(db: ReadDb, agentId: string, queryTokens: ReadonlyArray<string>): string[] {
 	const tokens = sanitizeQueryTokens(queryTokens);
 	if (tokens.length === 0) return [];
 
@@ -227,9 +224,7 @@ export function resolveFocalEntities(
 
 		const pinnedEntityIds = getPinnedEntityIds(db, agentId);
 		let resolvedEntityIds: string[] = [];
-		let source: FocalEntityResult["source"] = signals.project
-			? "project"
-			: "query";
+		let source: FocalEntityResult["source"] = signals.project ? "project" : "query";
 
 		if (signals.checkpointEntityIds && signals.checkpointEntityIds.length > 0) {
 			resolvedEntityIds = sanitizeEntityIds(signals.checkpointEntityIds);
@@ -242,11 +237,7 @@ export function resolveFocalEntities(
 			}
 		}
 
-		if (
-			resolvedEntityIds.length === 0 &&
-			signals.queryTokens &&
-			signals.queryTokens.length > 0
-		) {
+		if (resolvedEntityIds.length === 0 && signals.queryTokens && signals.queryTokens.length > 0) {
 			const queryIds = resolveByQueryTokens(db, agentId, signals.queryTokens);
 			if (queryIds.length > 0) {
 				resolvedEntityIds = queryIds;
@@ -254,17 +245,11 @@ export function resolveFocalEntities(
 			}
 		}
 
-		if (
-			resolvedEntityIds.length === 0 &&
-			signals.sessionKey
-		) {
+		if (resolvedEntityIds.length === 0 && signals.sessionKey) {
 			source = "session_key";
 		}
 
-		const entityIds = sanitizeEntityIds([
-			...pinnedEntityIds,
-			...resolvedEntityIds,
-		]);
+		const entityIds = sanitizeEntityIds([...pinnedEntityIds, ...resolvedEntityIds]);
 		return {
 			entityIds,
 			entityNames: getEntityNames(db, entityIds),
@@ -359,14 +344,23 @@ export function traverseKnowledgeGraph(
 
 			if (checkDeadline()) return;
 
-			const aspectRows = db
-				.prepare(
-					`SELECT id FROM entity_aspects
+			// Apply optional aspect name filter for on-demand expansion
+			const aspectQuery = config.aspectFilter
+				? `SELECT id FROM entity_aspects
+					 WHERE entity_id = ? AND agent_id = ?
+					   AND canonical_name LIKE ?
+					 ORDER BY weight DESC
+					 LIMIT ?`
+				: `SELECT id FROM entity_aspects
 					 WHERE entity_id = ? AND agent_id = ?
 					 ORDER BY weight DESC
-					 LIMIT ?`,
-				)
-				.all(entityId, agentId, config.maxAspectsPerEntity) as Array<{ id: string }>;
+					 LIMIT ?`;
+
+			const aspectArgs = config.aspectFilter
+				? [entityId, agentId, `%${config.aspectFilter}%`, config.maxAspectsPerEntity]
+				: [entityId, agentId, config.maxAspectsPerEntity];
+
+			const aspectRows = db.prepare(aspectQuery).all(...aspectArgs) as Array<{ id: string }>;
 
 			for (const aspect of aspectRows) {
 				if (checkDeadline()) break;
@@ -380,11 +374,7 @@ export function traverseKnowledgeGraph(
 						 ORDER BY importance DESC
 						 LIMIT ?`,
 					)
-					.all(
-						aspect.id,
-						agentId,
-						config.maxAttributesPerAspect,
-					) as Array<{ memory_id: string | null }>;
+					.all(aspect.id, agentId, config.maxAttributesPerAspect) as Array<{ memory_id: string | null }>;
 
 				for (const row of attributeRows) {
 					if (!row.memory_id) continue;
@@ -409,12 +399,9 @@ export function traverseKnowledgeGraph(
 					 ORDER BY strength DESC
 					 LIMIT ?`,
 				)
-				.all(
-					agentId,
-					...focalIds,
-					config.minDependencyStrength,
-					config.maxDependencyHops,
-				) as Array<{ target_entity_id: string }>;
+				.all(agentId, ...focalIds, config.minDependencyStrength, config.maxDependencyHops) as Array<{
+				target_entity_id: string;
+			}>;
 
 			for (const row of dependencyRows) {
 				if (checkDeadline()) break;
