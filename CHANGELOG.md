@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.47.1] - 2026-03-09
+
+### Bug Fixes
+
+- **openclaw**: resolve package.json merge conflict with main
+- **openclaw-adapter**: assert before_prompt_build hook priority
+- **openclaw**: address additional PR review feedback
+- **openclaw**: address PR review edge cases
+- **openclaw**: sync connector and adapter compatibility
+
+
 ## [0.47.0] - 2026-03-08
 
 ### Bug Fixes
