@@ -87,6 +87,18 @@ let needsRedraw = true;
 let lastHoveredId: string | null = null;
 let userAdjustedCamera = false;
 
+// Throttled camera fit — avoids O(n) computeWorldBounds on every tick
+let lastFitTime = 0;
+const FIT_THROTTLE_MS = 100;
+
+function throttledFitCamera(): void {
+	const now = performance.now();
+	if (now - lastFitTime > FIT_THROTTLE_MS) {
+		fitCameraToBounds();
+		lastFitTime = now;
+	}
+}
+
 // Minimap state
 const MINIMAP_WIDTH = 160;
 const MINIMAP_HEIGHT = 120;
@@ -154,7 +166,7 @@ export function startSimulation(
 		)
 		.alphaDecay(0.03)
 		.on("tick", () => {
-			if (!userAdjustedCamera) fitCameraToBounds();
+			if (!userAdjustedCamera) throttledFitCamera();
 			requestRedraw();
 		})
 		.on("end", () => {
@@ -206,7 +218,7 @@ export function startKnowledgeGraphSimulation(
 		)
 		.alphaDecay(0.03)
 		.on("tick", () => {
-			if (!userAdjustedCamera) fitCameraToBounds();
+			if (!userAdjustedCamera) throttledFitCamera();
 			requestRedraw();
 		})
 		.on("end", () => {
