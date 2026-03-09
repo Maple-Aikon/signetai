@@ -289,7 +289,7 @@
 		border-left: 1px solid var(--sig-border);
 		background: var(--sig-bg);
 		resize: horizontal;
-		overflow: hidden;
+		overflow: auto;
 	}
 
 	.panel-collapsed {

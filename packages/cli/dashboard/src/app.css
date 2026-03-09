@@ -581,10 +581,6 @@ h3 {
 	font-variant-numeric: tabular-nums;
 }
 
-/* Blueprint grid background — disabled */
-.sig-blueprint {
-}
-
 /* Subtle glow container — neon accent glow */
 .sig-glow {
 	box-shadow: var(--sig-glow-highlight);

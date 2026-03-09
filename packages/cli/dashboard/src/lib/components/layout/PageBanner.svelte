@@ -43,13 +43,13 @@
 		margin-bottom: 2rem;
 	}
 
-	/* Content layout */
+	/* Content layout — grid keeps side slots in flow to prevent overlap */
 	.banner-content {
 		position: relative;
 		z-index: 1;
-		display: flex;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 		align-items: center;
-		justify-content: center;
 		width: 100%;
 		gap: var(--space-md);
 	}
@@ -76,18 +76,16 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-sm);
-		flex-shrink: 0;
-		position: absolute;
-		left: var(--space-md);
+		min-width: 0;
+		justify-self: start;
 	}
 
 	.banner-right {
 		display: flex;
 		align-items: center;
 		gap: var(--space-sm);
-		flex-shrink: 0;
-		position: absolute;
-		right: var(--space-md);
+		min-width: 0;
+		justify-self: end;
 	}
 
 	/* Coordinate markers — tiny data labels at corners */

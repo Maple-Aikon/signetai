@@ -153,9 +153,9 @@ export function startSimulation(
 			forceCollide().radius((entry: any) => entry.radius + 2),
 		)
 		.alphaDecay(0.03)
-		.on("tick", () => {
+		.on("tick", requestRedraw)
+		.on("end", () => {
 			if (!userAdjustedCamera) fitCameraToBounds();
-			requestRedraw();
 		});
 }
 
@@ -200,9 +200,9 @@ export function startKnowledgeGraphSimulation(
 			forceCollide().radius((entry: any) => entry.radius + 2),
 		)
 		.alphaDecay(0.03)
-		.on("tick", () => {
+		.on("tick", requestRedraw)
+		.on("end", () => {
 			if (!userAdjustedCamera) fitCameraToBounds();
-			requestRedraw();
 		});
 }
 

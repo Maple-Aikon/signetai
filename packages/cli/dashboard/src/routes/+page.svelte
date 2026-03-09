@@ -212,18 +212,9 @@ $effect(() => {
 	/>
 	<main data-page-content="true" class="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden
 		mr-2 rounded-br-lg border border-[var(--sig-border-strong)] border-l-0 border-t-0 border-b-0
-		bg-[var(--sig-surface)] sig-blueprint">
+		bg-[var(--sig-surface)]">
 
-		<PageHeader
-			{activeTab}
-			{memoryDocumentsLabel}
-			memorySearching={mem.searching}
-			memoryHasResults={!!(mem.searched || hasActiveFilters() || mem.similarSourceId)}
-			onresetmemory={clearAll}
-			onnewtask={() => openForm()}
-			onmemoryselect={handleMemorySelect}
-			onengineselect={handleEngineSelect}
-		/>
+		<PageHeader {activeTab} />
 
 		<UpgradeBanner {daemonStatus} />
 		<ExtensionBanner />

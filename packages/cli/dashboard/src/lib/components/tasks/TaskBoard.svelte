@@ -140,7 +140,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 <style>
 	.board-grid {
 		display: grid;
-		grid-template-columns: repeat(4, 1fr);
+		grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
 		gap: var(--space-sm);
 		padding: var(--space-md);
 		min-height: 0;
