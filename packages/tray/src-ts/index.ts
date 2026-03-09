@@ -10,7 +10,9 @@ import {
 } from "./state";
 import { buildTrayUpdate, type TrayUpdate } from "./menu";
 
-const DAEMON_URL = "http://localhost:3850";
+// Respect SIGNET_PORT if set, otherwise default to 3850
+const DAEMON_PORT = 3850;
+const DAEMON_URL = `http://localhost:${DAEMON_PORT}`;
 
 // Poll intervals (ms)
 const HEALTH_RUNNING_MS = 5_000;
@@ -43,12 +45,14 @@ async function pollHealth(): Promise<void> {
   const alive = await fetchHealth(DAEMON_URL);
 
   if (alive && !isRunning) {
-    // Just came online — kick off secondary polls
+    // Just came online — kick off secondary polls and show dashboard
     isRunning = true;
     everSeenRunning = true;
     fetchMemories(DAEMON_URL);
     fetchDiagnostics(DAEMON_URL);
     fetchEmbeddings(DAEMON_URL);
+    // Auto-show the main window now that daemon is healthy
+    invoke("open_dashboard").catch(() => {});
   } else if (!alive && isRunning) {
     isRunning = false;
     resetState();

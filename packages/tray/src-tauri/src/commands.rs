@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use tauri::{AppHandle, Manager, PhysicalSize, Size, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, PhysicalSize, Size, WebviewWindowBuilder};
 
 use crate::daemon;
 use crate::tray;
@@ -7,13 +7,17 @@ use crate::tray;
 const TRAY_ID: &str = "signet-tray";
 const DEFAULT_PORT: u16 = 3850;
 
-/// Get the daemon URL, respecting SIGNET_PORT env var.
-pub(crate) fn daemon_url() -> String {
-    let port = std::env::var("SIGNET_PORT")
+/// Get the configured daemon port, respecting SIGNET_PORT env var.
+pub(crate) fn daemon_port() -> u16 {
+    std::env::var("SIGNET_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_PORT);
-    format!("http://localhost:{}", port)
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// Get the daemon URL, respecting SIGNET_PORT env var.
+pub(crate) fn daemon_url() -> String {
+    format!("http://localhost:{}", daemon_port())
 }
 
 #[derive(Deserialize, Clone)]
@@ -114,16 +118,19 @@ pub(crate) fn open_dashboard_inner(app: &AppHandle) -> Result<(), String> {
             });
         }
     } else {
-        let raw_url = daemon_url();
-        let parsed = url::Url::parse(&raw_url).map_err(|e| e.to_string())?;
-        WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
-            .title("Signet")
-            .inner_size(1200.0, 800.0)
-            .min_inner_size(800.0, 600.0)
-            .center()
-            .zoom_hotkeys_enabled(true)
-            .build()
-            .map_err(|e| e.to_string())?;
+        WebviewWindowBuilder::new(
+            app,
+            "main",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("Signet")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .center()
+        .decorations(false)
+        .zoom_hotkeys_enabled(true)
+        .build()
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }

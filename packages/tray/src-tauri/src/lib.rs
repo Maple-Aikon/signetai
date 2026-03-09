@@ -4,6 +4,8 @@ mod platform;
 mod tray;
 
 use tauri::Manager;
+#[cfg(not(debug_assertions))]
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 pub fn run() {
     // Wayland compatibility: NVIDIA drivers need explicit sync disabled
@@ -25,7 +27,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second instance tried to launch — show the main window
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.set_focus();
@@ -46,9 +47,6 @@ pub fn run() {
             commands::check_for_update,
         ])
         .on_window_event(|window, event| {
-            // Hide main window on close instead of destroying it,
-            // so "Open Dashboard" from tray can re-show it without
-            // recreating from scratch.
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -62,9 +60,19 @@ pub fn run() {
 
             tray::setup(app)?;
 
-            // Auto-start daemon if not running
-            let manager = platform::create_manager();
-            if !manager.is_running() {
+            // In release builds, a hidden window runs the tray polling JS.
+            #[cfg(not(debug_assertions))]
+            WebviewWindowBuilder::new(app, "tray-worker", WebviewUrl::App("tray.html".into()))
+                .visible(false)
+                .build()?;
+
+            // Auto-start daemon if nothing is listening on the configured port.
+            // Uses a TCP connect probe instead of PID files, which may not exist
+            // when the daemon was started outside the tray app.
+            let port = commands::daemon_port();
+            let daemon_up =
+                std::net::TcpStream::connect(("127.0.0.1", port)).is_ok();
+            if !daemon_up {
                 let _ = daemon::start();
             }
 

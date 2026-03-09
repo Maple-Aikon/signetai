@@ -4,7 +4,8 @@
   "version": "0.1.84",
   "identifier": "ai.signet.app",
   "build": {
-    "beforeDevCommand": "bun run build:ts",
+    "beforeDevCommand": "cd ../cli/dashboard && bun run dev",
+    "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "bun run build:ts",
     "frontendDist": "../dist"
   },
@@ -13,7 +14,6 @@
       {
         "label": "main",
         "title": "Signet",
-        "url": "http://localhost:3850",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -26,7 +26,7 @@
     ],
     "security": {
       "capabilities": ["default"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost http://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*; style-src 'self' 'unsafe-inline' http://localhost:*; img-src 'self' http://localhost:* data: blob:; font-src 'self' http://localhost:* data:; connect-src ipc: http://ipc.localhost http://localhost:*; frame-src http://localhost:*"
+      "csp": "default-src 'self' ipc: http://ipc.localhost http://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*; style-src 'self' 'unsafe-inline' http://localhost:* https://fonts.googleapis.com; img-src 'self' http://localhost:* data: blob:; font-src 'self' http://localhost:* https://fonts.gstatic.com data:; connect-src ipc: http://ipc.localhost http://localhost:* ws://localhost:* https://fonts.googleapis.com https://fonts.gstatic.com; frame-src http://localhost:*"
     },
     "trayIcon": {
       "iconPath": "icons/signet-stopped.png",
