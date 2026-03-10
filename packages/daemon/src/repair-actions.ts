@@ -195,33 +195,71 @@ export function requeueDeadJobs(
 		};
 	}
 
-	const affected = accessor.withWriteTx((db) => {
+	// Requeue both memory_jobs and summary_jobs in a single transaction
+	// so the rate limiter only records on full success.
+	const { memoryCount, summaryCount } = accessor.withWriteTx((db) => {
+		// --- memory_jobs ---
+		let memoryCount = 0;
 		const dead = db.prepare("SELECT id FROM memory_jobs WHERE status = 'dead' LIMIT ?").all(maxBatch) as Array<{
 			id: string;
 		}>;
 
-		if (dead.length === 0) return 0;
+		if (dead.length > 0) {
+			const placeholders = dead.map(() => "?").join(", ");
+			const ids = dead.map((r) => r.id);
+			const now = new Date().toISOString();
+			const result = db
+				.prepare(
+					`UPDATE memory_jobs
+					 SET status = 'pending', attempts = 0, updated_at = ?
+					 WHERE id IN (${placeholders})`,
+				)
+				.run(now, ...ids);
 
-		const placeholders = dead.map(() => "?").join(", ");
-		const ids = dead.map((r) => r.id);
-		const now = new Date().toISOString();
-		const result = db
-			.prepare(
-				`UPDATE memory_jobs
-				 SET status = 'pending', attempts = 0, updated_at = ?
-				 WHERE id IN (${placeholders})`,
-			)
-			.run(now, ...ids);
+			memoryCount = countChanges(result);
+			const msg = `requeued ${memoryCount} dead job(s) to pending`;
+			writeRepairAudit(db, action, ctx, memoryCount, msg);
+		}
 
-		const count = countChanges(result);
-		const msg = `requeued ${count} dead job(s) to pending`;
-		writeRepairAudit(db, action, ctx, count, msg);
-		return count;
+		// --- summary_jobs (issue #181) ---
+		// Share the maxBatch budget: only requeue up to the remaining capacity
+		const summaryBudget = maxBatch - memoryCount;
+		let summaryCount = 0;
+		const tableExists = db
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'")
+			.get();
+
+		if (tableExists && summaryBudget > 0) {
+			const deadSummary = db
+				.prepare("SELECT id FROM summary_jobs WHERE status = 'dead' LIMIT ?")
+				.all(summaryBudget) as Array<{ id: string }>;
+
+			if (deadSummary.length > 0) {
+				const placeholders = deadSummary.map(() => "?").join(", ");
+				const ids = deadSummary.map((r) => r.id);
+				const result = db
+					.prepare(
+						`UPDATE summary_jobs
+						 SET status = 'pending', attempts = 0, error = NULL
+						 WHERE id IN (${placeholders})`,
+					)
+					.run(...ids);
+				summaryCount = countChanges(result);
+				const msg = `requeued ${summaryCount} dead summary job(s) to pending`;
+				writeRepairAudit(db, action, ctx, summaryCount, msg);
+			}
+		}
+
+		return { memoryCount, summaryCount };
 	});
+
+	const totalAffected = memoryCount + summaryCount;
 
 	limiter.record(action);
 	logger.info("pipeline", "repair: requeued dead jobs", {
-		affected,
+		memoryJobs: memoryCount,
+		summaryJobs: summaryCount,
+		total: totalAffected,
 		actor: ctx.actor,
 		reason: ctx.reason,
 	});
@@ -229,8 +267,8 @@ export function requeueDeadJobs(
 	return {
 		action,
 		success: true,
-		affected,
-		message: `requeued ${affected} dead job(s) to pending`,
+		affected: totalAffected,
+		message: `requeued ${memoryCount} dead memory job(s) and ${summaryCount} dead summary job(s) to pending`,
 	};
 }
 

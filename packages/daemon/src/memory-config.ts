@@ -202,7 +202,8 @@ function clampFraction(raw: unknown, fallback: number): number {
 
 /**
  * Load pipeline config from YAML, supporting both nested and flat key formats.
- * Nested keys take precedence when both are present.
+ * Flat extraction keys (dashboard-written) take precedence over nested keys.
+ * Provider and model are paired — if flat provider wins, flat model wins too.
  */
 export function loadPipelineConfig(
 	yaml: Record<string, unknown>,
@@ -233,7 +234,7 @@ export function loadPipelineConfig(
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 
-	// Helper: resolve nested-first, flat-fallback
+	// Helper: resolve with flat-fallback (non-extraction fields still nested-first)
 	const d = DEFAULT_PIPELINE_V2;
 
 	function resolveBool(nested: unknown, flat: unknown, fallback: boolean): boolean {
@@ -243,24 +244,36 @@ export function loadPipelineConfig(
 	}
 
 	// -- Extraction provider resolution --
-	// Nested wins; flat fallback preserves legacy ollama inference
+	// Flat keys win when set (dashboard writes these); nested is fallback.
+	// Provider and model must stay paired — if flat provider won, use flat model.
 	const nestedProvider = extractionRaw?.provider;
 	const flatProvider = raw.extractionProvider;
 	const flatModel = raw.extractionModel;
-	const resolvedProvider: "ollama" | "claude-code" | "opencode" | "codex" =
-		nestedProvider === "codex" || flatProvider === "codex"
-			? "codex"
-			: nestedProvider === "opencode" || flatProvider === "opencode"
-			? "opencode"
-			: nestedProvider === "claude-code" || flatProvider === "claude-code"
-				? "claude-code"
-				: nestedProvider === "ollama" || flatProvider === "ollama"
+
+	type ProviderKind = "ollama" | "claude-code" | "opencode" | "codex";
+	const VALID_PROVIDERS: ReadonlySet<string> = new Set<ProviderKind>([
+		"codex", "opencode", "claude-code", "ollama",
+	]);
+
+	function isValidProvider(v: unknown): v is ProviderKind {
+		return typeof v === "string" && VALID_PROVIDERS.has(v);
+	}
+
+	const flatProviderWon = isValidProvider(flatProvider);
+	// Model-only flat key: no provider set anywhere, but extractionModel is
+	// present.  Default to "ollama" so the model isn't silently discarded.
+	const flatModelOnly =
+		!flatProviderWon &&
+		!isValidProvider(nestedProvider) &&
+		typeof flatModel === "string";
+	const resolvedProvider: ProviderKind =
+		flatProviderWon
+			? flatProvider
+			: isValidProvider(nestedProvider)
+				? nestedProvider
+				: flatModelOnly
 					? "ollama"
-					: typeof (extractionRaw?.model ?? flatModel) === "string" &&
-						  nestedProvider === undefined &&
-						  flatProvider === undefined
-						? "ollama"
-						: d.extraction.provider;
+					: d.extraction.provider;
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -279,11 +292,12 @@ export function loadPipelineConfig(
 
 		extraction: {
 			provider: resolvedProvider,
-			model:
-				typeof extractionRaw?.model === "string"
+			model: flatProviderWon
+				? (typeof flatModel === "string" ? flatModel : d.extraction.model)
+				: typeof extractionRaw?.model === "string"
 					? extractionRaw.model
-					: typeof flatModel === "string"
-						? (flatModel as string)
+					: flatModelOnly
+						? flatModel
 						: d.extraction.model,
 			timeout: clampPositive(
 				extractionRaw?.timeout ?? raw.extractionTimeout,

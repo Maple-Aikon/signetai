@@ -13,6 +13,81 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
+// Global concurrency semaphore for CLI subprocess providers
+// ---------------------------------------------------------------------------
+// Prevents starvation when multiple pipeline workers (extraction,
+// structural-classify, summary, etc.) all spawn `claude -p` or `codex`
+// subprocesses simultaneously. Without this, 10+ concurrent processes
+// can cause API rate limiting and timeout cascades.
+
+const DEFAULT_MAX_CONCURRENT_SUBPROCESSES = 4;
+
+class SubprocessSemaphore {
+	private readonly max: number;
+	private active = 0;
+	private readonly queue: Array<() => void> = [];
+
+	constructor(max: number) {
+		this.max = max;
+	}
+
+	async acquire(): Promise<void> {
+		if (this.active < this.max) {
+			this.active++;
+			return;
+		}
+		return new Promise<void>((resolve) => {
+			this.queue.push(() => {
+				this.active++;
+				resolve();
+			});
+		});
+	}
+
+	release(): void {
+		this.active--;
+		const next = this.queue.shift();
+		if (next) next();
+	}
+
+	get pending(): number {
+		return this.queue.length;
+	}
+
+	get running(): number {
+		return this.active;
+	}
+}
+
+const subprocessSemaphore = new SubprocessSemaphore(
+	process.env.SIGNET_MAX_LLM_CONCURRENCY !== undefined
+		? (() => {
+				const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
+				if (!Number.isFinite(parsed)) {
+					logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid number, using default", {
+						value: process.env.SIGNET_MAX_LLM_CONCURRENCY,
+					});
+					return DEFAULT_MAX_CONCURRENT_SUBPROCESSES;
+				}
+				return Math.max(1, parsed);
+			})()
+		: DEFAULT_MAX_CONCURRENT_SUBPROCESSES,
+);
+
+/**
+ * Run an async function guarded by the global subprocess semaphore.
+ * Ensures no more than N concurrent CLI subprocess calls across all workers.
+ */
+async function withSemaphore<T>(fn: () => Promise<T>): Promise<T> {
+	await subprocessSemaphore.acquire();
+	try {
+		return await fn();
+	} finally {
+		subprocessSemaphore.release();
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Windows-safe spawn helper
 // ---------------------------------------------------------------------------
 // Bun.spawn does not support windowsHide, so CLI subprocesses flash a
@@ -229,61 +304,58 @@ export function createClaudeCodeProvider(
 		outputFormat: "text" | "json",
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<string> {
-		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		return withSemaphore(async () => {
+			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 
-		const args = [
-			"-p", prompt,
-			"--model", cfg.model,
-			"--no-session-persistence",
-			"--output-format", outputFormat,
-		];
+			const args = [
+				"-p", prompt,
+				"--model", cfg.model,
+				"--no-session-persistence",
+				"--output-format", outputFormat,
+			];
 
-		// Unset CLAUDECODE to avoid nested-session detection when the
-		// daemon itself is launched from within a Claude Code session.
-		// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
-		const { CLAUDECODE: _, SIGNET_NO_HOOKS: __, ...cleanEnv } = process.env;
+			// Unset CLAUDECODE to avoid nested-session detection when the
+			// daemon itself is launched from within a Claude Code session.
+			// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
+			const { CLAUDECODE: _, SIGNET_NO_HOOKS: __, ...cleanEnv } = process.env;
 
-		const proc = spawnHidden(["claude", ...args], {
-			env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
+			const proc = spawnHidden(["claude", ...args], {
+				env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
+			});
+
+			let timedOut = false;
+			const timer = setTimeout(() => {
+				timedOut = true;
+				proc.kill();
+			}, timeoutMs);
+
+			try {
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(proc.stdout).text().catch(() => ""),
+					new Response(proc.stderr).text().catch(() => ""),
+					proc.exited.catch(() => -1),
+				]);
+
+				if (timedOut) {
+					throw new Error(`claude-code timeout after ${timeoutMs}ms`);
+				}
+
+				if (exitCode !== 0) {
+					throw new Error(
+						`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`,
+					);
+				}
+
+				const result = stdout.trim();
+				if (result.length === 0) {
+					throw new Error("claude-code returned empty output");
+				}
+
+				return result;
+			} finally {
+				clearTimeout(timer);
+			}
 		});
-
-		let timedOut = false;
-		const timer = setTimeout(() => {
-			timedOut = true;
-			proc.kill();
-		}, timeoutMs);
-
-		try {
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
-
-			if (timedOut) {
-				throw new Error(`claude-code timeout after ${timeoutMs}ms`);
-			}
-
-			if (exitCode !== 0) {
-				throw new Error(
-					`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`,
-				);
-			}
-
-			const result = stdout.trim();
-			if (result.length === 0) {
-				throw new Error("claude-code returned empty output");
-			}
-
-			return result;
-		} catch (e) {
-			if (timedOut) {
-				throw new Error(`claude-code timeout after ${timeoutMs}ms`);
-			}
-			throw e;
-		} finally {
-			clearTimeout(timer);
-		}
 	}
 
 	return {
@@ -435,52 +507,55 @@ export function createCodexProvider(
 		prompt: string,
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<LlmGenerateResult> {
-		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
-		const args = [
-			"exec",
-			"--skip-git-repo-check",
-			"--json",
-			"--sandbox",
-			"read-only",
-			"-C",
-			cfg.workingDirectory,
-			"--model",
-			cfg.model,
-			prompt,
-		];
+		return withSemaphore(async () => {
+			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+			const args = [
+				"exec",
+				"--skip-git-repo-check",
+				"--json",
+				"--sandbox",
+				"read-only",
+				"-C",
+				cfg.workingDirectory,
+				"--model",
+				cfg.model,
+				prompt,
+			];
 
-		const { SIGNET_NO_HOOKS: _, SIGNET_CODEX_BYPASS_WRAPPER: __, ...cleanEnv } = process.env;
-		const proc = spawnHidden(["codex", ...args], {
-			env: {
-				...cleanEnv,
-				NO_COLOR: "1",
-				SIGNET_NO_HOOKS: "1",
-				SIGNET_CODEX_BYPASS_WRAPPER: "1",
-			},
+			const { SIGNET_NO_HOOKS: _, SIGNET_CODEX_BYPASS_WRAPPER: __, ...cleanEnv } = process.env;
+			const proc = spawnHidden(["codex", ...args], {
+				env: {
+					...cleanEnv,
+					NO_COLOR: "1",
+					SIGNET_NO_HOOKS: "1",
+					SIGNET_CODEX_BYPASS_WRAPPER: "1",
+				},
+			});
+
+			let timedOut = false;
+			const timer = setTimeout(() => {
+				timedOut = true;
+				proc.kill();
+			}, timeoutMs);
+
+			try {
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(proc.stdout).text().catch(() => ""),
+					new Response(proc.stderr).text().catch(() => ""),
+					proc.exited.catch(() => -1),
+				]);
+				if (timedOut) {
+					throw new Error(`codex timeout after ${timeoutMs}ms`);
+				}
+				if (exitCode !== 0) {
+					const detail = stderr.trim() || stdout.trim();
+					throw new Error(`codex exit ${exitCode}: ${detail.slice(0, 500)}`);
+				}
+				return parseCodexJsonl(stdout);
+			} finally {
+				clearTimeout(timer);
+			}
 		});
-
-		let timedOut = false;
-		const timer = setTimeout(() => {
-			timedOut = true;
-			proc.kill();
-		}, timeoutMs);
-
-		try {
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text().catch(() => ""),
-				new Response(proc.stderr).text().catch(() => ""),
-				proc.exited.catch(() => -1),
-			]);
-			if (timedOut) {
-				throw new Error(`codex timeout after ${timeoutMs}ms`);
-			}
-			if (exitCode !== 0) {
-				throw new Error(`codex exit ${exitCode}: ${stderr.slice(0, 300)}`);
-			}
-			return parseCodexJsonl(stdout);
-		} finally {
-			clearTimeout(timer);
-		}
 	}
 
 	return {

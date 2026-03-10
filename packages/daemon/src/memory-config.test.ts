@@ -249,11 +249,61 @@ describe("loadPipelineConfig", () => {
 		expect(result).toEqual(DEFAULT_PIPELINE_V2);
 	});
 
-	it("resolves codex from nested extraction.provider", () => {
+	it("flat provider keys (dashboard) take priority over nested", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
+					extractionModel: "qwen3:4b",
+					extraction: {
+						provider: "codex",
+						model: "gpt-5.3-codex",
+					},
+				},
+			},
+		});
+
+		// Flat keys win as a pair — dashboard writes flat, so they must take priority
+		expect(result.extraction.provider).toBe("ollama");
+		expect(result.extraction.model).toBe("qwen3:4b");
+	});
+
+	it("flat provider without flat model uses provider default", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extraction: {
+						provider: "codex",
+						model: "gpt-5.3-codex",
+					},
+				},
+			},
+		});
+
+		// Flat provider wins — model must NOT bleed from nested config
+		expect(result.extraction.provider).toBe("ollama");
+		expect(result.extraction.model).not.toBe("gpt-5.3-codex");
+	});
+
+	it("flat model without flat provider is honoured (not silently discarded)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionModel: "qwen3:8b",
+				},
+			},
+		});
+
+		// No provider set → defaults to "ollama"; flat model must propagate
+		expect(result.extraction.provider).toBe("ollama");
+		expect(result.extraction.model).toBe("qwen3:8b");
+	});
+
+	it("nested provider used when no flat key is set", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
 					extraction: {
 						provider: "codex",
 						model: "gpt-5.3-codex",

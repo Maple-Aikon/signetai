@@ -222,7 +222,7 @@ export function startMaintenanceWorker(
 
 		if (recommendations.length === 0) {
 			haltTracker.reset();
-			if (cfg.graph.enabled && cfg.feedback.enabled) {
+			if (cfg.graph.enabled && cfg.feedback?.enabled) {
 				for (const agentId of getGraphAgentIds(accessor)) {
 					if (cfg.feedback.decayEnabled) {
 						feedbackDecayedAspects += decayAspectWeights(accessor, agentId, {
@@ -301,7 +301,7 @@ export function startMaintenanceWorker(
 			});
 		}
 
-		if (cfg.graph.enabled && cfg.feedback.enabled) {
+		if (cfg.graph.enabled && cfg.feedback?.enabled) {
 			for (const agentId of getGraphAgentIds(accessor)) {
 				if (cfg.feedback.decayEnabled) {
 					feedbackDecayedAspects += decayAspectWeights(accessor, agentId, {

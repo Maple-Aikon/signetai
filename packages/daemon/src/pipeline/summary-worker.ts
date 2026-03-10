@@ -15,8 +15,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { DbAccessor } from "../db-accessor";
-import type { LlmProvider } from "./provider";
-import { getLlmProvider } from "../llm";
+import type { LlmProvider } from "@signet/core";
+import { createOllamaProvider, createClaudeCodeProvider, createOpenCodeProvider } from "./provider";
+
 import { isDuplicate, inferType } from "../hooks";
 import { loadMemoryConfig } from "../memory-config";
 import { logger } from "../logger";
@@ -65,7 +66,7 @@ const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DIR = join(AGENTS_DIR, "memory");
 
 const POLL_INTERVAL_MS = 5_000;
-const LLM_TIMEOUT_MS = 90_000;
+// Timeout is now configured per-provider via resolveProvider() and config.
 
 // ---------------------------------------------------------------------------
 // Prompt
@@ -182,9 +183,9 @@ async function processJob(
 	accessor: DbAccessor,
 	provider: LlmProvider,
 	job: SummaryJobRow,
+	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	// --- Significance gate ---
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const significanceCfg: SignificanceConfig =
 		memoryCfg.pipelineV2.significance ?? {
 			enabled: true,
@@ -225,7 +226,8 @@ async function processJob(
 	const prompt = buildPrompt(job.transcript, today);
 
 	const raw = await provider.generate(prompt, {
-		timeoutMs: LLM_TIMEOUT_MS,
+		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
 	});
 
 	const result = parseLlmResponse(raw);
@@ -275,7 +277,7 @@ async function processJob(
 
 	// --- Session continuity scoring ---
 	try {
-		await scoreContinuity(accessor, provider, job, result.summary);
+		await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);
 	} catch (e) {
 		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -553,6 +555,7 @@ async function scoreContinuity(
 	provider: LlmProvider,
 	job: SummaryJobRow,
 	summary: string,
+	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	// Load injected memories for this session (empty array for old sessions)
 	const injectedMemories = loadInjectedMemories(accessor, job.session_key);
@@ -563,7 +566,10 @@ async function scoreContinuity(
 		injectedMemories,
 	);
 
-	const raw = await provider.generate(prompt, { timeoutMs: LLM_TIMEOUT_MS });
+	const raw = await provider.generate(prompt, {
+		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
+	});
 
 	let jsonStr = raw.trim();
 	const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -713,35 +719,48 @@ function writeSummaryToDAG(
 			.get();
 		if (!row) return;
 
-		const summaryId = crypto.randomUUID();
 		const now = new Date().toISOString();
 		const tokenCount = Math.ceil(result.summary.length / 4);
 
-		// ON CONFLICT preserves the existing row's id so cascade-linked child
-		// and memory rows survive job retries (INSERT OR REPLACE would delete
-		// the old row first, nuking those links).
-		db.prepare(
-			`INSERT INTO session_summaries (
-				id, project, depth, kind, content, token_count,
-				earliest_at, latest_at, session_key, harness,
-				agent_id, created_at
-			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(session_key, depth) DO UPDATE SET
-				content = excluded.content,
-				token_count = excluded.token_count,
-				latest_at = excluded.latest_at`,
-		).run(
-			summaryId,
-			job.project,
-			result.summary,
-			tokenCount,
-			job.created_at, // session start time
-			now,            // processing time ≈ session end time
-			job.session_key,
-			job.harness,
-			agentId,
-			now,
-		);
+		// Upsert: check for existing row first since ON CONFLICT doesn't
+		// work with the partial unique index (WHERE session_key IS NOT NULL).
+		const existing = job.session_key
+			? (db.prepare(
+				`SELECT id FROM session_summaries
+				 WHERE session_key = ? AND depth = 0`,
+			).get(job.session_key) as { id: string } | undefined)
+			: undefined;
+
+		let effectiveId: string;
+
+		if (existing) {
+			effectiveId = existing.id;
+			db.prepare(
+				`UPDATE session_summaries
+				 SET content = ?, token_count = ?, latest_at = ?
+				 WHERE id = ?`,
+			).run(result.summary, tokenCount, now, existing.id);
+		} else {
+			effectiveId = crypto.randomUUID();
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, token_count,
+					earliest_at, latest_at, session_key, harness,
+					agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				effectiveId,
+				job.project,
+				result.summary,
+				tokenCount,
+				job.created_at,
+				now,
+				job.session_key,
+				job.harness,
+				agentId,
+				now,
+			);
+		}
 
 		// Link extracted memories to this summary.
 		// Match by source_id containing the session key.
@@ -761,7 +780,7 @@ function writeSummaryToDAG(
 				 VALUES (?, ?)`,
 			);
 			for (const mem of recentMemories) {
-				linkStmt.run(summaryId, mem.id);
+				linkStmt.run(effectiveId, mem.id);
 			}
 		}
 	});
@@ -771,10 +790,25 @@ function writeSummaryToDAG(
 // Worker loop
 // ---------------------------------------------------------------------------
 
+/** Resolve from synthesis config — distinct from extraction so users can
+ *  decouple the summary provider/model/timeout from the extraction pipeline. */
+function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): LlmProvider {
+	const p = cfg.pipelineV2.synthesis.provider;
+	const model = cfg.pipelineV2.synthesis.model;
+	const timeout = cfg.pipelineV2.synthesis.timeout;
+	switch (p) {
+		case "claude-code":
+			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
+		case "opencode":
+			return createOpenCodeProvider({ model: model || "anthropic/claude-haiku-4-5-20251001", defaultTimeoutMs: timeout });
+		default:
+			return createOllamaProvider({ model: model || "qwen3:4b", defaultTimeoutMs: timeout });
+	}
+}
+
 export function startSummaryWorker(
 	accessor: DbAccessor,
 ): SummaryWorkerHandle {
-	const provider = getLlmProvider();
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 
@@ -830,7 +864,8 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
-			await processJob(accessor, provider, job);
+			const provider = resolveProvider(cfg);
+			await processJob(accessor, provider, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {
