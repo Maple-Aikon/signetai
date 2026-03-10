@@ -1,6 +1,6 @@
 /**
  * LLM provider implementations: Ollama (HTTP), Claude Code (CLI subprocess),
- * and OpenCode (headless HTTP server).
+ * Anthropic (direct HTTP API), and OpenCode (headless HTTP server).
  *
  * The LlmProvider interface itself lives in @signet/core so that the
  * ingestion pipeline and other consumers can accept any provider.
@@ -9,7 +9,7 @@
 import type { LlmProvider, LlmGenerateResult } from "@signet/core";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { spawn as nodeSpawn } from "node:child_process";
+// node:child_process removed — using Bun.spawn directly for reliable I/O
 import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
@@ -102,38 +102,23 @@ interface SpawnResult {
 }
 
 function spawnHidden(cmd: string[], options?: { env?: Record<string, string | undefined> }): SpawnResult {
-	const proc = nodeSpawn(cmd[0], cmd.slice(1), {
-		stdio: "pipe",
-		windowsHide: true,
-		env: options?.env as NodeJS.ProcessEnv,
-	});
-
-	const stdout = new ReadableStream<Uint8Array>({
-		start(controller) {
-			proc.stdout?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-			proc.stdout?.on("end", () => { try { controller.close(); } catch {} });
-			proc.stdout?.on("error", (err) => { try { controller.error(err); } catch {} });
-		},
-	});
-
-	const stderr = new ReadableStream<Uint8Array>({
-		start(controller) {
-			proc.stderr?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-			proc.stderr?.on("end", () => { try { controller.close(); } catch {} });
-			proc.stderr?.on("error", (err) => { try { controller.error(err); } catch {} });
-		},
-	});
-
-	const exited = new Promise<number>((resolve) => {
-		proc.on("close", (code) => resolve(code ?? 1));
-		proc.on("error", () => resolve(1));
+	// Use Bun.spawn directly — it natively returns ReadableStreams and
+	// handles subprocess I/O correctly. The previous node:child_process
+	// wrapper had stream-closing issues that caused hangs.
+	const proc = Bun.spawn(cmd, {
+		stdout: "pipe",
+		stderr: "pipe",
+		env: options?.env as Record<string, string>,
 	});
 
 	return {
-		stdout,
-		stderr,
-		exited,
-		kill(signal?: string) { proc.kill(signal as NodeJS.Signals); },
+		stdout: proc.stdout as ReadableStream<Uint8Array>,
+		stderr: proc.stderr as ReadableStream<Uint8Array>,
+		exited: proc.exited,
+		kill(signal?: string) {
+			const sigNum = signal === "SIGKILL" ? 9 : signal === "SIGTERM" ? 15 : undefined;
+			proc.kill(sigNum);
+		},
 	};
 }
 
@@ -314,31 +299,51 @@ export function createClaudeCodeProvider(
 				"--output-format", outputFormat,
 			];
 
-			// Unset CLAUDECODE to avoid nested-session detection when the
-			// daemon itself is launched from within a Claude Code session.
+			// Strip ALL Claude Code env vars to prevent nested-session
+			// detection when the daemon is launched from a CC session.
 			// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
-			const { CLAUDECODE: _, SIGNET_NO_HOOKS: __, ...cleanEnv } = process.env;
+			const cleanEnv: Record<string, string> = {};
+			for (const [k, v] of Object.entries(process.env)) {
+				if (v === undefined) continue;
+				if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
+				cleanEnv[k] = v;
+			}
+
+			logger.debug("pipeline", "Spawning claude-code subprocess", {
+				model: cfg.model,
+				outputFormat,
+				promptLen: prompt.length,
+				timeoutMs,
+			});
 
 			const proc = spawnHidden(["claude", ...args], {
 				env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
 			});
 
-			let timedOut = false;
-			const timer = setTimeout(() => {
-				timedOut = true;
-				proc.kill();
-			}, timeoutMs);
+			// Race the subprocess against a timeout. On timeout we kill the
+			// process and reject immediately instead of waiting for streams
+			// to drain — a hanging subprocess may never close its stdio.
+			const SIGKILL_GRACE_MS = 2000;
 
-			try {
+			const timeoutPromise = new Promise<never>((_resolve, reject) => {
+				const timer = setTimeout(() => {
+					// SIGTERM first, SIGKILL after grace period
+					proc.kill("SIGTERM");
+					setTimeout(() => {
+						try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+					}, SIGKILL_GRACE_MS);
+					reject(new Error(`claude-code timeout after ${timeoutMs}ms`));
+				}, timeoutMs);
+				// Allow the timer to be GC'd if the process finishes first
+				proc.exited.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
+			});
+
+			const resultPromise = (async (): Promise<string> => {
 				const [stdout, stderr, exitCode] = await Promise.all([
 					new Response(proc.stdout).text().catch(() => ""),
 					new Response(proc.stderr).text().catch(() => ""),
 					proc.exited.catch(() => -1),
 				]);
-
-				if (timedOut) {
-					throw new Error(`claude-code timeout after ${timeoutMs}ms`);
-				}
 
 				if (exitCode !== 0) {
 					throw new Error(
@@ -352,9 +357,9 @@ export function createClaudeCodeProvider(
 				}
 
 				return result;
-			} finally {
-				clearTimeout(timer);
-			}
+			})();
+
+			return Promise.race([resultPromise, timeoutPromise]);
 		});
 	}
 
@@ -409,6 +414,267 @@ export function createClaudeCodeProvider(
 				return exitCode === 0;
 			} catch {
 				logger.debug("pipeline", "Claude Code CLI not available");
+				return false;
+			}
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic via direct HTTP API
+// ---------------------------------------------------------------------------
+// Bypasses the Claude Code CLI subprocess entirely by calling the
+// Anthropic Messages API over HTTP. Eliminates subprocess hanging,
+// auth-prompt deadlocks, and concurrency starvation.
+
+export interface AnthropicProviderConfig {
+	readonly model: string;
+	readonly apiKey: string;
+	readonly baseUrl: string;
+	readonly defaultTimeoutMs: number;
+	readonly maxRetries: number;
+}
+
+const DEFAULT_ANTHROPIC_CONFIG: AnthropicProviderConfig = {
+	model: "claude-haiku-4-5-20251001",
+	apiKey: "",
+	baseUrl: "https://api.anthropic.com",
+	defaultTimeoutMs: 60000,
+	maxRetries: 2,
+};
+
+const ANTHROPIC_API_VERSION = "2023-06-01";
+
+/** Map short model aliases to full Anthropic model IDs. */
+function resolveAnthropicModel(model: string): string {
+	const aliases: Record<string, string> = {
+		haiku: "claude-haiku-4-5-20251001",
+		sonnet: "claude-sonnet-4-6-20250514",
+		opus: "claude-opus-4-6-20250514",
+	};
+	return aliases[model] ?? model;
+}
+
+interface AnthropicUsage {
+	readonly input_tokens?: number;
+	readonly output_tokens?: number;
+	readonly cache_creation_input_tokens?: number;
+	readonly cache_read_input_tokens?: number;
+}
+
+interface AnthropicContentBlock {
+	readonly type: string;
+	readonly text?: string;
+}
+
+interface AnthropicErrorBody {
+	readonly type?: string;
+	readonly error?: {
+		readonly type?: string;
+		readonly message?: string;
+	};
+}
+
+interface AnthropicResponse {
+	readonly id?: string;
+	readonly content?: readonly AnthropicContentBlock[];
+	readonly usage?: AnthropicUsage;
+	readonly stop_reason?: string;
+}
+
+function isRetryableStatus(status: number): boolean {
+	return status === 429 || status === 529 || status >= 500;
+}
+
+export function createAnthropicProvider(
+	config?: Partial<AnthropicProviderConfig>,
+): LlmProvider {
+	const cfg = { ...DEFAULT_ANTHROPIC_CONFIG, ...config };
+	const resolvedModel = resolveAnthropicModel(cfg.model);
+
+	if (!cfg.apiKey) {
+		throw new Error(
+			"Anthropic provider requires an API key. Set ANTHROPIC_API_KEY env var or configure it in Signet secrets.",
+		);
+	}
+
+	async function callAnthropic(
+		prompt: string,
+		opts?: { timeoutMs?: number; maxTokens?: number },
+	): Promise<{ text: string; usage: AnthropicUsage | null }> {
+		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const maxTokens = opts?.maxTokens ?? 4096;
+		const url = `${cfg.baseUrl}/v1/messages`;
+		const body = JSON.stringify({
+			model: resolvedModel,
+			max_tokens: maxTokens,
+			messages: [{ role: "user", content: prompt }],
+		});
+
+		let lastError: Error | null = null;
+
+		for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+			if (attempt > 0) {
+				// Exponential backoff: 1s, 2s, 4s...
+				const backoffMs = Math.min(1000 * (2 ** (attempt - 1)), 8000);
+				await new Promise((r) => setTimeout(r, backoffMs));
+
+				logger.debug("pipeline", "Anthropic API retry", {
+					attempt,
+					maxRetries: cfg.maxRetries,
+					backoffMs,
+				});
+			}
+
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+			try {
+				const res = await fetch(url, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-api-key": cfg.apiKey,
+						"anthropic-version": ANTHROPIC_API_VERSION,
+					},
+					body,
+					signal: controller.signal,
+				});
+
+				if (!res.ok) {
+					const rawBody = await res.text().catch(() => "");
+					let errorDetail = rawBody.slice(0, 300);
+
+					// Parse structured error if available
+					try {
+						const parsed = JSON.parse(rawBody) as AnthropicErrorBody;
+						if (parsed.error?.message) {
+							errorDetail = `${parsed.error.type ?? "error"}: ${parsed.error.message}`;
+						}
+					} catch {
+						// Use raw body
+					}
+
+					if (res.status === 401) {
+						throw new Error(
+							`Anthropic auth failed (401): ${errorDetail}. Check your ANTHROPIC_API_KEY.`,
+						);
+					}
+
+					if (isRetryableStatus(res.status) && attempt < cfg.maxRetries) {
+						lastError = new Error(
+							`Anthropic HTTP ${res.status}: ${errorDetail}`,
+						);
+						logger.warn("pipeline", "Anthropic API retryable error", {
+							status: res.status,
+							attempt,
+							detail: errorDetail.slice(0, 100),
+						});
+						continue;
+					}
+
+					throw new Error(
+						`Anthropic HTTP ${res.status}: ${errorDetail}`,
+					);
+				}
+
+				const data = (await res.json()) as AnthropicResponse;
+
+				// Extract text from content blocks
+				const textParts: string[] = [];
+				if (Array.isArray(data.content)) {
+					for (const block of data.content) {
+						if (block.type === "text" && typeof block.text === "string") {
+							textParts.push(block.text);
+						}
+					}
+				}
+
+				const text = textParts.join("\n").trim();
+				if (text.length === 0) {
+					throw new Error(
+						`Anthropic returned empty response (stop_reason: ${data.stop_reason ?? "unknown"})`,
+					);
+				}
+
+				return { text, usage: data.usage ?? null };
+			} catch (e) {
+				if (e instanceof DOMException && e.name === "AbortError") {
+					throw new Error(`Anthropic timeout after ${timeoutMs}ms`);
+				}
+
+				// Don't retry non-retryable errors
+				if (e instanceof Error && (
+					e.message.includes("auth failed") ||
+					e.message.includes("timeout after")
+				)) {
+					throw e;
+				}
+
+				lastError = e instanceof Error ? e : new Error(String(e));
+
+				if (attempt < cfg.maxRetries) {
+					logger.warn("pipeline", "Anthropic API network error", {
+						attempt,
+						error: lastError.message.slice(0, 100),
+					});
+					continue;
+				}
+
+				throw lastError;
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+
+		throw lastError ?? new Error("Anthropic call failed after retries");
+	}
+
+	return {
+		name: `anthropic:${resolvedModel}`,
+
+		async generate(prompt, opts): Promise<string> {
+			const { text } = await callAnthropic(prompt, opts);
+			return text;
+		},
+
+		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
+			const { text, usage } = await callAnthropic(prompt, opts);
+			return {
+				text,
+				usage: usage
+					? {
+							inputTokens: usage.input_tokens ?? null,
+							outputTokens: usage.output_tokens ?? null,
+							cacheReadTokens: usage.cache_read_input_tokens ?? null,
+							cacheCreationTokens: usage.cache_creation_input_tokens ?? null,
+							totalCost: null,
+							totalDurationMs: null,
+						}
+					: null,
+			};
+		},
+
+		async available(): Promise<boolean> {
+			try {
+				const res = await fetch(`${cfg.baseUrl}/v1/messages`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-api-key": cfg.apiKey,
+						"anthropic-version": ANTHROPIC_API_VERSION,
+					},
+					body: JSON.stringify({
+						model: resolvedModel,
+						max_tokens: 1,
+						messages: [{ role: "user", content: "ping" }],
+					}),
+					signal: AbortSignal.timeout(5000),
+				});
+				// 200 = works, 401 = bad key but API is reachable
+				return res.ok || res.status === 401;
+			} catch {
+				logger.debug("pipeline", "Anthropic API not reachable");
 				return false;
 			}
 		},

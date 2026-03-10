@@ -250,9 +250,9 @@ export function loadPipelineConfig(
 	const flatProvider = raw.extractionProvider;
 	const flatModel = raw.extractionModel;
 
-	type ProviderKind = "ollama" | "claude-code" | "opencode" | "codex";
+	type ProviderKind = "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
 	const VALID_PROVIDERS: ReadonlySet<string> = new Set<ProviderKind>([
-		"codex", "opencode", "claude-code", "ollama",
+		"codex", "opencode", "claude-code", "ollama", "anthropic",
 	]);
 
 	function isValidProvider(v: unknown): v is ProviderKind {

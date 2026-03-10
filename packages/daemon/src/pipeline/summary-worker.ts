@@ -16,7 +16,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { DbAccessor } from "../db-accessor";
 import type { LlmProvider } from "@signet/core";
-import { createOllamaProvider, createClaudeCodeProvider, createOpenCodeProvider } from "./provider";
+import { createAnthropicProvider, createOllamaProvider, createClaudeCodeProvider, createOpenCodeProvider } from "./provider";
 
 import { isDuplicate, inferType } from "../hooks";
 import { loadMemoryConfig } from "../memory-config";
@@ -797,6 +797,10 @@ function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): LlmProvider 
 	const model = cfg.pipelineV2.synthesis.model;
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	switch (p) {
+		case "anthropic": {
+			const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
+			return createAnthropicProvider({ model: model || "haiku", apiKey, defaultTimeoutMs: timeout });
+		}
 		case "claude-code":
 			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
 		case "opencode":
