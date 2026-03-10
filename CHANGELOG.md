@@ -2,6 +2,33 @@
 
 All notable changes to Signet are documented here.
 
+## [0.53.2] - 2026-03-10
+
+### Bug Fixes
+
+- use date-versioned model IDs for sonnet/opus Anthropic aliases
+- add HTTP 504 to retryable status set for Anthropic provider
+- use SHA-256 fingerprint for provider cache key rotation detection
+- address Greptile review items for 5/5 confidence
+- use NonRetryableError for empty-response throw in callAnthropic
+- improve deadline-expiry diagnostics and warn on unknown kill signal
+- reset model to qwen3:4b on Ollama fallback in summary-worker
+- guard SIGTERM calls in timeout callbacks against already-exited processes
+- clear SIGKILL grace timer on process exit and clarify cache comment
+- replace brittle substring matching with NonRetryableError sentinel
+- tighten isRetryableStatus and add TTL to provider cache
+- cache summary-worker provider and harden spawnHidden kill signal
+- apply Promise.race timeout to codex provider
+- recompute deadline inside semaphore to account for contention
+- don't retry fatal 4xx Anthropic HTTP errors
+- guard Anthropic provider construction against missing API key
+- acquire semaphore per-attempt so backoff doesn't hold slots idle
+- wrap anthropic in semaphore, gate synthesis key lookup, use /v1/models for available()
+- address review feedback — model fallback, model IDs, available() auth, empty-response retry
+- address reviewer feedback on Anthropic provider and subprocess handling
+- replace node:child_process with Bun.spawn for reliable subprocess I/O
+
+
 ## [0.53.1] - 2026-03-10
 
 ### Bug Fixes
