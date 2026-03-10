@@ -501,7 +501,9 @@ interface AnthropicResponse {
 }
 
 function isRetryableStatus(status: number): boolean {
-	return status === 429 || status === 529 || status >= 500;
+	// 429 = rate limited, 500 = internal error, 502/503 = transient,
+	// 529 = overloaded. Don't retry 501 (not implemented) or other 5xx.
+	return status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
 }
 
 export function createAnthropicProvider(

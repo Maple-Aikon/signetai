@@ -829,9 +829,12 @@ export function startSummaryWorker(
 	let stopped = false;
 
 	// Cache the LLM provider to avoid per-job getSecret calls.
-	// Re-resolve only when the synthesis config changes.
+	// Re-resolve when config changes or after a TTL expires (so a
+	// newly added API key gets picked up without a restart).
 	let cachedProvider: LlmProvider | null = null;
 	let cachedProviderKey = "";
+	let cachedProviderAt = 0;
+	const PROVIDER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
@@ -885,11 +888,13 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
-			// Cache provider across jobs — only re-resolve when config changes
+			// Cache provider across jobs — re-resolve on config change or TTL expiry
 			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}`;
-			if (!cachedProvider || providerKey !== cachedProviderKey) {
+			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
+			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
 				cachedProvider = await resolveProvider(cfg);
 				cachedProviderKey = providerKey;
+				cachedProviderAt = Date.now();
 			}
 			await processJob(accessor, cachedProvider, job, cfg);
 
