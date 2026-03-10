@@ -938,7 +938,7 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
 				// Native unavailable — check if ollama is available as fallback
 				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
 				try {
-					const ollamaRes = await fetch("http://localhost:11434/api/tags", {
+					const ollamaRes = await fetch("http://127.0.0.1:11434/api/tags", {
 						method: "GET",
 						signal: AbortSignal.timeout(3000),
 					});

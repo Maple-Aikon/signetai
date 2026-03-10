@@ -169,7 +169,7 @@ export interface OllamaProviderConfig {
 
 const DEFAULT_OLLAMA_CONFIG: OllamaProviderConfig = {
 	model: "qwen3:4b",
-	baseUrl: "http://localhost:11434",
+	baseUrl: "http://127.0.0.1:11434",
 	defaultTimeoutMs: 90000,
 };
 
@@ -945,12 +945,12 @@ export interface OpenCodeProviderConfig {
 }
 
 const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
-	baseUrl: "http://localhost:4096",
+	baseUrl: "http://127.0.0.1:4096",
 	model: "anthropic/claude-haiku-4-5-20251001",
 	defaultTimeoutMs: 60000,
 	enableOllamaFallback: true,
 	ollamaFallbackModel: "qwen3:4b",
-	ollamaFallbackBaseUrl: "http://localhost:11434",
+	ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 };
 
 /**
@@ -990,7 +990,7 @@ let openCodeChild: {
  * configured port. Tracks the child for explicit cleanup.
  */
 export async function ensureOpenCodeServer(port: number): Promise<boolean> {
-	const healthUrl = `http://localhost:${port}/global/health`;
+	const healthUrl = `http://127.0.0.1:${port}/global/health`;
 
 	// Already managed by us?
 	if (openCodeChild?.port === port) {
