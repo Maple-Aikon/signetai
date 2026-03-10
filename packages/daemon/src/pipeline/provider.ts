@@ -474,8 +474,8 @@ const ANTHROPIC_API_VERSION = "2023-06-01";
 function resolveAnthropicModel(model: string): string {
 	const aliases: Record<string, string> = {
 		haiku: "claude-haiku-4-5-20251001",
-		sonnet: "claude-sonnet-4-6",
-		opus: "claude-opus-4-6",
+		sonnet: "claude-sonnet-4-5-20250514",
+		opus: "claude-opus-4-5-20250514",
 	};
 	return aliases[model] ?? model;
 }
