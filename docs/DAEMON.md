@@ -69,6 +69,11 @@ Configuration
 
 ### Files
 
+When log path overrides are set:
+- `SIGNET_LOG_FILE` takes highest precedence and points to the exact file.
+- Else `SIGNET_LOG_DIR` overrides the default log directory.
+- Else the default `~/.agents/.daemon/logs/` paths below apply.
+
 | File | Description |
 |------|-------------|
 | `~/.agents/.daemon/pid` | Process ID file |
@@ -338,7 +343,10 @@ Logging
 -------
 
 Logs are written to the console and to a daily file at
-`~/.agents/.daemon/logs/daemon-YYYY-MM-DD.log`.
+`~/.agents/.daemon/logs/daemon-YYYY-MM-DD.log` by default. When
+`SIGNET_LOG_FILE` is set, logs are written to that exact file.
+When `SIGNET_LOG_DIR` is set (and `SIGNET_LOG_FILE` is unset), daily
+logs are written under `$SIGNET_LOG_DIR/`.
 
 ```
 [2025-02-17T18:00:00.000Z] [INFO] Message here
@@ -368,7 +376,7 @@ signet start
 
 Read the error log:
 ```bash
-cat ~/.agents/.daemon/logs/daemon.err.log
+cat "${SIGNET_LOG_FILE:-$HOME/.agents/.daemon/logs/daemon.err.log}"
 ```
 
 ### Daemon keeps crashing

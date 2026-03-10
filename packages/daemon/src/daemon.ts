@@ -280,13 +280,27 @@ function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
 	}
 }
 
+function redactUrlForLogs(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	try {
+		const parsed = new URL(url);
+		parsed.username = "";
+		parsed.password = "";
+		parsed.search = "";
+		parsed.hash = "";
+		return normalizeBaseUrl(parsed.toString()) ?? url;
+	} catch {
+		return url;
+	}
+}
+
 const PORT = parsePort(readEnvTrimmed("SIGNET_PORT"), 3850);
 const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? "127.0.0.1");
 const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? HOST);
 const INTERNAL_SELF_HOST =
 	BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
 
-type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex";
+type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
 
 interface ProviderRuntimeResolution {
 	extraction: {
@@ -9253,6 +9267,10 @@ async function main() {
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"http://127.0.0.1:11434",
 	);
+	const extractionOllamaFallbackBaseUrl =
+		memoryCfg.pipelineV2.extraction.provider === "opencode"
+			? "http://127.0.0.1:11434"
+			: extractionOllamaBaseUrl;
 	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"http://127.0.0.1:4096",
@@ -9269,7 +9287,7 @@ async function main() {
 			}
 		} else {
 			logger.info("config", "Using external OpenCode endpoint for extraction", {
-				baseUrl: extractionOpenCodeBaseUrl,
+				baseUrl: redactUrlForLogs(extractionOpenCodeBaseUrl),
 			});
 		}
 	} else if (effectiveExtractionProvider === "claude-code") {
@@ -9309,30 +9327,6 @@ async function main() {
 			effectiveExtractionProvider = "ollama";
 		}
 	}
-	providerRuntimeResolution.extraction = {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: effectiveExtractionProvider,
-	};
-	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
-		logger.warn("config", "Extraction provider resolved differently than configured", {
-			configured: providerHints.extraction,
-			resolved: memoryCfg.pipelineV2.extraction.provider,
-			effective: effectiveExtractionProvider,
-		});
-	}
-	logger.info("config", "Extraction provider", {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: effectiveExtractionProvider,
-		endpoint:
-			effectiveExtractionProvider === "ollama"
-				? extractionOllamaBaseUrl
-				: effectiveExtractionProvider === "opencode"
-					? extractionOpenCodeBaseUrl
-					: undefined,
-	});
-
 	// Resolve Anthropic API key once — shared by extraction and synthesis
 	let anthropicApiKey: string | undefined;
 	const needsAnthropicForSynthesis =
@@ -9361,6 +9355,30 @@ async function main() {
 	if (effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama") {
 		effectiveExtractionModel = undefined;
 	}
+	providerRuntimeResolution.extraction = {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: effectiveExtractionProvider,
+	};
+	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
+		logger.warn("config", "Extraction provider resolved differently than configured", {
+			configured: providerHints.extraction,
+			resolved: memoryCfg.pipelineV2.extraction.provider,
+			effective: effectiveExtractionProvider,
+		});
+	}
+	logger.info("config", "Extraction provider", {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: effectiveExtractionProvider,
+		endpoint: redactUrlForLogs(
+			effectiveExtractionProvider === "ollama"
+				? extractionOllamaFallbackBaseUrl
+				: effectiveExtractionProvider === "opencode"
+					? extractionOpenCodeBaseUrl
+					: undefined,
+		),
+	});
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
@@ -9389,7 +9407,7 @@ async function main() {
 							})
 						: createOllamaProvider({
 								model: effectiveExtractionModel || "qwen3:4b",
-								baseUrl: extractionOllamaBaseUrl,
+								baseUrl: extractionOllamaFallbackBaseUrl,
 								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 							});
 	initLlmProvider(llmProvider);
@@ -9402,6 +9420,10 @@ async function main() {
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:11434",
 		);
+		const synthesisOllamaFallbackBaseUrl =
+			memoryCfg.pipelineV2.synthesis.provider === "opencode"
+				? "http://127.0.0.1:11434"
+				: synthesisOllamaBaseUrl;
 		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:4096",
@@ -9418,7 +9440,7 @@ async function main() {
 				}
 			} else {
 				logger.info("config", "Using external OpenCode endpoint for synthesis", {
-					baseUrl: synthesisOpenCodeBaseUrl,
+					baseUrl: redactUrlForLogs(synthesisOpenCodeBaseUrl),
 				});
 			}
 		} else if (effectiveSynthesisProvider === "anthropic") {
@@ -9459,12 +9481,13 @@ async function main() {
 			configured: providerHints.synthesis,
 			resolved: memoryCfg.pipelineV2.synthesis.provider,
 			effective: effectiveSynthesisProvider,
-			endpoint:
+			endpoint: redactUrlForLogs(
 				effectiveSynthesisProvider === "ollama"
-					? synthesisOllamaBaseUrl
+					? synthesisOllamaFallbackBaseUrl
 					: effectiveSynthesisProvider === "opencode"
 						? synthesisOpenCodeBaseUrl
 						: undefined,
+			),
 		});
 
 		// When falling back to ollama, reset model so ollama uses its own default
@@ -9492,11 +9515,11 @@ async function main() {
 								model: effectiveSynthesisModel || "haiku",
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 							})
-						: createOllamaProvider({
-								model: effectiveSynthesisModel || "qwen3:4b",
-								baseUrl: synthesisOllamaBaseUrl,
-								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-							});
+					: createOllamaProvider({
+							model: effectiveSynthesisModel || "qwen3:4b",
+							baseUrl: synthesisOllamaFallbackBaseUrl,
+							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+						});
 		initSynthesisProvider(synthesisProvider);
 	} else {
 		providerRuntimeResolution.synthesis = {
