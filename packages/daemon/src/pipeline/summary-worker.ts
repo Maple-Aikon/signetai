@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { DbAccessor } from "../db-accessor";
 import type { LlmProvider } from "./provider";
+import { createOllamaProvider, createClaudeCodeProvider, createCodexProvider, createOpenCodeProvider } from "./provider";
 import { getLlmProvider } from "../llm";
 import { isDuplicate, inferType } from "../hooks";
 import { loadMemoryConfig } from "../memory-config";
@@ -65,7 +66,7 @@ const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DIR = join(AGENTS_DIR, "memory");
 
 const POLL_INTERVAL_MS = 5_000;
-const LLM_TIMEOUT_MS = 90_000;
+const LLM_TIMEOUT_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // Prompt
@@ -717,31 +718,41 @@ function writeSummaryToDAG(
 		const now = new Date().toISOString();
 		const tokenCount = Math.ceil(result.summary.length / 4);
 
-		// ON CONFLICT preserves the existing row's id so cascade-linked child
-		// and memory rows survive job retries (INSERT OR REPLACE would delete
-		// the old row first, nuking those links).
-		db.prepare(
-			`INSERT INTO session_summaries (
-				id, project, depth, kind, content, token_count,
-				earliest_at, latest_at, session_key, harness,
-				agent_id, created_at
-			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(session_key, depth) DO UPDATE SET
-				content = excluded.content,
-				token_count = excluded.token_count,
-				latest_at = excluded.latest_at`,
-		).run(
-			summaryId,
-			job.project,
-			result.summary,
-			tokenCount,
-			job.created_at, // session start time
-			now,            // processing time ≈ session end time
-			job.session_key,
-			job.harness,
-			agentId,
-			now,
-		);
+		// Upsert: check for existing row first since ON CONFLICT doesn't
+		// work with the partial unique index (WHERE session_key IS NOT NULL).
+		const existing = job.session_key
+			? db.prepare(
+				`SELECT id FROM session_summaries
+				 WHERE session_key = ? AND depth = 0`,
+			).get(job.session_key) as { id: string } | undefined
+			: undefined;
+
+		if (existing) {
+			db.prepare(
+				`UPDATE session_summaries
+				 SET content = ?, token_count = ?, latest_at = ?
+				 WHERE id = ?`,
+			).run(result.summary, tokenCount, now, existing.id);
+		} else {
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, token_count,
+					earliest_at, latest_at, session_key, harness,
+					agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				summaryId,
+				job.project,
+				result.summary,
+				tokenCount,
+				job.created_at,
+				now,
+				job.session_key,
+				job.harness,
+				agentId,
+				now,
+			);
+		}
 
 		// Link extracted memories to this summary.
 		// Match by source_id containing the session key.
@@ -771,10 +782,25 @@ function writeSummaryToDAG(
 // Worker loop
 // ---------------------------------------------------------------------------
 
+function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): LlmProvider {
+	const p = cfg.pipelineV2.extraction.provider;
+	const model = cfg.pipelineV2.extraction.model;
+	const timeout = cfg.pipelineV2.extraction.timeout;
+	switch (p) {
+		case "claude-code":
+			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
+		case "codex":
+			return createCodexProvider({ model: model || "gpt-5.3-codex", defaultTimeoutMs: timeout });
+		case "opencode":
+			return createOpenCodeProvider({ model: model || "anthropic/claude-haiku-4-5-20251001", defaultTimeoutMs: timeout });
+		default:
+			return createOllamaProvider({ model: model || "qwen3:4b", defaultTimeoutMs: timeout });
+	}
+}
+
 export function startSummaryWorker(
 	accessor: DbAccessor,
 ): SummaryWorkerHandle {
-	const provider = getLlmProvider();
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 
@@ -830,6 +856,7 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
+			const provider = resolveProvider(cfg);
 			await processJob(accessor, provider, job);
 
 			// Mark complete

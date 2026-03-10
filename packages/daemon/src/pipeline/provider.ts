@@ -475,7 +475,8 @@ export function createCodexProvider(
 				throw new Error(`codex timeout after ${timeoutMs}ms`);
 			}
 			if (exitCode !== 0) {
-				throw new Error(`codex exit ${exitCode}: ${stderr.slice(0, 300)}`);
+				const detail = stderr.trim() || stdout.trim();
+				throw new Error(`codex exit ${exitCode}: ${detail.slice(0, 500)}`);
 			}
 			return parseCodexJsonl(stdout);
 		} finally {

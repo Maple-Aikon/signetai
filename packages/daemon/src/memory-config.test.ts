@@ -249,11 +249,27 @@ describe("loadPipelineConfig", () => {
 		expect(result).toEqual(DEFAULT_PIPELINE_V2);
 	});
 
-	it("resolves codex from nested extraction.provider", () => {
+	it("flat provider keys (dashboard) take priority over nested", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
+					extraction: {
+						provider: "codex",
+						model: "gpt-5.3-codex",
+					},
+				},
+			},
+		});
+
+		// Flat keys win — dashboard writes flat, so they must take priority
+		expect(result.extraction.provider).toBe("ollama");
+	});
+
+	it("nested provider used when no flat key is set", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
 					extraction: {
 						provider: "codex",
 						model: "gpt-5.3-codex",

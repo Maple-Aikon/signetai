@@ -243,24 +243,26 @@ export function loadPipelineConfig(
 	}
 
 	// -- Extraction provider resolution --
-	// Nested wins; flat fallback preserves legacy ollama inference
+	// Flat keys win when set (dashboard writes these); nested is fallback.
+	// Provider and model must stay paired — if flat provider won, use flat model.
 	const nestedProvider = extractionRaw?.provider;
 	const flatProvider = raw.extractionProvider;
 	const flatModel = raw.extractionModel;
+	const flatProviderWon = typeof flatProvider === "string" && (
+		flatProvider === "codex" || flatProvider === "opencode" ||
+		flatProvider === "claude-code" || flatProvider === "ollama"
+	);
 	const resolvedProvider: "ollama" | "claude-code" | "opencode" | "codex" =
-		nestedProvider === "codex" || flatProvider === "codex"
-			? "codex"
-			: nestedProvider === "opencode" || flatProvider === "opencode"
-			? "opencode"
-			: nestedProvider === "claude-code" || flatProvider === "claude-code"
-				? "claude-code"
-				: nestedProvider === "ollama" || flatProvider === "ollama"
+		flatProviderWon
+			? flatProvider as "ollama" | "claude-code" | "opencode" | "codex"
+			: nestedProvider === "codex" || nestedProvider === "opencode" ||
+			  nestedProvider === "claude-code" || nestedProvider === "ollama"
+				? nestedProvider
+				: typeof (extractionRaw?.model ?? flatModel) === "string" &&
+					  nestedProvider === undefined &&
+					  flatProvider === undefined
 					? "ollama"
-					: typeof (extractionRaw?.model ?? flatModel) === "string" &&
-						  nestedProvider === undefined &&
-						  flatProvider === undefined
-						? "ollama"
-						: d.extraction.provider;
+					: d.extraction.provider;
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -279,8 +281,9 @@ export function loadPipelineConfig(
 
 		extraction: {
 			provider: resolvedProvider,
-			model:
-				typeof extractionRaw?.model === "string"
+			model: flatProviderWon && typeof flatModel === "string"
+				? (flatModel as string)
+				: typeof extractionRaw?.model === "string"
 					? extractionRaw.model
 					: typeof flatModel === "string"
 						? (flatModel as string)
