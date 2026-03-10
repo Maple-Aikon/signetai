@@ -3998,11 +3998,15 @@ secretCmd
 			secrets[name] = name;
 		}
 
-		// Shell-escape each part so arguments with embedded spaces or special
-		// characters survive the daemon's `sh -c` invocation intact.
-		// e.g. ["python", "-c", "import os; print(1)"] → "python -c 'import os; print(1)'"
+		// Double-quote each part so arguments with embedded spaces survive
+		// the daemon's `sh -c` invocation. Double quotes (not single quotes)
+		// are used deliberately: they allow $VAR expansion in the daemon's
+		// shell, which is what makes `signet secret exec -s KEY echo $KEY` work.
+		// Backslash, double-quote, and backtick are escaped to prevent
+		// unintended interpretation; dollar signs are left unescaped.
+		// e.g. ["python", "-c", "import os; print(1)"] → "python" "-c" "import os; print(1)"
 		const command = commandParts
-			.map((arg) => `'${arg.replace(/'/g, "'\\''")}'`)
+			.map((arg) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`")}"`)
 			.join(" ");
 
 		try {
