@@ -554,16 +554,14 @@ async function configureHarnessHooks(
 				runtimePath,
 			});
 			if (runtimePath === "plugin") {
-				// ensureOpenClawPluginPackage returns the resolved global path — reuse
-				// it to patch load.paths without spawning a second subprocess.
+				// ensureOpenClawPluginPackage installs the package, creates the symlink,
+				// and returns the resolved global path so we can patch load.paths in one
+				// targeted call without re-running the full connector install.
 				const globalPkgPath = await ensureOpenClawPluginPackage(basePath);
 				if (globalPkgPath) {
-					await connector.install(basePath, {
-						configureWorkspace: false,
-						configureHooks: false,
-						runtimePath,
-						globalPackagePath: globalPkgPath,
-					});
+					// dirname gives the parent search directory (e.g. …/@signetai/)
+					// that OpenClaw scans for "signet-memory-openclaw" subdirectory.
+					connector.patchLoadPaths(dirname(globalPkgPath));
 				}
 			}
 			break;

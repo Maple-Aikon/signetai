@@ -23,7 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
 import { parse as parseJson5 } from "json5";
 
@@ -67,9 +67,6 @@ export interface OpenClawInstallOptions {
 	configureWorkspace?: boolean;
 	configureHooks?: boolean;
 	runtimePath?: "plugin" | "legacy";
-	/** Resolved filesystem path to the globally-installed plugin package.
-	 *  When provided, added to plugins.load.paths as a discovery fallback. */
-	globalPackagePath?: string;
 }
 
 /**
@@ -325,7 +322,7 @@ export class OpenClawConnector extends BaseConnector {
 
 		if (Object.keys(patch).length > 0) {
 			if (runtimePath === "plugin") {
-				const pluginResult = this.patchAllConfigsWithPlugin(patch, options.globalPackagePath);
+				const pluginResult = this.patchAllConfigsWithPlugin(patch);
 				configsPatched.push(...pluginResult.patched);
 				warnings.push(...pluginResult.warnings);
 			} else {
@@ -672,7 +669,6 @@ export class OpenClawConnector extends BaseConnector {
 	 */
 	private patchAllConfigsWithPlugin(
 		patch: JsonObject,
-		globalPackagePath?: string,
 	): {
 		patched: string[];
 		warnings: string[];
@@ -734,25 +730,6 @@ export class OpenClawConnector extends BaseConnector {
 					config.signet = undefined;
 				}
 
-				// Add global package path to plugins.load.paths as a fallback
-				// for environments where the symlink can't be created (Docker, perms).
-				if (globalPackagePath) {
-					// Use the parent directory as the load path. OpenClaw scans each
-					// entry in load.paths for a subdirectory named after the plugin
-					// ("signet-memory-openclaw"). The package lives at:
-					//   …/@signetai/signet-memory-openclaw
-					// so dirname gives …/@signetai/, which contains "signet-memory-openclaw".
-					const searchPath = dirname(globalPackagePath);
-					const pluginsObj = (config.plugins ?? {}) as JsonObject;
-					const loadObj = (pluginsObj.load ?? {}) as JsonObject;
-					const existingPaths = Array.isArray(loadObj.paths) ? (loadObj.paths as string[]) : [];
-					if (!existingPaths.includes(searchPath)) {
-						loadObj.paths = [...existingPaths, searchPath];
-						pluginsObj.load = loadObj;
-						config.plugins = pluginsObj;
-					}
-				}
-
 				deepMerge(config, patch);
 				writeFileSync(configPath, JSON.stringify(config, null, indent));
 				patched.push(configPath);
@@ -801,6 +778,51 @@ export class OpenClawConnector extends BaseConnector {
 		const indent = this.detectIndent(raw);
 		deepMerge(config, patch);
 		writeFileSync(configPath, JSON.stringify(config, null, indent));
+	}
+
+	/**
+	 * Narrow config-only update: add `searchPath` to `plugins.load.paths` in
+	 * all discovered configs without re-running the full install flow.
+	 *
+	 * `searchPath` should be the **parent** directory of the plugin package
+	 * (e.g. `…/@signetai/`) so OpenClaw can find `signet-memory-openclaw`
+	 * as a subdirectory.
+	 */
+	patchLoadPaths(searchPath: string): { patched: string[]; warnings: string[] } {
+		const patched: string[] = [];
+		const warnings: string[] = [];
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const raw = readFileSync(configPath, "utf-8");
+				const config = parseJsonOrJson5(raw);
+				const indent = this.detectIndent(raw);
+
+				const pluginsObj = (config.plugins ?? {}) as JsonObject;
+				const loadObj = (pluginsObj.load ?? {}) as JsonObject;
+				const rawPaths = loadObj.paths;
+				const existingPaths =
+					Array.isArray(rawPaths) &&
+					rawPaths.every((entry): entry is string => typeof entry === "string")
+						? rawPaths
+						: [];
+
+				if (!existingPaths.includes(searchPath)) {
+					loadObj.paths = [...existingPaths, searchPath];
+					pluginsObj.load = loadObj;
+					config.plugins = pluginsObj;
+					writeFileSync(configPath, JSON.stringify(config, null, indent));
+					patched.push(configPath);
+				}
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: ${message}`;
+				warnings.push(warning);
+				console.warn(warning);
+			}
+		}
+
+		return { patched, warnings };
 	}
 
 	/**

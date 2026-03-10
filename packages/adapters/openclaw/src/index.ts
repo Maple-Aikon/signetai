@@ -1351,12 +1351,7 @@ const signetPlugin = {
 				sessionKey,
 			});
 			if (!result) {
-				// daemonFetch already logs ECONNREFUSED; this gives a higher-level
-				// signal at the injection layer, fires immediately rather than waiting
-				// for the health-check interval.
-				api.logger.warn(
-					"signet-memory: user-prompt-submit returned no result — daemon may be unreachable",
-				);
+				// daemonFetch already logged the specific error (ECONNREFUSED or HTTP status).
 				return undefined;
 			}
 			recentPromptTurns.set(promptTurnKey, Date.now());
