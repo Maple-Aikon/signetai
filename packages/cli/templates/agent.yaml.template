@@ -114,7 +114,7 @@ memory:
       # "claude-code" (Claude CLI), "codex" (Codex CLI), "opencode" (OpenCode), or "ollama" (local)
       provider: claude-code
       model: haiku
-      # ollama endpoint override (only used when provider resolves to ollama)
+      # endpoint/base_url override (used by ollama and OpenCode ollama fallback)
       # endpoint: http://localhost:11434
       # timeout: 45000
       # minConfidence: 0.7

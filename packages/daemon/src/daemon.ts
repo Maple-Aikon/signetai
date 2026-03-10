@@ -278,6 +278,8 @@ function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
 const PORT = Number.parseInt(readEnvTrimmed("SIGNET_PORT") ?? "3850", 10);
 const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? "127.0.0.1");
 const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? HOST);
+const INTERNAL_SELF_HOST =
+	BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
 
 type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex";
 
@@ -629,32 +631,42 @@ function getConfiguredProviderHints(agentsDir: string): {
 		join(agentsDir, "AGENT.yaml"),
 		join(agentsDir, "config.yaml"),
 	];
+	let extraction: string | null = null;
+	let synthesis: string | null = null;
 
 	for (const path of paths) {
 		if (!existsSync(path)) continue;
 		try {
-			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
-			const mem = yaml.memory as Record<string, unknown> | undefined;
-			const pipeline = mem?.pipelineV2 as Record<string, unknown> | undefined;
-			const extractionObj = pipeline?.extraction as Record<string, unknown> | undefined;
-			const synthesisObj = pipeline?.synthesis as Record<string, unknown> | undefined;
-			const extraction =
+			const yaml = toRecord(parseSimpleYaml(readFileSync(path, "utf-8")));
+			const mem = toRecord(yaml?.memory);
+			const pipeline = toRecord(mem?.pipelineV2);
+			const extractionObj = toRecord(pipeline?.extraction);
+			const synthesisObj = toRecord(pipeline?.synthesis);
+			const extractionInFile =
 				typeof pipeline?.extractionProvider === "string"
 					? pipeline.extractionProvider
 					: typeof extractionObj?.provider === "string"
 						? extractionObj.provider
 						: null;
-			const synthesis =
+			const synthesisInFile =
 				typeof synthesisObj?.provider === "string"
 					? synthesisObj.provider
 					: null;
-			return { extraction, synthesis };
+			if (extraction === null && extractionInFile !== null) {
+				extraction = extractionInFile;
+			}
+			if (synthesis === null && synthesisInFile !== null) {
+				synthesis = synthesisInFile;
+			}
+			if (extraction !== null && synthesis !== null) {
+				break;
+			}
 		} catch {
 			continue;
 		}
 	}
 
-	return { extraction: null, synthesis: null };
+	return { extraction, synthesis };
 }
 
 interface LegacyEmbeddingsResponse {
@@ -2249,7 +2261,7 @@ app.post("/api/memory/remember", async (c) => {
 		const importance = body.importance ?? parsedPrefixes.importance;
 		const pinned = (body.pinned ?? parsedPrefixes.pinned) ? 1 : 0;
 		const tags = body.tags ?? parsedPrefixes.tags;
-		const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
+		const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
 		const groupId = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -2420,7 +2432,7 @@ app.post("/api/memory/remember", async (c) => {
 	const normalizedContentForInsert =
 		normalizedContent.normalizedContent.length > 0 ? normalizedContent.normalizedContent : normalizedContent.hashBasis;
 	const contentHash = normalizedContent.contentHash;
-	const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
+	const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
 	type DedupeRow = {
 		id: string;
@@ -2606,7 +2618,7 @@ app.post("/api/memory/remember", async (c) => {
 app.post("/api/memory/save", async (c) => {
 	// Re-use the same handler by forwarding to the internal fetch
 	const body = await c.req.json().catch(() => ({}));
-	return fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+	return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -2616,7 +2628,7 @@ app.post("/api/memory/save", async (c) => {
 // Alias for Claude Code skill compatibility
 app.post("/api/hook/remember", async (c) => {
 	const body = await c.req.json().catch(() => ({}));
-	return fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+	return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -8673,7 +8685,7 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 			syncedClaudeMemories.add(chunkKey);
 
 			try {
-				const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+				const response = await fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -8931,7 +8943,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		const chunk = chunks[i];
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
 		try {
-			const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+			const response = await fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({

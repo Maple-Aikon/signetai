@@ -249,16 +249,25 @@ async function processJob(
 		summaryChars: result.summary.length,
 	});
 
-	const saved = insertSummaryFacts(accessor, job, result.facts);
+	let saved = 0;
+	if (memoryCfg.pipelineV2.shadowMode) {
+		logger.info("summary-worker", "Shadow mode enabled — skipping summary fact writes", {
+			total: result.facts.length,
+			sessionKey: job.session_key,
+			project: job.project,
+		});
+	} else {
+		saved = insertSummaryFacts(accessor, job, result.facts);
 
-	logger.info("summary-worker", "Inserted session facts", {
-		total: result.facts.length,
-		saved,
-		deduplicated: result.facts.length - saved,
-		factsPreview: result.facts
-			.slice(0, 10)
-			.map((fact) => fact.content),
-	});
+		logger.info("summary-worker", "Inserted session facts", {
+			total: result.facts.length,
+			saved,
+			deduplicated: result.facts.length - saved,
+			factsPreview: result.facts
+				.slice(0, 10)
+				.map((fact) => fact.content),
+		});
+	}
 
 	// Agent ID is hardcoded because summary_jobs and session_scores tables
 	// lack an agent_id column (pre-existing schema limitation). In a
@@ -826,7 +835,7 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 		default:
 			return createOllamaProvider({
 				model: model || "qwen3:4b",
-				baseUrl: endpoint,
+				...(endpoint ? { baseUrl: endpoint } : {}),
 				defaultTimeoutMs: timeout,
 			});
 	}
@@ -851,7 +860,7 @@ export function startSummaryWorker(
 
 		// Re-check config each tick — respect runtime config changes
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		if (!cfg.pipelineV2.enabled) {
+		if (!cfg.pipelineV2.enabled || cfg.pipelineV2.shadowMode) {
 			scheduleTick(POLL_INTERVAL_MS);
 			return;
 		}
