@@ -9143,10 +9143,10 @@ async function main() {
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
-		effectiveExtractionProvider === "anthropic"
+		effectiveExtractionProvider === "anthropic" && anthropicApiKey
 			? createAnthropicProvider({
 					model: effectiveExtractionModel || "haiku",
-					apiKey: anthropicApiKey ?? "",
+					apiKey: anthropicApiKey,
 					defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 				})
 			: effectiveExtractionProvider === "opencode"
@@ -9211,10 +9211,10 @@ async function main() {
 		}
 
 		const synthesisProvider =
-			effectiveSynthesisProvider === "anthropic"
+			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
 				? createAnthropicProvider({
 						model: effectiveSynthesisModel || "haiku",
-						apiKey: anthropicApiKey ?? "",
+						apiKey: anthropicApiKey,
 						defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 					})
 				: effectiveSynthesisProvider === "opencode"
