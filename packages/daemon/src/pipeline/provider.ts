@@ -519,7 +519,6 @@ export function createAnthropicProvider(
 		prompt: string,
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<{ text: string; usage: AnthropicUsage | null }> {
-		return withSemaphore(async () => {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const maxTokens = opts?.maxTokens ?? 4096;
 		const url = `${cfg.baseUrl}/v1/messages`;
@@ -536,7 +535,8 @@ export function createAnthropicProvider(
 
 		for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
 			if (attempt > 0) {
-				// Exponential backoff: 1s, 2s, 4s...
+				// Exponential backoff happens OUTSIDE the semaphore so idle
+				// sleep doesn't block other providers from using the slot.
 				const backoffMs = Math.min(1000 * (2 ** (attempt - 1)), 8000);
 				await new Promise((r) => setTimeout(r, backoffMs));
 
@@ -552,110 +552,117 @@ export function createAnthropicProvider(
 				throw lastError ?? new Error(`Anthropic timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt})`);
 			}
 
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), remainingMs);
+			// Acquire semaphore only for the actual API call, release
+			// immediately after so backoff sleep doesn't hold a slot.
+			const result = await withSemaphore(async () => {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), remainingMs);
 
-			try {
-				const res = await fetch(url, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"x-api-key": cfg.apiKey,
-						"anthropic-version": ANTHROPIC_API_VERSION,
-					},
-					body,
-					signal: controller.signal,
-				});
+				try {
+					const res = await fetch(url, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"x-api-key": cfg.apiKey,
+							"anthropic-version": ANTHROPIC_API_VERSION,
+						},
+						body,
+						signal: controller.signal,
+					});
 
-				if (!res.ok) {
-					const rawBody = await res.text().catch(() => "");
-					let errorDetail = rawBody.slice(0, 300);
+					if (!res.ok) {
+						const rawBody = await res.text().catch(() => "");
+						let errorDetail = rawBody.slice(0, 300);
 
-					// Parse structured error if available
-					try {
-						const parsed = JSON.parse(rawBody) as AnthropicErrorBody;
-						if (parsed.error?.message) {
-							errorDetail = `${parsed.error.type ?? "error"}: ${parsed.error.message}`;
+						// Parse structured error if available
+						try {
+							const parsed = JSON.parse(rawBody) as AnthropicErrorBody;
+							if (parsed.error?.message) {
+								errorDetail = `${parsed.error.type ?? "error"}: ${parsed.error.message}`;
+							}
+						} catch {
+							// Use raw body
 						}
-					} catch {
-						// Use raw body
-					}
 
-					if (res.status === 401) {
+						if (res.status === 401) {
+							throw new Error(
+								`Anthropic auth failed (401): ${errorDetail}. Check your ANTHROPIC_API_KEY.`,
+							);
+						}
+
+						if (isRetryableStatus(res.status) && attempt < cfg.maxRetries) {
+							lastError = new Error(
+								`Anthropic HTTP ${res.status}: ${errorDetail}`,
+							);
+							logger.warn("pipeline", "Anthropic API retryable error", {
+								status: res.status,
+								attempt,
+								detail: errorDetail.slice(0, 100),
+							});
+							return { retry: true } as const;
+						}
+
 						throw new Error(
-							`Anthropic auth failed (401): ${errorDetail}. Check your ANTHROPIC_API_KEY.`,
-						);
-					}
-
-					if (isRetryableStatus(res.status) && attempt < cfg.maxRetries) {
-						lastError = new Error(
 							`Anthropic HTTP ${res.status}: ${errorDetail}`,
 						);
-						logger.warn("pipeline", "Anthropic API retryable error", {
-							status: res.status,
-							attempt,
-							detail: errorDetail.slice(0, 100),
-						});
-						continue;
 					}
 
-					throw new Error(
-						`Anthropic HTTP ${res.status}: ${errorDetail}`,
-					);
-				}
+					const data = (await res.json()) as AnthropicResponse;
 
-				const data = (await res.json()) as AnthropicResponse;
-
-				// Extract text from content blocks
-				const textParts: string[] = [];
-				if (Array.isArray(data.content)) {
-					for (const block of data.content) {
-						if (block.type === "text" && typeof block.text === "string") {
-							textParts.push(block.text);
+					// Extract text from content blocks
+					const textParts: string[] = [];
+					if (Array.isArray(data.content)) {
+						for (const block of data.content) {
+							if (block.type === "text" && typeof block.text === "string") {
+								textParts.push(block.text);
+							}
 						}
 					}
+
+					const text = textParts.join("\n").trim();
+					if (text.length === 0) {
+						throw new Error(
+							`Anthropic returned empty response (stop_reason: ${data.stop_reason ?? "unknown"})`,
+						);
+					}
+
+					return { retry: false, text, usage: data.usage ?? null } as const;
+				} catch (e) {
+					if (e instanceof DOMException && e.name === "AbortError") {
+						throw new Error(`Anthropic timeout after ${timeoutMs}ms`);
+					}
+
+					// Don't retry non-retryable errors
+					if (e instanceof Error && (
+						e.message.includes("auth failed") ||
+						e.message.includes("timeout after") ||
+						e.message.includes("empty response")
+					)) {
+						throw e;
+					}
+
+					lastError = e instanceof Error ? e : new Error(String(e));
+
+					if (attempt < cfg.maxRetries) {
+						logger.warn("pipeline", "Anthropic API network error", {
+							attempt,
+							error: lastError.message.slice(0, 100),
+						});
+						return { retry: true } as const;
+					}
+
+					throw lastError;
+				} finally {
+					clearTimeout(timer);
 				}
+			});
 
-				const text = textParts.join("\n").trim();
-				if (text.length === 0) {
-					throw new Error(
-						`Anthropic returned empty response (stop_reason: ${data.stop_reason ?? "unknown"})`,
-					);
-				}
-
-				return { text, usage: data.usage ?? null };
-			} catch (e) {
-				if (e instanceof DOMException && e.name === "AbortError") {
-					throw new Error(`Anthropic timeout after ${timeoutMs}ms`);
-				}
-
-				// Don't retry non-retryable errors
-				if (e instanceof Error && (
-					e.message.includes("auth failed") ||
-					e.message.includes("timeout after") ||
-					e.message.includes("empty response")
-				)) {
-					throw e;
-				}
-
-				lastError = e instanceof Error ? e : new Error(String(e));
-
-				if (attempt < cfg.maxRetries) {
-					logger.warn("pipeline", "Anthropic API network error", {
-						attempt,
-						error: lastError.message.slice(0, 100),
-					});
-					continue;
-				}
-
-				throw lastError;
-			} finally {
-				clearTimeout(timer);
+			if (!result.retry) {
+				return { text: result.text, usage: result.usage };
 			}
 		}
 
 		throw lastError ?? new Error("Anthropic call failed after retries");
-		});
 	}
 
 	return {
