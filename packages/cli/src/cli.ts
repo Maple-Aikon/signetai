@@ -730,14 +730,21 @@ function ensureOpenClawExtensionSymlink(
 	silent?: boolean,
 ): void {
 
-	// Discover the active OpenClaw state directory. Check env overrides first,
-	// then probe for existing legacy dirs (~/.clawdbot, ~/.moldbot, ~/.moltbot).
+	// Discover the active OpenClaw state directory. Check env overrides first
+	// (expanding ~ just like the connector does), then probe for existing legacy
+	// dirs (~/.clawdbot, ~/.moldbot, ~/.moltbot).
 	const stateDirCandidates: string[] = [];
+	// normalizeAgentPath expands ~ and resolves to an absolute path.
 	if (process.env.OPENCLAW_STATE_DIR) {
-		stateDirCandidates.push(resolvePath(process.env.OPENCLAW_STATE_DIR));
+		stateDirCandidates.push(normalizeAgentPath(process.env.OPENCLAW_STATE_DIR));
 	}
 	if (process.env.CLAWDBOT_STATE_DIR) {
-		stateDirCandidates.push(resolvePath(process.env.CLAWDBOT_STATE_DIR));
+		stateDirCandidates.push(normalizeAgentPath(process.env.CLAWDBOT_STATE_DIR));
+	}
+	// OPENCLAW_STATE_HOME is the root of the state directory (openclaw.json lives
+	// directly inside it), so extensions/ belongs there too.
+	if (process.env.OPENCLAW_STATE_HOME) {
+		stateDirCandidates.push(normalizeAgentPath(process.env.OPENCLAW_STATE_HOME));
 	}
 	const home = homedir();
 	for (const name of [".openclaw", ".clawdbot", ".moldbot", ".moltbot"]) {
