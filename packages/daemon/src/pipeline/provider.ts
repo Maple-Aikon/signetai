@@ -128,7 +128,8 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		stderr: proc.stderr,
 		exited: proc.exited,
 		kill(signal?: string) {
-			const sigNum = signal === "SIGKILL" ? 9 : signal === "SIGTERM" ? 15 : undefined;
+			// Default to SIGTERM (15) when no signal is specified
+			const sigNum = signal === "SIGKILL" ? 9 : 15;
 			proc.kill(sigNum);
 		},
 	};

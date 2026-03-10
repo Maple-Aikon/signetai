@@ -828,6 +828,11 @@ export function startSummaryWorker(
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 
+	// Cache the LLM provider to avoid per-job getSecret calls.
+	// Re-resolve only when the synthesis config changes.
+	let cachedProvider: LlmProvider | null = null;
+	let cachedProviderKey = "";
+
 	async function tick(): Promise<void> {
 		if (stopped) return;
 
@@ -880,8 +885,13 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
-			const provider = await resolveProvider(cfg);
-			await processJob(accessor, provider, job, cfg);
+			// Cache provider across jobs — only re-resolve when config changes
+			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}`;
+			if (!cachedProvider || providerKey !== cachedProviderKey) {
+				cachedProvider = await resolveProvider(cfg);
+				cachedProviderKey = providerKey;
+			}
+			await processJob(accessor, cachedProvider, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {
