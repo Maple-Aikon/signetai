@@ -3998,7 +3998,12 @@ secretCmd
 			secrets[name] = name;
 		}
 
-		const command = commandParts.join(" ");
+		// Shell-escape each part so arguments with embedded spaces or special
+		// characters survive the daemon's `sh -c` invocation intact.
+		// e.g. ["python", "-c", "import os; print(1)"] → "python -c 'import os; print(1)'"
+		const command = commandParts
+			.map((arg) => `'${arg.replace(/'/g, "'\\''")}'`)
+			.join(" ");
 
 		try {
 			// TODO: stream output once the daemon exposes a SSE endpoint for
@@ -4012,17 +4017,20 @@ secretCmd
 
 			if (!ok) {
 				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
-				process.exit(1);
+				process.exitCode = 1;
+				return;
 			}
 
 			const result = data as { stdout: string; stderr: string; code: number | null };
 			if (result.stdout) process.stdout.write(result.stdout);
 			if (result.stderr) process.stderr.write(result.stderr);
-			// code is null when the process was killed by a signal — treat as failure
-			process.exit(result.code ?? 1);
+			// Use exitCode + return so Node flushes stdout/stderr buffers before
+			// the process actually exits. process.exit() can truncate buffered output.
+			// code is null when the child was killed by a signal — treat as failure.
+			process.exitCode = result.code ?? 1;
 		} catch (e) {
 			console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			process.exit(1);
+			process.exitCode = 1;
 		}
 	});
 
