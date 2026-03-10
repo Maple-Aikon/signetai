@@ -3996,6 +3996,19 @@ secretCmd
 			process.exit(1);
 		}
 
+		// Validate that each name is a legal POSIX env var identifier.
+		// Secret names that contain hyphens or start with a digit are valid
+		// Signet identifiers but cannot be injected as env vars.
+		const VALID_ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
+		for (const name of opts.secret) {
+			if (!VALID_ENV_VAR.test(name)) {
+				console.error(chalk.red(`  Invalid secret name for env injection: "${name}"`));
+				console.log(chalk.dim("  Names must be valid env var identifiers: letters, digits, underscore; no leading digit or hyphens."));
+				process.exitCode = 1;
+				return;
+			}
+		}
+
 		// Map each name to itself — env var name and secret name are the same.
 		// The daemon API accepts Record<envVarName, secretName> for future
 		// "ENV=SECRET" remapping support.
