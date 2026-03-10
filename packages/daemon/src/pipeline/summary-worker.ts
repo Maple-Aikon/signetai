@@ -66,7 +66,7 @@ const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DIR = join(AGENTS_DIR, "memory");
 
 const POLL_INTERVAL_MS = 5_000;
-const LLM_TIMEOUT_MS = 300_000;
+// Timeout is now configured per-provider via resolveProvider() and config.
 
 // ---------------------------------------------------------------------------
 // Prompt
@@ -225,9 +225,7 @@ async function processJob(
 
 	const prompt = buildPrompt(job.transcript, today);
 
-	const raw = await provider.generate(prompt, {
-		timeoutMs: LLM_TIMEOUT_MS,
-	});
+	const raw = await provider.generate(prompt, {});
 
 	const result = parseLlmResponse(raw);
 	if (!result) {
@@ -564,7 +562,7 @@ async function scoreContinuity(
 		injectedMemories,
 	);
 
-	const raw = await provider.generate(prompt, { timeoutMs: LLM_TIMEOUT_MS });
+	const raw = await provider.generate(prompt, {});
 
 	let jsonStr = raw.trim();
 	const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);

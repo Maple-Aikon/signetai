@@ -254,6 +254,7 @@ describe("loadPipelineConfig", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
+					extractionModel: "qwen3:4b",
 					extraction: {
 						provider: "codex",
 						model: "gpt-5.3-codex",
@@ -262,8 +263,9 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		// Flat keys win — dashboard writes flat, so they must take priority
+		// Flat keys win as a pair — dashboard writes flat, so they must take priority
 		expect(result.extraction.provider).toBe("ollama");
+		expect(result.extraction.model).toBe("qwen3:4b");
 	});
 
 	it("nested provider used when no flat key is set", () => {

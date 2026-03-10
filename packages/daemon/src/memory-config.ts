@@ -202,7 +202,8 @@ function clampFraction(raw: unknown, fallback: number): number {
 
 /**
  * Load pipeline config from YAML, supporting both nested and flat key formats.
- * Nested keys take precedence when both are present.
+ * Flat extraction keys (dashboard-written) take precedence over nested keys.
+ * Provider and model are paired — if flat provider wins, flat model wins too.
  */
 export function loadPipelineConfig(
 	yaml: Record<string, unknown>,
@@ -233,7 +234,7 @@ export function loadPipelineConfig(
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 
-	// Helper: resolve nested-first, flat-fallback
+	// Helper: resolve with flat-fallback (non-extraction fields still nested-first)
 	const d = DEFAULT_PIPELINE_V2;
 
 	function resolveBool(nested: unknown, flat: unknown, fallback: boolean): boolean {
@@ -264,7 +265,7 @@ export function loadPipelineConfig(
 			? flatProvider
 			: isValidProvider(nestedProvider)
 				? nestedProvider
-				: typeof (extractionRaw?.model ?? flatModel) === "string" &&
+				: typeof flatModel === "string" &&
 					  nestedProvider === undefined &&
 					  flatProvider === undefined
 					? "ollama"
