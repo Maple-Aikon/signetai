@@ -3977,14 +3977,20 @@ secretCmd
 
 secretCmd
 	.command("exec <command...>")
-	.description("Run a command with secrets injected as environment variables")
+	.description(
+		"Run a command with secrets injected as environment variables\n" +
+			"  NOTE: --secret flags must appear before the command token.\n" +
+			"  Secrets are available via process.env / os.environ in the subprocess;\n" +
+			"  shell-level $VAR expansion is intentionally disabled for security.",
+	)
 	.passThroughOptions()
-	.option("-s, --secret <name>", "Secret to inject (repeatable)", appendCliString, [] as string[])
+	.option("-s, --secret <name>", "Secret to inject (repeatable, must precede command)", appendCliString, [] as string[])
 	.action(async (commandParts: string[], opts: { secret: string[] }) => {
 		if (!(await ensureDaemonForSecrets())) return;
 
 		if (opts.secret.length === 0) {
 			console.error(chalk.red("  At least one --secret is required."));
+			console.log(chalk.dim("  NOTE: --secret flags must come before the command token."));
 			console.log(chalk.dim("\n  Example:"));
 			console.log(`    signet secret exec --secret OPENAI_API_KEY curl https://api.openai.com/v1/models\n`);
 			process.exit(1);
