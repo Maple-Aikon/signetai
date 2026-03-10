@@ -61,8 +61,11 @@ Configuration
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIGNET_PORT` | `3850` | HTTP server port |
-| `SIGNET_HOST` | `localhost` | Bind address |
+| `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls and default bind address |
+| `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (for example `0.0.0.0`) |
 | `SIGNET_PATH` | `~/.agents` | Base agents directory |
+| `SIGNET_LOG_FILE` | — | Optional explicit log file path |
+| `SIGNET_LOG_DIR` | `~/.agents/.daemon/logs` | Optional log directory override |
 
 ### Files
 

@@ -99,7 +99,8 @@ memory:
 
   # Pipeline V2 — automatic memory extraction from conversations
   pipelineV2:
-    # Master switch (true = extract memories from conversations)
+    # Master switch (true = run pipeline workers)
+    # When false, shadowMode is ignored and the pipeline is fully disabled.
     enabled: true
 
     # Shadow mode: extract but don't write to DB (dry-run for testing)
@@ -113,6 +114,8 @@ memory:
       # "claude-code" (Claude CLI), "codex" (Codex CLI), "opencode" (OpenCode), or "ollama" (local)
       provider: claude-code
       model: haiku
+      # ollama endpoint override (only used when provider resolves to ollama)
+      # endpoint: http://localhost:11434
       # timeout: 45000
       # minConfidence: 0.7
 

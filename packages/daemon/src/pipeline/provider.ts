@@ -173,6 +173,10 @@ const DEFAULT_OLLAMA_CONFIG: OllamaProviderConfig = {
 	defaultTimeoutMs: 90000,
 };
 
+function trimTrailingSlash(url: string): string {
+	return url.endsWith("/") ? url.slice(0, -1) : url;
+}
+
 interface OllamaGenerateResponse {
 	readonly response?: string;
 	readonly eval_count?: number;
@@ -184,7 +188,8 @@ interface OllamaGenerateResponse {
 export function createOllamaProvider(
 	config?: Partial<OllamaProviderConfig>,
 ): LlmProvider {
-	const cfg = { ...DEFAULT_OLLAMA_CONFIG, ...config };
+	const merged = { ...DEFAULT_OLLAMA_CONFIG, ...config };
+	const cfg = { ...merged, baseUrl: trimTrailingSlash(merged.baseUrl) };
 
 	async function callOllama(
 		prompt: string,
@@ -936,6 +941,7 @@ export interface OpenCodeProviderConfig {
 	readonly defaultTimeoutMs: number;
 	readonly enableOllamaFallback: boolean;
 	readonly ollamaFallbackModel: string;
+	readonly ollamaFallbackBaseUrl: string;
 }
 
 const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
@@ -944,6 +950,7 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	defaultTimeoutMs: 60000,
 	enableOllamaFallback: true,
 	ollamaFallbackModel: "qwen3:4b",
+	ollamaFallbackBaseUrl: "http://localhost:11434",
 };
 
 /**
@@ -1202,7 +1209,12 @@ function extractOpenCodeText(data: OpenCodeMessageResponse): string {
 export function createOpenCodeProvider(
 	config?: Partial<OpenCodeProviderConfig>,
 ): LlmProvider {
-	const cfg = { ...DEFAULT_OPENCODE_CONFIG, ...config };
+	const merged = { ...DEFAULT_OPENCODE_CONFIG, ...config };
+	const cfg = {
+		...merged,
+		baseUrl: trimTrailingSlash(merged.baseUrl),
+		ollamaFallbackBaseUrl: trimTrailingSlash(merged.ollamaFallbackBaseUrl),
+	};
 
 	// Parse "provider/model" format (e.g. "anthropic/claude-haiku-4-5-20251001")
 	const slashIdx = cfg.model.indexOf("/");
@@ -1216,6 +1228,7 @@ export function createOpenCodeProvider(
 		if (ollamaFallbackProvider) return ollamaFallbackProvider;
 		ollamaFallbackProvider = createOllamaProvider({
 			model: cfg.ollamaFallbackModel,
+			baseUrl: cfg.ollamaFallbackBaseUrl,
 			defaultTimeoutMs: cfg.defaultTimeoutMs,
 		});
 		return ollamaFallbackProvider;
@@ -1248,7 +1261,7 @@ export function createOpenCodeProvider(
 			let inputTokens: number | null = null;
 			let outputTokens: number | null = null;
 			try {
-				const res = await fetch("http://localhost:11434/api/generate", {
+				const res = await fetch(`${cfg.ollamaFallbackBaseUrl}/api/generate`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({

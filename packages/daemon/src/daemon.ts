@@ -230,8 +230,82 @@ const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 
 // Config
-const PORT = Number.parseInt(process.env.SIGNET_PORT || "3850", 10);
-const HOST = process.env.SIGNET_HOST || "localhost";
+function readEnvTrimmed(key: string): string | undefined {
+	const raw = process.env[key];
+	if (typeof raw !== "string") return undefined;
+	const trimmed = raw.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeBaseUrl(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	return url.endsWith("/") ? url.slice(0, -1) : url;
+}
+
+function normalizeLoopbackHost(host: string): string {
+	return host === "localhost" ? "127.0.0.1" : host;
+}
+
+function normalizeRuntimeBaseUrl(url: string | undefined, fallback: string): string {
+	const base = normalizeBaseUrl(url) ?? fallback;
+	try {
+		const parsed = new URL(base);
+		if (parsed.hostname === "localhost" || parsed.hostname === "::1") {
+			parsed.hostname = "127.0.0.1";
+		}
+		return normalizeBaseUrl(parsed.toString()) ?? fallback;
+	} catch {
+		return base;
+	}
+}
+
+function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
+	try {
+		const parsed = new URL(baseUrl);
+		const isLoopbackHost =
+			parsed.hostname === "127.0.0.1" ||
+			parsed.hostname === "localhost" ||
+			parsed.hostname === "::1";
+		if (!isLoopbackHost) return false;
+		if (parsed.protocol !== "http:") return false;
+		const port = parsed.port.length > 0 ? Number.parseInt(parsed.port, 10) : 80;
+		return port === 4096;
+	} catch {
+		return false;
+	}
+}
+
+const PORT = Number.parseInt(readEnvTrimmed("SIGNET_PORT") ?? "3850", 10);
+const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? "127.0.0.1");
+const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? HOST);
+
+type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex";
+
+interface ProviderRuntimeResolution {
+	extraction: {
+		configured: string | null;
+		resolved: RuntimeProviderName;
+		effective: RuntimeProviderName;
+	};
+	synthesis: {
+		configured: string | null;
+		resolved: "ollama" | "claude-code" | "opencode" | "anthropic" | null;
+		effective: "ollama" | "claude-code" | "opencode" | "anthropic" | null;
+	};
+}
+
+const providerRuntimeResolution: ProviderRuntimeResolution = {
+	extraction: {
+		configured: null,
+		resolved: "claude-code",
+		effective: "claude-code",
+	},
+	synthesis: {
+		configured: null,
+		resolved: null,
+		effective: null,
+	},
+};
 
 // Autonomous maintenance singletons
 const providerTracker = createProviderTracker();
@@ -544,6 +618,43 @@ function parseIsoDateQuery(raw: string | undefined): string | undefined {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return undefined;
 	return date.toISOString();
+}
+
+function getConfiguredProviderHints(agentsDir: string): {
+	readonly extraction: string | null;
+	readonly synthesis: string | null;
+} {
+	const paths = [
+		join(agentsDir, "agent.yaml"),
+		join(agentsDir, "AGENT.yaml"),
+		join(agentsDir, "config.yaml"),
+	];
+
+	for (const path of paths) {
+		if (!existsSync(path)) continue;
+		try {
+			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
+			const mem = yaml.memory as Record<string, unknown> | undefined;
+			const pipeline = mem?.pipelineV2 as Record<string, unknown> | undefined;
+			const extractionObj = pipeline?.extraction as Record<string, unknown> | undefined;
+			const synthesisObj = pipeline?.synthesis as Record<string, unknown> | undefined;
+			const extraction =
+				typeof pipeline?.extractionProvider === "string"
+					? pipeline.extractionProvider
+					: typeof extractionObj?.provider === "string"
+						? extractionObj.provider
+						: null;
+			const synthesis =
+				typeof synthesisObj?.provider === "string"
+					? synthesisObj.provider
+					: null;
+			return { extraction, synthesis };
+		} catch {
+			continue;
+		}
+	}
+
+	return { extraction: null, synthesis: null };
 }
 
 interface LegacyEmbeddingsResponse {
@@ -6257,6 +6368,12 @@ app.get("/api/tasks/:id/runs", (c) => {
 
 app.get("/api/status", (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
+	const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
+	const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
+	const datedLogFile = join(
+		configuredLogDir,
+		`signet-${new Date().toISOString().slice(0, 10)}.log`,
+	);
 
 	let health: { score: number; status: string } | undefined;
 	try {
@@ -6293,9 +6410,15 @@ app.get("/api/status", (c) => {
 		startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
 		port: PORT,
 		host: HOST,
+		bindHost: BIND_HOST,
 		agentsDir: AGENTS_DIR,
 		memoryDb: existsSync(MEMORY_DB),
 		pipelineV2: config.pipelineV2,
+		providerResolution: providerRuntimeResolution,
+		logging: {
+			logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
+			logFile: configuredLogFile ?? datedLogFile,
+		},
 		activeSessions: activeSessionCount(),
 		bypassedSessions: getBypassedSessionKeys().size,
 		agentCreatedAt,
@@ -9015,7 +9138,7 @@ process.on("uncaughtException", (err) => {
 async function main() {
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
-	logger.info("daemon", "Port configured", { port: PORT });
+	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 
 	// Ensure daemon directory exists
 	mkdirSync(DAEMON_DIR, { recursive: true });
@@ -9064,14 +9187,73 @@ async function main() {
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
+	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
+	const validExtractionProviders = new Set([
+		"ollama",
+		"claude-code",
+		"opencode",
+		"codex",
+		"anthropic",
+	]);
+	const validSynthesisProviders = new Set([
+		"ollama",
+		"claude-code",
+		"opencode",
+		"anthropic",
+	]);
+
+	providerRuntimeResolution.extraction = {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: memoryCfg.pipelineV2.extraction.provider,
+	};
+	providerRuntimeResolution.synthesis = {
+		configured: providerHints.synthesis,
+		resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+		effective: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+	};
+	if (providerHints.extraction && !validExtractionProviders.has(providerHints.extraction)) {
+		logger.warn("config", "Unsupported extraction provider configured, using resolved fallback", {
+			configured: providerHints.extraction,
+			resolved: memoryCfg.pipelineV2.extraction.provider,
+		});
+	}
+	if (
+		providerHints.synthesis &&
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		!validSynthesisProviders.has(providerHints.synthesis)
+	) {
+		logger.warn("config", "Unsupported synthesis provider configured, using resolved fallback", {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.provider,
+		});
+	}
+
 	// Auto-detect extraction provider: verify the configured provider is
 	// available, falling back to ollama with a warning if not.
 	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
+	const extractionOllamaBaseUrl = normalizeRuntimeBaseUrl(
+		memoryCfg.pipelineV2.extraction.endpoint,
+		"http://127.0.0.1:11434",
+	);
+	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
+		memoryCfg.pipelineV2.extraction.endpoint,
+		"http://127.0.0.1:4096",
+	);
+	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
+		extractionOpenCodeBaseUrl,
+	);
 	if (effectiveExtractionProvider === "opencode") {
-		const serverReady = await ensureOpenCodeServer(4096);
-		if (!serverReady) {
-			logger.warn("config", "OpenCode server not available, falling back to ollama for extraction");
-			effectiveExtractionProvider = "ollama";
+		if (extractionOpenCodeShouldManage) {
+			const serverReady = await ensureOpenCodeServer(4096);
+			if (!serverReady) {
+				logger.warn("config", "OpenCode server not available, falling back to ollama for extraction");
+				effectiveExtractionProvider = "ollama";
+			}
+		} else {
+			logger.info("config", "Using external OpenCode endpoint for extraction", {
+				baseUrl: extractionOpenCodeBaseUrl,
+			});
 		}
 	} else if (effectiveExtractionProvider === "claude-code") {
 		try {
@@ -9110,7 +9292,29 @@ async function main() {
 			effectiveExtractionProvider = "ollama";
 		}
 	}
-	logger.info("config", "Extraction provider", { provider: effectiveExtractionProvider });
+	providerRuntimeResolution.extraction = {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: effectiveExtractionProvider,
+	};
+	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
+		logger.warn("config", "Extraction provider resolved differently than configured", {
+			configured: providerHints.extraction,
+			resolved: memoryCfg.pipelineV2.extraction.provider,
+			effective: effectiveExtractionProvider,
+		});
+	}
+	logger.info("config", "Extraction provider", {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: effectiveExtractionProvider,
+		endpoint:
+			effectiveExtractionProvider === "ollama"
+				? extractionOllamaBaseUrl
+				: effectiveExtractionProvider === "opencode"
+					? extractionOpenCodeBaseUrl
+					: undefined,
+	});
 
 	// Resolve Anthropic API key once — shared by extraction and synthesis
 	let anthropicApiKey: string | undefined;
@@ -9152,6 +9356,8 @@ async function main() {
 			: effectiveExtractionProvider === "opencode"
 				? createOpenCodeProvider({
 						model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
+						baseUrl: extractionOpenCodeBaseUrl,
+						ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 					})
 				: effectiveExtractionProvider === "claude-code"
@@ -9166,6 +9372,7 @@ async function main() {
 							})
 						: createOllamaProvider({
 								model: effectiveExtractionModel || "qwen3:4b",
+								baseUrl: extractionOllamaBaseUrl,
 								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 							});
 	initLlmProvider(llmProvider);
@@ -9174,11 +9381,28 @@ async function main() {
 	// needs a smarter model that can reason across long context
 	if (memoryCfg.pipelineV2.synthesis.enabled) {
 		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
+		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
+			memoryCfg.pipelineV2.synthesis.endpoint,
+			"http://127.0.0.1:11434",
+		);
+		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
+			memoryCfg.pipelineV2.synthesis.endpoint,
+			"http://127.0.0.1:4096",
+		);
+		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
+			synthesisOpenCodeBaseUrl,
+		);
 		if (effectiveSynthesisProvider === "opencode") {
-			const serverReady = await ensureOpenCodeServer(4096);
-			if (!serverReady) {
-				logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
-				effectiveSynthesisProvider = "ollama";
+			if (synthesisOpenCodeShouldManage) {
+				const serverReady = await ensureOpenCodeServer(4096);
+				if (!serverReady) {
+					logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
+					effectiveSynthesisProvider = "ollama";
+				}
+			} else {
+				logger.info("config", "Using external OpenCode endpoint for synthesis", {
+					baseUrl: synthesisOpenCodeBaseUrl,
+				});
 			}
 		} else if (effectiveSynthesisProvider === "anthropic") {
 			if (!anthropicApiKey) {
@@ -9202,7 +9426,29 @@ async function main() {
 				effectiveSynthesisProvider = "ollama";
 			}
 		}
-		logger.info("config", "Synthesis provider", { provider: effectiveSynthesisProvider });
+		providerRuntimeResolution.synthesis = {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.provider,
+			effective: effectiveSynthesisProvider,
+		};
+		if (providerHints.synthesis && providerHints.synthesis !== effectiveSynthesisProvider) {
+			logger.warn("config", "Synthesis provider resolved differently than configured", {
+				configured: providerHints.synthesis,
+				resolved: memoryCfg.pipelineV2.synthesis.provider,
+				effective: effectiveSynthesisProvider,
+			});
+		}
+		logger.info("config", "Synthesis provider", {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.provider,
+			effective: effectiveSynthesisProvider,
+			endpoint:
+				effectiveSynthesisProvider === "ollama"
+					? synthesisOllamaBaseUrl
+					: effectiveSynthesisProvider === "opencode"
+						? synthesisOpenCodeBaseUrl
+						: undefined,
+		});
 
 		// When falling back to ollama, reset model so ollama uses its own default
 		let effectiveSynthesisModel: string | undefined = memoryCfg.pipelineV2.synthesis.model;
@@ -9220,6 +9466,8 @@ async function main() {
 				: effectiveSynthesisProvider === "opencode"
 					? createOpenCodeProvider({
 							model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
+							baseUrl: synthesisOpenCodeBaseUrl,
+							ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 						})
 					: effectiveSynthesisProvider === "claude-code"
@@ -9229,10 +9477,16 @@ async function main() {
 							})
 						: createOllamaProvider({
 								model: effectiveSynthesisModel || "qwen3:4b",
+								baseUrl: synthesisOllamaBaseUrl,
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 							});
 		initSynthesisProvider(synthesisProvider);
 	} else {
+		providerRuntimeResolution.synthesis = {
+			configured: providerHints.synthesis,
+			resolved: null,
+			effective: null,
+		};
 		logger.info("config", "Synthesis disabled");
 	}
 
@@ -9284,8 +9538,9 @@ async function main() {
 		);
 	}
 
-	// Start extraction pipeline if enabled
-	if (memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode) {
+	// Start extraction pipeline only when explicitly enabled.
+	// shadowMode controls behavior inside the enabled pipeline.
+	if (memoryCfg.pipelineV2.enabled) {
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
@@ -9421,6 +9676,8 @@ async function main() {
 			env: {
 				...process.env,
 				SIGNET_PORT: String(PORT),
+				SIGNET_HOST: HOST,
+				SIGNET_BIND: BIND_HOST,
 				SIGNET_PATH: AGENTS_DIR,
 			},
 		});
@@ -9439,7 +9696,7 @@ async function main() {
 		{
 			fetch: app.fetch,
 			port: PORT,
-			hostname: HOST,
+			hostname: BIND_HOST,
 		},
 		(info) => {
 			logger.info("daemon", "Server listening", {
