@@ -1143,7 +1143,7 @@ export function startWorker(
 				const targetTokens = tokenize(proposal.targetContent);
 				const overlap = overlapCount(factTokens, targetTokens);
 
-				if (overlap >= 1 && !detectContradictionRisk(proposal.fact.content, proposal.targetContent)) {
+				if (overlap >= 3 && !detectContradictionRisk(proposal.fact.content, proposal.targetContent)) {
 					try {
 						const result = await detectSemanticContradiction(
 							proposal.fact.content,

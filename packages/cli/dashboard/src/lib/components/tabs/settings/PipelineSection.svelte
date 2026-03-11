@@ -236,11 +236,13 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				</Select.Root>
 			</FormField>
 
-			{#each PIPELINE_CONTRADICTION_NUMS as { key, label, desc, min, max, step } (key)}
-				<FormField {label} description={desc}>
-					<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
-				</FormField>
-			{/each}
+			{#if st.aBool(["memory", "pipelineV2", "semanticContradictionEnabled"])}
+				{#each PIPELINE_CONTRADICTION_NUMS as { key, label, desc, min, max, step } (key)}
+					<FormField {label} description={desc}>
+						<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
+					</FormField>
+				{/each}
+			{/if}
 
 			{#each PIPELINE_EXTRACTION_NUMS as { key, label, desc, min, max, step } (key)}
 				<FormField {label} description={desc}>

@@ -599,6 +599,13 @@ controlled by `semanticContradictionTimeoutMs` (default 45 seconds, range
 5s–300s). On timeout or parse failure, the result defaults to "no
 contradiction" — the check is advisory and never blocks a proposal.
 
+```yaml
+memory:
+  pipelineV2:
+    semanticContradictionEnabled: false
+    semanticContradictionTimeoutMs: 45000  # ms, range 5000–300000
+```
+
 
 URL Fetcher
 ---
