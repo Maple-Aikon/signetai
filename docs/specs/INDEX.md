@@ -25,9 +25,10 @@ flowchart TD
   SCP[Session Continuity ✓]
   PM[Procedural Memory]
   MA[Multi-Agent Support]
-  KA[Knowledge Architecture]
+  KA[Knowledge Architecture ✓]
   PMS[Predictive Memory Scorer]
   SR[Signet Runtime]
+  DP[Desire Paths Epic]
 
   MP --> SCP
   MP --> PM
@@ -38,6 +39,8 @@ flowchart TD
   KA --> PMS
   SCP --> PMS
   MP --> PMS
+  KA --> DP
+  PMS --> DP
   MA -.-> PM
   MA -.-> KA
   SR -.-> PM
@@ -107,6 +110,11 @@ The knowledge architecture schema defines the canonical entity types:
 All specs that create entities MUST use this taxonomy. Procedural memory
 creates `entity_type = 'skill'`. Multi-agent creates agent-scoped
 entities. The taxonomy is not extensible without updating KA.
+
+**Planned extension:** DP-14 (Discovered Principles) in the desire
+paths epic will add `principle` as an entity type for emergent
+cross-entity patterns. This invariant must be updated when DP-14
+lands.
 
 ### 4. Scorer consumes all available signals
 
@@ -215,6 +223,37 @@ cannot suppress them. This is a hard retrieval invariant.
 - Runtime does not implement traversal logic — it calls daemon API
   endpoints that KA defines.
 
+### Desire Paths <-> Knowledge Architecture
+
+- Desire paths builds on the complete KA-1 through KA-6 foundation:
+  entity/aspect/attribute hierarchy, graph traversal, behavioral
+  feedback loop, entity pinning, constraint surfacing.
+- DP-2 (edge confidence) adds `confidence` and `reason` columns to
+  `entity_dependencies`. Graph traversal uses `confidence * strength`
+  for edge filtering.
+- DP-6 (entity-anchored search) replaces the heuristic focal entity
+  resolution in `resolveFocalEntities` with FTS5 + embedding search
+  against entities. Current resolution becomes fallback.
+- DP-7 (constructed memories) changes traversal output from
+  `memoryIds` to structured path objects with provenance metadata.
+- DP-14 (discovered principles) adds `principle` to the entity type
+  taxonomy. Requires updating invariant 3 when implemented.
+
+### Desire Paths <-> Predictive Scorer
+
+- DP-8 (predictor bug fixes) is a prerequisite: fixes the 3 critical
+  bugs blocking enablement.
+- DP-10 (path scoring) evolves the scorer from ranking individual
+  memories to ranking traversal paths. Feature vector changes from
+  per-memory signals to per-path signals (hop count, min edge
+  confidence, average aspect weight, community boundary crossing).
+- DP-9 (path feedback) changes training signal from "was this memory
+  useful?" to "was this traversal path useful?" — propagating ratings
+  along edges, upgrading/downgrading confidence/reason.
+- This is the convergence point described in `docs/DESIRE-PATHS.md`:
+  the scorer provides learning signal, the graph provides structure
+  to propagate it.
+
 ### Multi-Agent <-> All Specs
 
 - `agent_id` column appears on every data table (see invariant 1).
@@ -287,6 +326,29 @@ Phase ordering based on hard dependencies and integration contracts.
 - **Signet Runtime Phase 3**: HTTP channel + adapter retrofit
 - **Multi-Agent Phase 4+**: daemon API, harness sync, CLI, dashboard
 
+### Wave 6 (depends on Wave 5 — KA complete, PMS complete)
+
+- **Desire Paths Phase 1**: foundation completion
+  - DP-1: Significance gate (zero-cost continuity)
+  - DP-2: Edge confidence + reason on `entity_dependencies`
+  - DP-3: Bounded traversal parameters
+  - DP-4: MCP tool registration + blast radius endpoint
+- **Desire Paths Phase 2**: bootstrap topology
+  - DP-5: Leiden community detection
+- **Desire Paths Phase 3**: graph-native retrieval
+  - DP-6: Entity-anchored search (replaces heuristic focal resolution)
+  - DP-7: Constructed memories (traversal paths, not memory rows)
+- **Desire Paths Phase 4**: path learning
+  - DP-8: Predictor bug fixes (prerequisite)
+  - DP-9: Path feedback propagation
+  - DP-10: Path scoring (predictor evolution)
+  - DP-11: Temporal reinforcement
+- **Desire Paths Phase 5**: emergence
+  - DP-12: Explorer bees
+  - DP-13: Cross-entity boundary traversal
+  - DP-14: Discovered principles
+  - DP-15: Entity health dashboard
+
 ---
 
 ## Spec Registry
@@ -312,6 +374,7 @@ Legend:
 | `signet-roadmap-spec` | planning | `docs/specs/planning/signet-roadmap-spec.md` | - | - | |
 | `openclaw-integration-strategy` | complete | `docs/specs/complete/openclaw-integration-strategy.md` | - | `openclaw-importance-scoring-pr` | |
 | `openclaw-importance-scoring-pr` | complete | `docs/specs/complete/openclaw-importance-scoring-pr.md` | `openclaw-integration-strategy` | - | |
+| `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 15 stories across 5 phases; LCM foundation patterns (escalation, cold tier, summary DAG) already implemented |
 | `notebook-dump-2026-02-25` | reference | `docs/specs/planning/notebook-dump-2026-02-25.md` | - | - | |
 
 ---

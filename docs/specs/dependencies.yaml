@@ -1,5 +1,5 @@
 version: 2
-updated_at: "2026-03-04"
+updated_at: "2026-03-11"
 
 specs:
   - id: memory-pipeline-v2
@@ -34,7 +34,7 @@ specs:
       - knowledge-architecture-schema
 
   - id: knowledge-architecture-schema
-    status: approved
+    status: complete
     path: docs/specs/approved/knowledge-architecture-schema.md
     hard_depends_on:
       - memory-pipeline-v2
@@ -43,6 +43,7 @@ specs:
     soft_depends_on: []
     blocks:
       - predictive-memory-scorer
+      - desire-paths-epic
 
   - id: predictive-memory-scorer
     status: approved
@@ -114,6 +115,15 @@ specs:
     path: docs/specs/complete/openclaw-importance-scoring-pr.md
     hard_depends_on:
       - openclaw-integration-strategy
+    soft_depends_on: []
+    blocks: []
+
+  - id: desire-paths-epic
+    status: approved
+    path: docs/specs/approved/desire-paths-epic.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+      - predictive-memory-scorer
     soft_depends_on: []
     blocks: []
 
