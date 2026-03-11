@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "./yaml";
 
@@ -256,6 +257,101 @@ export function getSkillsRunnerCommand(
 				command: "npm",
 				args: ["exec", "--yes", "--", "skills", ...skillsArgs],
 			};
+	}
+}
+
+/**
+ * Resolve the filesystem path where a globally-installed package lives.
+ * Returns undefined if the path cannot be determined or does not exist.
+ */
+export function resolveGlobalPackagePath(
+	family: PackageManagerFamily,
+	packageName: string,
+): string | undefined {
+	try {
+		switch (family) {
+			case "bun": {
+				const bunGlobal = join(
+					process.env.BUN_INSTALL ?? join(homedir(), ".bun"),
+					"install",
+					"global",
+					"node_modules",
+					packageName,
+				);
+				if (existsSync(bunGlobal)) return bunGlobal;
+				return undefined;
+			}
+			case "npm": {
+				const result = spawnSync("npm", ["root", "-g"], {
+					encoding: "utf-8",
+					timeout: 10_000,
+					windowsHide: true,
+				});
+				if (result.status === 0 && result.stdout.trim()) {
+					const candidate = join(result.stdout.trim(), packageName);
+					if (existsSync(candidate)) return candidate;
+				}
+				return undefined;
+			}
+			case "pnpm": {
+				const result = spawnSync("pnpm", ["root", "-g"], {
+					encoding: "utf-8",
+					timeout: 10_000,
+					windowsHide: true,
+				});
+				if (result.status === 0 && result.stdout.trim()) {
+					const candidate = join(result.stdout.trim(), packageName);
+					if (existsSync(candidate)) return candidate;
+				}
+				return undefined;
+			}
+			case "yarn": {
+				// `yarn global dir` is Yarn Classic (v1) only. Yarn Berry (v2+)
+				// removed all `yarn global` subcommands. Detect version first.
+				const versionResult = spawnSync("yarn", ["--version"], {
+					encoding: "utf-8",
+					timeout: 5_000,
+					windowsHide: true,
+				});
+				const isClassic =
+					versionResult.status === 0 &&
+					/^1\./.test(versionResult.stdout.trim());
+
+				if (isClassic) {
+					const result = spawnSync("yarn", ["global", "dir"], {
+						encoding: "utf-8",
+						timeout: 10_000,
+						windowsHide: true,
+					});
+					if (result.status === 0 && result.stdout.trim()) {
+						const candidate = join(
+							result.stdout.trim(),
+							"node_modules",
+							packageName,
+						);
+						if (existsSync(candidate)) return candidate;
+					}
+				} else {
+					// Yarn Berry (v2+) removed `yarn global add` entirely, so no
+					// global package tree is created under the default linker (PnP).
+					// This path only resolves for Berry users who explicitly set
+					// `nodeLinker: node-modules` in their .yarnrc.yml — PnP installs
+					// will not have a node_modules directory here. Checked as a
+					// best-effort fallback; callers should warn when this returns
+					// undefined, since Berry users may need an alternative install path.
+					const berryGlobal = join(
+						process.env.YARN_GLOBAL_FOLDER ??
+							join(homedir(), ".yarn", "berry", "global"),
+						"node_modules",
+						packageName,
+					);
+					if (existsSync(berryGlobal)) return berryGlobal;
+				}
+				return undefined;
+			}
+		}
+	} catch {
+		return undefined;
 	}
 }
 

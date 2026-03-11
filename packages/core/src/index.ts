@@ -202,6 +202,7 @@ export {
 	resolvePrimaryPackageManager,
 	getSkillsRunnerCommand,
 	getGlobalInstallCommand,
+	resolveGlobalPackagePath,
 	type PackageManagerFamily,
 	type PackageManagerResolution,
 	type PackageManagerCommand,

@@ -12,8 +12,10 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	readlinkSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "fs";
 import { homedir, platform } from "os";
@@ -37,6 +39,7 @@ import {
 	ensureUnifiedSchema,
 	formatYaml,
 	getGlobalInstallCommand,
+	resolveGlobalPackagePath,
 	getMissingIdentityFiles,
 	getSkillsRunnerCommand,
 	hasValidIdentity,
@@ -544,12 +547,40 @@ async function configureHarnessHooks(
 				options?.openclawRuntimePath ??
 				connector.getConfiguredRuntimePath() ??
 				"plugin";
+			// Install connector first — writes config with runtimePath so
+			// ensureOpenClawPluginPackage's getConfiguredRuntimePath() check passes.
 			await connector.install(basePath, {
 				configureWorkspace: options?.configureOpenClawWorkspace ?? false,
 				runtimePath,
 			});
 			if (runtimePath === "plugin") {
-				await ensureOpenClawPluginPackage(basePath);
+				// ensureOpenClawPluginPackage installs the package, creates the symlink,
+				// and returns the resolved global path so we can patch load.paths in one
+				// targeted call without re-running the full connector install.
+				const globalPkgPath = await ensureOpenClawPluginPackage(basePath);
+				if (globalPkgPath) {
+					// dirname gives the parent search directory (e.g. …/@signetai/)
+					// that OpenClaw scans for "signet-memory-openclaw" subdirectory.
+					// patchLoadPaths already calls console.warn internally for each
+					// skipped config (same pattern as sibling private methods).
+					const { patched: lPathPatched, warnings: lPathWarnings } =
+						connector.patchLoadPaths(dirname(globalPkgPath));
+					if (lPathPatched.length > 0) {
+						console.log(
+							chalk.green(
+								`  ✓ OpenClaw config updated with plugins.load.paths (${lPathPatched.length} file(s))`,
+							),
+						);
+					} else if (lPathWarnings.length === 0) {
+						// No configs found yet — expected on first run before OpenClaw
+						// has been launched and created its config file.
+						console.log(
+							chalk.dim(
+								"  (no OpenClaw configs found to patch with load.paths; run 'signet setup' again after first OpenClaw launch)",
+							),
+						);
+					}
+				}
 			}
 			break;
 		}
@@ -637,20 +668,36 @@ function writeOpenClawPluginSyncVersion(basePath: string, version: string): void
 async function ensureOpenClawPluginPackage(
 	basePath: string,
 	options: { force?: boolean; silent?: boolean } = {},
-): Promise<boolean> {
+): Promise<string | undefined> {
 	const connector = new OpenClawConnector();
 	if (connector.getConfiguredRuntimePath() !== "plugin") {
-		return false;
-	}
-
-	if (!options.force && readOpenClawPluginSyncVersion(basePath) === VERSION) {
-		return true;
+		return undefined;
 	}
 
 	const packageManager = resolvePrimaryPackageManager({
 		agentsDir: basePath,
 		env: process.env,
 	});
+
+	if (!options.force && readOpenClawPluginSyncVersion(basePath) === VERSION) {
+		// Cached — skip re-install but still resolve and return path for caller.
+		// If the path can't be resolved (package was pruned after the stamp was
+		// written), fall through to re-install rather than returning undefined.
+		const cachedPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
+		if (cachedPath) {
+			ensureOpenClawExtensionSymlink(cachedPath, options.silent);
+			return cachedPath;
+		}
+		if (!options.silent) {
+			console.log(
+				chalk.yellow(
+					`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE} not found on disk; retrying install.`,
+				),
+			);
+		}
+		// Fall through to re-install below.
+	}
+
 	const installCommand = getGlobalInstallCommand(
 		packageManager.family,
 		`${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
@@ -671,7 +718,7 @@ async function ensureOpenClawPluginPackage(
 				),
 			);
 		}
-		return false;
+		return undefined;
 	}
 
 	writeOpenClawPluginSyncVersion(basePath, VERSION);
@@ -681,7 +728,136 @@ async function ensureOpenClawPluginPackage(
 		);
 	}
 
-	return true;
+	// Resolve once and reuse for both symlink creation and load.paths patch.
+	const globalPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
+	if (globalPath) {
+		ensureOpenClawExtensionSymlink(globalPath, options.silent);
+	} else if (!options.silent) {
+		console.log(
+			chalk.yellow(
+				`  Warning: could not resolve global path for ${OPENCLAW_PLUGIN_PACKAGE} after install; plugin discovery may be incomplete. Run 'signet setup' again if needed.`,
+			),
+		);
+	}
+	return globalPath;
+}
+
+/**
+ * Create a symlink from OpenClaw's extensions directory to the globally
+ * installed plugin package. Idempotent — skips if already correct,
+ * updates if stale, creates if missing.
+ */
+function ensureOpenClawExtensionSymlink(
+	globalPath: string,
+	silent?: boolean,
+): void {
+
+	// Discover the active OpenClaw state directory. Check env overrides first
+	// (expanding ~ just like the connector does), then probe for existing legacy
+	// dirs (~/.clawdbot, ~/.moldbot, ~/.moltbot).
+	const stateDirCandidates: string[] = [];
+	// normalizeAgentPath expands ~ and resolves to an absolute path.
+	if (process.env.OPENCLAW_STATE_DIR) {
+		stateDirCandidates.push(normalizeAgentPath(process.env.OPENCLAW_STATE_DIR));
+	}
+	if (process.env.CLAWDBOT_STATE_DIR) {
+		stateDirCandidates.push(normalizeAgentPath(process.env.CLAWDBOT_STATE_DIR));
+	}
+	// OPENCLAW_STATE_HOME is the root of the state directory (openclaw.json lives
+	// directly inside it), so extensions/ belongs there too.
+	if (process.env.OPENCLAW_STATE_HOME) {
+		stateDirCandidates.push(normalizeAgentPath(process.env.OPENCLAW_STATE_HOME));
+	}
+	const home = homedir();
+	for (const name of [".openclaw", ".clawdbot", ".moldbot", ".moltbot"]) {
+		const candidate = join(home, name);
+		if (existsSync(candidate)) {
+			stateDirCandidates.push(candidate);
+		}
+	}
+	// Default to ~/.openclaw if nothing else exists
+	if (stateDirCandidates.length === 0) {
+		stateDirCandidates.push(join(home, ".openclaw"));
+	}
+
+	// Create symlink in every discovered state dir
+	for (const stateDir of [...new Set(stateDirCandidates)]) {
+		createExtensionSymlink(stateDir, globalPath, silent);
+	}
+}
+
+function createExtensionSymlink(
+	stateDir: string,
+	globalPath: string,
+	silent?: boolean,
+): void {
+	const extensionsDir = join(stateDir, "extensions");
+	const symlinkPath = join(extensionsDir, "signet-memory-openclaw");
+
+	try {
+		mkdirSync(extensionsDir, { recursive: true });
+	} catch (err) {
+		if (!silent) {
+			console.log(
+				chalk.yellow(
+					`  Warning: could not prepare OpenClaw extensions dir at ${extensionsDir}: ${err}`,
+				),
+			);
+		}
+		return;
+	}
+
+	// Check existing symlink — lstatSync doesn't follow symlinks, so it
+	// catches both valid and broken symlinks. existsSync follows symlinks
+	// and misses broken ones.
+	try {
+		const stat = lstatSync(symlinkPath);
+		if (stat.isSymbolicLink()) {
+			const currentTarget = readlinkSync(symlinkPath);
+			if (currentTarget === globalPath) {
+				return; // Already correct
+			}
+			// Stale symlink — remove and recreate
+			try {
+				rmSync(symlinkPath, { force: true });
+			} catch (rmErr) {
+				if (!silent) {
+					console.log(chalk.yellow(`  Warning: could not remove stale symlink at ${symlinkPath}: ${rmErr}`));
+				}
+				return;
+			}
+		} else {
+			// Exists but is not a symlink (real file or directory). Removing it
+			// before symlinkSync could permanently destroy a working manual
+			// installation if symlink creation then fails. Leave it in place and
+			// warn — the user can remove it manually to enable the managed symlink.
+			if (!silent) {
+				console.log(
+					chalk.yellow(
+						`  Warning: existing non-symlink at ${symlinkPath}; leaving it in place. Remove it manually to enable the Signet-managed symlink.`,
+					),
+				);
+			}
+			return;
+		}
+	} catch {
+		// Path doesn't exist — will create below
+	}
+
+	try {
+		symlinkSync(globalPath, symlinkPath, "dir");
+		if (!silent) {
+			console.log(
+				chalk.green("  ✓ OpenClaw extension symlink created"),
+			);
+		}
+	} catch (err) {
+		if (!silent) {
+			console.log(
+				chalk.yellow(`  Warning: could not create extension symlink: ${err}`),
+			);
+		}
+	}
 }
 
 /**

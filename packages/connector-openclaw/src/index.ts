@@ -48,6 +48,9 @@ interface OpenClawConfigShape {
 			memory?: string;
 		};
 		entries?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
+		load?: {
+			paths?: string[];
+		};
 	};
 	agents?: {
 		defaults?: {
@@ -258,6 +261,12 @@ export class OpenClawConnector extends BaseConnector {
 	 * - Patches OpenClaw hook entries by default
 	 * - Patches OpenClaw workspace only when explicitly requested
 	 * - Installs hook handler files under `<basePath>/hooks/agent-memory/`
+	 *
+	 * **`runtimePath` default changed in 0.53:** The default is now `"plugin"`
+	 * (automatic per-prompt memory injection via the OpenClaw plugin system)
+	 * instead of the old `"legacy"` (manual `/remember`/`/recall` commands
+	 * only). SDK callers that relied on the legacy path must now pass
+	 * `{ runtimePath: "legacy" }` explicitly.
 	 */
 	async install(basePath: string, options: OpenClawInstallOptions = {}): Promise<InstallResult> {
 		const expandedBasePath = this.expandPath(basePath);
@@ -267,7 +276,7 @@ export class OpenClawConnector extends BaseConnector {
 
 		const configureHooks = options.configureHooks ?? true;
 		const configureWorkspace = options.configureWorkspace ?? true;
-		const runtimePath = options.runtimePath ?? "legacy";
+		const runtimePath = options.runtimePath ?? "plugin";
 
 		const patch: JsonObject = {};
 		if (configureWorkspace) {
@@ -664,7 +673,9 @@ export class OpenClawConnector extends BaseConnector {
 	 * - Top-level `signet: { daemonUrl }` key
 	 * - Old plugin name "signet-memory" -> "signet-memory-openclaw"
 	 */
-	private patchAllConfigsWithPlugin(patch: JsonObject): {
+	private patchAllConfigsWithPlugin(
+		patch: JsonObject,
+	): {
 		patched: string[];
 		warnings: string[];
 	} {
@@ -773,6 +784,79 @@ export class OpenClawConnector extends BaseConnector {
 		const indent = this.detectIndent(raw);
 		deepMerge(config, patch);
 		writeFileSync(configPath, JSON.stringify(config, null, indent));
+	}
+
+	/**
+	 * Narrow config-only update: add `searchPath` to `plugins.load.paths` in
+	 * all discovered configs without re-running the full install flow.
+	 *
+	 * `searchPath` should be the **parent** directory of the plugin package
+	 * (e.g. `…/@signetai/`) so OpenClaw can find `signet-memory-openclaw`
+	 * as a subdirectory.
+	 */
+	patchLoadPaths(searchPath: string): { patched: string[]; warnings: string[] } {
+		const patched: string[] = [];
+		const warnings: string[] = [];
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const raw = readFileSync(configPath, "utf-8");
+				const config = parseJsonOrJson5(raw);
+				const indent = this.detectIndent(raw);
+
+				// Legacy configs store plugins as an array of strings. The
+				// install() call migrates these to object form before patchLoadPaths
+				// is called in the normal CLI flow, but guard explicitly so a direct
+				// SDK caller against an unmigrated config doesn't silently produce a
+				// no-op (JSON.stringify drops non-index array properties).
+				if (Array.isArray(config.plugins)) {
+					const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: plugins is in legacy array format; run install() first`;
+					warnings.push(warning);
+					console.warn(warning);
+					continue;
+				}
+
+				const pluginsObj = isJsonObject(config.plugins) ? config.plugins : {};
+				const rawLoad = pluginsObj.load;
+				if (Array.isArray(rawLoad)) {
+					const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: plugins.load is array-shaped; run install() first`;
+					warnings.push(warning);
+					console.warn(warning);
+					continue;
+				}
+				if (rawLoad !== undefined && !isJsonObject(rawLoad)) {
+					// Scalar values (false, "disabled", 0, etc.) likely represent an
+					// intentional opt-out — overwriting them silently could change
+					// deliberate user config.
+					const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: plugins.load has unexpected type (${typeof rawLoad}); cannot safely merge`;
+					warnings.push(warning);
+					console.warn(warning);
+					continue;
+				}
+				const loadObj = isJsonObject(rawLoad) ? rawLoad : {};
+				const rawPaths = loadObj.paths;
+				// filter (not every) so valid string entries are preserved even
+				// if the array contains a stray non-string element.
+				const existingPaths = Array.isArray(rawPaths)
+					? rawPaths.filter((entry): entry is string => typeof entry === "string")
+					: [];
+
+				if (!existingPaths.includes(searchPath)) {
+					loadObj.paths = [...existingPaths, searchPath];
+					pluginsObj.load = loadObj;
+					config.plugins = pluginsObj;
+					writeFileSync(configPath, JSON.stringify(config, null, indent));
+					patched.push(configPath);
+				}
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: ${message}`;
+				warnings.push(warning);
+				console.warn(warning);
+			}
+		}
+
+		return { patched, warnings };
 	}
 
 	/**

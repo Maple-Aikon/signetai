@@ -319,7 +319,21 @@ async function daemonFetch<T>(
 
 		return (await res.json()) as T;
 	} catch (e) {
-		console.warn(`[signet] ${method} ${path} error:`, e);
+		// Native fetch wraps OS errors as TypeError.cause, but polyfill/proxy
+		// layers may rethrow the OS error directly — check both forms.
+		const cause: unknown = e instanceof TypeError ? e.cause : e;
+		const isConnRefused =
+			typeof cause === "object" &&
+			cause !== null &&
+			"code" in cause &&
+			cause.code === "ECONNREFUSED";
+		if (isConnRefused) {
+			console.warn(
+				`[signet] daemon unreachable at ${daemonUrl} — is the Signet daemon running? (${method} ${path})`,
+			);
+		} else {
+			console.warn(`[signet] ${method} ${path} error:`, e);
+		}
 		return null;
 	}
 }
@@ -1339,6 +1353,7 @@ const signetPlugin = {
 				sessionKey,
 			});
 			if (!result) {
+				// daemonFetch already logged the specific error (ECONNREFUSED or HTTP status).
 				return undefined;
 			}
 			recentPromptTurns.set(promptTurnKey, Date.now());
