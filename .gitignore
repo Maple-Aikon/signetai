@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+.bun-tmp/
+.bun-install/
 
 # Build outputs
 dist/
@@ -32,6 +34,7 @@ packages/signetai/bin/signet-predictor-*
 *.swo
 .vscode/
 .playwright-mcp/
+.claude/
 
 # OS
 .DS_Store
@@ -56,6 +59,7 @@ coverage/
 references/
 dogfood-output/
 email*
+marketing/
 
 # Web (Cloudflare Worker)
 web/.wrangler/
@@ -64,6 +68,4 @@ web/.dev.vars*
 # Rust sidecar build artifacts
 packages/predictor/target/
 
-marketing/
-.bun-tmp/
-.claude/
+
