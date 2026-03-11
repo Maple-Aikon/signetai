@@ -6,6 +6,7 @@ import { Input } from "$lib/components/ui/input/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
 import {
+	PIPELINE_CONTRADICTION_NUMS,
 	PIPELINE_CORE_BOOLS,
 	PIPELINE_EXTRACTION_NUMS,
 	PIPELINE_FEATURE_BOOLS,
@@ -234,6 +235,12 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 					</Select.Content>
 				</Select.Root>
 			</FormField>
+
+			{#each PIPELINE_CONTRADICTION_NUMS as { key, label, desc, min, max, step } (key)}
+				<FormField {label} description={desc}>
+					<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
+				</FormField>
+			{/each}
 
 			{#each PIPELINE_EXTRACTION_NUMS as { key, label, desc, min, max, step } (key)}
 				<FormField {label} description={desc}>

@@ -1149,6 +1149,7 @@ export function startWorker(
 							proposal.fact.content,
 							proposal.targetContent,
 							instrumentedProvider,
+							pipelineCfg.semanticContradictionTimeoutMs,
 						);
 						if (result.detected && result.confidence >= 0.7) {
 							contradictionFlags.set(i, result);

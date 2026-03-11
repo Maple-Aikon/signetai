@@ -33,6 +33,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	shadowMode: false,
 	mutationsFrozen: false,
 	semanticContradictionEnabled: false,
+	semanticContradictionTimeoutMs: 45000,
 	extraction: {
 		provider: "claude-code",
 		model: "haiku",
@@ -297,6 +298,12 @@ export function loadPipelineConfig(
 			typeof raw.semanticContradictionEnabled === "boolean"
 				? raw.semanticContradictionEnabled
 				: d.semanticContradictionEnabled,
+		semanticContradictionTimeoutMs: clampPositive(
+			raw.semanticContradictionTimeoutMs,
+			5000,
+			300000,
+			d.semanticContradictionTimeoutMs,
+		),
 
 		extraction: {
 			provider: resolvedProvider,

@@ -49,6 +49,7 @@ export async function detectSemanticContradiction(
 	factContent: string,
 	targetContent: string,
 	provider: LlmProvider,
+	timeoutMs = 45000,
 ): Promise<SemanticContradictionResult> {
 	const noContradiction: SemanticContradictionResult = {
 		detected: false,
@@ -58,7 +59,7 @@ export async function detectSemanticContradiction(
 
 	try {
 		const prompt = buildPrompt(factContent, targetContent);
-		const raw = await provider.generate(prompt, { timeoutMs: 15000 });
+		const raw = await provider.generate(prompt, { timeoutMs });
 
 		let jsonStr = raw.trim();
 		const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);

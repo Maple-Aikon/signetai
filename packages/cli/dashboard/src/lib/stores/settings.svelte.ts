@@ -21,6 +21,17 @@ export const PIPELINE_FEATURE_BOOLS = [
 	},
 ] as const;
 
+export const PIPELINE_CONTRADICTION_NUMS = [
+	{
+		key: "semanticContradictionTimeoutMs",
+		label: "Contradiction timeout (ms)",
+		desc: "Timeout for the semantic contradiction LLM call. Falls back to 'no contradiction' on timeout.",
+		min: 5000,
+		max: 300000,
+		step: 1000,
+	},
+] as const;
+
 export const PIPELINE_RERANKER_BOOLS = [
 	{
 		key: "rerankerEnabled",

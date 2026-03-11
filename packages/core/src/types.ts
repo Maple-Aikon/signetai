@@ -242,6 +242,7 @@ export interface PipelineV2Config {
 	readonly shadowMode: boolean;
 	readonly mutationsFrozen: boolean;
 	readonly semanticContradictionEnabled: boolean;
+	readonly semanticContradictionTimeoutMs: number;
 	readonly telemetryEnabled: boolean;
 
 	// Grouped sub-objects

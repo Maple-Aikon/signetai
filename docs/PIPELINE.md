@@ -594,9 +594,10 @@ prompted to return a JSON object with `contradicts` (boolean), `confidence`
 (0–1), and `reasoning` (string).
 
 Semantic contradiction detection is gated by `semanticContradictionEnabled`
-(default `false`). When enabled, the LLM call uses a 15-second timeout.
-On timeout or parse failure, the result defaults to "no contradiction" —
-the check is advisory and never blocks a proposal.
+(default `false`). When enabled, the LLM call uses a configurable timeout
+controlled by `semanticContradictionTimeoutMs` (default 45 seconds, range
+5s–300s). On timeout or parse failure, the result defaults to "no
+contradiction" — the check is advisory and never blocks a proposal.
 
 
 URL Fetcher
