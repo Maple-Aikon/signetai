@@ -563,7 +563,23 @@ async function configureHarnessHooks(
 					// that OpenClaw scans for "signet-memory-openclaw" subdirectory.
 					// patchLoadPaths already calls console.warn internally for each
 					// skipped config (same pattern as sibling private methods).
-					connector.patchLoadPaths(dirname(globalPkgPath));
+					const { patched: lPathPatched, warnings: lPathWarnings } =
+						connector.patchLoadPaths(dirname(globalPkgPath));
+					if (lPathPatched.length > 0) {
+						console.log(
+							chalk.green(
+								`  ✓ OpenClaw config updated with plugins.load.paths (${lPathPatched.length} file(s))`,
+							),
+						);
+					} else if (lPathWarnings.length === 0) {
+						// No configs found yet — expected on first run before OpenClaw
+						// has been launched and created its config file.
+						console.log(
+							chalk.dim(
+								"  (no OpenClaw configs found to patch with load.paths; run 'signet setup' again after first OpenClaw launch)",
+							),
+						);
+					}
 				}
 			}
 			break;
