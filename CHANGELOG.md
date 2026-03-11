@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.54.0] - 2026-03-11
+
+### Bug Fixes
+
+- enable positional options on secret command to prevent CLI crash
+
+
 ## [0.53.4] - 2026-03-11
 
 ### Features
