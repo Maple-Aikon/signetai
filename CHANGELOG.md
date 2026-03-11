@@ -2,6 +2,15 @@
 
 All notable changes to Signet are documented here.
 
+## [0.54.1] - 2026-03-11
+
+### Bug Fixes
+
+- document overlap >= 3 threshold and add config ref entry
+- address review feedback on contradiction timeout PR
+- make semantic contradiction timeout configurable
+
+
 ## [0.54.0] - 2026-03-11
 
 ### Bug Fixes
