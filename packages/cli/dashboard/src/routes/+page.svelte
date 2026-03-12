@@ -159,9 +159,16 @@ onMount(() => {
 	};
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
-	// Ctrl+scroll wheel zoom — only in Tauri (web build preserves native browser zoom)
+	// Ctrl+scroll wheel zoom — only in Tauri (web build preserves native browser zoom).
+	// Modifier check is inlined so non-ctrl scrolls exit immediately, minimising the
+	// cost of the { passive: false } constraint on ordinary scrolling.
 	const isTauri = "__TAURI_INTERNALS__" in window;
-	const handleWheel = (e: WheelEvent) => uiScale.handleZoomWheel(e);
+	const handleWheel = (e: WheelEvent) => {
+		if (!(e.ctrlKey || e.metaKey)) return;
+		e.preventDefault();
+		if (e.deltaY < 0) uiScale.zoomIn();
+		else if (e.deltaY > 0) uiScale.zoomOut();
+	};
 	if (isTauri) {
 		window.addEventListener("wheel", handleWheel, { passive: false });
 	}

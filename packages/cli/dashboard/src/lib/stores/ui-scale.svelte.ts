@@ -18,11 +18,13 @@ function loadIndex(): number {
 	const stored = localStorage.getItem(STORAGE_KEY);
 	if (stored !== null) {
 		const v = parseFloat(stored);
-		if (!isNaN(v)) {
+		// Guard: values above the max step are old index-based storage (e.g. "7" for
+		// index 7). Passing them to nearest-match would silently set max zoom (3.0×).
+		if (!isNaN(v) && v <= STEPS[STEPS.length - 1]) {
 			// Exact match first
 			const exact = (STEPS as readonly number[]).indexOf(v);
 			if (exact !== -1) return exact;
-			// Nearest match — handles old index-based values and future STEPS changes
+			// Nearest match — gracefully handles future STEPS reshuffling
 			return STEPS.reduce(
 				(best, s, i) => (Math.abs(s - v) < Math.abs(STEPS[best] - v) ? i : best),
 				DEFAULT_INDEX,
