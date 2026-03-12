@@ -303,6 +303,11 @@
 		border-color: var(--sig-border-strong);
 	}
 
+	.refresh-btn:focus-visible {
+		outline: 2px solid var(--sig-highlight);
+		outline-offset: 1px;
+	}
+
 	:global(.insights-panel .refresh-icon) {
 		width: 10px;
 		height: 10px;
@@ -438,6 +443,11 @@
 	.action-btn.edit:hover {
 		color: var(--sig-accent-hover);
 		border-color: var(--sig-accent);
+	}
+
+	.action-btn:focus-visible {
+		outline: 2px solid var(--sig-highlight);
+		outline-offset: 1px;
 	}
 
 	/* --- Empty state --- */
