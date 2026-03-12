@@ -10,7 +10,6 @@
 
 	interface Props {
 		identity: Identity;
-		greeting: string;
 		daemonStatus: DaemonStatus | null;
 		connectorCount: number;
 		continuity: ContinuityEntry[];
@@ -22,7 +21,6 @@
 
 	const {
 		identity,
-		greeting: _greeting,
 		daemonStatus,
 		connectorCount,
 		continuity,

@@ -12,7 +12,6 @@
 	} from "$lib/api";
 	import {
 		getDiagnostics,
-		getHomeGreeting,
 		getContinuityLatest,
 		getPipelineStatus,
 		getConnectors,
@@ -35,7 +34,6 @@
 		$props();
 
 	let diagnostics = $state<DiagnosticsReport | null>(null);
-	let greeting = $state<string>("welcome back");
 	let continuity = $state<ContinuityEntry[]>([]);
 	let pipelineStatus = $state<PipelineStatus | null>(null);
 	let connectors = $state<DocumentConnector[]>([]);
@@ -44,7 +42,6 @@
 	onMount(async () => {
 		const results = await Promise.allSettled([
 			getDiagnostics(),
-			getHomeGreeting(),
 			getContinuityLatest(),
 			getPipelineStatus(),
 			getConnectors(),
@@ -52,14 +49,12 @@
 
 		if (results[0].status === "fulfilled" && results[0].value)
 			diagnostics = results[0].value;
-		if (results[1].status === "fulfilled" && results[1].value)
-			greeting = results[1].value.greeting;
+		if (results[1].status === "fulfilled")
+			continuity = results[1].value;
 		if (results[2].status === "fulfilled")
-			continuity = results[2].value;
+			pipelineStatus = results[2].value;
 		if (results[3].status === "fulfilled")
-			pipelineStatus = results[3].value;
-		if (results[4].status === "fulfilled")
-			connectors = results[4].value;
+			connectors = results[3].value;
 		loaded = true;
 	});
 </script>
@@ -69,7 +64,6 @@
 	<div class="area-banner">
 		<AgentHeader
 			{identity}
-			{greeting}
 			{daemonStatus}
 			connectorCount={connectors.length}
 			{continuity}

@@ -254,9 +254,9 @@ let isInstalled = $derived(
 	}
 
 	.card:focus-visible {
-		outline: none;
+		outline: 2px solid var(--sig-highlight);
+		outline-offset: 1px;
 		border-color: var(--sig-highlight);
-		border-left: 2px solid var(--sig-highlight);
 	}
 
 	.action-row {
