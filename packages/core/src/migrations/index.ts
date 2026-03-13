@@ -332,10 +332,8 @@ function currentVersion(db: MigrationDb): number {
 function repairBogusVersion(db: MigrationDb): void {
 	const current = currentVersion(db);
 	if (current < 2) return;
-	const cols = db
-		.prepare("PRAGMA table_info(memories)")
-		.all() as ReadonlyArray<Record<string, unknown>>;
-	const hasContentHash = cols.some((r) => r.name === "content_hash");
+	const cols = db.prepare("PRAGMA table_info(memories)").all();
+	const hasContentHash = cols.filter(hasStringName).some((r) => r.name === "content_hash");
 	if (hasContentHash) return;
 	db.exec("DELETE FROM schema_migrations WHERE version > 0");
 }
@@ -375,19 +373,22 @@ function tableColumns(
 }
 
 /**
- * Detect "phantom" migrations — recorded as applied in schema_migrations
- * but whose expected artifacts (tables/columns) don't actually exist.
- * Deletes the phantom rows so the migration re-runs on the next pass.
+ * Detect phantom migrations — versions recorded in schema_migrations whose
+ * expected artifacts (tables/columns) no longer exist. Read-only; does not
+ * modify the database.
+ *
+ * Used by both hasPendingMigrations (detection only) and
+ * repairPhantomMigrations (detection + deletion).
  */
-function repairPhantomMigrations(db: MigrationDb): void {
+function findPhantomVersions(db: MigrationDb): Set<number> {
 	const tables = existingTables(db);
 	const colCache = new Map<string, Set<string>>();
+	const phantoms = new Set<number>();
 
 	for (const migration of MIGRATIONS) {
 		if (!migration.artifacts) continue;
 
-		// Skip v1/v2 — legacy CLI partial schemas are handled by
-		// repairBogusVersion, not phantom repair
+		// Skip v1/v2 — legacy CLI partial schemas handled by repairBogusVersion
 		if (migration.version <= 2) continue;
 
 		const row = db
@@ -400,9 +401,6 @@ function repairPhantomMigrations(db: MigrationDb): void {
 		if (migration.artifacts.tables) {
 			for (const t of migration.artifacts.tables) {
 				if (!tables.has(t)) {
-					console.error(
-						`[signet] phantom migration v${migration.version} (${migration.name}): table "${t}" missing — will re-run`,
-					);
 					missing = true;
 					break;
 				}
@@ -412,31 +410,39 @@ function repairPhantomMigrations(db: MigrationDb): void {
 		if (!missing && migration.artifacts.columns) {
 			for (const col of migration.artifacts.columns) {
 				if (!tables.has(col.table)) {
-					console.error(
-						`[signet] phantom migration v${migration.version} (${migration.name}): table "${col.table}" missing — will re-run`,
-					);
 					missing = true;
 					break;
 				}
 				const cols = tableColumns(db, col.table, colCache);
 				if (!cols.has(col.column)) {
-					console.error(
-						`[signet] phantom migration v${migration.version} (${migration.name}): column "${col.table}.${col.column}" missing — will re-run`,
-					);
 					missing = true;
 					break;
 				}
 			}
 		}
 
-		if (missing) {
-			db.prepare(
-				"DELETE FROM schema_migrations WHERE version = ?",
-			).run(migration.version);
-			db.prepare(
-				"DELETE FROM schema_migrations_audit WHERE version = ?",
-			).run(migration.version);
+		if (missing) phantoms.add(migration.version);
+	}
+
+	return phantoms;
+}
+
+/**
+ * Detect phantom migrations and delete their schema_migrations records so
+ * they re-run on the next pass. Logs each repair to stderr.
+ */
+function repairPhantomMigrations(db: MigrationDb): void {
+	const phantoms = findPhantomVersions(db);
+
+	for (const version of phantoms) {
+		const migration = MIGRATIONS.find((m) => m.version === version);
+		if (migration) {
+			console.error(
+				`[signet] phantom migration v${migration.version} (${migration.name}): artifact missing — will re-run`,
+			);
 		}
+		db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(version);
+		db.prepare("DELETE FROM schema_migrations_audit WHERE version = ?").run(version);
 	}
 }
 
@@ -490,17 +496,17 @@ function verifyArtifacts(db: MigrationDb, migration: Migration): void {
  * Check whether there are unapplied migrations without running them.
  * Useful for backup-before-migrate logic in the daemon.
  *
- * This is intentionally read-only (beyond the bogus-version repair, which
- * was present before this PR). repairPhantomMigrations is NOT called here
- * because it deletes schema_migrations rows — doing so would corrupt the
- * backup version label that the daemon reads immediately after this call.
- * Phantom repair runs exclusively inside runMigrations.
+ * Read-only beyond the bogus-version repair (which predates this PR).
+ * Uses findPhantomVersions for phantom detection without deleting rows —
+ * that keeps the backup version label in db-accessor.ts accurate.
+ * repairPhantomMigrations (which deletes rows) runs only inside runMigrations.
  */
 export function hasPendingMigrations(db: MigrationDb): boolean {
 	ensureMetaTables(db);
 	repairBogusVersion(db);
 	const applied = appliedVersions(db);
-	return MIGRATIONS.some((m) => !applied.has(m.version));
+	const hasNew = MIGRATIONS.some((m) => !applied.has(m.version));
+	return hasNew || findPhantomVersions(db).size > 0;
 }
 
 /** The highest migration version defined. */
