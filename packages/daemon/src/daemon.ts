@@ -272,6 +272,15 @@ function normalizeRuntimeBaseUrl(url: string | undefined, fallback: string): str
 	}
 }
 
+/**
+ * Resolve the Ollama base URL for the model registry, returning undefined
+ * when the current provider is not Ollama.
+ */
+function resolveRegistryOllamaBaseUrl(provider: string, endpoint: string | undefined): string | undefined {
+	if (provider !== "ollama") return undefined;
+	return normalizeRuntimeBaseUrl(endpoint, "http://127.0.0.1:11434");
+}
+
 function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
 	try {
 		const parsed = new URL(baseUrl);
@@ -6647,7 +6656,7 @@ app.post("/api/pipeline/models/refresh", async (c) => {
 		} catch { /* ignore */ }
 	}
 	await refreshRegistry(
-		cfg.pipelineV2.extraction.provider === "ollama" ? "http://localhost:11434" : undefined,
+		resolveRegistryOllamaBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
 		anthropicKey,
 	);
 	return c.json({
@@ -9461,7 +9470,7 @@ async function main() {
 	if (memoryCfg.pipelineV2.modelRegistry.enabled) {
 		initModelRegistry(
 			memoryCfg.pipelineV2.modelRegistry,
-			effectiveExtractionProvider === "ollama" ? "http://localhost:11434" : undefined,
+			effectiveExtractionProvider === "ollama" ? extractionOllamaBaseUrl : undefined,
 			anthropicApiKey,
 		);
 	}

@@ -105,10 +105,10 @@ function cleanModelLabel(raw: string): string {
 }
 
 /**
- * Given a list of models, mark older versions of the same family as
- * deprecated. Mutates entries in place.
+ * Given a list of models, return a new array with older versions of the
+ * same family marked as deprecated. Does not mutate the input.
  */
-function markDeprecatedVersions(entries: ModelRegistryEntry[]): void {
+function markDeprecatedVersions(entries: readonly ModelRegistryEntry[]): ModelRegistryEntry[] {
 	const familyBest = new Map<string, { version: number; id: string }>();
 
 	for (const entry of entries) {
@@ -122,16 +122,17 @@ function markDeprecatedVersions(entries: ModelRegistryEntry[]): void {
 		}
 	}
 
-	for (const entry of entries) {
+	return entries.map((entry) => {
 		const family = parseModelFamily(entry.id);
 		const version = parseModelVersion(entry.id);
-		if (version === null) continue;
+		if (version === null) return { ...entry };
 
 		const best = familyBest.get(family);
 		if (best && best.id !== entry.id && version < best.version) {
-			(entry as { deprecated: boolean }).deprecated = true;
+			return { ...entry, deprecated: true };
 		}
-	}
+		return { ...entry };
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ async function discoverAnthropicModels(apiKey: string | undefined): Promise<Mode
 		const data = (await res.json()) as { data?: Array<{ id: string; display_name?: string }> };
 		if (!Array.isArray(data.data)) return KNOWN_MODELS.anthropic ?? [];
 
-		const entries: ModelRegistryEntry[] = data.data
+		let entries: ModelRegistryEntry[] = data.data
 			.filter((m) => m.id.startsWith("claude-"))
 			.map((m) => {
 				const tier: "high" | "mid" | "low" = m.id.includes("opus") ? "high" : m.id.includes("sonnet") ? "mid" : "low";
@@ -208,7 +209,7 @@ async function discoverAnthropicModels(apiKey: string | undefined): Promise<Mode
 				};
 			});
 
-		markDeprecatedVersions(entries);
+		entries = markDeprecatedVersions(entries);
 		return entries.length > 0 ? entries : (KNOWN_MODELS.anthropic ?? []);
 	} catch {
 		logger.debug("model-registry", "Anthropic model discovery failed, using known list");

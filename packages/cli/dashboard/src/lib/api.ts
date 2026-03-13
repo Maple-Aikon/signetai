@@ -4,6 +4,7 @@
  */
 
 import { marked } from "marked";
+import type { ModelRegistryEntry } from "@signet/core";
 
 // When served by the daemon, use relative URLs.
 // When served by Tauri (frontendDist) or Vite dev server, use absolute URL.
@@ -2472,13 +2473,7 @@ export async function getContinuityLatest(): Promise<ContinuityEntry[]> {
 // Model Registry
 // ---------------------------------------------------------------------------
 
-export interface ModelRegistryEntry {
-	id: string;
-	provider: string;
-	label: string;
-	tier: "high" | "mid" | "low";
-	deprecated: boolean;
-}
+export type { ModelRegistryEntry };
 
 export async function getModelsByProvider(): Promise<Record<string, ModelRegistryEntry[]>> {
 	try {

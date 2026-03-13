@@ -208,6 +208,10 @@ function clampFraction(raw: unknown, fallback: number): number {
 	return Math.max(0, Math.min(1, raw));
 }
 
+function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
+	return typeof v === "string" && ["low", "medium", "high"].includes(v);
+}
+
 function parseOptionalUrl(raw: unknown): string | undefined {
 	if (typeof raw !== "string") return undefined;
 	const trimmed = raw.trim();
@@ -320,9 +324,10 @@ export function loadPipelineConfig(
 					: flatModelOnly
 						? flatModel
 						: d.extraction.model,
-			strength: (["low", "medium", "high"].includes(extractionRaw?.strength ?? raw.extractionStrength)
-				? (extractionRaw?.strength ?? raw.extractionStrength)
-				: d.extraction.strength) as "low" | "medium" | "high",
+			strength: (() => {
+				const candidate = extractionRaw?.strength ?? raw.extractionStrength;
+				return isExtractionStrength(candidate) ? candidate : d.extraction.strength;
+			})(),
 			endpoint:
 				parseOptionalUrl(extractionRaw?.endpoint) ??
 				parseOptionalUrl(extractionRaw?.base_url) ??

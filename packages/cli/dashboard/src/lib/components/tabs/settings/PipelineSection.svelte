@@ -164,6 +164,7 @@ function setExtractionProvider(v: string | undefined): void {
 function setExtractionModelPreset(v: string | undefined): void {
 	if (!v) {
 		customModelActive = false;
+		st.aSetStr(["memory", "pipelineV2", "extractionModel"], "");
 		return;
 	}
 	if (v === "__custom__") {

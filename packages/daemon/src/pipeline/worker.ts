@@ -1025,11 +1025,12 @@ export function startWorker(
 			: provider;
 
 		// Run extraction — strength controls max tokens and timeout scaling
-		const strengthMaxTokens: Record<string, number> = { low: 1024, medium: 2048, high: 4096 };
-		const strengthTimeoutMultiplier: Record<string, number> = { low: 1, medium: 1.5, high: 2.5 };
-		const extractionMaxTokens = strengthMaxTokens[pipelineCfg.extraction.strength] ?? 1024;
+		const strengthMaxTokens = { low: 1024, medium: 2048, high: 4096 } as const;
+		const strengthTimeoutMultiplier = { low: 1, medium: 1.5, high: 2.5 } as const;
+		const strength = pipelineCfg.extraction.strength;
+		const extractionMaxTokens = strengthMaxTokens[strength] ?? 1024;
 		const extractionTimeout = Math.round(
-			pipelineCfg.extraction.timeout * (strengthTimeoutMultiplier[pipelineCfg.extraction.strength] ?? 1),
+			pipelineCfg.extraction.timeout * (strengthTimeoutMultiplier[strength] ?? 1),
 		);
 		const extractionStart = Date.now();
 		const rawExtraction = await extractFactsAndEntities(
