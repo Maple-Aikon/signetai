@@ -5,7 +5,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { spawn } from "child_process";
+import { execSync, spawn } from "child_process";
 import { createHash } from "crypto";
 import {
 	appendFileSync,
@@ -7754,6 +7754,45 @@ interface GitConfig {
 	branch: string;
 }
 
+/**
+ * Auto-detect the git branch for sync. Detection order:
+ * 1. Remote default branch via `git symbolic-ref refs/remotes/{remote}/HEAD`
+ * 2. Current local branch via `git rev-parse --abbrev-ref HEAD`
+ * 3. Falls back to "main" if neither succeeds (no git repo, no remote, etc.)
+ */
+function detectGitBranch(remote: string): string {
+	try {
+		// Try remote's default branch first (e.g. refs/remotes/origin/HEAD -> origin/main)
+		const ref = execSync(`git symbolic-ref refs/remotes/${remote}/HEAD`, {
+			cwd: AGENTS_DIR,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
+		// ref looks like "refs/remotes/origin/main" — extract the branch name
+		const prefix = `refs/remotes/${remote}/`;
+		if (ref.startsWith(prefix)) {
+			return ref.slice(prefix.length);
+		}
+	} catch {
+		// Remote HEAD not set — fall through to local branch
+	}
+
+	try {
+		const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+			cwd: AGENTS_DIR,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
+		if (branch && branch !== "HEAD") {
+			return branch;
+		}
+	} catch {
+		// Not a git repo or detached HEAD — fall through to default
+	}
+
+	return "main";
+}
+
 function loadGitConfig(): GitConfig {
 	const defaults: GitConfig = {
 		enabled: true,
@@ -7761,7 +7800,7 @@ function loadGitConfig(): GitConfig {
 		autoSync: true, // enabled by default - credentials auto-detected from gh, ssh, or credential helper
 		syncInterval: 300, // 5 minutes
 		remote: "origin",
-		branch: "main",
+		branch: "", // populated below after remote is resolved
 	};
 
 	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
@@ -7783,6 +7822,11 @@ function loadGitConfig(): GitConfig {
 		} catch {
 			// ignore parse errors
 		}
+	}
+
+	// Auto-detect branch if not explicitly configured in agent.yaml
+	if (!defaults.branch) {
+		defaults.branch = detectGitBranch(defaults.remote);
 	}
 
 	return defaults;
