@@ -50,21 +50,37 @@ function streamFromString(value: string): ReadableStream<Uint8Array> {
 describe("createOllamaProvider", () => {
 	afterEach(() => restoreFetch());
 
+	function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+		if (typeof value !== "object" || value === null) return false;
+		const then = Reflect.get(value, "then");
+		return typeof then === "function";
+	}
+
 	function withEnvOverride<T>(
 		key: "SIGNET_OLLAMA_FALLBACK_MODEL" | "SIGNET_OLLAMA_FALLBACK_MAX_CTX",
 		value: string,
-		fn: () => T,
-	): T {
+		fn: () => T | Promise<T>,
+	): T | Promise<T> {
 		const prev = process.env[key];
 		process.env[key] = value;
-		try {
-			return fn();
-		} finally {
+		const restore = (): void => {
 			if (prev === undefined) {
 				delete process.env[key];
-			} else {
-				process.env[key] = prev;
+				return;
 			}
+			process.env[key] = prev;
+		};
+
+		try {
+			const result = fn();
+			if (isPromiseLike<T>(result)) {
+				return Promise.resolve(result).finally(restore);
+			}
+			restore();
+			return result;
+		} catch (error) {
+			restore();
+			throw error;
 		}
 	}
 
@@ -98,6 +114,16 @@ describe("createOllamaProvider", () => {
 			const provider = createOllamaProvider();
 			expect(provider.name).toBe("ollama:llama3.1:8b");
 		});
+	});
+
+	it("withEnvOverride keeps env set for async callbacks", async () => {
+		const key = "SIGNET_OLLAMA_FALLBACK_MODEL";
+		const prev = process.env[key];
+		await withEnvOverride(key, "async-test-model", async () => {
+			await Promise.resolve();
+			expect(process.env[key]).toBe("async-test-model");
+		});
+		expect(process.env[key]).toBe(prev);
 	});
 
 	it("generate() returns trimmed response on success", async () => {

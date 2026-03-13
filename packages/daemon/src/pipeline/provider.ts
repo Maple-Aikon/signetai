@@ -1262,7 +1262,7 @@ export function createOpenCodeProvider(
 	const ollamaFallbackMaxContextTokens =
 		typeof merged.ollamaFallbackMaxContextTokens === "number"
 			? merged.ollamaFallbackMaxContextTokens
-			: resolveDefaultOllamaFallbackMaxContextTokens();
+			: resolveDefaultOllamaFallbackMaxContextTokens(); // Eagerly resolved even when fallback is disabled; tryOllamaFallback gates on enableOllamaFallback.
 	const cfg = {
 		...merged,
 		baseUrl: trimTrailingSlash(merged.baseUrl),
