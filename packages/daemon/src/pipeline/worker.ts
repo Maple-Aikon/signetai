@@ -1029,9 +1029,13 @@ export function startWorker(
 		const strengthTimeoutMultiplier = { low: 1, medium: 1.5, high: 2.5 } as const;
 		const strength = pipelineCfg.extraction.strength;
 		const extractionMaxTokens = strengthMaxTokens[strength] ?? 1024;
-		const extractionTimeout = Math.round(
+		const rawExtractionTimeout = Math.round(
 			pipelineCfg.extraction.timeout * (strengthTimeoutMultiplier[strength] ?? 1),
 		);
+		// Cap timeout to half the lease timeout to prevent duplicate job processing
+		// when escalation triggers two sequential LLM calls
+		const leaseLimit = Math.floor(pipelineCfg.worker.leaseTimeoutMs / 2);
+		const extractionTimeout = Math.min(rawExtractionTimeout, leaseLimit);
 		const extractionStart = Date.now();
 		const rawExtraction = await extractFactsAndEntities(
 			row.content,

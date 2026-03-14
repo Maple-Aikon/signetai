@@ -263,9 +263,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 						<Select.Item class={selectItemClass} value="high" label="high" />
 					</Select.Content>
 				</Select.Root>
-				{#if st.aStr(["memory", "pipelineV2", "extractionStrength"])}
-					<span class="text-[9px] text-[var(--sig-text-muted)] tracking-wider uppercase">{strengthMaxTokensLabel()} max tokens</span>
-				{/if}
+				<span class="text-[9px] text-[var(--sig-text-muted)] tracking-wider uppercase">{strengthMaxTokensLabel()} max tokens</span>
 				{#if (st.aStr(["memory", "pipelineV2", "extractionStrength"]) || "low") === "high"}
 					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">running extraction at high is usually unnecessary and will increase API costs significantly</span>
 				{/if}

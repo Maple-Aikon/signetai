@@ -146,6 +146,7 @@ interface RegistryState {
 }
 
 let state: RegistryState | null = null;
+let refreshInFlight: Promise<void> | null = null;
 
 // ---------------------------------------------------------------------------
 // Discovery functions
@@ -177,7 +178,7 @@ async function discoverOllamaModels(baseUrl: string): Promise<ModelRegistryEntry
 }
 
 async function discoverAnthropicModels(apiKey: string | undefined): Promise<ModelRegistryEntry[]> {
-	if (!apiKey) return KNOWN_MODELS.anthropic ?? [];
+	if (!apiKey) return markDeprecatedVersions(KNOWN_MODELS.anthropic ?? []);
 
 	try {
 		const res = await fetch("https://api.anthropic.com/v1/models", {
@@ -190,11 +191,11 @@ async function discoverAnthropicModels(apiKey: string | undefined): Promise<Mode
 
 		if (!res.ok) {
 			// API might not support /v1/models — fall back to known list
-			return KNOWN_MODELS.anthropic ?? [];
+			return markDeprecatedVersions(KNOWN_MODELS.anthropic ?? []);
 		}
 
 		const data = (await res.json()) as { data?: Array<{ id: string; display_name?: string }> };
-		if (!Array.isArray(data.data)) return KNOWN_MODELS.anthropic ?? [];
+		if (!Array.isArray(data.data)) return markDeprecatedVersions(KNOWN_MODELS.anthropic ?? []);
 
 		let entries: ModelRegistryEntry[] = data.data
 			.filter((m) => m.id.startsWith("claude-"))
@@ -210,10 +211,10 @@ async function discoverAnthropicModels(apiKey: string | undefined): Promise<Mode
 			});
 
 		entries = markDeprecatedVersions(entries);
-		return entries.length > 0 ? entries : (KNOWN_MODELS.anthropic ?? []);
+		return entries.length > 0 ? entries : markDeprecatedVersions(KNOWN_MODELS.anthropic ?? []);
 	} catch {
 		logger.debug("model-registry", "Anthropic model discovery failed, using known list");
-		return KNOWN_MODELS.anthropic ?? [];
+		return markDeprecatedVersions(KNOWN_MODELS.anthropic ?? []);
 	}
 }
 
@@ -229,6 +230,11 @@ export function initModelRegistry(
 	if (!config.enabled) {
 		logger.info("model-registry", "Model registry disabled");
 		return;
+	}
+
+	// Clean up any previous instance to avoid leaking timers
+	if (state?.refreshTimer) {
+		clearInterval(state.refreshTimer);
 	}
 
 	state = {
@@ -265,6 +271,25 @@ export function initModelRegistry(
 }
 
 export async function refreshRegistry(ollamaBaseUrl?: string, anthropicApiKey?: string): Promise<void> {
+	if (!state) return;
+
+	// Serialize refreshes to prevent stale out-of-order writes
+	if (refreshInFlight) {
+		await refreshInFlight;
+	}
+
+	const doRefresh = async (): Promise<void> => {
+		await _refreshRegistryInner(ollamaBaseUrl, anthropicApiKey);
+	};
+	refreshInFlight = doRefresh();
+	try {
+		await refreshInFlight;
+	} finally {
+		refreshInFlight = null;
+	}
+}
+
+async function _refreshRegistryInner(ollamaBaseUrl?: string, anthropicApiKey?: string): Promise<void> {
 	if (!state) return;
 
 	logger.debug("model-registry", "Refreshing model registry");
@@ -314,7 +339,7 @@ export function getAvailableModels(provider?: string, includeDeprecated = false)
 
 	if (provider) {
 		const models = state.models.get(provider) ?? [];
-		return includeDeprecated ? models : models.filter((m) => !m.deprecated);
+		return includeDeprecated ? [...models] : models.filter((m) => !m.deprecated);
 	}
 
 	const all = [...state.models.values()].flat();
