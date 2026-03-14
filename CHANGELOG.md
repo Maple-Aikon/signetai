@@ -2,6 +2,18 @@
 
 All notable changes to Signet are documented here.
 
+## [0.56.2] - 2026-03-14
+
+### Features
+
+- tactile aluminum design system for dashboard
+
+### Docs
+
+- add dashboard and constellation screenshots to README
+- refactor AGENTS.md into behavioral contract with backlinks
+
+
 ## [0.56.1] - 2026-03-14
 
 ### Bug Fixes
