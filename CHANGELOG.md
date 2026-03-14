@@ -2,6 +2,43 @@
 
 All notable changes to Signet are documented here.
 
+## [0.56.2] - 2026-03-14
+
+### Features
+
+- tactile aluminum design system for dashboard
+
+### Docs
+
+- add dashboard and constellation screenshots to README
+- refactor AGENTS.md into behavioral contract with backlinks
+
+
+## [0.56.1] - 2026-03-14
+
+### Bug Fixes
+
+- **migrations**: complete artifact declarations for v22 and v24
+- **migrations**: address round 9 Greptile feedback
+- **migrations**: address round 8 review feedback
+- **migrations**: replace hardcoded 26 with MIGRATIONS.length in all tests
+- **migrations**: address round 6 review feedback
+- **migrations**: address round 5 review feedback
+- **migrations**: address round 4 review feedback
+- **migrations**: address round 3 review feedback
+- **migrations**: address round 2 review feedback
+- **migrations**: address review feedback on PR #199
+- **migrations**: self-heal phantom migrations with artifact verification
+
+
+## [0.56.0] - 2026-03-14
+
+### Bug Fixes
+
+- **daemon**: harden ollama fallback max-context validation
+- **daemon**: remove hardcoded qwen fallback model
+
+
 ## [0.55.0] - 2026-03-12
 
 ### Features

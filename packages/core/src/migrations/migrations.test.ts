@@ -8,9 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-// The migration runner should be importable from the migrations index
-// If this import fails, the module hasn't been created yet
-import { runMigrations } from "./index";
+import { MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
@@ -32,8 +30,7 @@ describe("migration framework", () => {
 			version: number;
 			applied_at: string;
 		}>;
-		expect(migrations.length).toBe(27);
-		expect(migrations[0].version).toBe(1);
+		expect(migrations.length).toBe(MIGRATIONS.length);		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
 		expect(migrations[3].version).toBe(4);
@@ -172,8 +169,7 @@ describe("migration framework", () => {
 			version: number;
 			applied_at: string;
 		}>;
-		expect(audits.length).toBe(27);
-		for (const audit of audits) {
+		expect(audits.length).toBe(MIGRATIONS.length);		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
 	});
@@ -392,8 +388,7 @@ describe("migration framework", () => {
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		expect(migrations.length).toBe(27);
-	});
+		expect(migrations.length).toBe(MIGRATIONS.length);	});
 
 	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
 		db = createFreshDb();
@@ -433,8 +428,7 @@ describe("migration framework", () => {
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		expect(migrations.length).toBe(27);
-	});
+		expect(migrations.length).toBe(MIGRATIONS.length);	});
 
 	test("DB with existing v1 schema only gets v2 migration", () => {
 		db = createFreshDb();
@@ -452,5 +446,123 @@ describe("migration framework", () => {
 			.count;
 
 		expect(countAfter).toBe(countBefore);
+	});
+
+	test("phantom migration repair: dropped table triggers re-run", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		// Record audit count before repair (v14 should have 1 entry)
+		const auditBefore = db
+			.query<{ count: number }, []>(
+				"SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14",
+			)
+			.get();
+		expect(auditBefore?.count).toBe(1);
+
+		// Drop a table that v14 created, simulating a phantom migration
+		db.run("DROP TABLE telemetry_events");
+
+		// Verify it's gone
+		const before = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'")
+			.all();
+		expect(before.length).toBe(0);
+
+		// Re-run — phantom repair should detect the missing table,
+		// remove the v14 record, and re-run it
+		runMigrations(db);
+
+		// Table should be recreated
+		const after = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'")
+			.all();
+		expect(after.length).toBe(1);
+
+		// All versions should be recorded
+		const migrations = db
+			.query<{ version: number }, []>(
+				"SELECT version FROM schema_migrations ORDER BY version",
+			)
+			.all();
+		expect(migrations.length).toBe(MIGRATIONS.length);
+
+		// Audit history preserved: original entry plus new re-run entry
+		const auditAfter = db
+			.query<{ count: number }, []>(
+				"SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14",
+			)
+			.get();
+		expect(auditAfter?.count).toBe((auditBefore?.count ?? 0) + 1);
+	});
+
+	test("set-based skip handles gaps from phantom repair", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		// Simulate phantom state: keep schema_migrations rows but drop the
+		// tables those migrations created. Dropping session_memories also
+		// cascades to v20, v23, and v25 (they declare columns on that table),
+		// so repairPhantomMigrations removes records for v14, v15, v16, v20,
+		// v23, and v25. The set-based runner then re-executes all six in order;
+		// v15 re-creates session_memories before v20's addColumnIfMissing runs.
+		db.run("DROP TABLE IF EXISTS telemetry_events");
+		db.run("DROP TABLE IF EXISTS session_memories");
+		db.run("DROP TABLE IF EXISTS session_checkpoints");
+
+		// Re-run — phantom repair removes stale records, set-based runner
+		// fills all gaps in version order
+		runMigrations(db);
+
+		// All tables restored
+		const tables = db
+			.query<{ name: string }, []>(
+				"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+			)
+			.all();
+		const tableNames = tables.map((t) => t.name);
+		expect(tableNames).toContain("telemetry_events");
+		expect(tableNames).toContain("session_memories");
+		expect(tableNames).toContain("session_checkpoints");
+
+		// All versions present
+		const migrations = db
+			.query<{ version: number }, []>(
+				"SELECT version FROM schema_migrations ORDER BY version",
+			)
+			.all();
+		expect(migrations.length).toBe(MIGRATIONS.length);
+	});
+
+	test("post-DDL verification: all declared artifacts exist after migration", () => {
+		db = createFreshDb();
+
+		// We can't easily inject a broken migration into the real list,
+		// so we verify the mechanism by checking that after a successful
+		// run, all declared artifacts actually exist
+		runMigrations(db);
+
+		const tables = db
+			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+			.all();
+		const tableNames = new Set(tables.map((t) => t.name));
+
+		for (const m of MIGRATIONS) {
+			if (!m.artifacts) continue;
+			if (m.artifacts.tables) {
+				for (const t of m.artifacts.tables) {
+					expect(tableNames.has(t)).toBe(true);
+				}
+			}
+			if (m.artifacts.columns) {
+				for (const col of m.artifacts.columns) {
+					const cols = db
+						.query<{ name: string }, []>(`PRAGMA table_info("${col.table}")`)
+						.all();
+					const colNames = cols.map((c) => c.name);
+					expect(colNames).toContain(col.column);
+				}
+			}
+		}
 	});
 });
