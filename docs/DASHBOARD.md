@@ -247,3 +247,127 @@ SIGNET_PORT=4000 signet start
 ```
 
 The dashboard URL changes accordingly.
+
+
+Development Conventions
+-----------------------
+
+These conventions apply to all dashboard UI work.
+
+### Stack
+
+- **Framework**: Svelte 5 (runes: `$props`, `$state`, `$derived`, `$effect`)
+- **Styling**: Tailwind CSS v4 (via `@tailwindcss/vite` plugin, no `tailwind.config`)
+- **UI primitives**: shadcn-svelte (https://www.shadcn-svelte.com)
+- **Icons**: Lucide (`@lucide/svelte/icons/<name>`)
+- **Visualization**: 3d-force-graph, D3, CodeMirror 6
+- **Build**: Vite + SvelteKit static adapter
+
+### Component Organization
+
+```
+packages/cli/dashboard/src/lib/
+  components/
+    ui/           # shadcn-svelte primitives (button, card, tabs, etc.)
+    memory/       # Memory feature components
+    embeddings/   # Constellation / canvas views
+    config/       # Config editor components (FormField, FormSection)
+    sessions/     # Session management and bypass toggle
+    skills/       # Skills marketplace components
+    tasks/        # Task scheduler components
+    app-sidebar.svelte   # Main navigation sidebar
+    CodeEditor.svelte    # CodeMirror wrapper
+    ToastContainer.svelte
+  stores/         # Svelte 5 rune stores (*.svelte.ts)
+  api.ts          # Daemon API client
+```
+
+- Always use existing shadcn-svelte components from
+  `$lib/components/ui/` when possible. Do not recreate primitives.
+- Feature components go in their domain subdirectory (e.g. `memory/`,
+  `skills/`, `tasks/`).
+- Component naming: PascalCase for feature components (`SkillCard.svelte`),
+  kebab-case for shadcn primitives (`button.svelte`).
+- Props use Svelte 5 `$props()` with explicit TypeScript interfaces.
+- Import shadcn components via barrel: `$lib/components/ui/card/index.js`
+
+### Design Tokens
+
+Tokens are CSS custom properties defined in
+`packages/cli/dashboard/src/app.css`. Dark theme is the default;
+light activates via `data-theme="light"` on `<html>`.
+
+**Never hardcode hex colors.** Always use token variables:
+
+| Purpose | Token |
+|---------|-------|
+| Page background | `var(--sig-bg)` / `bg-background` |
+| Card surface | `var(--sig-surface)` / `bg-card` |
+| Raised surface | `var(--sig-surface-raised)` / `bg-secondary` |
+| Primary text | `var(--sig-text)` / `text-foreground` |
+| Bright text | `var(--sig-text-bright)` / `text-primary` |
+| Muted text | `var(--sig-text-muted)` / `text-muted-foreground` |
+| Border | `var(--sig-border)` / `border-border` |
+| Strong border | `var(--sig-border-strong)` / `border-input` |
+| Accent | `var(--sig-accent)` |
+| Danger | `var(--sig-danger)` / `bg-destructive` |
+| Success | `var(--sig-success)` |
+
+**Spacing scale**: `--space-xs` (4px), `--space-sm` (8px),
+`--space-md` (16px), `--space-lg` (24px), `--space-xl` (48px),
+`--space-2xl` (80px).
+
+**Typography**: Display font `var(--font-display)` (Diamond Grotesk /
+Chakra Petch) for headings. Monospace `var(--font-mono)` (Geist Mono /
+IBM Plex Mono) for body text and UI. Base font size is 13px.
+
+**Font sizes**: `--font-size-xs` (10px), `--font-size-sm` (11px),
+`--font-size-base` (13px), `--font-size-lg` (15px).
+
+**Utility classes**: `sig-label` (11px muted), `sig-eyebrow` (10px
+uppercase), `sig-heading` (11px bold uppercase), `sig-meta` (9px),
+`sig-badge` (9px rounded), `sig-micro` (8px uppercase).
+
+### Styling Rules
+
+- Use Tailwind utility classes mapped through the `@theme inline`
+  block in `app.css` (e.g. `bg-card`, `text-muted-foreground`,
+  `border-border`).
+- For Signet-specific tokens not in the Tailwind theme, use
+  `style="color: var(--sig-accent)"` or arbitrary values
+  `text-[var(--sig-accent)]`.
+- Transitions use `var(--dur)` (0.2s) and `var(--ease)`
+  (cubic-bezier). The grain overlay and scrollbar styles are global.
+- Headings are uppercase with letter-spacing. Use `sig-heading` class
+  or match the pattern: `font-display font-bold uppercase tracking-wider`.
+- Respect `prefers-reduced-motion` — the global CSS disables
+  animations when active.
+
+### Icon System
+
+- All icons come from `@lucide/svelte/icons/<icon-name>`.
+  Import individually, not from the barrel.
+  ```svelte
+  import Brain from "@lucide/svelte/icons/brain";
+  ```
+- Do not import or add new icon packages. If a design requires an
+  icon not in Lucide, flag it.
+- Icon color backgrounds use `--sig-icon-bg-1` through `--sig-icon-bg-6`
+  with `--sig-icon-fg` foreground and `--sig-icon-border` stroke.
+
+### State Management
+
+- Stores are Svelte 5 rune-based files at `$lib/stores/*.svelte.ts`.
+- Navigation uses `$lib/stores/navigation.svelte.ts` (hash-based tabs).
+- API calls go through `$lib/api.ts` which talks to the daemon at
+  `localhost:3850`.
+- Use `$state()`, `$derived()`, `$effect()` — not legacy stores.
+
+### Svelte 5 Conventions
+
+- Use `$props()` with destructured interface, not `export let`.
+- Use `{@render children()}` for slot content, not `<slot>`.
+- Event handlers: `onclick`, `onkeydown` (lowercase), not `on:click`.
+- Use `$effect()` for side effects, not `afterUpdate`.
+- Wrap mutable external references in `$state.raw()` or
+  `untrack()` where needed to prevent infinite reactivity loops.

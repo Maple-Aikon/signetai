@@ -142,6 +142,69 @@ a file grows unwieldy, especially if it improves testability.
 **Comments:** Explain why, not what. Self-explanatory code needs no
 inline narration; non-obvious logic or workarounds deserve a brief note.
 
+### Naming
+
+Use single word names by default. Multi-word names only when a single
+word would be ambiguous. Reduce variable count by inlining values used once.
+
+```ts
+// Good
+const foo = 1
+function journal(dir: string) {}
+const journal = await Bun.file(path.join(dir, "journal.json")).json()
+
+// Bad
+const fooBar = 1
+function prepareJournal(dir: string) {}
+const journalPath = path.join(dir, "journal.json")
+const journal = await Bun.file(journalPath).json()
+```
+
+### Destructuring
+
+Avoid unnecessary destructuring. Use dot notation to preserve context.
+
+```ts
+// Good
+obj.a
+obj.b
+
+// Bad
+const { a, b } = obj
+```
+
+### Variables
+
+Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
+
+```ts
+// Good
+const foo = condition ? 1 : 2
+
+// Bad
+let foo
+if (condition) foo = 1
+else foo = 2
+```
+
+### Control Flow
+
+Avoid `else` statements. Prefer early returns.
+
+```ts
+// Good
+function foo() {
+  if (condition) return 1
+  return 2
+}
+
+// Bad
+function foo() {
+  if (condition) return 1
+  else return 2
+}
+```
+
 Pull Requests
 ---
 
@@ -221,6 +284,40 @@ All scripts live in `scripts/` and are written in TypeScript (run via
 | `extract-changelog-section.ts` | Extracts a single version's section from CHANGELOG.md. Used by CI to populate GitHub release notes. |
 | `check-install-guide.ts` | Validates that the install guide (`web/public/skill.md`), README, and landing page components contain the expected install prompt and don't reference deprecated commands. |
 | `post-push-sync.sh` | Watches for the release workflow to complete after a push to `main`, then pulls the resulting release commit locally. Useful for staying in sync after pushing. |
+
+Identity Files
+---
+
+Signet recognizes these standard identity files at `~/.agents/`:
+
+| File | Required | Description |
+|------|----------|-------------|
+| AGENTS.md | yes | Operational rules and behavioral settings |
+| SOUL.md | yes | Persona, character, and security settings |
+| IDENTITY.md | yes | Agent name, creature type, and vibe |
+| USER.md | yes | User profile and preferences |
+| HEARTBEAT.md | no | Current working state, focus, and blockers |
+| MEMORY.md | no | Memory index and summary |
+| TOOLS.md | no | Tool preferences and notes |
+| BOOTSTRAP.md | no | Setup ritual (typically deleted after first run) |
+
+The `detectExistingSetup()` function in `packages/core/src/identity.ts`
+detects existing setups from OpenClaw, Claude Code, and OpenCode.
+
+Reference Repos
+---
+
+Use these as implementation references when designing protocol handling,
+integrations, and operational safeguards.
+
+- [lossless-claw](https://github.com/Martian-Engineering/lossless-claw) — lossless context handling
+- [openclaw](https://github.com/openclaw/openclaw) — agent runtime reference
+- [acpx](https://github.com/openclaw/acpx) — agent communication protocol
+- [arscontexta](https://github.com/agenticnotetaking/arscontexta) — agentic notetaking
+- [ACAN](https://github.com/HongChuanYang/Training-by-LLM-Enhanced-Memory-Retrieval-for-Generative-Agents-via-ACAN) — LLM-enhanced memory retrieval
+- [cli](https://github.com/entireio/cli) — CLI patterns
+- [codex/cli](https://github.com/openai/codex.git)
+- [opencode](https://github.com/anomalyco/opencode.git)
 
 To run any script manually:
 
