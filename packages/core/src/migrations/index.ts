@@ -35,6 +35,7 @@ import { up as predictorTrainingPairs } from "./026-predictor-training-pairs";
 import { up as backfillCanonicalNames } from "./027-backfill-canonical-names";
 import { up as losslessRetention } from "./028-lossless-retention";
 import { up as sessionSummaryDag } from "./029-session-summary-dag";
+import { up as nullableMemoryJobMemoryId } from "./030-nullable-memory-job-memory-id";
 
 // -- Public interface consumed by Database.init() --
 
@@ -300,6 +301,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 29,
 		name: "session-summary-dag",
 		up: sessionSummaryDag,
+	},
+	{
+		version: 30,
+		name: "nullable-memory-job-memory-id",
+		up: nullableMemoryJobMemoryId,
 	},
 ];
 
