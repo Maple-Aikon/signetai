@@ -6,6 +6,7 @@
 
 import { spawn, spawnSync } from "child_process";
 import {
+	appendFileSync,
 	closeSync,
 	copyFileSync,
 	existsSync,
@@ -434,9 +435,19 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 		},
 	});
 
-	// Suppress unhandled 'error' events (e.g., bun not found) so the
-	// readiness poll below produces a clean failure instead of a crash.
-	proc.on("error", () => {});
+	// Prevent unhandled 'error' crash (e.g. bun not on PATH). Spawn-level
+	// errors never reach the child's stderr fd — write them to startup.log
+	// so the diagnostic tail below surfaces them alongside normal stderr.
+	proc.on("error", (err) => {
+		if (startupLogPath) {
+			try {
+				appendFileSync(startupLogPath, `[spawn error] ${err.message}\n`);
+			} catch {
+				// Best effort — if we can't write, the readiness poll will still
+				// time out and report a clean failure.
+			}
+		}
+	});
 
 	proc.unref();
 	if (stderrFd !== null) closeSync(stderrFd);
