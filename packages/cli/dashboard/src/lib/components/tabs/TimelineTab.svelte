@@ -1112,15 +1112,21 @@ onMount(() => {
 			margin-left: 0;
 			margin-right: 0;
 			padding-bottom: 0;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			grid-template-columns: minmax(0, 1fr);
 			gap: 0;
 		}
 
 		.timeline-mix-card {
-			max-height: 150px;
+			max-height: 180px;
 			overflow-y: auto;
 			border-bottom: 1px solid var(--sig-highlight-text);
-			font-size: 9px;
+			border-left: 1px solid var(--sig-highlight-text);
+			border-right: 1px solid var(--sig-highlight-text);
+			font-size: 10px;
+		}
+
+		.timeline-mix-grid > .timeline-mix-card:first-child {
+			border-top: 1px solid var(--sig-highlight-text);
 		}
 
 		.timeline-top-panel {

@@ -11,16 +11,18 @@
 		class: className,
 		onclick,
 		children,
+		mobileOnly = false,
 		...restProps
 	}: ComponentProps<typeof Button> & {
 		onclick?: (e: MouseEvent) => void;
 		children?: Snippet;
+		mobileOnly?: boolean;
 	} = $props();
 
 	const sidebar = useSidebar();
 </script>
 
-{#if !(sidebar.isMobile && sidebar.openMobile) && (sidebar.isMobile || !restProps["data-mobile-only"])}
+{#if !(sidebar.isMobile && sidebar.openMobile) && (sidebar.isMobile || !mobileOnly)}
 <Button
 	data-sidebar="trigger"
 	data-slot="sidebar-trigger"

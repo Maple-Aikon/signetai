@@ -121,6 +121,7 @@
 			flex-wrap: wrap;
 			justify-content: center;
 			padding-left: 4.5rem; /* clear fixed sidebar trigger */
+			padding-right: 4.5rem; /* symmetric balance */
 		}
 
 		.banner-right {
