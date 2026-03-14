@@ -577,12 +577,12 @@ export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpC
 			if (!name || !url) continue;
 			const ghMatch = url.match(/github\.com\/([^/]+\/[^/]+)/);
 			const slug = ghMatch ? ghMatch[1].replace(/\/$/, "") : (url.replace(/\/$/, "").split("/").at(-1) ?? name);
-			const id = makeCatalogEntryId("modelcontextprotocol/servers", slug);
+			const id = makeCatalogEntryId("github", slug);
 			if (seen.has(id)) continue;
 			seen.add(id);
 			entries.push({
 				id,
-				source: "modelcontextprotocol/servers",
+				source: "github",
 				catalogId: slug,
 				name,
 				description: desc,

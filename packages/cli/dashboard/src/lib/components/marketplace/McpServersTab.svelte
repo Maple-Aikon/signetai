@@ -58,7 +58,8 @@ const sourceOptions = $derived(getMarketplaceMcpSourceOptions());
 
 const MCP_PAGE_SIZE = 60;
 let visibleCount = $state(MCP_PAGE_SIZE);
-$effect(() => { filteredCatalog; visibleCount = MCP_PAGE_SIZE; });
+// Read filteredCatalog to reset pagination when filters change
+$effect(() => { filteredCatalog; visibleCount = MCP_PAGE_SIZE; catalogAvatarErrors.clear(); });
 const visibleCatalog = $derived(filteredCatalog.slice(0, visibleCount));
 const hasMore = $derived(visibleCount < filteredCatalog.length);
 const remaining = $derived(filteredCatalog.length - visibleCount);
@@ -168,10 +169,10 @@ function getAvatarFromSource(source: string | undefined): string | null {
 	return null;
 }
 
-function getHueRotate(name: string): string {
+function getHueRotate(name: string): number {
 	let hash = 0;
 	for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) & 0xffff;
-	return `hue-rotate(${hash % 360}deg)`;
+	return hash % 360;
 }
 
 const installedAvatarErrors = $state(new Set<string>());
@@ -356,7 +357,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 							<div class="catalog-top">
 								<div class="mcp-icon" style={`background: ${sAvatar && !installedAvatarErrors.has(server.id) ? 'transparent' : getMonogramBg(server.name)};`}>
 									{#if sAvatar && !installedAvatarErrors.has(server.id)}
-										<img src={sAvatar} alt={server.name} class="mcp-avatar" style="filter: {getHueRotate(server.name)};" onerror={() => { installedAvatarErrors.add(server.id); }} />
+										<img src={sAvatar} alt={server.name} class="mcp-avatar" style="filter: hue-rotate({getHueRotate(server.name)}deg);" onerror={() => { installedAvatarErrors.add(server.id); }} />
 									{:else}
 										{getMonogram(server.name)}
 									{/if}
@@ -419,7 +420,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 						<div class="catalog-top">
 							<div class="mcp-icon" style={`background: ${avatar && !catalogAvatarErrors.has(entry.id) ? 'transparent' : getMonogramBg(entry.name)};`}>
 								{#if avatar && !catalogAvatarErrors.has(entry.id)}
-									<img src={avatar} alt={entry.name} class="mcp-avatar" style="filter: {getHueRotate(entry.name)};" onerror={() => { catalogAvatarErrors.add(entry.id); }} />
+									<img src={avatar} alt={entry.name} class="mcp-avatar" style="filter: hue-rotate({getHueRotate(entry.name)}deg);" onerror={() => { catalogAvatarErrors.add(entry.id); }} />
 								{:else}
 									{getMonogram(entry.name)}
 								{/if}
