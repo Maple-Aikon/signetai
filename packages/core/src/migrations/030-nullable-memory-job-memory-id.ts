@@ -10,6 +10,10 @@ import type { MigrationDb } from "./index";
  *   SQLiteError: NOT NULL constraint failed: memory_jobs.memory_id
  *
  * SQLite doesn't support ALTER COLUMN, so we rebuild the table.
+ *
+ * No artifacts declared: this migration modifies an existing table's
+ * constraint (not a new table/column). The memory_jobs table is already
+ * tracked by migration 002's artifacts, so phantom detection still works.
  */
 export function up(db: MigrationDb): void {
 	db.exec(`
@@ -45,7 +49,7 @@ export function up(db: MigrationDb): void {
 		FROM memory_jobs
 	`);
 
-	db.exec("DROP TABLE memory_jobs");
+	db.exec("DROP TABLE IF EXISTS memory_jobs");
 	db.exec("ALTER TABLE memory_jobs_new RENAME TO memory_jobs");
 
 	db.exec(`
