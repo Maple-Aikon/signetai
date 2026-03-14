@@ -241,7 +241,10 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "entity-pinning",
 		up: entityPinning,
 		artifacts: {
-			columns: [{ table: "entities", column: "pinned" }],
+			columns: [
+				{ table: "entities", column: "pinned" },
+				{ table: "entities", column: "pinned_at" },
+			],
 		},
 	},
 	{
@@ -259,6 +262,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			columns: [
 				{ table: "predictor_comparisons", column: "scorer_confidence" },
+				{ table: "predictor_comparisons", column: "success_rate" },
+				{ table: "predictor_comparisons", column: "predictor_top_ids" },
+				{ table: "predictor_comparisons", column: "baseline_top_ids" },
+				{ table: "predictor_comparisons", column: "relevance_scores" },
+				{ table: "predictor_comparisons", column: "fts_overlap_score" },
 			],
 		},
 	},
