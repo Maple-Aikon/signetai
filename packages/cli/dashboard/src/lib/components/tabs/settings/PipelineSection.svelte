@@ -76,7 +76,9 @@ $effect(() => {
 	// Re-fetch when registry toggle changes
 	const _enabled = st.aBool(["memory", "pipelineV2", "modelRegistry", "enabled"]);
 	void _enabled;
+	let cancelled = false;
 	getModelsByProvider().then((models) => {
+		if (cancelled) return;
 		if (models && Object.keys(models).length > 0) {
 			dynamicModels = models;
 			registryLoaded = true;
@@ -84,6 +86,7 @@ $effect(() => {
 	}).catch(() => {
 		// Registry unavailable — fall back to static presets
 	});
+	return () => { cancelled = true; };
 });
 
 function getModelPresets(provider: string): Array<{ value: string; label: string }> {

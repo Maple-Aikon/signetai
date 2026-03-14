@@ -6647,7 +6647,19 @@ app.get("/api/pipeline/models/by-provider", (c) => {
 	return c.json(getModelsByProvider());
 });
 
+let lastRefreshRequestAt = 0;
+const REFRESH_COOLDOWN_MS = 60_000;
+
 app.post("/api/pipeline/models/refresh", async (c) => {
+	const now = Date.now();
+	if (now - lastRefreshRequestAt < REFRESH_COOLDOWN_MS) {
+		return c.json({
+			models: getModelsByProvider(),
+			registry: getRegistryStatus(),
+			throttled: true,
+		}, 429);
+	}
+	lastRefreshRequestAt = now;
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	let anthropicKey: string | undefined = process.env.ANTHROPIC_API_KEY;
 	if (!anthropicKey) {

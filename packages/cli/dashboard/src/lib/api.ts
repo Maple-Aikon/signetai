@@ -2485,14 +2485,4 @@ export async function getModelsByProvider(): Promise<Record<string, ModelRegistr
 	}
 }
 
-export async function refreshModelRegistry(): Promise<Record<string, ModelRegistryEntry[]>> {
-	try {
-		const res = await fetch(`${API_BASE}/api/pipeline/models/refresh`, { method: "POST" });
-		if (!res.ok) return {};
-		const body = (await res.json()) as { models: Record<string, ModelRegistryEntry[]> };
-		return body.models ?? {};
-	} catch {
-		return {};
-	}
-}
 
