@@ -2111,6 +2111,17 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		return { memoriesSaved: 0 };
 	}
 
+	// Safety cap: prevent unbounded transcripts from blowing LLM context.
+	// Sanitization handles most cases; this is a circuit breaker.
+	const MAX_TRANSCRIPT_CHARS = 100_000;
+	if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+		logger.warn("hooks", "Transcript exceeds safety cap, truncating", {
+			original: transcript.length,
+			cap: MAX_TRANSCRIPT_CHARS,
+		});
+		transcript = `${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
+	}
+
 	// Queue for async processing by the summary worker instead of
 	// blocking on LLM inference. The worker produces both a dated
 	// markdown summary and atomic fact rows.
@@ -2135,27 +2146,27 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		sessionKey,
 		transcriptPath: req.transcriptPath,
 		transcriptChars: transcript.length,
-		queuedChars: transcript.length,
-		transcript,
 	});
 
 	return { memoriesSaved: 0, queued: true, jobId };
 }
 
-function normalizeSessionTranscript(harness: string, raw: string): string {
-	if (harness === "codex") {
+export function normalizeSessionTranscript(harness: string, raw: string): string {
+	if (harness.trim().toLowerCase() === "codex") {
 		return normalizeCodexTranscript(raw);
 	}
 
-	const normalizedJson = normalizeJsonConversationTranscript(raw);
-	if (normalizedJson.length > 0) {
-		return normalizedJson;
-	}
-
-	return raw;
+	const result = normalizeJsonConversationTranscript(raw);
+	// null = not a JSON-line transcript, safe to return raw
+	if (result === null) return raw;
+	// string (including "") = successfully sanitized
+	return result;
 }
 
-function normalizeJsonConversationTranscript(raw: string): string {
+// Returns null when input is not JSON-line format (below 60% threshold).
+// Returns string (possibly empty) when input IS JSON-line — empty means
+// all lines were non-conversational (tool calls, metadata, etc.).
+export function normalizeJsonConversationTranscript(raw: string): string | null {
 	const rawLines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 	if (rawLines.length === 0) return "";
 
@@ -2175,8 +2186,9 @@ function normalizeJsonConversationTranscript(raw: string): string {
 		parsedLines.push(null);
 	}
 
+	// Not a JSON-line transcript — caller should fall back to raw
 	if (parsedCount < Math.ceil(rawLines.length * 0.6)) {
-		return "";
+		return null;
 	}
 
 	const conversationLines: string[] = [];
@@ -2299,10 +2311,7 @@ export function normalizeCodexTranscript(raw: string): string {
 			continue;
 		}
 
-		if (event.type === "response_item") {
-			const payload = event.payload;
-			void payload;
-		}
+		// response_item events (tool calls/outputs) are intentionally omitted
 	}
 
 	return lines.join("\n");
