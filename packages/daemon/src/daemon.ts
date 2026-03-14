@@ -5,7 +5,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { execSync, spawn } from "child_process";
+import { execFileSync, spawn } from "child_process";
 import { createHash } from "crypto";
 import {
 	appendFileSync,
@@ -7763,7 +7763,7 @@ interface GitConfig {
 function detectGitBranch(remote: string): string {
 	try {
 		// Try remote's default branch first (e.g. refs/remotes/origin/HEAD -> origin/main)
-		const ref = execSync(`git symbolic-ref refs/remotes/${remote}/HEAD`, {
+		const ref = execFileSync("git", ["symbolic-ref", `refs/remotes/${remote}/HEAD`], {
 			cwd: AGENTS_DIR,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
@@ -7778,7 +7778,7 @@ function detectGitBranch(remote: string): string {
 	}
 
 	try {
-		const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+		const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
 			cwd: AGENTS_DIR,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
