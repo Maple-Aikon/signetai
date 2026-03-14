@@ -20,7 +20,7 @@
 	const sidebar = useSidebar();
 </script>
 
-{#if !(sidebar.isMobile && sidebar.openMobile)}
+{#if !(sidebar.isMobile && sidebar.openMobile) && (sidebar.isMobile || !restProps["data-mobile-only"])}
 <Button
 	data-sidebar="trigger"
 	data-slot="sidebar-trigger"
