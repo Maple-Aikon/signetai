@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.56.0] - 2026-03-14
+
+### Bug Fixes
+
+- **daemon**: harden ollama fallback max-context validation
+- **daemon**: remove hardcoded qwen fallback model
+
+
 ## [0.55.0] - 2026-03-12
 
 ### Features
