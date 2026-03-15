@@ -48,6 +48,7 @@ import { onMount } from "svelte";
 const activeTab = $derived(nav.activeTab);
 const { data } = $props();
 let daemonStatus = $state<DaemonStatus | null>(null);
+let bannerShowing = $state(false);
 let embeddingsPrefetchPromise: Promise<unknown[]> | null = null;
 let timelineGeneratedFor = $state("");
 
@@ -243,7 +244,7 @@ $effect(() => {
 	<Sidebar.Trigger
 		unstyled={true}
 		class="mobile-sidebar-trigger fixed z-40 size-5 p-0 bg-transparent border-none shadow-none rounded-sm hover:bg-[color-mix(in_srgb,var(--sig-surface-raised)_60%,transparent)] transition-all items-center justify-center flex"
-		style="top: calc(var(--titlebar-h, 0px) + var(--space-sm, 8px) + 3px); left: calc(var(--space-sm, 8px) + 1px);"
+		style="top: calc(var(--titlebar-h, 0px) + var(--space-sm, 8px) + 3px + {bannerShowing ? '24px' : '0px'}); left: calc(var(--space-sm, 8px) + 1px);"
 		mobileOnly={true}
 	>
 		<span
@@ -259,7 +260,7 @@ $effect(() => {
 	<main data-page-content="true" class="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden
 		bg-[var(--sig-bg)]">
 
-		<UpgradeBanner {daemonStatus} />
+		<UpgradeBanner {daemonStatus} bind:showing={bannerShowing} />
 		<ExtensionBanner />
 
 		<div class="flex flex-1 flex-col min-h-0 relative" data-tab-panel-active="true">

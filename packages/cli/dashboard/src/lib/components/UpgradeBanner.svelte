@@ -1,35 +1,64 @@
 <script lang="ts">
 	import { browser } from "$app/environment";
-	import type { DaemonStatus } from "$lib/api";
+	import { fetchChangelog, type DaemonStatus } from "$lib/api";
+	import ExternalLink from "@lucide/svelte/icons/external-link";
 	import X from "@lucide/svelte/icons/x";
 
 	const STORAGE_KEY_PREFIX = "signet-upgrade-banner-dismissed-";
+	const CHANGELOG_URL =
+		"https://github.com/Signet-AI/signetai/blob/main/CHANGELOG.md";
 
 	interface Props {
 		daemonStatus: DaemonStatus | null;
+		showing?: boolean;
 	}
 
-	let { daemonStatus }: Props = $props();
+	let { daemonStatus, showing = $bindable(false) }: Props = $props();
 
 	let dismissed = $state(false);
+	let notes = $state<string[]>([]);
 
 	const version = $derived(daemonStatus?.version ?? null);
-	const storageKey = $derived(version ? `${STORAGE_KEY_PREFIX}${version}` : null);
+	const key = $derived(
+		version ? `${STORAGE_KEY_PREFIX}${version}` : null,
+	);
 
-	// Check if this version's banner was already dismissed
-	if (browser && storageKey) {
-		dismissed = localStorage.getItem(storageKey) === "true";
-	}
+	// Sync dismiss state from localStorage when version resolves
+	$effect(() => {
+		if (!browser || !key) return;
+		dismissed = localStorage.getItem(key) === "true";
+	});
 
-	// Show banner when version is known and not dismissed for this version
+	// Fetch changelog and extract up to 3 items for the current version
+	$effect(() => {
+		if (!version || version === "0.0.0") return;
+		fetchChangelog().then((doc) => {
+			if (!doc?.html) return;
+			// Find the section for this version and grab list items
+			const anchor = doc.html.indexOf(`[${version}]`);
+			const slice = anchor >= 0
+				? doc.html.slice(anchor)
+				: doc.html;
+			const items = slice.match(/<li[^>]*>([\s\S]*?)<\/li>/gi);
+			if (!items) return;
+			notes = items.slice(0, 3).map((li) =>
+				li.replace(/<[^>]+>/g, "").trim(),
+			);
+		});
+	});
+
 	const visible = $derived(
 		!!version && version !== "0.0.0" && !dismissed,
 	);
 
+	$effect(() => {
+		showing = visible;
+	});
+
 	function dismiss() {
 		dismissed = true;
-		if (browser && storageKey) {
-			localStorage.setItem(storageKey, "true");
+		if (browser && key) {
+			localStorage.setItem(key, "true");
 		}
 	}
 </script>
@@ -37,11 +66,35 @@
 {#if visible}
 	<div class="banner">
 		<span class="banner-accent" aria-hidden="true"></span>
-		<span class="banner-version">v{version}</span>
+		<a
+			href={CHANGELOG_URL}
+			target="_blank"
+			rel="noopener noreferrer"
+			class="banner-link"
+		>
+			<span class="banner-version">v{version}</span>
+			<ExternalLink class="size-2.5" />
+		</a>
 		<span class="banner-separator" aria-hidden="true"></span>
-		<span class="banner-text">
-			Knowledge graph, session continuity, constellation entity overlay
-		</span>
+		{#if notes.length > 0}
+			<span class="banner-notes">
+				{#each notes as note, i}
+					<span class="banner-note">{note}</span>
+					{#if i < notes.length - 1}
+						<span class="banner-dot" aria-hidden="true">&middot;</span>
+					{/if}
+				{/each}
+			</span>
+			<span class="banner-separator" aria-hidden="true"></span>
+		{/if}
+		<a
+			href={CHANGELOG_URL}
+			target="_blank"
+			rel="noopener noreferrer"
+			class="banner-changelog-link"
+		>
+			View changelog
+		</a>
 		<button
 			onclick={dismiss}
 			class="banner-dismiss"
@@ -75,11 +128,23 @@
 		flex-shrink: 0;
 	}
 
-	.banner-version {
+	.banner-link {
+		display: flex;
+		align-items: center;
+		gap: 4px;
 		color: var(--sig-highlight);
+		text-decoration: none;
+		flex-shrink: 0;
+		transition: opacity var(--dur) var(--ease);
+	}
+
+	.banner-link:hover {
+		opacity: 0.8;
+	}
+
+	.banner-version {
 		font-weight: 700;
 		text-transform: uppercase;
-		flex-shrink: 0;
 	}
 
 	.banner-separator {
@@ -89,12 +154,36 @@
 		flex-shrink: 0;
 	}
 
-	.banner-text {
+	.banner-notes {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		overflow: hidden;
+	}
+
+	.banner-note {
 		color: var(--sig-text-muted);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		min-width: 0;
+	}
+
+	.banner-dot {
+		color: var(--sig-border-strong);
+		flex-shrink: 0;
+	}
+
+	.banner-changelog-link {
+		color: var(--sig-accent);
+		text-decoration: none;
+		white-space: nowrap;
+		flex-shrink: 0;
+		transition: color var(--dur) var(--ease);
+	}
+
+	.banner-changelog-link:hover {
+		color: var(--sig-text-bright);
 	}
 
 	.banner-dismiss {
