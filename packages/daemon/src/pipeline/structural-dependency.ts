@@ -172,7 +172,7 @@ function validateDependencyResults(
 		const i = typeof obj.i === "number" ? obj.i : -1;
 		if (i < 1 || i > factCount) continue;
 
-		const aspect = typeof obj.aspect === "string" ? obj.aspect.trim() : "";
+		const aspect = typeof obj.aspect === "string" ? obj.aspect.trim().slice(0, 200) : "";
 		if (aspect.length === 0) continue;
 
 		const kind = obj.kind === "constraint" ? "constraint" as const : "attribute" as const;
@@ -302,20 +302,28 @@ async function processDependencyBatch(
 			);
 
 			if (targetEntity) {
-				const aspect = upsertAspect(deps.accessor, {
-					entityId: payload.entity_id,
-					agentId: "default",
-					name: result.aspect,
-				});
-				upsertDependency(deps.accessor, {
-					sourceEntityId: payload.entity_id,
-					targetEntityId: targetEntity.id,
-					agentId: "default",
-					aspectId: aspect.id,
-					dependencyType: result.dep_type as DependencyType,
-					strength: 0.5,
-				});
-				depsCreated++;
+				try {
+					const aspect = upsertAspect(deps.accessor, {
+						entityId: payload.entity_id,
+						agentId: "default",
+						name: result.aspect,
+					});
+					upsertDependency(deps.accessor, {
+						sourceEntityId: payload.entity_id,
+						targetEntityId: targetEntity.id,
+						agentId: "default",
+						aspectId: aspect.id,
+						dependencyType: result.dep_type as DependencyType,
+						strength: 0.5,
+					});
+					depsCreated++;
+				} catch (e) {
+					logger.warn("structural-dependency", "upsert failed", {
+						error: String(e),
+						entity: payload.entity_id,
+						target: targetEntity.id,
+					});
+				}
 			}
 		}
 
