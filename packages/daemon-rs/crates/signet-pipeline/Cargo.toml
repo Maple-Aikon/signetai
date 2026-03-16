@@ -1,0 +1,16 @@
+[package]
+name = "signet-pipeline"
+version.workspace = true
+edition.workspace = true
+description = "LLM providers, embedding providers, workers, predictor, extraction"
+
+[dependencies]
+signet-core = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }

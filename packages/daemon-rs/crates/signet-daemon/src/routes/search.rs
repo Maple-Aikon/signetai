@@ -1,0 +1,352 @@
+//! Search and recall route handlers.
+
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
+
+use signet_core::search::{
+    RecallFilter, fts_search, merge_scores, touch_accessed, vec_search_scored,
+};
+
+use crate::state::AppState;
+
+// ---------------------------------------------------------------------------
+// POST /api/memory/recall
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallBody {
+    pub query: String,
+    pub keyword_query: Option<String>,
+    pub limit: Option<usize>,
+    #[allow(dead_code)] // Used in Phase 3 for agent scoping
+    pub agent_id: Option<String>,
+    #[serde(rename = "type")]
+    pub memory_type: Option<String>,
+    pub tags: Option<String>,
+    pub who: Option<String>,
+    pub pinned: Option<bool>,
+    pub importance_min: Option<f64>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RecallResponse {
+    pub results: Vec<RecallHit>,
+    pub query: String,
+    pub method: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct RecallHit {
+    pub id: String,
+    pub content: String,
+    pub content_length: usize,
+    pub truncated: bool,
+    pub score: f64,
+    pub source: String,
+    #[serde(rename = "type")]
+    pub memory_type: String,
+    pub tags: Option<String>,
+    pub pinned: bool,
+    pub importance: f64,
+    pub who: Option<String>,
+    pub project: Option<String>,
+    pub created_at: String,
+}
+
+pub async fn recall(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RecallBody>,
+) -> impl IntoResponse {
+    let query = body.query.trim().to_string();
+    if query.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "query is required"})),
+        )
+            .into_response();
+    }
+
+    let limit = body.limit.unwrap_or(10);
+    let search_cfg = state.config.manifest.search.clone().unwrap_or_default();
+    let alpha = search_cfg.alpha;
+    let min_score = search_cfg.min_score;
+    let top_k = search_cfg.top_k;
+    let truncate = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|p| p.guardrails.recall_truncate_chars)
+        .unwrap_or(50_000);
+
+    // Embed query if we have a provider
+    let query_vec = if let Some(ref provider) = state.embedding {
+        provider.embed(&query).await
+    } else {
+        None
+    };
+    let has_vec = query_vec.is_some();
+
+    let keyword_query = body.keyword_query.unwrap_or_else(|| query.clone());
+    let mem_type = body.memory_type.clone();
+    let tags = body.tags.clone();
+    let who = body.who.clone();
+    let pinned = body.pinned;
+    let importance_min = body.importance_min;
+    let since = body.since.clone();
+    let until = body.until.clone();
+    let query_for_response = query.clone();
+
+    let result = state
+        .pool
+        .read(move |conn| {
+            let filter = RecallFilter {
+                memory_type: mem_type.as_deref(),
+                tags: tags.as_deref(),
+                who: who.as_deref(),
+                pinned,
+                importance_min,
+                since: since.as_deref(),
+                until: until.as_deref(),
+            };
+
+            // FTS5 keyword search
+            let fts_hits = fts_search(conn, &keyword_query, top_k, &filter).unwrap_or_default();
+
+            // Vector KNN search
+            let vec_hits = match &query_vec {
+                Some(v) => vec_search_scored(conn, v, top_k, mem_type.as_deref()),
+                None => vec![],
+            };
+
+            // Merge
+            let mut scored = merge_scores(&fts_hits, &vec_hits, alpha, min_score);
+            scored.truncate(limit);
+
+            if scored.is_empty() {
+                return Ok(RecallResponse {
+                    results: vec![],
+                    query: query_for_response,
+                    method: "hybrid".to_string(),
+                });
+            }
+
+            // Fetch full rows
+            let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
+            let placeholders: String = ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id, content, type, tags, pinned, importance, who, project, created_at
+                 FROM memories WHERE id IN ({placeholders})"
+            );
+
+            let mut stmt = conn.prepare(&sql)?;
+            let refs: Vec<&dyn rusqlite::types::ToSql> = ids
+                .iter()
+                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .collect();
+
+            let rows: std::collections::HashMap<String, RecallHit> = stmt
+                .query_map(refs.as_slice(), |row| {
+                    let content: String = row.get(1)?;
+                    let len = content.len();
+                    let is_truncated = len > truncate;
+                    let display = if is_truncated {
+                        format!("{} [truncated]", &content[..truncate])
+                    } else {
+                        content
+                    };
+
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        RecallHit {
+                            id: row.get(0)?,
+                            content: display,
+                            content_length: len,
+                            truncated: is_truncated,
+                            score: 0.0, // Filled below
+                            source: String::new(),
+                            memory_type: row.get(2)?,
+                            tags: row.get(3)?,
+                            pinned: row.get::<_, i64>(4)? != 0,
+                            importance: row.get(5)?,
+                            who: row.get(6)?,
+                            project: row.get(7)?,
+                            created_at: row.get(8)?,
+                        },
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Update access tracking
+            touch_accessed(conn, &ids);
+
+            let results: Vec<RecallHit> = scored
+                .iter()
+                .filter_map(|s| {
+                    let mut hit = rows.get(&s.id)?.clone();
+                    hit.score = (s.score * 100.0).round() / 100.0;
+                    hit.source = s.source.as_str().to_string();
+                    Some(hit)
+                })
+                .collect();
+
+            let method = if has_vec { "hybrid" } else { "keyword" };
+            Ok(RecallResponse {
+                results,
+                query: query_for_response,
+                method: method.to_string(),
+            })
+        })
+        .await;
+
+    match result {
+        Ok(resp) => (StatusCode::OK, Json(serde_json::to_value(resp).unwrap())).into_response(),
+        Err(e) => {
+            warn!(err = %e, "recall failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Recall failed", "results": []})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/memory/search?q=...
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct SearchParams {
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+    #[serde(rename = "type")]
+    pub memory_type: Option<String>,
+    pub tags: Option<String>,
+    pub who: Option<String>,
+    pub pinned: Option<String>,
+    pub importance_min: Option<f64>,
+    pub since: Option<String>,
+}
+
+pub async fn search_get(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SearchParams>,
+) -> axum::response::Response {
+    let q = params.q.unwrap_or_default().trim().to_string();
+    if q.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "query is required"})),
+        )
+            .into_response();
+    }
+
+    let pinned = params.pinned.as_deref().map(|p| p == "1" || p == "true");
+
+    let body = RecallBody {
+        query: q,
+        keyword_query: None,
+        limit: params.limit,
+        agent_id: None,
+        memory_type: params.memory_type,
+        tags: params.tags,
+        who: params.who,
+        pinned,
+        importance_min: params.importance_min,
+        since: params.since,
+        until: None,
+    };
+
+    recall(State(state), Json(body)).await.into_response()
+}
+
+// ---------------------------------------------------------------------------
+// GET /memory/search (legacy alias)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct LegacySearchParams {
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
+pub async fn legacy_search(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LegacySearchParams>,
+) -> axum::response::Response {
+    let q = params.q.unwrap_or_default().trim().to_string();
+    if q.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "query is required"})),
+        )
+            .into_response();
+    }
+
+    let body = RecallBody {
+        query: q,
+        keyword_query: None,
+        limit: params.limit,
+        agent_id: None,
+        memory_type: None,
+        tags: None,
+        who: None,
+        pinned: None,
+        importance_min: None,
+        since: None,
+        until: None,
+    };
+
+    recall(State(state), Json(body)).await.into_response()
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/embeddings
+// ---------------------------------------------------------------------------
+
+pub async fn embeddings_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let stats = state
+        .pool
+        .read(|conn| {
+            let total: i64 = conn.query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))?;
+            let memories: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT source_id) FROM embeddings WHERE source_type = 'memory'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let dims: Option<i64> = conn
+                .query_row("SELECT dimensions FROM embeddings LIMIT 1", [], |r| {
+                    r.get(0)
+                })
+                .ok();
+
+            Ok(serde_json::json!({
+                "total": total,
+                "memoriesWithEmbeddings": memories,
+                "dimensions": dims,
+            }))
+        })
+        .await
+        .unwrap_or_else(|_| serde_json::json!({"error": "db unavailable"}));
+
+    Json(stats)
+}
