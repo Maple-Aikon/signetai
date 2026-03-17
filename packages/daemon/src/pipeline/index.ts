@@ -16,6 +16,7 @@ import { DEFAULT_RETENTION, type RetentionHandle, startRetentionWorker } from ".
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./structural-classify";
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
+import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, startWorker } from "./worker";
 
@@ -53,6 +54,7 @@ let summaryWorkerHandle: SummaryWorkerHandle | null = null;
 let synthesisWorkerHandle: SynthesisWorkerHandle | null = null;
 let structuralClassifyHandle: StructuralClassifyHandle | null = null;
 let structuralDependencyHandle: StructuralDependencyHandle | null = null;
+let dependencySynthesisHandle: DependencySynthesisHandle | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): Record<string, { running: boolean }> {
@@ -65,6 +67,7 @@ export function getPipelineWorkerStatus(): Record<string, { running: boolean }> 
 		synthesis: { running: synthesisWorkerHandle !== null },
 		structuralClassify: { running: structuralClassifyHandle !== null },
 		structuralDependency: { running: structuralDependencyHandle !== null },
+		dependencySynthesis: { running: dependencySynthesisHandle !== null },
 	};
 }
 
@@ -155,6 +158,13 @@ export function startPipeline(
 				pipelineCfg,
 			});
 		}
+		if (!dependencySynthesisHandle && pipelineCfg.structural.synthesisEnabled) {
+			dependencySynthesisHandle = startDependencySynthesisWorker({
+				accessor,
+				provider,
+				pipelineCfg,
+			});
+		}
 	}
 
 	logger.info("pipeline", "Pipeline started", {
@@ -171,6 +181,10 @@ export async function stopPipeline(): Promise<void> {
 			logger.warn("pipeline", "Synthesis worker drain timed out during shutdown");
 		}
 		synthesisWorkerHandle = null;
+	}
+	if (dependencySynthesisHandle) {
+		await dependencySynthesisHandle.stop();
+		dependencySynthesisHandle = null;
 	}
 	if (structuralDependencyHandle) {
 		await structuralDependencyHandle.stop();

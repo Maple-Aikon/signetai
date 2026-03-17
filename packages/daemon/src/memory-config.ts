@@ -145,6 +145,10 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		classifyBatchSize: 8,
 		dependencyBatchSize: 5,
 		pollIntervalMs: 10000,
+		synthesisEnabled: true,
+		synthesisIntervalMs: 60_000,
+		synthesisTopEntities: 20,
+		synthesisMaxFacts: 10,
 	},
 	feedback: {
 		enabled: true,
@@ -759,6 +763,27 @@ export function loadPipelineConfig(
 				2000,
 				120000,
 				d.structural.pollIntervalMs,
+			),
+			synthesisEnabled: resolveBool(
+				structuralRaw?.synthesisEnabled, undefined, d.structural.synthesisEnabled,
+			),
+			synthesisIntervalMs: clampPositive(
+				structuralRaw?.synthesisIntervalMs,
+				10000,
+				600000,
+				d.structural.synthesisIntervalMs,
+			),
+			synthesisTopEntities: clampPositive(
+				structuralRaw?.synthesisTopEntities,
+				5,
+				100,
+				d.structural.synthesisTopEntities,
+			),
+			synthesisMaxFacts: clampPositive(
+				structuralRaw?.synthesisMaxFacts,
+				3,
+				50,
+				d.structural.synthesisMaxFacts,
 			),
 		},
 

@@ -93,7 +93,14 @@ export function stripFences(raw: string): string {
 	// Strip <think> blocks from models that use chain-of-thought (qwen3, etc.)
 	const stripped = raw.replace(THINK_RE, "");
 	const match = stripped.match(FENCE_RE);
-	return match ? match[1].trim() : stripped.trim();
+	if (match) return match[1].trim();
+
+	// Fallback: extract balanced JSON array from verbose output
+	// (handles "explanation then JSON" pattern common with qwen3)
+	const arr = extractBalancedJsonArray(stripped);
+	if (arr) return arr;
+
+	return stripped.trim();
 }
 
 export function tryParseJson(candidate: string): unknown | null {
@@ -157,6 +164,66 @@ function extractBalancedJsonObject(raw: string): string | null {
 			if (depth === 0) {
 				return raw.slice(start, i + 1);
 			}
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Find the last top-level JSON array in a string. Scans forward with
+ * string-awareness, recording every depth-0 '[' position, then extracts
+ * the balanced array starting from the last one. This handles both:
+ * - brackets in explanation text before JSON: "options: [a,b] ... [{...}]"
+ * - brackets inside JSON strings: [{"reason":"uses [auth]"}]
+ */
+export function extractBalancedJsonArray(raw: string): string | null {
+	// Pass 1: find the last top-level '[' (not inside a quoted string)
+	let last = -1;
+	let depth = 0;
+	let inString = false;
+	let escaping = false;
+
+	for (let i = 0; i < raw.length; i++) {
+		const ch = raw[i];
+
+		if (inString) {
+			if (escaping) { escaping = false; continue; }
+			if (ch === "\\") { escaping = true; continue; }
+			if (ch === '"') inString = false;
+			continue;
+		}
+
+		if (ch === '"') { inString = true; continue; }
+		if (ch === "[") {
+			if (depth === 0) last = i;
+			depth++;
+		}
+		if (ch === "]") depth--;
+	}
+
+	if (last < 0) return null;
+
+	// Pass 2: extract balanced array from the last top-level '['
+	depth = 0;
+	inString = false;
+	escaping = false;
+
+	for (let i = last; i < raw.length; i++) {
+		const ch = raw[i];
+
+		if (inString) {
+			if (escaping) { escaping = false; continue; }
+			if (ch === "\\") { escaping = true; continue; }
+			if (ch === '"') inString = false;
+			continue;
+		}
+
+		if (ch === '"') { inString = true; continue; }
+		if (ch === "[") depth++;
+		if (ch === "]") {
+			depth--;
+			if (depth === 0) return raw.slice(last, i + 1);
 		}
 	}
 

@@ -556,6 +556,11 @@ onMount(() => {
 															<div class="mt-1 sig-label text-[var(--sig-text-bright)]">
 																{edge.sourceEntityName} → {edge.targetEntityName}
 															</div>
+															{#if edge.reason}
+																<div class="mt-1 sig-meta text-[var(--sig-text-muted)] italic">
+																	{edge.reason}
+																</div>
+															{/if}
 														</div>
 													{/each}
 												{/if}

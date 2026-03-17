@@ -1962,6 +1962,7 @@ export interface KnowledgeDependencyEdge {
 	dependencyType: string;
 	strength: number;
 	aspectId: string | null;
+	reason: string | null;
 	sourceEntityId: string;
 	sourceEntityName: string;
 	targetEntityId: string;

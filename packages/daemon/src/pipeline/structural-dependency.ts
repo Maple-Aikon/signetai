@@ -11,7 +11,7 @@ import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import { stripFences, tryParseJson } from "./extraction";
-import { upsertDependency } from "../knowledge-graph";
+import { upsertAspect, upsertDependency } from "../knowledge-graph";
 import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
@@ -51,9 +51,37 @@ interface DependencyResult {
 	readonly kind: "attribute" | "constraint";
 	readonly dep_target: string | null;
 	readonly dep_type: string | null;
+	readonly reason: string | null;
 }
 
 const VALID_DEP_TYPES = new Set<string>(DEPENDENCY_TYPES);
+
+// One-line descriptions to steer the LLM toward consistent type selection.
+// Included in the extraction prompt so the model disambiguates similar pairs
+// (e.g. uses vs depends_on, informs vs teaches, precedes vs follows).
+export const DEP_DESCRIPTIONS: Record<DependencyType, string> = {
+	uses: "actively calls or consumes at runtime",
+	requires: "cannot function without (hard prerequisite)",
+	owned_by: "maintained or governed by",
+	blocks: "prevents progress of",
+	informs: "sends data or signals to",
+	built: "was created or constructed by",
+	depends_on: "needs but does not directly call (soft dependency)",
+	related_to: "associated loosely, no directional dependency",
+	learned_from: "acquired knowledge from",
+	teaches: "transfers knowledge to",
+	knows: "is aware of or references",
+	assumes: "presupposes as true without verifying",
+	contradicts: "conflicts with or negates",
+	supersedes: "replaces or obsoletes",
+	part_of: "is a component or subset of",
+	precedes: "must happen before (temporal)",
+	follows: "happens after (temporal)",
+	triggers: "causes to start or execute",
+	impacts: "change here affects (blast radius)",
+	produces: "generates as output",
+	consumes: "takes as input",
+};
 
 // ---------------------------------------------------------------------------
 // Job leasing
@@ -146,11 +174,12 @@ function buildDependencyPrompt(
 Entity: ${entityName} (${entityType})
 Aspects: ${aspectList}
 
-Dependency types: uses, requires, owned_by, blocks, informs
+Dependency types:
+${DEPENDENCY_TYPES.map((t) => `- ${t}: ${DEP_DESCRIPTIONS[t]}`).join("\n")}
 
 ${factList}
 
-For each fact return: {"i": N, "aspect": "...", "kind": "attribute"|"constraint", "dep_target": "entity or null", "dep_type": "type or null"}
+For each fact return: {"i": N, "aspect": "...", "kind": "attribute"|"constraint", "dep_target": "entity or null", "dep_type": "type or null", "reason": "short explanation or null"}
 /no_think`;
 }
 
@@ -172,7 +201,7 @@ function validateDependencyResults(
 		const i = typeof obj.i === "number" ? obj.i : -1;
 		if (i < 1 || i > factCount) continue;
 
-		const aspect = typeof obj.aspect === "string" ? obj.aspect.trim() : "";
+		const aspect = typeof obj.aspect === "string" ? obj.aspect.trim().slice(0, 200) : "";
 		if (aspect.length === 0) continue;
 
 		const kind = obj.kind === "constraint" ? "constraint" as const : "attribute" as const;
@@ -183,8 +212,11 @@ function validateDependencyResults(
 		const depType = typeof obj.dep_type === "string" && VALID_DEP_TYPES.has(obj.dep_type)
 			? obj.dep_type
 			: null;
+		const reason = typeof obj.reason === "string" && obj.reason.trim().length > 0
+			? obj.reason.trim().slice(0, 300)
+			: null;
 
-		valid.push({ i, aspect, kind, dep_target: depTarget, dep_type: depType });
+		valid.push({ i, aspect, kind, dep_target: depTarget, dep_type: depType, reason });
 	}
 
 	return valid;
@@ -261,25 +293,37 @@ async function processDependencyBatch(
 		factContents,
 	);
 
-	// Call LLM
-	let raw: string;
-	try {
-		raw = await deps.provider.generate(prompt, { temperature: 0.1 });
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		logger.warn("structural-dependency", "LLM call failed", { error: msg });
-		deps.accessor.withWriteTx((db) => {
-			for (const idx of validIndices) {
-				failJob(db, jobs[idx].id, msg, jobs[idx].attempts + 1, jobs[idx].max_attempts);
+	// Call LLM — retry once if parsing fails (qwen3 sometimes emits
+	// verbose reasoning instead of JSON on the first attempt)
+	let results: readonly DependencyResult[] = [];
+	for (let attempt = 0; attempt < 2; attempt++) {
+		let raw: string;
+		try {
+			raw = await deps.provider.generate(prompt, { temperature: 0.1 });
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			logger.warn("structural-dependency", "LLM call failed", { error: msg });
+			if (attempt === 1) {
+				deps.accessor.withWriteTx((db) => {
+					for (const idx of validIndices) {
+						failJob(db, jobs[idx].id, msg, jobs[idx].attempts + 1, jobs[idx].max_attempts);
+					}
+				});
+				return;
 			}
-		});
-		return;
-	}
+			continue;
+		}
 
-	// Parse response
-	const stripped = stripFences(raw);
-	const parsed = tryParseJson(stripped);
-	const results = validateDependencyResults(parsed, validPayloads.length);
+		const stripped = stripFences(raw);
+		const parsed = tryParseJson(stripped);
+		results = validateDependencyResults(parsed, validPayloads.length);
+		if (results.length > 0) break;
+
+		logger.info("structural-dependency", "Empty parse, retrying", {
+			entityName,
+			attempt,
+		});
+	}
 
 	// Apply results — LLM indices (1-based) map into validPayloads,
 	// which maps back to jobs via validIndices.
@@ -302,14 +346,36 @@ async function processDependencyBatch(
 			);
 
 			if (targetEntity) {
-				upsertDependency(deps.accessor, {
-					sourceEntityId: payload.entity_id,
-					targetEntityId: targetEntity.id,
-					agentId: "default",
-					dependencyType: result.dep_type as DependencyType,
-					strength: 0.5,
-				});
-				depsCreated++;
+				// Not wrapped in withWriteTx — both upsertAspect and upsertDependency
+				// acquire their own write tx internally, and DbAccessor uses
+				// BEGIN IMMEDIATE (no savepoints), so nesting throws.
+				// Orphaned aspects from a upsertDependency failure are benign —
+				// the job retries on next tick and upsertAspect is idempotent.
+				try {
+					const aspect = upsertAspect(deps.accessor, {
+						entityId: payload.entity_id,
+						agentId: "default",
+						name: result.aspect,
+					});
+					upsertDependency(deps.accessor, {
+						sourceEntityId: payload.entity_id,
+						targetEntityId: targetEntity.id,
+						agentId: "default",
+						aspectId: aspect.id,
+						dependencyType: result.dep_type as DependencyType,
+						strength: 0.5,
+						reason: result.reason,
+					});
+					depsCreated++;
+				} catch (e) {
+					logger.warn("structural-dependency", "upsert failed", {
+						error: String(e),
+						entity: payload.entity_id,
+						target: targetEntity.id,
+					});
+					// Skip processedJobIndices — job retries on next tick
+					continue;
+				}
 			}
 		}
 

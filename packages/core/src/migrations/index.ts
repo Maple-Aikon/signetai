@@ -36,6 +36,7 @@ import { up as backfillCanonicalNames } from "./027-backfill-canonical-names";
 import { up as losslessRetention } from "./028-lossless-retention";
 import { up as sessionSummaryDag } from "./029-session-summary-dag";
 import { up as nullableMemoryJobMemoryId } from "./030-nullable-memory-job-memory-id";
+import { up as dependencyReason } from "./031-dependency-reason";
 
 // -- Public interface consumed by Database.init() --
 
@@ -306,6 +307,17 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 30,
 		name: "nullable-memory-job-memory-id",
 		up: nullableMemoryJobMemoryId,
+	},
+	{
+		version: 31,
+		name: "dependency-reason",
+		up: dependencyReason,
+		artifacts: {
+			columns: [
+				{ table: "entity_dependencies", column: "reason" },
+				{ table: "entities", column: "last_synthesized_at" },
+			],
+		},
 	},
 ];
 
