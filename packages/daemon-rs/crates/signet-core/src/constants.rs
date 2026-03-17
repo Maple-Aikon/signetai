@@ -1,4 +1,29 @@
 pub const DEFAULT_EMBEDDING_DIMENSIONS: usize = 768;
+
+/// All valid dependency types for entity_dependencies.
+pub const DEPENDENCY_TYPES: &[&str] = &[
+    "uses",
+    "requires",
+    "owned_by",
+    "blocks",
+    "informs",
+    "built",
+    "depends_on",
+    "related_to",
+    "learned_from",
+    "teaches",
+    "knows",
+    "assumes",
+    "contradicts",
+    "supersedes",
+    "part_of",
+    "precedes",
+    "follows",
+    "triggers",
+    "impacts",
+    "produces",
+    "consumes",
+];
 pub const DEFAULT_HYBRID_ALPHA: f64 = 0.7;
 pub const DEFAULT_REPLAY_WINDOW_MS: u64 = 5 * 60 * 1000;
 pub const SCHEMA_VERSION: u32 = 3;

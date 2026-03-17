@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
+use signet_core::constants::DEPENDENCY_TYPES;
 use signet_core::db::DbPool;
 
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
@@ -44,8 +45,31 @@ impl Default for StructuralConfig {
 // Types
 // ---------------------------------------------------------------------------
 
-/// Valid dependency types.
-pub const DEPENDENCY_TYPES: &[&str] = &["uses", "requires", "owned_by", "blocks", "informs"];
+/// One-line descriptions for each dependency type (mirrors structural-dependency.ts).
+/// Parallel to DEPENDENCY_TYPES — indices must match.
+pub const DEP_DESCRIPTIONS: &[&str] = &[
+    "actively calls or consumes at runtime",         // uses
+    "cannot function without (hard prerequisite)",   // requires
+    "maintained or governed by",                     // owned_by
+    "prevents progress of",                          // blocks
+    "sends data or signals to",                      // informs
+    "was created or constructed by",                 // built
+    "needs but does not directly call (soft dependency)", // depends_on
+    "associated loosely, no directional dependency", // related_to
+    "acquired knowledge from",                       // learned_from
+    "transfers knowledge to",                        // teaches
+    "is aware of or references",                     // knows
+    "presupposes as true without verifying",         // assumes
+    "conflicts with or negates",                     // contradicts
+    "replaces or obsoletes",                         // supersedes
+    "is a component or subset of",                   // part_of
+    "must happen before (temporal)",                 // precedes
+    "happens after (temporal)",                      // follows
+    "causes to start or execute",                    // triggers
+    "change here affects (blast radius)",            // impacts
+    "generates as output",                           // produces
+    "takes as input",                                // consumes
+];
 
 /// A structural job (classify or dependency).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -515,15 +539,26 @@ fn build_dependency_prompt(entity_name: &str, facts: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let type_list: String = DEPENDENCY_TYPES
+        .iter()
+        .zip(DEP_DESCRIPTIONS.iter())
+        .map(|(t, d)| format!("- {t}: {d}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     format!(
         r#"Extract entity relationships from facts about "{entity_name}".
 
 Facts:
 {facts_str}
 
+Dependency types:
+{type_list}
+
 For each relationship found, return a JSON array of objects with:
 - "target": string (target entity name)
-- "relationship": one of "uses", "requires", "owned_by", "blocks", "informs"
+- "relationship": one of the dependency types above
+- "reason": brief explanation of why this dependency exists
 - "direction": "outgoing" or "incoming"
 
 Only extract clear, explicit relationships. Respond with only the JSON array."#
@@ -552,6 +587,8 @@ struct DependencyItem {
     relationship: String,
     #[allow(dead_code)]
     direction: Option<String>,
+    #[allow(dead_code)]
+    reason: Option<String>,
 }
 
 fn parse_classify_output(raw: &str) -> Vec<ClassifyItem> {
@@ -638,9 +675,12 @@ mod tests {
 
     #[test]
     fn valid_dependency_types() {
-        assert_eq!(DEPENDENCY_TYPES.len(), 5);
+        assert_eq!(DEPENDENCY_TYPES.len(), 21);
         assert!(DEPENDENCY_TYPES.contains(&"uses"));
         assert!(DEPENDENCY_TYPES.contains(&"informs"));
+        assert!(DEPENDENCY_TYPES.contains(&"consumes"));
+        assert!(DEPENDENCY_TYPES.contains(&"produces"));
+        assert_eq!(DEP_DESCRIPTIONS.len(), DEPENDENCY_TYPES.len());
     }
 
     #[test]

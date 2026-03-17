@@ -611,6 +611,10 @@ pub struct StructuralConfig {
     pub classify_batch_size: usize,
     pub dependency_batch_size: usize,
     pub poll_interval_ms: u64,
+    pub synthesis_enabled: bool,
+    pub synthesis_interval_ms: u64,
+    pub synthesis_top_entities: usize,
+    pub synthesis_max_facts: usize,
 }
 
 impl Default for StructuralConfig {
@@ -620,6 +624,10 @@ impl Default for StructuralConfig {
             classify_batch_size: 10,
             dependency_batch_size: 10,
             poll_interval_ms: 10_000,
+            synthesis_enabled: true,
+            synthesis_interval_ms: 60_000,
+            synthesis_top_entities: 20,
+            synthesis_max_facts: 10,
         }
     }
 }

@@ -1583,6 +1583,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signet-core",
+ "signet-services",
  "thiserror",
  "tokio",
  "tracing",

@@ -196,9 +196,14 @@ static MIGRATIONS: &[Migration] = &[
         name: "nullable-memory-job-memory-id",
         sql: include_str!("sql/030-nullable-memory-job-memory-id.sql"),
     },
+    Migration {
+        version: 31,
+        name: "dependency-reason",
+        sql: include_str!("sql/031-dependency-reason.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 30;
+pub const LATEST_SCHEMA_VERSION: u32 = 31;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -474,6 +479,10 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         }
         30 => {
             add_column_if_missing(conn, "memory_jobs", "document_id", "TEXT");
+        }
+        31 => {
+            add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT");
+            add_column_if_missing(conn, "entities", "last_synthesized_at", "TEXT");
         }
         _ => {}
     }

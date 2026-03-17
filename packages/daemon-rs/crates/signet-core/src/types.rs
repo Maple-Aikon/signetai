@@ -474,6 +474,7 @@ pub struct EntityDependency {
     pub aspect_id: Option<String>,
     pub dependency_type: String,
     pub strength: f64,
+    pub reason: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

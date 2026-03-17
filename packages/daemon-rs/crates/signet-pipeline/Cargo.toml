@@ -6,6 +6,7 @@ description = "LLM providers, embedding providers, workers, predictor, extractio
 
 [dependencies]
 signet-core = { workspace = true }
+signet-services = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

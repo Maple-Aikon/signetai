@@ -72,6 +72,7 @@ fn row_to_dependency(row: &rusqlite::Row) -> rusqlite::Result<EntityDependency> 
         aspect_id: row.get("aspect_id")?,
         dependency_type: row.get("dependency_type")?,
         strength: row.get("strength")?,
+        reason: row.get("reason")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -302,15 +303,29 @@ pub fn delete_attribute(conn: &Connection, id: &str, agent_id: &str) -> Result<(
 // Dependency CRUD
 // ---------------------------------------------------------------------------
 
+pub struct UpsertDepInput<'a> {
+    pub source_entity_id: &'a str,
+    pub target_entity_id: &'a str,
+    pub agent_id: &'a str,
+    pub aspect_id: Option<&'a str>,
+    pub dependency_type: &'a str,
+    pub strength: Option<f64>,
+    pub reason: Option<&'a str>,
+}
+
 pub fn upsert_dependency(
     conn: &Connection,
-    source_entity_id: &str,
-    target_entity_id: &str,
-    agent_id: &str,
-    aspect_id: Option<&str>,
-    dependency_type: &str,
-    strength: Option<f64>,
+    input: UpsertDepInput<'_>,
 ) -> Result<EntityDependency, CoreError> {
+    let UpsertDepInput {
+        source_entity_id,
+        target_entity_id,
+        agent_id,
+        aspect_id,
+        dependency_type,
+        strength,
+        reason,
+    } = input;
     let ts = now();
 
     let existing: Option<(String, f64)> = conn
@@ -331,9 +346,10 @@ pub fn upsert_dependency(
     if let Some((eid, _)) = existing {
         let s = strength.unwrap_or(0.5);
         conn.execute(
-            "UPDATE entity_dependencies SET strength = ?1, aspect_id = ?2, updated_at = ?3
+            "UPDATE entity_dependencies
+             SET strength = ?1, aspect_id = ?2, updated_at = ?3, reason = ?5
              WHERE id = ?4",
-            params![s, aspect_id, ts, eid],
+            params![s, aspect_id, ts, eid, reason],
         )?;
         let mut stmt = conn.prepare_cached("SELECT * FROM entity_dependencies WHERE id = ?1")?;
         let dep = stmt.query_row(params![eid], row_to_dependency)?;
@@ -344,8 +360,8 @@ pub fn upsert_dependency(
         conn.execute(
             "INSERT INTO entity_dependencies
              (id, source_entity_id, target_entity_id, agent_id, aspect_id,
-              dependency_type, strength, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+              dependency_type, strength, reason, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![
                 id,
                 source_entity_id,
@@ -354,6 +370,7 @@ pub fn upsert_dependency(
                 aspect_id,
                 dependency_type,
                 s,
+                reason,
                 ts
             ],
         )?;
@@ -395,6 +412,7 @@ pub struct DependencyEdge {
     pub dependency_type: String,
     pub strength: f64,
     pub aspect_id: Option<String>,
+    pub reason: Option<String>,
     pub source_entity_id: String,
     pub source_entity_name: String,
     pub target_entity_id: String,
@@ -439,6 +457,7 @@ pub fn get_dependencies_detailed(
             dependency_type: row.get("dependency_type")?,
             strength: row.get("strength")?,
             aspect_id: row.get("aspect_id")?,
+            reason: row.get("reason")?,
             source_entity_id: src_id,
             source_entity_name: row.get("source_entity_name")?,
             target_entity_id: tgt_id,
@@ -1675,7 +1694,7 @@ mod tests {
                 id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL DEFAULT 'default', aspect_id TEXT,
                 dependency_type TEXT NOT NULL, strength REAL DEFAULT 0.5,
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE task_meta (
                 entity_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default',
@@ -1770,7 +1789,19 @@ mod tests {
         insert_entity(&conn, "e1", "Source Entity");
         insert_entity(&conn, "e2", "Target Entity");
 
-        let dep = upsert_dependency(&conn, "e1", "e2", "default", None, "uses", Some(0.7)).unwrap();
+        let dep = upsert_dependency(
+            &conn,
+            UpsertDepInput {
+                source_entity_id: "e1",
+                target_entity_id: "e2",
+                agent_id: "default",
+                aspect_id: None,
+                dependency_type: "uses",
+                strength: Some(0.7),
+                reason: None,
+            },
+        )
+        .unwrap();
         assert_eq!(dep.dependency_type, "uses");
         assert_eq!(dep.strength, 0.7);
 

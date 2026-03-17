@@ -1,3 +1,4 @@
+pub mod dep_synthesis;
 pub mod document;
 pub mod embedding;
 pub mod extraction;
