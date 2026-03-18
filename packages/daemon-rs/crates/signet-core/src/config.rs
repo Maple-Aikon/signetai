@@ -213,6 +213,10 @@ pub struct RateLimitConfig {
 pub struct PipelineV2Config {
     pub enabled: bool,
     pub shadow_mode: bool,
+    /// Spawn the native Rust daemon as a shadow on :3851. Distinct from
+    /// `shadow_mode` (extract-without-write). Only meaningful when read
+    /// by the TS daemon; the Rust daemon ignores this field at runtime.
+    pub native_shadow_enabled: bool,
     pub mutations_frozen: bool,
     pub semantic_contradiction_enabled: bool,
     pub semantic_contradiction_timeout_ms: u64,
@@ -244,6 +248,7 @@ impl Default for PipelineV2Config {
         Self {
             enabled: true,
             shadow_mode: false,
+            native_shadow_enabled: false,
             mutations_frozen: false,
             semantic_contradiction_enabled: true,
             semantic_contradiction_timeout_ms: 45_000,

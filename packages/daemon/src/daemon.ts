@@ -454,18 +454,33 @@ function resolveDaemonBinary(): string | null {
 }
 
 function setupShadowDb(agentsDir: string): string {
-	const shadowDir = join(agentsDir, ".shadow", "memory");
-	mkdirSync(shadowDir, { recursive: true });
+	const shadowRoot = join(agentsDir, ".shadow");
+	const shadowMemDir = join(shadowRoot, "memory");
+	mkdirSync(shadowMemDir, { recursive: true });
+
 	const mainDb = join(agentsDir, "memory", "memories.db");
-	const shadowDb = join(shadowDir, "memories.db");
+	const shadowDb = join(shadowMemDir, "memories.db");
 	const stale =
 		!existsSync(shadowDb) ||
 		Date.now() - statSync(shadowDb).mtimeMs > 24 * 60 * 60 * 1000;
 	if (stale && existsSync(mainDb)) {
+		// Copy WAL and SHM alongside the main DB so the shadow starts from a
+		// consistent snapshot — without them it may see uncheckpointed pages as missing.
 		copyFileSync(mainDb, shadowDb);
+		for (const ext of ["-wal", "-shm"]) {
+			const src = mainDb + ext;
+			if (existsSync(src)) copyFileSync(src, shadowDb + ext);
+		}
 		logger.info("shadow", "Shadow DB refreshed");
 	}
-	return join(agentsDir, ".shadow");
+
+	// Copy agent.yaml so the shadow daemon uses real config (auth, pipeline flags, etc.)
+	// rather than built-in defaults.
+	const mainCfg = join(agentsDir, "agent.yaml");
+	const shadowCfg = join(shadowRoot, "agent.yaml");
+	if (existsSync(mainCfg)) copyFileSync(mainCfg, shadowCfg);
+
+	return shadowRoot;
 }
 
 function appendDivergence(agentsDir: string, entry: Record<string, unknown>) {
@@ -1213,15 +1228,18 @@ app.use("*", async (c, next) => {
 
 // Shadow request tap — fire-and-forget replay to Rust daemon on :3851
 app.use("*", async (c, next) => {
-	await next();
-	if (!shadowProcess) return;
+	// Read body before next() — route handlers consume the stream; Hono caches
+	// the result but only after the first read. Pre-reading here ensures mutating
+	// replays carry the correct payload.
 	const method = c.req.method;
-	const reqPath = c.req.path;
-	const search = new URL(c.req.url).search;
-	const primaryStatus = c.res.status;
 	const bodyP = ["POST", "PUT", "PATCH"].includes(method)
 		? c.req.text().catch(() => undefined)
 		: Promise.resolve(undefined);
+	await next();
+	if (!shadowProcess) return;
+	const reqPath = c.req.path;
+	const search = new URL(c.req.url).search;
+	const primaryStatus = c.res.status;
 	bodyP
 		.then((rawBody) =>
 			fetch(`http://localhost:3851${reqPath}${search}`, {
@@ -9924,7 +9942,7 @@ async function main() {
 	}
 
 	// Spawn Rust daemon shadow if enabled (port 3851, isolated DB)
-	if (memoryCfg.pipelineV2.shadowEnabled) {
+	if (memoryCfg.pipelineV2.nativeShadowEnabled) {
 		const binary = resolveDaemonBinary();
 		if (binary) {
 			const shadowAgentsDir = setupShadowDb(AGENTS_DIR);

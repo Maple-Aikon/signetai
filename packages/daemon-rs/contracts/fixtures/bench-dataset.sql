@@ -18,7 +18,7 @@ SELECT
   lower('memory content for benchmark test number ' || x || ' this contains enough text to exercise the fts5 indexer'),
   printf('hash%04d', x),
   CASE (x % 4)
-    WHEN 0 THEN 'observation'
+    WHEN 0 THEN 'episodic'
     WHEN 1 THEN 'fact'
     WHEN 2 THEN 'preference'
     WHEN 3 THEN 'decision'
@@ -103,7 +103,7 @@ SELECT
   printf('mem-%04d', x),
   CASE (x % 4)
     WHEN 0 THEN 'pending'
-    WHEN 1 THEN 'processing'
+    WHEN 1 THEN 'leased'
     WHEN 2 THEN 'completed'
     WHEN 3 THEN 'dead'
   END,

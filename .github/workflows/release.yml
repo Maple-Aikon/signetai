@@ -207,6 +207,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset: signet-daemon-win32-x64.exe
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_TARGET: ${{ matrix.target }}
+      RELEASE_ASSET: ${{ matrix.asset }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,15 +219,17 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build daemon
-        run: cargo build --release --target "${{ matrix.target }}" -p signet-daemon
+        run: cargo build --release --target "$RELEASE_TARGET" -p signet-daemon
         working-directory: packages/daemon-rs
       - name: Upload to release
         shell: bash
         run: |
           EXT=""
           [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
-          BINARY="packages/daemon-rs/target/${{ matrix.target }}/release/signet-daemon${EXT}"
-          gh release upload "v${{ needs.release.outputs.version }}" "${BINARY}#${{ matrix.asset }}"
+          BINARY="packages/daemon-rs/target/${RELEASE_TARGET}/release/signet-daemon${EXT}"
+          sha256sum "${BINARY}" | awk '{print $1}' > "${BINARY}.sha256"
+          gh release upload "v${RELEASE_VERSION}" "${BINARY}#${RELEASE_ASSET}"
+          gh release upload "v${RELEASE_VERSION}" "${BINARY}.sha256#${RELEASE_ASSET}.sha256"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
