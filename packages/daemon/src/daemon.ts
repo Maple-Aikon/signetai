@@ -146,6 +146,7 @@ import {
 	createCodexProvider,
 	createOllamaProvider,
 	createOpenCodeProvider,
+	createOpenRouterProvider,
 	ensureOpenCodeServer,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 	stopOpenCodeServer,
@@ -282,6 +283,11 @@ function normalizeRuntimeBaseUrl(url: string | undefined, fallback: string): str
 function resolveRegistryOllamaBaseUrl(provider: string, endpoint: string | undefined): string | undefined {
 	if (provider !== "ollama") return undefined;
 	return normalizeRuntimeBaseUrl(endpoint, "http://127.0.0.1:11434");
+}
+
+function resolveRegistryOpenRouterBaseUrl(provider: string, endpoint: string | undefined): string | undefined {
+	if (provider !== "openrouter") return undefined;
+	return normalizeRuntimeBaseUrl(endpoint, "https://openrouter.ai/api/v1");
 }
 
 function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
@@ -6670,9 +6676,20 @@ app.post("/api/pipeline/models/refresh", async (c) => {
 			anthropicKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
 		} catch { /* ignore */ }
 	}
+	let openRouterKey: string | undefined = process.env.OPENROUTER_API_KEY;
+	if (!openRouterKey) {
+		try {
+			openRouterKey = await getSecret("OPENROUTER_API_KEY") ?? undefined;
+		} catch { /* ignore */ }
+	}
 	await refreshRegistry(
 		resolveRegistryOllamaBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
 		anthropicKey,
+		openRouterKey,
+		resolveRegistryOpenRouterBaseUrl(
+			cfg.pipelineV2.extraction.provider,
+			cfg.pipelineV2.extraction.endpoint,
+		),
 	);
 	return c.json({
 		models: getModelsByProvider(),
@@ -9357,12 +9374,14 @@ async function main() {
 		"opencode",
 		"codex",
 		"anthropic",
+		"openrouter",
 	]);
 	const validSynthesisProviders = new Set([
 		"ollama",
 		"claude-code",
 		"opencode",
 		"anthropic",
+		"openrouter",
 	]);
 
 	providerRuntimeResolution.extraction = {
@@ -9406,6 +9425,10 @@ async function main() {
 	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"http://127.0.0.1:4096",
+	);
+	const extractionOpenRouterBaseUrl = normalizeRuntimeBaseUrl(
+		memoryCfg.pipelineV2.extraction.endpoint,
+		"https://openrouter.ai/api/v1",
 	);
 	const ollamaFallbackMaxContextTokens =
 		resolveDefaultOllamaFallbackMaxContextTokens();
@@ -9483,6 +9506,34 @@ async function main() {
 		}
 	}
 
+	// Resolve OpenRouter API key once — shared by extraction and synthesis
+	let openRouterApiKey: string | undefined;
+	const needsOpenRouterForSynthesis =
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		memoryCfg.pipelineV2.synthesis.provider === "openrouter";
+	if (
+		effectiveExtractionProvider === "openrouter" ||
+		needsOpenRouterForSynthesis
+	) {
+		openRouterApiKey = process.env.OPENROUTER_API_KEY;
+		if (!openRouterApiKey) {
+			try {
+				openRouterApiKey = await getSecret("OPENROUTER_API_KEY") ?? undefined;
+			} catch {
+				logger.warn("config", "Failed to resolve OPENROUTER_API_KEY from secrets store");
+			}
+		}
+		if (!openRouterApiKey) {
+			logger.error(
+				"config",
+				"OPENROUTER_API_KEY not found — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
+			);
+			if (effectiveExtractionProvider === "openrouter") {
+				effectiveExtractionProvider = "ollama";
+			}
+		}
+	}
+
 	// When falling back to ollama, reset model so ollama uses its own default
 	// instead of inheriting an anthropic-specific alias like "haiku".
 	let effectiveExtractionModel: string | undefined = memoryCfg.pipelineV2.extraction.model;
@@ -9513,6 +9564,8 @@ async function main() {
 				? extractionOllamaFallbackBaseUrl
 				: effectiveExtractionProvider === "opencode"
 					? extractionOpenCodeBaseUrl
+					: effectiveExtractionProvider === "openrouter"
+						? extractionOpenRouterBaseUrl
 					: undefined,
 		),
 	});
@@ -9525,6 +9578,15 @@ async function main() {
 					apiKey: anthropicApiKey,
 					defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 				})
+			: effectiveExtractionProvider === "openrouter" && openRouterApiKey
+				? createOpenRouterProvider({
+						model: effectiveExtractionModel || "openai/gpt-5.3-mini",
+						apiKey: openRouterApiKey,
+						baseUrl: extractionOpenRouterBaseUrl,
+						referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
+						title: readEnvTrimmed("OPENROUTER_TITLE"),
+						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+					})
 			: effectiveExtractionProvider === "opencode"
 				? createOpenCodeProvider({
 						model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
@@ -9572,10 +9634,25 @@ async function main() {
 				}
 			}
 		}
+		let registryOpenRouterApiKey = openRouterApiKey;
+		if (!registryOpenRouterApiKey) {
+			registryOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
+			if (!registryOpenRouterApiKey) {
+				try {
+					registryOpenRouterApiKey = (await getSecret("OPENROUTER_API_KEY")) ?? undefined;
+				} catch {
+					// ignore: registry can still run without OpenRouter discovery
+				}
+			}
+		}
 		initModelRegistry(
 			memoryCfg.pipelineV2.modelRegistry,
 			effectiveExtractionProvider === "ollama" ? extractionOllamaBaseUrl : undefined,
 			registryAnthropicApiKey,
+			registryOpenRouterApiKey,
+			effectiveExtractionProvider === "openrouter"
+				? extractionOpenRouterBaseUrl
+				: undefined,
 		);
 	}
 
@@ -9595,6 +9672,10 @@ async function main() {
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:4096",
 		);
+		const synthesisOpenRouterBaseUrl = normalizeRuntimeBaseUrl(
+			memoryCfg.pipelineV2.synthesis.endpoint,
+			"https://openrouter.ai/api/v1",
+		);
 		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
 			synthesisOpenCodeBaseUrl,
 		);
@@ -9613,6 +9694,11 @@ async function main() {
 		} else if (effectiveSynthesisProvider === "anthropic") {
 			if (!anthropicApiKey) {
 				logger.warn("config", "ANTHROPIC_API_KEY not found for synthesis, falling back to ollama");
+				effectiveSynthesisProvider = "ollama";
+			}
+		} else if (effectiveSynthesisProvider === "openrouter") {
+			if (!openRouterApiKey) {
+				logger.warn("config", "OPENROUTER_API_KEY not found for synthesis, falling back to ollama");
 				effectiveSynthesisProvider = "ollama";
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
@@ -9653,6 +9739,8 @@ async function main() {
 					? synthesisOllamaFallbackBaseUrl
 					: effectiveSynthesisProvider === "opencode"
 						? synthesisOpenCodeBaseUrl
+						: effectiveSynthesisProvider === "openrouter"
+							? synthesisOpenRouterBaseUrl
 						: undefined,
 			),
 		});
@@ -9673,6 +9761,15 @@ async function main() {
 						apiKey: anthropicApiKey,
 						defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 					})
+				: effectiveSynthesisProvider === "openrouter" && openRouterApiKey
+					? createOpenRouterProvider({
+							model: effectiveSynthesisModel || "openai/gpt-5.3-mini",
+							apiKey: openRouterApiKey,
+							baseUrl: synthesisOpenRouterBaseUrl,
+							referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
+							title: readEnvTrimmed("OPENROUTER_TITLE"),
+							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+						})
 				: effectiveSynthesisProvider === "opencode"
 					? createOpenCodeProvider({
 							model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
