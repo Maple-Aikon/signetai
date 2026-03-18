@@ -227,7 +227,7 @@ jobs:
           EXT=""
           [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           BINARY="packages/daemon-rs/target/${RELEASE_TARGET}/release/signet-daemon${EXT}"
-          sha256sum "${BINARY}" | awk '{print $1}' > "${BINARY}.sha256"
+          openssl dgst -sha256 -hex "${BINARY}" | awk '{print $NF}' > "${BINARY}.sha256"
           gh release upload "v${RELEASE_VERSION}" "${BINARY}#${RELEASE_ASSET}"
           gh release upload "v${RELEASE_VERSION}" "${BINARY}.sha256#${RELEASE_ASSET}.sha256"
         env:
