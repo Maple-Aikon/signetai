@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { type Interface, createInterface } from "node:readline";
 import { DEFAULT_EMBEDDING_DIMENSIONS, type PredictorConfig } from "@signet/core";
 import { logger } from "./logger";
@@ -251,7 +251,10 @@ function syncedBinaryCandidate(): string {
 	const arch = process.arch === "arm64" ? "arm64" : "x64";
 	const ext = platform === "win32" ? ".exe" : "";
 	const name = `signet-predictor-${platform}-${arch}${ext}`;
-	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
+	const envPath = process.env.SIGNET_PATH;
+	const agentsDir = typeof envPath === "string" && isAbsolute(envPath)
+		? envPath
+		: join(homedir(), ".agents");
 	return join(agentsDir, ".daemon", "bin", name);
 }
 

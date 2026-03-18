@@ -5,6 +5,7 @@
  */
 
 import { spawn, spawnSync } from "child_process";
+import { createHash } from "crypto";
 import {
 	appendFileSync,
 	chmodSync,
@@ -17,6 +18,7 @@ import {
 	readFileSync,
 	readdirSync,
 	readlinkSync,
+	renameSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -644,6 +646,7 @@ const __dirname = dirname(__filename);
 const OPENCLAW_PLUGIN_PACKAGE = "@signetai/signet-memory-openclaw";
 const OPENCLAW_PLUGIN_SYNC_FILENAME = "openclaw-plugin-version";
 const PREDICTOR_SYNC_FILENAME = "predictor-version";
+const NATIVE_SYNC_LOCK_FILENAME = "sync-native.lock";
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
 	if (!existsSync(packageJsonPath)) {
@@ -762,6 +765,12 @@ function predictorBinaryName():
 	};
 }
 
+function readSha256(raw: string): string | null {
+	const hash = raw.trim().split(/\s+/)[0]?.toLowerCase();
+	if (!hash) return null;
+	return /^[a-f0-9]{64}$/.test(hash) ? hash : null;
+}
+
 async function syncPredictorBinary(basePath: string): Promise<{
 	readonly status: "updated" | "current" | "skipped" | "error";
 	readonly message: string;
@@ -785,6 +794,31 @@ async function syncPredictorBinary(basePath: string): Promise<{
 	}
 
 	const url = `https://github.com/Signet-AI/signetai/releases/download/v${VERSION}/${binary.name}`;
+	let expected: string;
+	try {
+		const hashRes = await fetch(`${url}.sha256`, { redirect: "follow" });
+		if (!hashRes.ok) {
+			return {
+				status: "error",
+				message: `checksum lookup failed (HTTP ${hashRes.status})`,
+			};
+		}
+		const hashRaw = await hashRes.text();
+		const hash = readSha256(hashRaw);
+		if (hash === null) {
+			return {
+				status: "error",
+				message: "checksum file is invalid",
+			};
+		}
+		expected = hash;
+	} catch (err) {
+		return {
+			status: "error",
+			message: err instanceof Error ? `checksum lookup failed (${err.message})` : "checksum lookup failed",
+		};
+	}
+
 	let res: Response;
 	try {
 		res = await fetch(url, { redirect: "follow" });
@@ -808,6 +842,7 @@ async function syncPredictorBinary(basePath: string): Promise<{
 		};
 	}
 
+	let tmp = "";
 	try {
 		const body = Buffer.from(await res.arrayBuffer());
 		if (body.length === 0) {
@@ -816,13 +851,30 @@ async function syncPredictorBinary(basePath: string): Promise<{
 				message: "download returned empty payload",
 			};
 		}
+		const actual = createHash("sha256").update(body).digest("hex");
+		if (actual !== expected) {
+			return {
+				status: "error",
+				message: "binary checksum mismatch",
+			};
+		}
 		mkdirSync(dir, { recursive: true });
-		writeFileSync(dest, body);
+		tmp = `${dest}.tmp-${process.pid}-${Date.now()}`;
+		writeFileSync(tmp, body);
 		if (process.platform !== "win32") {
-			chmodSync(dest, 0o755);
+			chmodSync(tmp, 0o755);
+		}
+		try {
+			renameSync(tmp, dest);
+		} catch {
+			rmSync(dest, { force: true });
+			renameSync(tmp, dest);
 		}
 		writePredictorSyncVersion(basePath, VERSION);
 	} catch (err) {
+		if (tmp.length > 0) {
+			rmSync(tmp, { force: true });
+		}
 		return {
 			status: "error",
 			message: err instanceof Error ? `write failed (${err.message})` : "write failed",
@@ -854,10 +906,18 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 				}
 			}
 			const mem = parsed.memory;
-			if (!isRecord(mem)) continue;
-			const nested = mem.embeddings;
-			if (isRecord(nested) && typeof nested.provider === "string") {
-				const provider = nested.provider;
+			if (isRecord(mem)) {
+				const nested = mem.embeddings;
+				if (isRecord(nested) && typeof nested.provider === "string") {
+					const provider = nested.provider;
+					if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+						return provider;
+					}
+				}
+			}
+			const legacy = parsed.embeddings;
+			if (isRecord(legacy) && typeof legacy.provider === "string") {
+				const provider = legacy.provider;
 				if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
 					return provider;
 				}
@@ -881,6 +941,83 @@ function hasNativeModelCache(basePath: string): boolean {
 	}
 }
 
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function nativeSyncLockPath(basePath: string): string {
+	return join(basePath, ".daemon", NATIVE_SYNC_LOCK_FILENAME);
+}
+
+function clearStaleNativeSyncLock(path: string): boolean {
+	try {
+		const raw = readFileSync(path, "utf-8");
+		const pid = Number.parseInt(raw.trim().split(/\s+/)[0] ?? "", 10);
+		if (Number.isInteger(pid) && pid > 0 && !isAlive(pid)) {
+			rmSync(path, { force: true });
+			return true;
+		}
+	} catch {
+		// Best-effort stale-lock detection.
+	}
+
+	try {
+		const age = Date.now() - statSync(path).mtimeMs;
+		if (age > 5 * 60_000) {
+			rmSync(path, { force: true });
+			return true;
+		}
+	} catch {
+		// Lock disappeared between checks.
+	}
+
+	return false;
+}
+
+async function acquireNativeSyncLock(basePath: string): Promise<{
+	readonly fd: number;
+	readonly path: string;
+} | null> {
+	const path = nativeSyncLockPath(basePath);
+	mkdirSync(dirname(path), { recursive: true });
+	const end = Date.now() + 15_000;
+
+	while (Date.now() < end) {
+		try {
+			const fd = openSync(path, "wx");
+			writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
+			return { fd, path };
+		} catch (err) {
+			const code = err instanceof Error && "code" in err ? String(err.code) : "";
+			if (code !== "EEXIST") {
+				return null;
+			}
+		}
+
+		if (clearStaleNativeSyncLock(path)) {
+			continue;
+		}
+
+		await sleep(200);
+	}
+
+	return null;
+}
+
+function releaseNativeSyncLock(lock: { readonly fd: number; readonly path: string }): void {
+	try {
+		closeSync(lock.fd);
+	} catch {
+		// Ignore.
+	}
+	rmSync(lock.path, { force: true });
+}
+
 async function syncNativeEmbeddingModel(basePath: string): Promise<{
 	readonly status: "updated" | "current" | "skipped" | "error";
 	readonly message: string;
@@ -893,20 +1030,17 @@ async function syncNativeEmbeddingModel(basePath: string): Promise<{
 		};
 	}
 
-	const hadCache = hasNativeModelCache(basePath);
-	const running = await isDaemonRunning();
-	let started = false;
-	if (!running) {
-		const ok = await startDaemon(basePath);
-		if (!ok) {
-			return {
-				status: "error",
-				message: "daemon is required to warm native embeddings (failed to start)",
-			};
-		}
-		started = true;
+	const lock = await acquireNativeSyncLock(basePath);
+	if (lock === null) {
+		return {
+			status: "error",
+			message: "another sync is currently warming native embeddings",
+		};
 	}
 
+	const hadCache = hasNativeModelCache(basePath);
+	let started = false;
+	let blocked = false;
 	let result: {
 		readonly status: "updated" | "current" | "skipped" | "error";
 		readonly message: string;
@@ -916,55 +1050,82 @@ async function syncNativeEmbeddingModel(basePath: string): Promise<{
 	};
 
 	try {
-		const urls = await getReachableDaemonUrls();
-		const url = urls[0];
-		if (!url) {
-			result = {
-				status: "error",
-				message: "daemon reachable URL not found",
-			};
-		} else {
-			const res = await fetch(`${url}/api/embeddings/status`, {
-				method: "GET",
-				signal: AbortSignal.timeout(10 * 60_000),
-			});
-			if (!res.ok) {
+		const running = await isDaemonRunning();
+		if (!running) {
+			const ok = await startDaemon(basePath);
+			if (!ok) {
 				result = {
 					status: "error",
-					message: `warmup request failed (HTTP ${res.status})`,
+					message: "daemon is required to warm native embeddings (failed to start)",
+				};
+				blocked = true;
+			} else {
+				started = true;
+			}
+		}
+
+		if (!blocked) {
+			const urls = await getReachableDaemonUrls();
+			const url = urls[0];
+			if (!url) {
+				result = {
+					status: "error",
+					message: "daemon reachable URL not found",
 				};
 			} else {
-				const body: unknown = await res.json();
-				if (!isRecord(body)) {
+				const res = await fetch(`${url}/api/embeddings/status`, {
+					method: "GET",
+					signal: AbortSignal.timeout(10 * 60_000),
+				});
+				if (!res.ok) {
 					result = {
 						status: "error",
-						message: "warmup response had invalid shape",
+						message: `warmup request failed (HTTP ${res.status})`,
 					};
 				} else {
-					const active = typeof body.provider === "string" ? body.provider : "unknown";
-					const available = body.available === true;
-					const err = typeof body.error === "string" ? body.error : null;
-					if (active !== "native") {
-						result = {
-							status: "skipped",
-							message: `daemon embedding provider is '${active}'`,
-						};
-					} else if (!available) {
+					const body: unknown = await res.json();
+					if (!isRecord(body)) {
 						result = {
 							status: "error",
-							message: err ?? "native provider unavailable",
-						};
-					} else if (err?.toLowerCase().includes("fallback")) {
-						result = {
-							status: "error",
-							message: err,
+							message: "warmup response had invalid shape",
 						};
 					} else {
-						const hasCache = hasNativeModelCache(basePath);
-						result = {
-							status: hadCache || !hasCache ? "current" : "updated",
-							message: "nomic-ai/nomic-embed-text-v1.5",
-						};
+						const active = typeof body.provider === "string" ? body.provider : "unknown";
+						const available = body.available === true;
+						const err = typeof body.error === "string" ? body.error : null;
+						const reported = body.modelCached === true;
+						if (active !== "native") {
+							result = {
+								status: "skipped",
+								message: `daemon embedding provider is '${active}'`,
+							};
+						} else if (!available) {
+							result = {
+								status: "error",
+								message: err ?? "native provider unavailable",
+							};
+						} else if (err?.toLowerCase().includes("fallback")) {
+							result = {
+								status: "error",
+								message: err,
+							};
+						} else {
+							const hasCache = hasNativeModelCache(basePath);
+							const ready = reported || hasCache;
+							if (!ready) {
+								result = {
+									status: "error",
+									message: "native provider responded but model cache was not detected",
+								};
+							} else {
+								result = {
+									status: !hadCache && hasCache ? "updated" : "current",
+									message: hasCache
+										? "nomic-ai/nomic-embed-text-v1.5"
+										: "nomic-ai/nomic-embed-text-v1.5 (runtime cache)",
+								};
+							}
+						}
 					}
 				}
 			}
@@ -984,6 +1145,7 @@ async function syncNativeEmbeddingModel(basePath: string): Promise<{
 				};
 			}
 		}
+		releaseNativeSyncLock(lock);
 	}
 
 	return result;
