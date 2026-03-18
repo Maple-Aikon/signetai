@@ -297,22 +297,9 @@ function ensureVecTable(db: Database): void {
 }
 
 function backfillVecEmbeddings(db: Database): void {
-	const vecCount = (
-		db.prepare("SELECT count(*) as n FROM vec_embeddings").get() as {
-			n: number;
-		}
-	).n;
-
-	const embCount = (
-		db.prepare("SELECT count(*) as n FROM embeddings").get() as {
-			n: number;
-		}
-	).n;
-
-	// Skip if vec_embeddings already has all rows (or no embeddings exist)
-	if (embCount === 0 || vecCount >= embCount) return;
-
-	// Only fetch embeddings missing from vec_embeddings
+	// Directly query for missing rows instead of comparing counts.
+	// Count comparison is racy — a row can exist in embeddings but not
+	// vec_embeddings even when counts match (e.g. after a crash mid-sync).
 	const rows = db
 		.prepare(
 			`SELECT e.id, e.vector FROM embeddings e
@@ -320,6 +307,8 @@ function backfillVecEmbeddings(db: Database): void {
 			 WHERE v.id IS NULL`,
 		)
 		.all() as Array<{ id: string; vector: Buffer }>;
+
+	if (rows.length === 0) return;
 
 	const insert = db.prepare(
 		"INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
