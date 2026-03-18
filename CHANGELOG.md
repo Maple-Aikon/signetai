@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.63.1] - 2026-03-18
+
+### Bug Fixes
+
+- add sharp to optionalDependencies for Windows ARM64 support
+
+
 ## [0.63.0] - 2026-03-18
 
 ### Refactoring
