@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.65.3] - 2026-03-19
+
+### Bug Fixes
+
+- move @signet/core to devDependencies in openclaw plugin (#237)
+
+
 ## [0.65.2] - 2026-03-19
 
 ### Bug Fixes
