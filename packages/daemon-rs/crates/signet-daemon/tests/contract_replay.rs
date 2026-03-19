@@ -87,9 +87,16 @@ impl TestServer {
 
         // Kill daemon on drop via PID (since we can't easily store the child handle)
         if pid > 0 {
-            // We'll rely on tmpdir cleanup and process termination
+            #[cfg(unix)]
             unsafe {
                 libc::kill(pid as i32, libc::SIGTERM);
+            }
+            #[cfg(windows)]
+            {
+                // On Windows, use taskkill to terminate the process
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/F"])
+                    .output();
             }
         }
 
