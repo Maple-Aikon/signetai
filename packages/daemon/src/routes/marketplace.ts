@@ -1505,6 +1505,45 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 	});
 
+	app.post("/api/marketplace/mcp/read-resource", async (c) => {
+		let body: { serverId?: string; uri?: string } = {};
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		if (!body.serverId || !body.uri) {
+			return c.json({ error: "serverId and uri are required" }, 400);
+		}
+
+		const context = extractContextFromRequest(c);
+		const installed = readInstalledServers();
+		const server = installed.find(
+			(s) =>
+				s.id === body.serverId &&
+				s.enabled &&
+				scopeMatches(s.scope, context),
+		);
+		if (!server) {
+			return c.json(
+				{ error: "Server not found, disabled, or out of scope" },
+				404,
+			);
+		}
+
+		try {
+			const result = await withConnectedClient(server, async (client) => {
+				return client.readResource({ uri: body.uri ?? "" });
+			});
+			return c.json({ success: true, contents: result });
+		} catch (error) {
+			const msg =
+				error instanceof Error ? error.message : String(error);
+			return c.json({ success: false, error: msg }, 500);
+		}
+	});
+
 	app.get("/api/marketplace/mcp/:id", (c) => {
 		const id = c.req.param("id");
 		const installed = readInstalledServers();

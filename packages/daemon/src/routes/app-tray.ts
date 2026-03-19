@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { SignetAppManifest } from "@signet/core";
 
-import { isPrivateHostname, validatePublicHttpUrl } from "../url-validation.js";
+import { isPrivateHostname } from "../url-validation.js";
 import {
 	loadAppTray,
 	loadProbeResult,

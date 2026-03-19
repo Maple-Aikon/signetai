@@ -51,7 +51,8 @@ export type LogCategory =
 	| "update" // Auto-update cycle
 	| "probe" // MCP server auto-probe (Signet OS)
 	| "event-bus" // Signet OS event bus
-	| "event-bridge"; // Browser-to-event-bus bridge
+	| "event-bridge" // Browser-to-event-bus bridge
+	| "widget"; // Widget HTML generation (Signet OS)
 
 export interface LogEntry {
 	timestamp: string;

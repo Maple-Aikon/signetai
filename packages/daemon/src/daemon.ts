@@ -102,6 +102,7 @@ import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
 import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
+import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 import { type LogEntry, logger } from "./logger";
 import { migrateConfig } from "./config-migration";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
@@ -4612,6 +4613,10 @@ mountMarketplaceRoutes(app);
 
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 mountAppTrayRoutes(app);
+
+// Widget generation routes (Signet OS widget rendering)
+import { mountWidgetRoutes } from "./routes/widget.js";
+mountWidgetRoutes(app);
 
 // Event bus routes (Signet OS ambient awareness layer — Phase 3/5)
 import { mountEventBusRoutes } from "./routes/event-bus.js";
@@ -9381,6 +9386,7 @@ async function cleanup() {
 
 	closeLlmProvider();
 	closeSynthesisProvider();
+	closeWidgetProvider();
 	stopOpenCodeServer();
 	stopModelRegistry();
 
@@ -9918,6 +9924,8 @@ async function main() {
 								: {}),
 						});
 		initSynthesisProvider(synthesisProvider);
+		// Widget provider defaults to synthesis provider (needs smart model for HTML gen)
+		initWidgetProvider(synthesisProvider);
 	} else {
 		providerRuntimeResolution.synthesis = {
 			configured: providerHints.synthesis,
@@ -10146,16 +10154,6 @@ async function main() {
 	});
 	initFeatureFlags(AGENTS_DIR);
 	startUpdateTimer();
-
-	// Wire browser CDP events into the event bus (Phase 3/5)
-	try {
-		const { initBrowserEventBridge } = await import("./browser-event-bridge.js");
-		await initBrowserEventBridge();
-	} catch (err) {
-		logger.warn("daemon", "Browser event bridge init failed (non-fatal)", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
 
 	// Start HTTP server
 	serve(

@@ -4,7 +4,7 @@
 	import X from "@lucide/svelte/icons/x";
 	import Loader from "@lucide/svelte/icons/loader";
 	import CheckCircle from "@lucide/svelte/icons/check-circle-2";
-	import { API_BASE } from "$lib/api";
+	import { installMcp } from "$lib/api";
 
 	interface Props {
 		open: boolean;
@@ -60,48 +60,26 @@
 			return;
 		}
 
-		// Validate URL scheme to prevent SSRF (file://, ftp://, etc.)
-		try {
-			const parsed = new URL(trimmedUrl);
-			if (!['https:', 'http:'].includes(parsed.protocol)) {
-				error = 'Only HTTP/HTTPS URLs are supported';
-				return;
-			}
-		} catch {
-			error = 'Invalid URL format';
-			return;
-		}
-
 		loading = true;
 		error = null;
 		success = null;
 
-		try {
-			const response = await fetch(`${API_BASE}/api/os/install`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					url: trimmedUrl,
-					name: name.trim() || undefined,
-					autoPlace: false,
-				}),
-			});
+		const result = await installMcp({
+			url: trimmedUrl,
+			name: name.trim() || undefined,
+			autoPlace: false,
+		});
 
-			const data = await response.json();
+		loading = false;
 
-			if (data.ok) {
-				success = `Installed "${data.manifest?.name ?? data.widgetId}" successfully`;
-				await fetchTrayEntries();
-				closeTimer = setTimeout(() => {
-					handleClose();
-				}, 1200);
-			} else {
-				error = data.error ?? "Install failed";
-			}
-		} catch (err) {
-			error = err instanceof Error ? err.message : "Network error";
-		} finally {
-			loading = false;
+		if (result.ok) {
+			success = `Installed "${result.manifest?.name ?? result.widgetId}" successfully`;
+			await fetchTrayEntries();
+			closeTimer = setTimeout(() => {
+				handleClose();
+			}, 1200);
+		} else {
+			error = result.error ?? "Install failed";
 		}
 	}
 </script>

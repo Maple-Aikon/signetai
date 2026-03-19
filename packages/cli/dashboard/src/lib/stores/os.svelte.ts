@@ -8,6 +8,14 @@ import { API_BASE } from "$lib/api";
 
 export type AppTrayState = "tray" | "grid" | "dock";
 
+export const WIDGET_SIZES = {
+	small: { w: 3, h: 2 },
+	medium: { w: 4, h: 3 },
+	large: { w: 6, h: 4 },
+} as const;
+
+export type WidgetSizePreset = keyof typeof WIDGET_SIZES;
+
 export interface GridPosition {
 	x: number;
 	y: number;
@@ -42,6 +50,7 @@ export interface SignetAppManifest {
 	readonly name: string;
 	readonly icon?: string;
 	readonly ui?: string;
+	readonly html?: string;
 	readonly defaultSize?: { w: number; h: number };
 	readonly events?: { subscribe?: readonly string[]; emit?: readonly string[] };
 	readonly menuItems?: readonly string[];
@@ -84,7 +93,17 @@ export const os = $state({
 	activeGroup: null as string | null,
 	/** Currently dragging app ID */
 	draggingId: null as string | null,
+	/** Currently expanded/focused widget ID */
+	focusedId: null as string | null,
+	/** Incremented when widgetHtmlCache or widgetGenerating changes, to trigger re-renders */
+	widgetCacheVersion: 0,
 });
+
+/** In-memory cache of fetched widget HTML */
+export const widgetHtmlCache = new Map<string, string>();
+
+/** Set of server IDs currently being generated */
+export const widgetGenerating = new Set<string>();
 
 /** Apps currently in the bottom tray */
 export function getTrayApps(): AppTrayEntry[] {
@@ -269,4 +288,64 @@ export function removeFromGroup(groupId: string, appId: string): void {
 
 export function setActiveGroup(groupId: string | null): void {
 	os.activeGroup = groupId;
+}
+
+// Widget focus & generation
+
+export function expandWidget(id: string): void {
+	os.focusedId = id;
+}
+
+export function collapseWidget(): void {
+	os.focusedId = null;
+}
+
+export async function fetchWidgetHtml(serverId: string): Promise<string | null> {
+	if (widgetHtmlCache.has(serverId)) return widgetHtmlCache.get(serverId) ?? null;
+	try {
+		const res = await fetch(`${API_BASE}/api/os/widget/${encodeURIComponent(serverId)}`);
+		if (!res.ok) return null;
+		const data = await res.json();
+		if (data.html) {
+			widgetHtmlCache.set(serverId, data.html);
+			os.widgetCacheVersion++;
+			return data.html;
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+export async function requestWidgetGen(serverId: string): Promise<void> {
+	if (widgetGenerating.has(serverId)) return;
+	widgetGenerating.add(serverId);
+	os.widgetCacheVersion++;
+	try {
+		const res = await fetch(`${API_BASE}/api/os/widget/generate`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ serverId, force: false }),
+		});
+		const data = await res.json();
+		if (data.status === "cached" && data.html) {
+			widgetHtmlCache.set(serverId, data.html);
+		}
+		// If status is "generating", we wait for SSE event
+	} catch {
+		// Generation failed silently — widget stays as AutoCard
+	} finally {
+		if (!widgetHtmlCache.has(serverId)) {
+			// Still generating, keep in set
+		} else {
+			widgetGenerating.delete(serverId);
+		}
+		os.widgetCacheVersion++;
+	}
+}
+
+export function onWidgetGenerated(serverId: string, html: string): void {
+	widgetHtmlCache.set(serverId, html);
+	widgetGenerating.delete(serverId);
+	os.widgetCacheVersion++;
 }

@@ -1,8 +1,14 @@
 <script lang="ts">
 	import type { AppTrayEntry } from "$lib/stores/os.svelte";
+	import { os, widgetHtmlCache, widgetGenerating, expandWidget, requestWidgetGen } from "$lib/stores/os.svelte";
+	import type { WidgetSizePreset } from "$lib/stores/os.svelte";
+	import { WIDGET_SIZES } from "$lib/stores/os.svelte";
 	import AutoCard from "./AutoCard.svelte";
+	import WidgetSandbox from "./WidgetSandbox.svelte";
 	import GripVertical from "@lucide/svelte/icons/grip-vertical";
 	import Minimize2 from "@lucide/svelte/icons/minimize-2";
+	import Maximize2 from "@lucide/svelte/icons/maximize-2";
+	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 
 	interface Props {
 		app: AppTrayEntry;
@@ -12,7 +18,20 @@
 
 	const { app, onremove, ondragstart }: Props = $props();
 
-	const hasUI = $derived(!!app.manifest?.ui);
+	// Force reactivity on cache changes
+	const _v = $derived(os.widgetCacheVersion);
+
+	const widgetHtml = $derived.by(() => {
+		// Access _v to subscribe to cache changes
+		void _v;
+		if (app.manifest.html) return app.manifest.html;
+		return widgetHtmlCache.get(app.id) ?? null;
+	});
+
+	const generating = $derived.by(() => {
+		void _v;
+		return widgetGenerating.has(app.id);
+	});
 </script>
 
 <div class="widget-card sig-panel">
@@ -34,18 +53,34 @@
 			>
 				<Minimize2 class="size-3" />
 			</button>
+			<button
+				class="widget-titlebar-btn"
+				title="Expand widget"
+				onclick={() => expandWidget(app.id)}
+			>
+				<Maximize2 class="size-3" />
+			</button>
+			{#if !app.manifest.html && !generating}
+				<button
+					class="widget-titlebar-btn"
+					title={widgetHtml ? "Regenerate widget" : "Generate widget UI"}
+					onclick={() => requestWidgetGen(app.id)}
+				>
+					<RefreshCw class="size-3" />
+				</button>
+			{/if}
 		</div>
 	</div>
 
 	<!-- Content area -->
 	<div class="widget-content">
-		{#if hasUI}
-			<iframe
-				src={app.manifest.ui}
-				title={app.name}
-				class="widget-iframe"
-				sandbox="allow-scripts allow-forms"
-			></iframe>
+		{#if widgetHtml}
+			<WidgetSandbox html={widgetHtml} serverId={app.id} />
+		{:else if generating}
+			<div class="widget-generating">
+				<div class="widget-generating-border"></div>
+				<span class="widget-generating-text">Widget Generating...</span>
+			</div>
 		{:else}
 			<AutoCard
 				autoCard={app.autoCard}
@@ -121,10 +156,34 @@
 		overflow: hidden;
 	}
 
-	.widget-iframe {
-		width: 100%;
+	.widget-generating {
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		height: 100%;
-		border: none;
-		background: var(--sig-bg);
+		position: relative;
 	}
+
+	.widget-generating-border {
+		position: absolute;
+		inset: 8px;
+		border: 2px dashed var(--sig-border-strong);
+		border-radius: 8px;
+		animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+	}
+
+	.widget-generating-text {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--sig-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+	}
+
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.4; }
+	}
+
 </style>

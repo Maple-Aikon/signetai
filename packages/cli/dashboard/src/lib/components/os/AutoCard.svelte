@@ -31,6 +31,7 @@
 				<button
 					class="auto-card-tool-btn sig-switch"
 					title={tool.description || tool.name}
+					disabled
 				>
 					<Wrench class="size-3 shrink-0 opacity-50" />
 					<span class="truncate">{tool.name}</span>
@@ -106,6 +107,12 @@
 		color: var(--sig-text);
 		cursor: pointer;
 		max-width: 100%;
+	}
+
+	.auto-card-tool-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+		pointer-events: none;
 	}
 
 	.auto-card-empty {

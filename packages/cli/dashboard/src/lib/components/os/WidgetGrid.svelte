@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onDestroy } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
-	import { updateGridPosition, moveToTray } from "$lib/stores/os.svelte";
+	import { os, updateGridPosition, moveToTray, collapseWidget } from "$lib/stores/os.svelte";
 	import WidgetCard from "./WidgetCard.svelte";
 
 	interface Props {
@@ -43,7 +43,22 @@
 
 	onDestroy(() => {
 		cleanupDragListeners();
+		window.removeEventListener("keydown", handleKeydown);
 	});
+
+	// Focus mode
+
+	function handleKeydown(e: KeyboardEvent): void {
+		if (e.key === "Escape" && os.focusedId) {
+			collapseWidget();
+		}
+	}
+
+	onMount(() => {
+		window.addEventListener("keydown", handleKeydown);
+	});
+
+	const focusedApp = $derived(os.focusedId ? apps.find((a) => a.id === os.focusedId) ?? null : null);
 
 	// Compute max rows needed
 	const maxRow = $derived.by(() => {
@@ -204,6 +219,7 @@
 
 <div
 	class="widget-grid"
+	class:has-focus={os.focusedId !== null}
 	bind:this={gridEl}
 	style="grid-template-rows: repeat({maxRow}, {ROW_HEIGHT}px); gap: {GAP}px;"
 	ondragover={handleGridDragOver}
@@ -230,6 +246,26 @@
 			/>
 		</div>
 	{/each}
+
+	{#if focusedApp}
+		<div
+			class="widget-focus-backdrop"
+			onclick={collapseWidget}
+			onkeydown={(e) => e.key === "Escape" && collapseWidget()}
+			role="dialog"
+			aria-modal="true"
+			tabindex="-1"
+		>
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<div class="widget-focus-panel" onclick={(e) => e.stopPropagation()}>
+				<WidgetCard
+					app={focusedApp}
+					onremove={() => collapseWidget()}
+					ondragstart={() => {}}
+				/>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -272,5 +308,29 @@
 		opacity: 0.85;
 		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 		pointer-events: none;
+	}
+
+	.widget-grid.has-focus .grid-item {
+		opacity: 0.15;
+		pointer-events: none;
+	}
+
+	.widget-focus-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 200;
+		background: rgba(0, 0, 0, 0.8);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 32px;
+	}
+
+	.widget-focus-panel {
+		width: 100%;
+		max-width: 900px;
+		height: 80vh;
+		border-radius: 12px;
+		overflow: hidden;
 	}
 </style>

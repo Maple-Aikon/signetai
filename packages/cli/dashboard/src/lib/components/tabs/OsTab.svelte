@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import {
 		os,
 		fetchTrayEntries,
@@ -8,15 +8,17 @@
 		getDockApps,
 		moveToGrid,
 		loadGroups,
+		requestWidgetGen,
+		fetchWidgetHtml,
+		onWidgetGenerated,
+		widgetHtmlCache,
 		type GridPosition,
 	} from "$lib/stores/os.svelte";
+	import { API_BASE } from "$lib/api";
 	import WidgetGrid from "$lib/components/os/WidgetGrid.svelte";
 	import AppDock from "$lib/components/os/AppDock.svelte";
 	import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
-	import MenuBar from "$lib/components/os/MenuBar.svelte";
-	import BrowserPanel from "$lib/components/os/BrowserPanel.svelte";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-	import Monitor from "@lucide/svelte/icons/monitor";
 
 	const GRID_COLS = 12;
 
@@ -46,12 +48,29 @@
 	const gridApps = $derived(getGridApps());
 	const dockApps = $derived(getDockApps());
 
-	// Browser panel toggle (collapsed by default)
-	let showBrowserPanel = $state(false);
+	let eventSource: EventSource | null = null;
 
 	onMount(() => {
 		fetchTrayEntries();
 		loadGroups();
+
+		// Subscribe to widget generation events via SSE
+		eventSource = new EventSource(`${API_BASE}/api/os/events/stream?type=widget`);
+		eventSource.onmessage = (e) => {
+			try {
+				const event = JSON.parse(e.data);
+				if (event.type === "widget.generated" && event.payload?.serverId) {
+					// Fetch the generated HTML and update the cache
+					fetchWidgetHtml(event.payload.serverId);
+				}
+			} catch {
+				// Ignore parse errors from heartbeats
+			}
+		};
+	});
+
+	onDestroy(() => {
+		eventSource?.close();
 	});
 
 	async function handleDragToBoard(id: string): Promise<void> {
@@ -66,6 +85,13 @@
 		const pos = findFreeGridPosition(occupied, size);
 
 		await moveToGrid(id, pos);
+
+		// Trigger widget generation if no declared or cached HTML
+		if (!entry.manifest.html && !widgetHtmlCache.has(id)) {
+			fetchWidgetHtml(id).then((cached) => {
+				if (!cached) requestWidgetGen(id);
+			});
+		}
 	}
 
 	function handleGridDrop(appId: string, x: number, y: number): void {
@@ -90,24 +116,13 @@
 
 	<!-- Main content area -->
 	<div class="os-main">
-		<!-- Menu bar (from MCP menuItems) -->
-		<MenuBar />
-
 		<!-- Top bar -->
 		<div class="os-topbar">
 			<div class="os-topbar-left">
 				<span class="sig-heading">Signet OS</span>
-				<span class="sig-eyebrow">{os.entries.length} apps</span>
+				<span class="sig-eyebrow">{os.entries.length} {os.entries.length === 1 ? "app" : "apps"}</span>
 			</div>
 			<div class="os-topbar-right">
-				<button
-					class="sig-switch os-browser-toggle"
-					class:os-browser-toggle--active={showBrowserPanel}
-					title={showBrowserPanel ? "Hide browser panel" : "Show browser panel"}
-					onclick={() => showBrowserPanel = !showBrowserPanel}
-				>
-					<Monitor class="size-3.5" />
-				</button>
 				<button
 					class="sig-switch os-refresh-btn"
 					title="Refresh app tray"
@@ -122,13 +137,6 @@
 		{#if os.error}
 			<div class="os-error">
 				<span class="sig-label text-[var(--sig-danger)]">{os.error}</span>
-			</div>
-		{/if}
-
-		<!-- Browser panel (collapsible) -->
-		{#if showBrowserPanel}
-			<div class="os-browser-panel-wrapper">
-				<BrowserPanel />
 			</div>
 		{/if}
 
@@ -197,25 +205,6 @@
 		width: 28px;
 		height: 28px;
 		padding: 0;
-	}
-
-	.os-browser-toggle {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		padding: 0;
-	}
-
-	.os-browser-toggle--active {
-		background: var(--sig-border-strong);
-		color: var(--sig-text-bright);
-	}
-
-	.os-browser-panel-wrapper {
-		padding: 8px var(--space-md) 0;
-		flex-shrink: 0;
 	}
 
 	.os-error {

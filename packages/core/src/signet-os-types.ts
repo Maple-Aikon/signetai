@@ -20,6 +20,8 @@ export interface SignetAppManifest {
 	readonly icon?: string;
 	/** URL of the widget UI. Auto-card rendered if absent. */
 	readonly ui?: string;
+	/** Pre-built HTML widget content (Signet schema). */
+	readonly html?: string;
 	readonly defaultSize?: SignetAppSize;
 	readonly events?: SignetAppEvents;
 	readonly menuItems?: readonly string[];
@@ -28,6 +30,14 @@ export interface SignetAppManifest {
 }
 
 export const DEFAULT_APP_SIZE: SignetAppSize = { w: 4, h: 3 };
+
+export const WIDGET_SIZES = {
+	small: { w: 3, h: 2 },
+	medium: { w: 4, h: 3 },
+	large: { w: 6, h: 4 },
+} as const;
+
+export type WidgetSizePreset = keyof typeof WIDGET_SIZES;
 
 // ---------------------------------------------------------------------------
 // Auto-card types (generated when no manifest or UI is present)

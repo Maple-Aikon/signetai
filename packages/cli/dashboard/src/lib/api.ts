@@ -2510,6 +2510,16 @@ export interface InstallMcpResult {
 }
 
 export async function installMcp(options: InstallMcpOptions): Promise<InstallMcpResult> {
+	// Validate URL scheme before making the request (SSRF prevention)
+	try {
+		const parsed = new URL(options.url);
+		if (!["https:", "http:"].includes(parsed.protocol)) {
+			return { ok: false, widgetId: "", manifest: null, error: "Only HTTP/HTTPS URLs are supported" };
+		}
+	} catch {
+		return { ok: false, widgetId: "", manifest: null, error: "Invalid URL format" };
+	}
+
 	try {
 		const response = await fetch(`${API_BASE}/api/os/install`, {
 			method: "POST",

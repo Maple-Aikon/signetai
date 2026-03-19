@@ -15,8 +15,10 @@ import type {
 	SignetAppManifest,
 } from "@signet/core";
 import { DEFAULT_APP_SIZE } from "@signet/core";
+import { createEvent, eventBus } from "./event-bus.js";
 import { logger } from "./logger.js";
 import { getSecret } from "./secrets.js";
+import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
 // Note: validatePublicHttpUrl from url-validation.ts is used by the install
 // endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
 // client-side (iframe/img) so they only need scheme validation, not address blocking.
@@ -256,6 +258,19 @@ export function parseManifest(
 				}
 			: {}),
 		...(typeof signetBlock.dock === "boolean" ? { dock: signetBlock.dock } : {}),
+		// Pre-built HTML widget content (Signet schema).
+		// Validated: must be a string, no external script sources allowed.
+		...(() => {
+			if (typeof signetBlock.html === "string" && signetBlock.html.trim().length > 0) {
+				const raw = signetBlock.html.trim();
+				if (/<script\s+src\s*=/i.test(raw)) {
+					logger.warn("probe", "Rejected manifest HTML with external script src");
+					return {};
+				}
+				return { html: raw };
+			}
+			return {};
+		})(),
 	};
 
 	return manifest;
@@ -469,6 +484,7 @@ export function storeProbeResult(result: McpProbeResult): void {
 	const now = new Date().toISOString();
 
 	const existingIndex = tray.findIndex((e) => e.id === result.serverId);
+	const oldEntry = existingIndex >= 0 ? tray[existingIndex] : null;
 
 	// Build the effective manifest (declared takes precedence, auto-card is fallback)
 	const effectiveManifest: SignetAppManifest = result.declaredManifest ?? {
@@ -502,6 +518,18 @@ export function storeProbeResult(result: McpProbeResult): void {
 		state: entry.state,
 		toolCount: result.toolCount,
 	});
+
+	// Invalidate cached widget if the tool set changed
+	if (oldEntry) {
+		const oldTools = new Set(oldEntry.autoCard.tools.map((t) => t.name));
+		const newTools = new Set(result.autoCard.tools.map((t) => t.name));
+		const changed = oldTools.size !== newTools.size || [...oldTools].some((n) => !newTools.has(n));
+		if (changed && loadCachedWidget(result.serverId)) {
+			deleteCachedWidget(result.serverId);
+			eventBus.emit(createEvent("system", "widget.invalidated", { serverId: result.serverId }));
+			logger.info("probe", `Invalidated cached widget for ${result.serverId} (tools changed)`);
+		}
+	}
 }
 
 /**
