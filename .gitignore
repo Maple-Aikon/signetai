@@ -16,6 +16,12 @@ packages/signetai/bin/signet-predictor-*
 *.tgz
 *.png
 !web/public/blog/*.png
+!web/public/apple-touch-icon.png
+!public/Signet-Logo-Black.png
+!public/Signet-Logo-White.png
+!public/discord-icon.png
+!packages/cli/dashboard/static/logo-dark.png
+!packages/cli/dashboard/static/logo-light.png
 .ruff_cache
 tmp/
 

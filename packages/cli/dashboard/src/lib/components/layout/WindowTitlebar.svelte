@@ -169,6 +169,7 @@
 				</button>
 			</div>
 
+			<img src="/logo-dark.png" alt="" class="titlebar__logo" width="14" height="14" aria-hidden="true" />
 			<span class="titlebar__title" data-tauri-drag-region>SIGNET</span>
 
 			<div class="titlebar__spacer">
@@ -192,6 +193,7 @@
 				>
 					<ModeIcon size={12} />
 				</button>
+				<img src="/logo-dark.png" alt="" class="titlebar__logo" width="14" height="14" aria-hidden="true" />
 				<span class="titlebar__title" data-tauri-drag-region>SIGNET</span>
 			</div>
 
@@ -265,6 +267,15 @@
 		flex-shrink: 0;
 		z-index: 9999;
 		font-family: var(--font-mono);
+	}
+
+	.titlebar__logo {
+		opacity: 0.5;
+		pointer-events: none;
+	}
+
+	:global([data-theme="light"]) .titlebar__logo {
+		filter: invert(1);
 	}
 
 	.titlebar__title {

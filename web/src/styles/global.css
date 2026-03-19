@@ -471,6 +471,14 @@ section {
 	text-decoration: none;
 }
 
+.nav-brand-logo {
+	display: block;
+}
+
+[data-theme="light"] .nav-brand-logo {
+	filter: invert(1);
+}
+
 .nav-brand-text {
 	white-space: nowrap;
 }

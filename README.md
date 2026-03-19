@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="public/Signet-Logo-Black.png" alt="Signet" width="120" />
+
 # S I G N E T
 
 **Portable Agent Infrastructure**

@@ -157,14 +157,12 @@ function activateItem(item: NavItem): void {
 				>
 					{#snippet child({ props })}
 						<div {...props}>
-							<span
-								class="sidebar-signet-icon inline-block h-2.5 w-2.5 shrink-0 relative
-									before:absolute before:w-px before:h-full before:left-1/2
-									before:bg-[var(--sig-highlight)]
-									after:absolute after:w-full after:h-px after:top-1/2
-									after:bg-[var(--sig-highlight)]"
+							<img
+								src="/logo-dark.png"
+								alt=""
+								class="sidebar-signet-icon h-5 w-5 shrink-0"
 								aria-hidden="true"
-							></span>
+							/>
 							<div class="flex flex-col gap-0.5 leading-none overflow-hidden
 								transition-[opacity,width] duration-200 ease-out
 								group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:w-0">
@@ -377,8 +375,17 @@ function activateItem(item: NavItem): void {
 		transition: filter var(--dur) var(--ease), transform var(--dur) var(--ease);
 	}
 
+	:global([data-theme="light"]) .sidebar-signet-icon {
+		filter: invert(1) drop-shadow(0 0 3px var(--sig-highlight-dim));
+	}
+
 	:global([data-sidebar="menu-button"]):hover .sidebar-signet-icon {
 		filter: drop-shadow(0 0 6px var(--sig-highlight)) drop-shadow(0 0 12px var(--sig-highlight));
+		transform: scale(1.15);
+	}
+
+	:global([data-theme="light"]) :global([data-sidebar="menu-button"]):hover .sidebar-signet-icon {
+		filter: invert(1) drop-shadow(0 0 6px var(--sig-highlight)) drop-shadow(0 0 12px var(--sig-highlight));
 		transform: scale(1.15);
 	}
 
