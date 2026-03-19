@@ -1,12 +1,10 @@
 <div align="center">
-<pre>
-███████╗██╗ ██████╗ ███╗   ██╗███████╗████████╗
+<pre>███████╗██╗ ██████╗ ███╗   ██╗███████╗████████╗
 ██╔════╝██║██╔════╝ ████╗  ██║██╔════╝╚══██╔══╝
 ███████╗██║██║  ███╗██╔██╗ ██║█████╗     ██║
 ╚════██║██║██║   ██║██║╚██╗██║██╔══╝     ██║
 ███████║██║╚██████╔╝██║ ╚████║███████╗   ██║
-╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝
-</pre>
+╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝</pre>
 
 **Portable Agent Infrastructure**
 
@@ -36,8 +34,8 @@ Everything runs locally. You own the data. The agent is yours.
 
 <table>
 <tr>
-<td width="50%"><img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" width="100%" /></td>
-<td width="50%"><img src="public/memory-loop-v2.jpg" alt="Signet memory loop — extraction, decision, and retention flow" width="100%" /></td>
+<td><img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" height="280" /></td>
+<td><img src="public/memory-loop-v2.jpg" alt="Signet memory loop — extraction, decision, and retention flow" height="280" /></td>
 </tr>
 </table>
 
