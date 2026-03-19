@@ -156,6 +156,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset: signet-predictor-win32-x64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset: signet-predictor-win32-arm64.exe
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
@@ -180,9 +183,13 @@ jobs:
           EXT=""
           [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           BINARY="packages/predictor/target/${RELEASE_TARGET}/release/signet-predictor${EXT}"
-          openssl dgst -sha256 -hex "${BINARY}" | awk '{print $NF}' > "${BINARY}.sha256"
-          gh release upload "v${RELEASE_VERSION}" "${BINARY}#${RELEASE_ASSET}" --clobber
-          gh release upload "v${RELEASE_VERSION}" "${BINARY}.sha256#${RELEASE_ASSET}.sha256" --clobber
+          # Rename binary to the platform-specific asset name so gh uses it as
+          # the release asset name (not just the label). This fixes the bug where
+          # all matrix legs uploaded as "signet-predictor" and overwrote each other.
+          cp "${BINARY}" "${RELEASE_ASSET}"
+          openssl dgst -sha256 -hex "${RELEASE_ASSET}" | awk '{print $NF}' > "${RELEASE_ASSET}.sha256"
+          gh release upload "v${RELEASE_VERSION}" "${RELEASE_ASSET}" --clobber
+          gh release upload "v${RELEASE_VERSION}" "${RELEASE_ASSET}.sha256" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -208,6 +215,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset: signet-daemon-win32-x64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset: signet-daemon-win32-arm64.exe
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
@@ -229,9 +239,10 @@ jobs:
           EXT=""
           [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           BINARY="packages/daemon-rs/target/${RELEASE_TARGET}/release/signet-daemon${EXT}"
-          openssl dgst -sha256 -hex "${BINARY}" | awk '{print $NF}' > "${BINARY}.sha256"
-          gh release upload "v${RELEASE_VERSION}" "${BINARY}#${RELEASE_ASSET}" --clobber
-          gh release upload "v${RELEASE_VERSION}" "${BINARY}.sha256#${RELEASE_ASSET}.sha256" --clobber
+          cp "${BINARY}" "${RELEASE_ASSET}"
+          openssl dgst -sha256 -hex "${RELEASE_ASSET}" | awk '{print $NF}' > "${RELEASE_ASSET}.sha256"
+          gh release upload "v${RELEASE_VERSION}" "${RELEASE_ASSET}" --clobber
+          gh release upload "v${RELEASE_VERSION}" "${RELEASE_ASSET}.sha256" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

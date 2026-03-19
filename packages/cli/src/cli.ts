@@ -393,7 +393,7 @@ async function downloadDaemonBinary(): Promise<void> {
 
 	const plat = process.platform;
 	const arch = process.arch;
-	const supported = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64"]);
+	const supported = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64", "win32:arm64"]);
 	if (!supported.has(`${plat}:${arch}`)) return;
 
 	const ext = plat === "win32" ? ".exe" : "";
@@ -830,7 +830,7 @@ function predictorBinaryName():
 	const host = process.platform;
 	const cpu = process.arch;
 	const tuple = `${host}:${cpu}`;
-	const supported = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64"]);
+	const supported = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64", "win32:arm64"]);
 	if (!supported.has(tuple)) {
 		return null;
 	}
