@@ -11,7 +11,7 @@ import type { ModelRegistryEntry } from "@signet/core";
 const isDev = import.meta.env.DEV;
 const isTauri =
 	typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
+export const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
 
 export interface Memory {
 	id: string;
@@ -2483,6 +2483,54 @@ export async function getModelsByProvider(): Promise<Record<string, ModelRegistr
 		return (await res.json()) as Record<string, ModelRegistryEntry[]>;
 	} catch {
 		return {};
+	}
+}
+
+// ============================================================================
+// Signet OS Install API (Phase 7)
+// ============================================================================
+
+export interface InstallMcpOptions {
+	url: string;
+	name?: string;
+	autoPlace?: boolean;
+}
+
+export interface InstallMcpResult {
+	ok: boolean;
+	widgetId: string;
+	manifest: {
+		name: string;
+		icon?: string;
+		ui?: string;
+		defaultSize?: { w: number; h: number };
+		dock?: boolean;
+	} | null;
+	error?: string;
+}
+
+export async function installMcp(options: InstallMcpOptions): Promise<InstallMcpResult> {
+	try {
+		const response = await fetch(`${API_BASE}/api/os/install`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(options),
+		});
+		if (!response.ok) {
+			const body = await response.json().catch(() => ({}));
+			const error = typeof (body as Record<string, unknown>).error === "string"
+				? (body as Record<string, unknown>).error as string
+				: `Install failed (HTTP ${response.status})`;
+			return { ok: false, widgetId: "", manifest: null, error };
+		}
+		return await response.json();
+	} catch (e) {
+		return {
+			ok: false,
+			widgetId: "",
+			manifest: null,
+			error: e instanceof Error ? e.message : String(e),
+		};
 	}
 }
 
