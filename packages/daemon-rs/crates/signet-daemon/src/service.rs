@@ -14,7 +14,10 @@ fn home() -> PathBuf {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir())
+        .unwrap_or_else(|_| {
+            eprintln!("warning: neither HOME nor USERPROFILE is set; falling back to current directory");
+            PathBuf::from(".")
+        })
 }
 
 fn agents_dir() -> PathBuf {

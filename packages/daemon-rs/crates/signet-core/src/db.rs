@@ -484,7 +484,7 @@ mod tests {
         // Test against the real DB if available
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+            .unwrap_or_else(|_| ".".into());
         let db_path = std::path::PathBuf::from(&home).join(".agents/memory/memories.db");
 
         if !db_path.exists() {

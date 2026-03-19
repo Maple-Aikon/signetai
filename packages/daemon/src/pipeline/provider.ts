@@ -149,7 +149,7 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 				if (signal === "SIGKILL") {
 					proc.kill();
 				} else {
-					proc.kill(15);
+					proc.kill("SIGTERM");
 				}
 				return;
 			}
