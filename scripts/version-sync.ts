@@ -96,8 +96,15 @@ function readCargoVersion(filePath: string): string | null {
 	return match ? match[1] : null;
 }
 
+function usesWorkspaceVersion(raw: string): boolean {
+	// Only match version.workspace inside [package], not in dependency tables
+	return /\[package\][^\[]*version\.workspace\s*=\s*true/s.test(raw);
+}
+
 function updateCargoVersion(filePath: string, targetVersion: string): boolean {
 	const raw = readFileSync(filePath, "utf8");
+	// Crates that inherit version from workspace root — nothing to update
+	if (usesWorkspaceVersion(raw)) return false;
 	// Match [package] or [workspace.package] section
 	const versionPattern = /(\[(?:workspace\.)?package\][^\[]*version\s*=\s*")([^"]+)(")/s;
 	if (!versionPattern.test(raw)) {
@@ -229,6 +236,8 @@ function main() {
 
 	const cargoMismatches: string[] = [];
 	for (const file of cargoFiles) {
+		const raw = readFileSync(file, "utf8");
+		if (usesWorkspaceVersion(raw)) continue;
 		const version = readCargoVersion(file);
 		if (version !== targetVersion) {
 			cargoMismatches.push(`${file} (${version ?? "missing"})`);
