@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.66.0] - 2026-03-19
+
+### Bug Fixes
+
+- **openclaw**: harden plugin sync and patch plugins.allow (#246)
+
+
 ## [0.65.9] - 2026-03-19
 
 ### Features
