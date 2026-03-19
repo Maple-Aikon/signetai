@@ -1,13 +1,12 @@
 <div align="center">
-
-```
- ███████╗██╗ ██████╗ ███╗   ██╗███████╗████████╗
- ██╔════╝██║██╔════╝ ████╗  ██║██╔════╝╚══██╔══╝
- ███████╗██║██║  ███╗██╔██╗ ██║█████╗     ██║
- ╚════██║██║██║   ██║██║╚██╗██║██╔══╝     ██║
- ███████║██║╚██████╔╝██║ ╚████║███████╗   ██║
- ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝
-```
+<pre>
+███████╗██╗ ██████╗ ███╗   ██╗███████╗████████╗
+██╔════╝██║██╔════╝ ████╗  ██║██╔════╝╚══██╔══╝
+███████╗██║██║  ███╗██╔██╗ ██║█████╗     ██║
+╚════██║██║██║   ██║██║╚██╗██║██╔══╝     ██║
+███████║██║╚██████╔╝██║ ╚████║███████╗   ██║
+╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝
+</pre>
 
 **Portable Agent Infrastructure**
 
@@ -35,9 +34,12 @@ before every prompt. The agent just has its memory. Like you have yours.
 
 Everything runs locally. You own the data. The agent is yours.
 
-<p align="center">
-  <img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" width="620" />
-</p>
+<table>
+<tr>
+<td width="50%"><img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" width="100%" /></td>
+<td width="50%"><img src="public/memory-loop-v2.jpg" alt="Signet memory loop — extraction, decision, and retention flow" width="100%" /></td>
+</tr>
+</table>
 
 ## Harness support
 
@@ -93,10 +95,6 @@ predictive scorer, trained on your interaction patterns, injects the
 right context before every prompt.
 
 Your agent doesn't manage its memory. It just has it.
-
-<p align="center">
-  <img src="public/memory-loop-v2.jpg" alt="Signet memory loop — extraction, decision, and retention flow" width="620" />
-</p>
 
 Read more: [Why Signet](./docs/QUICKSTART.md#why-signet) · [Architecture](./docs/ARCHITECTURE.md) · [Knowledge Graph](./docs/KNOWLEDGE-GRAPH.md) · [Pipeline](./docs/PIPELINE.md)
 
