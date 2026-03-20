@@ -133,7 +133,7 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		// explicitly with properly quoted arguments.
 		let child: import("node:child_process").ChildProcess;
 		if (resolvedBin.endsWith(".cmd")) {
-			const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
+			const quote = (s: string) => `"${s.replace(/%/g, "%%").replace(/"/g, '""')}"`;
 			const cmdLine = [quote(resolvedBin), ...args.map(quote)].join(" ");
 			child = nodeSpawn(process.env.COMSPEC || "cmd.exe", ["/d", "/s", "/c", `"${cmdLine}"`], {
 				stdio: ["ignore", "pipe", "pipe"],
