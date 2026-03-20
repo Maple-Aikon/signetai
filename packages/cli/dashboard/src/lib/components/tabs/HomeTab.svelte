@@ -20,6 +20,7 @@
 	import SuggestedInsights from "$lib/components/home/SuggestedInsights.svelte";
 	import PredictorSplitBar from "$lib/components/home/PredictorSplitBar.svelte";
 	import PinnedEntityCluster from "$lib/components/home/PinnedEntityCluster.svelte";
+	import MarketplaceSpotlights from "$lib/components/home/MarketplaceSpotlights.svelte";
 	import { onMount } from "svelte";
 
 	interface Props {
@@ -73,11 +74,14 @@
 			{memoryStats}
 		/>
 	</div>
+	<div class="area-spotlights">
+		<MarketplaceSpotlights />
+	</div>
 	<div class="area-insights">
 		<SuggestedInsights {memories} />
 	</div>
 	<div class="area-sidebar">
-		<PinnedEntityCluster />
+		<PinnedEntityCluster {memories} />
 		<PredictorSplitBar {daemonStatus} />
 	</div>
 </div>
@@ -87,10 +91,11 @@
 	.home-grid {
 		display: grid;
 		grid-template-columns: 1.6fr 1fr;
-		grid-template-rows: auto 1fr;
+		grid-template-rows: auto minmax(auto, max-content) 1fr;
 		grid-template-areas:
-			"banner  banner"
-			"insights sidebar";
+			"banner     banner"
+			"spotlights sidebar"
+			"insights   sidebar";
 		gap: var(--space-sm);
 		flex: 1;
 		min-height: 0;
@@ -102,6 +107,12 @@
 		grid-area: banner;
 	}
 
+	.area-spotlights {
+		grid-area: spotlights;
+		min-height: 0;
+		overflow: hidden;
+	}
+
 	.area-insights {
 		grid-area: insights;
 		min-height: 0;
@@ -110,6 +121,7 @@
 
 	.area-sidebar {
 		grid-area: sidebar;
+		grid-row: 2 / 4;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-sm);

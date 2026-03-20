@@ -15,6 +15,10 @@
 
 	let actedIds = $state<Set<string>>(new Set());
 	let displayOffset = $state(0);
+	let listEl: HTMLDivElement | undefined = $state();
+	let visibleCount = $state(3);
+
+	const ENTRY_HEIGHT = 90; // approximate height per insight entry
 
 	function scoreMemory(m: Memory): number {
 		const now = Date.now();
@@ -57,10 +61,21 @@
 
 	const displayCards = $derived.by(() => {
 		if (scoredPool.length === 0) return [];
+		const count = Math.min(visibleCount, scoredPool.length);
 		const start = displayOffset % scoredPool.length;
-		return Array.from({ length: Math.min(3, scoredPool.length) }, (_, i) =>
+		return Array.from({ length: count }, (_, i) =>
 			scoredPool[(start + i) % scoredPool.length].memory,
 		);
+	});
+
+	$effect(() => {
+		if (!listEl) return;
+		const observer = new ResizeObserver((entries) => {
+			const height = entries[0]?.contentRect.height ?? 0;
+			visibleCount = Math.max(1, Math.floor(height / ENTRY_HEIGHT));
+		});
+		observer.observe(listEl);
+		return () => observer.disconnect();
 	});
 
 	function importanceColor(imp: number): string {
@@ -125,7 +140,7 @@
 	}
 
 	function handleRefresh(): void {
-		displayOffset = (displayOffset + 3) % Math.max(1, scoredPool.length);
+		displayOffset = (displayOffset + visibleCount) % Math.max(1, scoredPool.length);
 	}
 </script>
 
@@ -146,7 +161,7 @@
 			<span>NO INSIGHTS TO CURATE</span>
 		</div>
 	{:else}
-		<div class="insights-list">
+		<div class="insights-list" bind:this={listEl}>
 			{#each displayCards as m, i (m.id)}
 				<div class="insight-entry">
 					<!-- Index + date row -->

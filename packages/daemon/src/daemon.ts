@@ -1726,6 +1726,27 @@ app.get("/api/memories", (c) => {
 	}
 });
 
+app.get("/api/memories/most-used", (c) => {
+	try {
+		const limit = Number.parseInt(c.req.query("limit") || "6", 10);
+		const memories = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(`
+					SELECT id, content, access_count, importance, type, tags
+					FROM memories
+					WHERE access_count > 0
+					ORDER BY access_count DESC, importance DESC
+					LIMIT ?
+				`)
+				.all(limit),
+		);
+		return c.json({ memories });
+	} catch (e) {
+		logger.error("memory", "Error loading most-used memories", e as Error);
+		return c.json({ memories: [] });
+	}
+});
+
 app.get("/api/memory/timeline", (c) => {
 	try {
 		const timeline = getDbAccessor().withReadDb((db) => buildMemoryTimeline(db));

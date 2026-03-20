@@ -1,65 +1,98 @@
 <script lang="ts">
+	import type { Memory } from "$lib/api";
 	import { setTab } from "$lib/stores/navigation.svelte";
-	import Network from "@lucide/svelte/icons/network";
+	import { API_BASE } from "$lib/api";
+	import Brain from "@lucide/svelte/icons/brain";
 	import { onMount } from "svelte";
 
-	const isDev = import.meta.env.DEV;
-	const API_BASE = isDev ? "http://localhost:3850" : "";
-
-	interface PinnedEntity {
-		id: string;
-		name: string;
-		type?: string;
-		mentionCount?: number;
+	interface Props {
+		memories: Memory[];
 	}
 
-	let entities = $state<PinnedEntity[]>([]);
+	const { memories }: Props = $props();
+
+	interface SpotlightMemory {
+		id: string;
+		content: string;
+		access_count: number;
+		importance: number;
+	}
+
+	let items = $state<SpotlightMemory[]>([]);
 	let loaded = $state(false);
 
-	async function fetchPinned(): Promise<void> {
+	async function fetchMostUsed(): Promise<void> {
 		try {
-			const res = await fetch(`${API_BASE}/api/knowledge/entities?pinned=true&limit=6`);
+			const res = await fetch(`${API_BASE}/api/memories/most-used?limit=50`);
 			if (res.ok) {
 				const data = await res.json();
-				entities = data.entities ?? data.items ?? [];
+				const results = data.memories ?? [];
+				if (results.length > 0) {
+					items = results;
+					loaded = true;
+					return;
+				}
 			}
 		} catch {
 			// endpoint may not exist yet
 		}
+
+		// Fallback: use prop memories sorted by importance
+		items = memories
+			.map((m) => ({
+				id: m.id,
+				content: m.content,
+				access_count: 0,
+				importance: m.importance ?? 0.5,
+			}))
+			.sort((a, b) => b.importance - a.importance)
+			.slice(0, 50);
 		loaded = true;
 	}
 
 	onMount(() => {
-		fetchPinned();
+		fetchMostUsed();
 	});
+
+	function label(m: SpotlightMemory): string {
+		const text = m.content.trim();
+		const first = text.split("\n")[0] ?? text;
+		return first.length > 60 ? `${first.slice(0, 57)}...` : first;
+	}
+
+	function importanceColor(imp: number): string {
+		if (imp >= 0.8) return "var(--sig-danger)";
+		if (imp >= 0.5) return "var(--sig-warning)";
+		return "var(--sig-success)";
+	}
 </script>
 
 <div class="panel sig-panel">
 	<div class="panel-header sig-panel-header">
 		<span class="panel-title">SPOTLIGHT</span>
-		<span class="panel-count">{entities.length} PINNED</span>
+		<span class="panel-count">{items.length} RECALLED</span>
 	</div>
 
 	<div class="panel-body">
 		{#if !loaded}
 			<div class="empty-state">LOADING</div>
-		{:else if entities.length === 0}
+		{:else if items.length === 0}
 			<div class="empty-state">
-				<Network class="empty-icon" />
-				<span>PIN AN ENTITY IN KNOWLEDGE<br/>TO SET YOUR SPOTLIGHT</span>
+				<Brain class="empty-icon" />
+				<span>NO MEMORIES YET</span>
 			</div>
 		{:else}
 			<div class="entity-list">
-				{#each entities as entity, idx (entity.id ?? `entity-${idx}`)}
+				{#each items as memory, idx (memory.id)}
 					<div class="entity-row">
 						<span class="entity-idx">{String(idx + 1).padStart(2, "0")}</span>
 						<span
 							class="entity-dot"
-							style="background: var(--sig-highlight)"
+							style="background: {importanceColor(memory.importance)}"
 						></span>
-						<span class="entity-name">{entity.name}</span>
-						{#if entity.mentionCount !== undefined}
-							<span class="entity-count">{entity.mentionCount}</span>
+						<span class="entity-name">{label(memory)}</span>
+						{#if memory.access_count > 0}
+							<span class="entity-count" title="times recalled">{memory.access_count}</span>
 						{/if}
 					</div>
 				{/each}
@@ -68,8 +101,8 @@
 	</div>
 
 	<div class="panel-footer sig-panel-footer">
-		<button class="panel-link" onclick={() => setTab("knowledge")}>
-			VIEW IN KNOWLEDGE
+		<button class="panel-link" onclick={() => setTab("memory")}>
+			VIEW IN MEMORY
 		</button>
 	</div>
 </div>

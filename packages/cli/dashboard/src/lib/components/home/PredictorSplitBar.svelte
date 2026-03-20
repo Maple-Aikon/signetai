@@ -39,7 +39,18 @@
 
 	const alpha = $derived(health?.alpha ?? 0.6);
 	const successRate = $derived(health?.successRate ?? 0);
-	const healthStatus = $derived(health?.status ?? "unknown");
+	const healthStatus = $derived.by(() => {
+		// Use composite diagnostic score for overall status
+		// instead of predictor-specific status (predictor is optional)
+		if (diagnostics?.composite) {
+			const score = diagnostics.composite.score;
+			if (score >= 0.7) return "healthy";
+			if (score >= 0.4) return "degraded";
+			return "unhealthy";
+		}
+		// Fall back to predictor status only if diagnostics unavailable
+		return health?.status ?? "unknown";
+	});
 
 	const embeddingCoverage = $derived(
 		diagnostics?.index?.embeddingCoverage ?? 0,
