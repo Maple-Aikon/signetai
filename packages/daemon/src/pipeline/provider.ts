@@ -127,15 +127,26 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 	// On Windows, use node:child_process with windowsHide to prevent
 	// console window flashing. Bun.spawn doesn't support windowsHide.
 	if (process.platform === "win32") {
-		// .cmd wrappers (e.g. claude.cmd, codex.cmd from npm) are shell scripts,
-		// not PE executables — node:child_process requires shell: true to run them.
-		const useShell = resolvedBin.endsWith(".cmd");
-		const child = nodeSpawn(resolvedBin, args, {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: options?.env ? sanitizedEnv : undefined,
-			windowsHide: true,
-			shell: useShell,
-		});
+		// .cmd wrappers (e.g. claude.cmd, codex.cmd from npm) are batch scripts,
+		// not PE executables. Instead of shell: true (which exposes args to
+		// cmd.exe metacharacter interpretation — injection risk), invoke cmd.exe
+		// explicitly with properly quoted arguments.
+		let child: import("node:child_process").ChildProcess;
+		if (resolvedBin.endsWith(".cmd")) {
+			const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
+			const cmdLine = [quote(resolvedBin), ...args.map(quote)].join(" ");
+			child = nodeSpawn(process.env.COMSPEC || "cmd.exe", ["/d", "/s", "/c", `"${cmdLine}"`], {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: options?.env ? sanitizedEnv : undefined,
+				windowsHide: true,
+			});
+		} else {
+			child = nodeSpawn(resolvedBin, args, {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: options?.env ? sanitizedEnv : undefined,
+				windowsHide: true,
+			});
+		}
 
 		const exitPromise = new Promise<number>((resolve, reject) => {
 			child.on("exit", (code) => resolve(code ?? 1));
