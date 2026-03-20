@@ -138,33 +138,57 @@ This gives Claude Code direct access to `memory_search`, `memory_store`,
 
 Codex is OpenAI's terminal coding agent. Signet integrates with Codex by
 installing a shell wrapper that fires Signet lifecycle hooks around local
-`codex` sessions and injects session-start context through Codex's
-`model_instructions_file` setting.
+`codex` sessions, generating a persistent identity file, patching
+`config.toml`, and symlinking skills.
 
 ### Files managed by Signet
 
 | File | Description |
 |------|-------------|
 | `~/.config/signet/bin/codex` | Signet-managed Codex wrapper script |
+| `~/.codex/CODEX.md` | Auto-generated identity + Signet context (from `~/.agents/` files) |
+| `~/.codex/skills/` | Symlinked skills directory (from `~/.agents/skills/`) |
+| `~/.codex/config.toml` | Patched with `model_instructions_file` pointing to CODEX.md |
 | `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` | PATH snippet that prioritizes the wrapper |
 
 ### How it works
 
-1. The wrapper calls `signet hook session-start -H codex` before launching Codex.
-2. The returned Signet context is written to a temporary instructions file.
-3. Codex is launched with `-c model_instructions_file=...` so the session starts with Signet context loaded.
-4. When Codex exits, the wrapper finds the newest `~/.codex/sessions/*.jsonl` transcript and calls `signet hook session-end -H codex`.
+1. On install, Signet generates `~/.codex/CODEX.md` from identity files
+   (AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md) and patches
+   `config.toml` to always load it as `model_instructions_file`.
+2. The wrapper calls `signet hook session-start -H codex` before launching Codex.
+3. The returned dynamic context (memories, recall) is merged with the
+   persistent CODEX.md into a temporary instructions file.
+4. Codex is launched with `-c model_instructions_file=...` so the session
+   starts with full Signet context: identity + live memories.
+5. When Codex exits, the wrapper finds the newest `~/.codex/sessions/*.jsonl`
+   transcript and calls `signet hook session-end -H codex`.
 
 This gives Codex the same durable memory lifecycle as Claude Code without
-requiring Codex-specific database or schema changes.
+requiring Codex-specific database or schema changes. Even without the
+wrapper (e.g., running `codex` directly), the config.toml patch ensures
+Codex always loads Signet identity context.
 
 ### Supported hooks
 
-| Hook | Supported |
-|------|-----------|
-| session-start | yes — context injected via `model_instructions_file` |
-| user-prompt-submit | no |
-| session-end | yes — transcript path passed to daemon for memory extraction |
+| Hook | Supported | Notes |
+|------|-----------|-------|
+| session-start | yes | Context injected via `model_instructions_file` |
+| user-prompt-submit | no | Codex has no mid-session hook support |
+| pre-compaction | no | Codex has no mid-session hook support |
+| session-end | yes | Transcript path passed to daemon for memory extraction |
+
+### Memory commands
+
+Codex does not support MCP, so the Signet MCP tools are unavailable.
+Instead, the agent can use CLI commands via shell:
+
+```bash
+signet remember "context to save"
+signet recall "query"
+```
+
+These are documented in the generated CODEX.md file.
 
 ### Extraction provider
 

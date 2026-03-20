@@ -1,18 +1,8 @@
 import { spawnSync } from "node:child_process";
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
-} from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
 
 const SHELL_BLOCK_START = "# >>> signet codex >>>";
 const SHELL_BLOCK_END = "# <<< signet codex <<<";
@@ -26,6 +16,8 @@ fi
 ${SHELL_BLOCK_END}
 `;
 
+const TOML_COMMENT = "# Added by Signet — points to generated identity file";
+
 function stripBlock(content: string): string {
 	const start = content.indexOf(SHELL_BLOCK_START);
 	if (start < 0) return content;
@@ -33,7 +25,7 @@ function stripBlock(content: string): string {
 	if (end < 0) return content;
 	const after = content.slice(end + SHELL_BLOCK_END.length);
 	const before = content.slice(0, start).trimEnd();
-	return `${before}${before ? "\n\n" : ""}${after.trimStart()}`.trimEnd() + "\n";
+	return `${`${before}${before ? "\n\n" : ""}${after.trimStart()}`.trimEnd()}\n`;
 }
 
 function appendBlock(content: string): string {
@@ -73,13 +65,24 @@ session_start() {
 	: > "$START_MARKER"
 	SESSION_KEY="$(uuidgen 2>/dev/null || printf "codex-%s-%s" "$(date +%s)" "$$")"
 
+	# Start with persistent identity context if available
+	CODEX_MD="\${HOME}/.codex/CODEX.md"
+	if [ -f "$CODEX_MD" ]; then
+		cp "$CODEX_MD" "$INSTRUCTIONS_FILE"
+		printf '\\n\\n---\\n\\n' >> "$INSTRUCTIONS_FILE"
+	fi
+
+	# Append dynamic session context (live memories, recall results)
+	DYNAMIC="$TMP_ROOT/dynamic.md"
 	payload="$(printf '{"session_id":"%s","cwd":"%s"}' "$(json_escape "$SESSION_KEY")" "$(json_escape "$PWD")")"
-	if printf "%s" "$payload" | "$SIGNET_BIN" hook session-start -H codex --project "$PWD" > "$INSTRUCTIONS_FILE" 2>/dev/null; then
-		if [ ! -s "$INSTRUCTIONS_FILE" ]; then
-			rm -f "$INSTRUCTIONS_FILE"
-			INSTRUCTIONS_FILE=""
+	if printf "%s" "$payload" | "$SIGNET_BIN" hook session-start -H codex --project "$PWD" > "$DYNAMIC" 2>/dev/null; then
+		if [ -s "$DYNAMIC" ]; then
+			cat "$DYNAMIC" >> "$INSTRUCTIONS_FILE"
 		fi
-	else
+	fi
+
+	# If nothing was written at all, clear
+	if [ ! -s "$INSTRUCTIONS_FILE" ]; then
 		rm -f "$INSTRUCTIONS_FILE"
 		INSTRUCTIONS_FILE=""
 	fi
@@ -172,16 +175,27 @@ set "TMP_ROOT=%TEMP%\\signet-codex-%RANDOM%"
 mkdir "%TMP_ROOT%" >nul 2>&1
 set "INSTRUCTIONS_FILE=%TMP_ROOT%\\model-instructions.md"
 
-REM Session-start hook: build JSON via ConvertTo-Json for safe escaping of paths containing ", &, |, %
+REM Start with persistent identity context if available
+set "CODEX_MD=%USERPROFILE%\\.codex\\CODEX.md"
+if exist "%CODEX_MD%" (
+	copy /y "%CODEX_MD%" "%INSTRUCTIONS_FILE%" >nul 2>&1
+	echo. >> "%INSTRUCTIONS_FILE%"
+	echo --- >> "%INSTRUCTIONS_FILE%"
+	echo. >> "%INSTRUCTIONS_FILE%"
+)
+
+REM Session-start hook: append dynamic context
+set "DYNAMIC=%TMP_ROOT%\\dynamic.md"
 set "HOOK_OK=0"
 for /f "delims=" %%j in ('powershell ${psFlags} -Command "ConvertTo-Json @{session_id=$env:SESSION_KEY;cwd=$PWD.Path} -Compress"') do (
-	echo %%j| "%SIGNET_BIN%" hook session-start -H codex --project "%CD%" > "%INSTRUCTIONS_FILE%" 2>nul && set "HOOK_OK=1"
+	echo %%j| "%SIGNET_BIN%" hook session-start -H codex --project "%CD%" > "%DYNAMIC%" 2>nul && set "HOOK_OK=1"
 )
-if "%HOOK_OK%"=="0" (
-	set "INSTRUCTIONS_FILE="
-) else (
-	for %%A in ("%INSTRUCTIONS_FILE%") do if %%~zA==0 set "INSTRUCTIONS_FILE="
+if "%HOOK_OK%"=="1" (
+	for %%A in ("%DYNAMIC%") do if not %%~zA==0 type "%DYNAMIC%" >> "%INSTRUCTIONS_FILE%"
 )
+
+REM If nothing was written, clear instructions file
+for %%A in ("%INSTRUCTIONS_FILE%") do if %%~zA==0 set "INSTRUCTIONS_FILE="
 
 if defined INSTRUCTIONS_FILE (
 	"%REAL_CODEX_BIN%" -c "model_instructions_file=%INSTRUCTIONS_FILE%" %*
@@ -220,6 +234,10 @@ export class CodexConnector extends BaseConnector {
 		return join(homedir(), ".codex");
 	}
 
+	private getCodexMdPath(): string {
+		return join(this.getCodexHome(), "CODEX.md");
+	}
+
 	private getWrapperDir(): string {
 		return join(homedir(), ".config", "signet", "bin");
 	}
@@ -231,11 +249,7 @@ export class CodexConnector extends BaseConnector {
 
 	private getShellConfigPaths(): string[] {
 		if (process.platform === "win32") return [];
-		return [
-			join(homedir(), ".zshrc"),
-			join(homedir(), ".bashrc"),
-			join(homedir(), ".bash_profile"),
-		];
+		return [join(homedir(), ".zshrc"), join(homedir(), ".bashrc"), join(homedir(), ".bash_profile")];
 	}
 
 	getConfigPath(): string {
@@ -263,26 +277,156 @@ export class CodexConnector extends BaseConnector {
 		return null;
 	}
 
+	/**
+	 * Generate ~/.codex/CODEX.md from identity files.
+	 *
+	 * Follows the same pattern as the OpenCode connector's generateAgentsMd():
+	 * header + Signet block + user AGENTS.md content + identity extras.
+	 * Also includes CLI memory commands since Codex has no MCP support.
+	 */
+	private generateCodexMd(basePath: string): string | null {
+		const source = join(basePath, "AGENTS.md");
+		if (!existsSync(source)) return null;
+
+		const raw = readFileSync(source, "utf-8");
+		const content = this.stripSignetBlock(raw);
+		const header = this.generateHeader(source);
+		const block = this.buildSignetBlock();
+		const extras = this.composeIdentityExtras(basePath);
+
+		// Codex has no MCP — include CLI memory commands
+		const cliHint = `
+## Memory Commands (CLI)
+
+Codex does not support MCP tools. Use these shell commands instead:
+
+\`\`\`bash
+signet remember "context to save"
+signet recall "query"
+\`\`\`
+`;
+
+		const codexMd = join(this.getCodexHome(), "CODEX.md");
+		mkdirSync(this.getCodexHome(), { recursive: true });
+		writeFileSync(codexMd, header + block + content + extras + cliHint);
+		return codexMd;
+	}
+
+	/**
+	 * Patch ~/.codex/config.toml to set model_instructions_file.
+	 *
+	 * Safe behavior:
+	 * - If absent: append the key pointing to CODEX.md
+	 * - If already points to CODEX.md: no-op
+	 * - If points elsewhere: skip and return a warning
+	 */
+	private patchConfigToml(): { patched: boolean; warning?: string } {
+		const toml = this.getConfigPath();
+		const codexMd = this.getCodexMdPath();
+
+		mkdirSync(this.getCodexHome(), { recursive: true });
+
+		const existing = existsSync(toml) ? readFileSync(toml, "utf-8") : "";
+		const lines = existing.split("\n");
+
+		// Find existing model_instructions_file (only at top level, before any [section])
+		let found = false;
+		let alreadyCorrect = false;
+		let userOwned = false;
+
+		for (const line of lines) {
+			const trimmed = line.trim();
+			// Stop scanning at first section header
+			if (trimmed.startsWith("[")) break;
+			const match = trimmed.match(/^model_instructions_file\s*=\s*"?([^"]*)"?$/);
+			if (match) {
+				found = true;
+				const val = match[1].trim();
+				if (val === codexMd) {
+					alreadyCorrect = true;
+				} else {
+					userOwned = true;
+				}
+				break;
+			}
+		}
+
+		if (alreadyCorrect) return { patched: false };
+
+		if (userOwned) {
+			return {
+				patched: false,
+				warning: `config.toml already has model_instructions_file set to a custom value. Skipped patching — set it to "${codexMd}" manually to use Signet context.`,
+			};
+		}
+
+		if (!found) {
+			// Append at the top (before first section or at end if no sections)
+			let insertIdx = 0;
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i].trim().startsWith("[")) {
+					insertIdx = i;
+					break;
+				}
+				insertIdx = i + 1;
+			}
+
+			const entry = `${TOML_COMMENT}\nmodel_instructions_file = "${codexMd}"`;
+			lines.splice(insertIdx, 0, entry);
+			writeFileSync(toml, lines.join("\n"));
+			return { patched: true };
+		}
+
+		return { patched: false };
+	}
+
+	/**
+	 * Remove model_instructions_file line from config.toml if it points to CODEX.md.
+	 */
+	private unpatchConfigToml(): boolean {
+		const toml = this.getConfigPath();
+		if (!existsSync(toml)) return false;
+
+		const codexMd = this.getCodexMdPath();
+		const content = readFileSync(toml, "utf-8");
+		const lines = content.split("\n");
+		const filtered = lines.filter((line) => {
+			const trimmed = line.trim();
+			if (trimmed === TOML_COMMENT) return false;
+			const match = trimmed.match(/^model_instructions_file\s*=\s*"?([^"]*)"?$/);
+			if (match && match[1].trim() === codexMd) return false;
+			return true;
+		});
+
+		if (filtered.length === lines.length) return false;
+
+		writeFileSync(toml, filtered.join("\n"));
+		return true;
+	}
+
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
+		const warnings: string[] = [];
 		const isWindows = process.platform === "win32";
+		const expanded = basePath.startsWith("~") ? join(homedir(), basePath.slice(1)) : basePath;
 
+		// 1. Resolve real Codex binary
 		const realCodexBin = this.resolveRealCodexBin();
 		if (!realCodexBin) {
 			throw new Error("Could not find Codex CLI on PATH");
 		}
 
+		// 2. Write shell wrapper
 		const wrapperDir = this.getWrapperDir();
 		mkdirSync(wrapperDir, { recursive: true });
 
 		const wrapperPath = this.getWrapperPath();
-		const wrapperContent = isWindows
-			? buildWindowsWrapper(realCodexBin)
-			: buildWrapper(realCodexBin);
+		const wrapperContent = isWindows ? buildWindowsWrapper(realCodexBin) : buildWrapper(realCodexBin);
 		writeFileSync(wrapperPath, wrapperContent, isWindows ? {} : { mode: 0o755 });
 		filesWritten.push(wrapperPath);
 
+		// 3. Patch shell configs with PATH block
 		for (const shellPath of this.getShellConfigPaths()) {
 			const existing = existsSync(shellPath) ? readFileSync(shellPath, "utf-8") : "";
 			const next = appendBlock(existing);
@@ -292,11 +436,32 @@ export class CodexConnector extends BaseConnector {
 			}
 		}
 
+		// 4. Generate CODEX.md identity file
+		const codexMd = this.generateCodexMd(expanded);
+		if (codexMd) {
+			filesWritten.push(codexMd);
+		}
+
+		// 5. Symlink skills directory
+		const sourceSkills = join(expanded, "skills");
+		const targetSkills = join(this.getCodexHome(), "skills");
+		this.symlinkSkills(sourceSkills, targetSkills);
+
+		// 6. Patch config.toml with model_instructions_file
+		const toml = this.patchConfigToml();
+		if (toml.patched) {
+			configsPatched.push(this.getConfigPath());
+		}
+		if (toml.warning) {
+			warnings.push(toml.warning);
+		}
+
 		return {
 			success: true,
 			message: "Codex integration installed successfully",
 			filesWritten,
 			configsPatched,
+			warnings: warnings.length > 0 ? warnings : undefined,
 		};
 	}
 
@@ -304,12 +469,14 @@ export class CodexConnector extends BaseConnector {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
 
+		// Remove wrapper
 		const wrapperPath = this.getWrapperPath();
 		if (existsSync(wrapperPath)) {
 			rmSync(wrapperPath, { force: true });
 			filesRemoved.push(wrapperPath);
 		}
 
+		// Remove shell PATH blocks
 		for (const shellPath of this.getShellConfigPaths()) {
 			if (!existsSync(shellPath)) continue;
 			const existing = readFileSync(shellPath, "utf-8");
@@ -318,6 +485,18 @@ export class CodexConnector extends BaseConnector {
 				writeFileSync(shellPath, next);
 				configsPatched.push(shellPath);
 			}
+		}
+
+		// Remove CODEX.md
+		const codexMd = this.getCodexMdPath();
+		if (existsSync(codexMd)) {
+			rmSync(codexMd, { force: true });
+			filesRemoved.push(codexMd);
+		}
+
+		// Unpatch config.toml
+		if (this.unpatchConfigToml()) {
+			configsPatched.push(this.getConfigPath());
 		}
 
 		return { filesRemoved, configsPatched };
