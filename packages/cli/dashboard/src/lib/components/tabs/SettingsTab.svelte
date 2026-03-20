@@ -17,6 +17,7 @@
 	import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
 	import { nav } from "$lib/stores/navigation.svelte";
 	import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+	import { invalidateAll } from "$app/navigation";
 
 	interface Props {
 		configFiles: ConfigFile[];
@@ -118,6 +119,8 @@
 		if (st.isDirty) promises.push(st.save());
 		if (identityDirty && identityPanel) promises.push(identityPanel.save());
 		await Promise.all(promises);
+		// Refresh page-level configFiles so IdentityPanel gets fresh data
+		await invalidateAll();
 	}
 
 	function handleDiscard(): void {

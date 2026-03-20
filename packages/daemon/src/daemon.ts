@@ -8834,6 +8834,22 @@ function startFileWatcher() {
 		logger.info("watcher", "File changed", { path });
 		scheduleAutoCommit(path);
 
+		// Reload auth config when agent.yaml changes on disk
+		if (path.endsWith("agent.yaml") || path.endsWith("AGENT.yaml")) {
+			try {
+				const cfg = loadMemoryConfig(AGENTS_DIR);
+				authConfig = cfg.auth;
+				const rl = authConfig.rateLimits;
+				if (rl.forget) authForgetLimiter = new AuthRateLimiter(rl.forget.windowMs, rl.forget.max);
+				if (rl.modify) authModifyLimiter = new AuthRateLimiter(rl.modify.windowMs, rl.modify.max);
+				if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
+				if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
+				logger.info("config", "Auth config reloaded from disk");
+			} catch (e) {
+				logger.error("config", "Failed to reload auth config", e as Error);
+			}
+		}
+
 		// If any identity file changed, sync to harness configs
 		const SYNC_TRIGGER_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
 		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f))) {

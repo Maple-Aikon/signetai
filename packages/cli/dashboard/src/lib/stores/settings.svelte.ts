@@ -1,4 +1,4 @@
-import { type ConfigFile, saveConfigFileResult } from "$lib/api";
+import { type ConfigFile, getConfigFiles, saveConfigFileResult } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { parse, stringify } from "yaml";
 
@@ -416,6 +416,14 @@ class SettingsStore {
 
 			if (successfulFiles.length > 0) {
 				this.lastSavedAt = new Date().toISOString();
+				// Re-fetch from disk and re-init so store matches persisted state
+				try {
+					const fresh = await getConfigFiles();
+					this.lastInitSource = null;
+					this.init(fresh);
+				} catch {
+					// Non-fatal — store still holds the just-saved state
+				}
 			}
 
 			if (failed.length === 0 && successfulFiles.length > 0) {
