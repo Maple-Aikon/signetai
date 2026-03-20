@@ -12,16 +12,7 @@
  *   extract user message → hybrid recall → atomic write to live file
  */
 
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	renameSync,
-	statSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { type FSWatcher, watch } from "chokidar";
@@ -35,15 +26,11 @@ import { logger } from "./logger";
 export interface CodexLiveRecallConfig {
 	readonly enabled: boolean;
 	readonly debounceMs: number;
-	readonly maxResults: number;
-	readonly charBudget: number;
 }
 
 const DEFAULTS: CodexLiveRecallConfig = {
 	enabled: true,
 	debounceMs: 300,
-	maxResults: 5,
-	charBudget: 800,
 };
 
 export function resolveConfig(raw?: Partial<CodexLiveRecallConfig>): CodexLiveRecallConfig {
@@ -51,8 +38,6 @@ export function resolveConfig(raw?: Partial<CodexLiveRecallConfig>): CodexLiveRe
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULTS.enabled,
 		debounceMs: typeof raw.debounceMs === "number" && raw.debounceMs > 0 ? raw.debounceMs : DEFAULTS.debounceMs,
-		maxResults: typeof raw.maxResults === "number" && raw.maxResults > 0 ? raw.maxResults : DEFAULTS.maxResults,
-		charBudget: typeof raw.charBudget === "number" && raw.charBudget > 0 ? raw.charBudget : DEFAULTS.charBudget,
 	};
 }
 
@@ -178,11 +163,7 @@ function writeLiveContext(memories: string, sessionKey: string): void {
 // Memory recall
 // ---------------------------------------------------------------------------
 
-async function recallForMessage(
-	message: string,
-	session: TrackedSession,
-	config: CodexLiveRecallConfig,
-): Promise<void> {
+async function recallForMessage(message: string, session: TrackedSession): Promise<void> {
 	// Dedup: skip if same message hash
 	const hash = simpleHash(message);
 	if (hash === session.lastUserHash) return;
@@ -227,39 +208,20 @@ function simpleHash(s: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Find the newest JSONL file in the sessions directory that was created
- * after the session was registered.
+ * Try to associate a newly appeared JSONL file with an unbound session.
+ * Uses chokidar's `add` event rather than date-path inference, avoiding
+ * the midnight rollover bug where date directories change between
+ * session registration and transcript creation.
  */
-function discoverTranscript(session: TrackedSession): string | null {
-	if (session.transcriptPath && existsSync(session.transcriptPath)) {
-		return session.transcriptPath;
+function tryBindTranscript(path: string): TrackedSession | null {
+	// Find the most recently registered session without a transcript
+	for (const [, s] of sessions) {
+		if (!s.transcriptPath) {
+			s.transcriptPath = path;
+			return s;
+		}
 	}
-
-	const dir = sessionsDir();
-	if (!existsSync(dir)) return null;
-
-	// Walk the date-based directory structure to find the newest file
-	try {
-		const now = new Date();
-		const year = now.getFullYear().toString();
-		const month = String(now.getMonth() + 1).padStart(2, "0");
-		const day = String(now.getDate()).padStart(2, "0");
-		const todayDir = join(dir, year, month, day);
-
-		if (!existsSync(todayDir)) return null;
-
-		const files = readdirSync(todayDir)
-			.filter((f: string) => f.endsWith(".jsonl"))
-			.sort()
-			.reverse();
-
-		if (files.length === 0) return null;
-
-		// Return the newest file
-		return join(todayDir, files[0]);
-	} catch {
-		return null;
-	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,17 +243,8 @@ function handleTranscriptChange(path: string): void {
 	}
 
 	if (!session) {
-		// Try to match by discovery (new file appeared)
-		for (const [, s] of sessions) {
-			if (!s.transcriptPath) {
-				const discovered = discoverTranscript(s);
-				if (discovered === path) {
-					s.transcriptPath = path;
-					session = s;
-					break;
-				}
-			}
-		}
+		// New file appeared — try to bind it to an unbound session
+		session = tryBindTranscript(path);
 	}
 
 	if (!session) return;
@@ -320,7 +273,7 @@ async function processTranscriptUpdate(path: string, session: TrackedSession): P
 
 	// Process the latest user message only (most relevant for recall)
 	const latest = messages[messages.length - 1];
-	await recallForMessage(latest, session, activeConfig);
+	await recallForMessage(latest, session);
 }
 
 // ---------------------------------------------------------------------------

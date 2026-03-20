@@ -81,10 +81,14 @@ session_start() {
 		fi
 	fi
 
-	# Append live recall instruction for interactive sessions
-	if [ -n "$INSTRUCTIONS_FILE" ] || [ -f "$CODEX_MD" ]; then
-		# Ensure file exists even if previous steps wrote nothing
-		: >> "$INSTRUCTIONS_FILE"
+	# If nothing was written at all, clear
+	if [ ! -s "$INSTRUCTIONS_FILE" ]; then
+		rm -f "$INSTRUCTIONS_FILE"
+		INSTRUCTIONS_FILE=""
+	fi
+
+	# Append live recall instruction only when there is real content
+	if [ -n "$INSTRUCTIONS_FILE" ] && [ -s "$INSTRUCTIONS_FILE" ]; then
 		cat >> "$INSTRUCTIONS_FILE" << 'LIVE_RECALL'
 
 ## Live Memory (Auto-Updated by Signet)
@@ -96,12 +100,6 @@ updated after each user message. If the file exists and has content,
 incorporate any relevant memories into your response. The file includes
 a timestamp — ignore it if older than 60 seconds.
 LIVE_RECALL
-	fi
-
-	# If nothing was written at all, clear
-	if [ ! -s "$INSTRUCTIONS_FILE" ]; then
-		rm -f "$INSTRUCTIONS_FILE"
-		INSTRUCTIONS_FILE=""
 	fi
 }
 
@@ -205,7 +203,9 @@ set "CODEX_MD=%USERPROFILE%\\.codex\\CODEX.md"
 if exist "%CODEX_MD%" (
 	copy /y "%CODEX_MD%" "%INSTRUCTIONS_FILE%" >nul 2>&1
 	echo. >> "%INSTRUCTIONS_FILE%"
+	echo. >> "%INSTRUCTIONS_FILE%"
 	echo --- >> "%INSTRUCTIONS_FILE%"
+	echo. >> "%INSTRUCTIONS_FILE%"
 	echo. >> "%INSTRUCTIONS_FILE%"
 )
 
@@ -378,7 +378,9 @@ signet recall "query"
 			const trimmed = line.trim();
 			// Stop scanning at first section header
 			if (trimmed.startsWith("[")) break;
-			const match = trimmed.match(/^model_instructions_file\s*=\s*"?([^"]*)"?$/);
+			// Strip inline comments before matching (TOML allows `key = "val" # comment`)
+			const stripped = trimmed.replace(/\s*#.*$/, "").trim();
+			const match = stripped.match(/^model_instructions_file\s*=\s*"?([^"]*?)"?$/);
 			if (match) {
 				found = true;
 				const val = match[1].trim();
@@ -417,6 +419,7 @@ signet recall "query"
 			return { patched: true };
 		}
 
+		// All branches (alreadyCorrect, userOwned, !found) return above
 		return { patched: false };
 	}
 
@@ -433,7 +436,9 @@ signet recall "query"
 		const filtered = lines.filter((line) => {
 			const trimmed = line.trim();
 			if (trimmed === TOML_COMMENT) return false;
-			const match = trimmed.match(/^model_instructions_file\s*=\s*"?([^"]*)"?$/);
+			// Strip inline comments before matching (TOML allows trailing `# comment`)
+			const stripped = trimmed.replace(/\s*#.*$/, "").trim();
+			const match = stripped.match(/^model_instructions_file\s*=\s*"?([^"]*?)"?$/);
 			if (match && match[1].trim() === codexMd) return false;
 			return true;
 		});
@@ -485,7 +490,11 @@ signet recall "query"
 		// 5. Symlink skills directory
 		const sourceSkills = join(expanded, "skills");
 		const targetSkills = join(this.getCodexHome(), "skills");
-		this.symlinkSkills(sourceSkills, targetSkills);
+		const symlink = this.symlinkSkills(sourceSkills, targetSkills);
+		if (symlink.errors.length > 0) {
+			const msgs = symlink.errors.map((e) => `${e.path}: ${e.error}`);
+			warnings.push(`Skills symlink failed: ${msgs.join("; ")}`);
+		}
 
 		// 6. Patch config.toml with model_instructions_file
 		const toml = this.patchConfigToml();

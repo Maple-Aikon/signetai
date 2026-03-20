@@ -6125,7 +6125,7 @@ hookCmd
 hookCmd
 	.command("codex-watch-start")
 	.description("Start live recall watcher for a Codex session")
-	.requiredOption("-H, --harness <harness>", "Harness name")
+	.option("-H, --harness <harness>", "Harness name")
 	.action(async () => {
 		let body: Record<string, string> = {};
 		try {

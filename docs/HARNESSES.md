@@ -195,7 +195,8 @@ be disabled in `agent.yaml`:
 memory:
   pipelineV2:
     codexLiveRecall:
-      enabled: false
+      enabled: false   # disable live recall
+      debounceMs: 300  # ms to wait after transcript change before recalling
 ```
 
 ### Memory commands
