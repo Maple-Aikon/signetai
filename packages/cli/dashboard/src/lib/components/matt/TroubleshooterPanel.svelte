@@ -34,7 +34,7 @@
 			id: "cli",
 			title: "CLI",
 			icon: Terminal,
-			color: "var(--sig-electric)",
+			color: "var(--sig-highlight)",
 			commands: [
 				{ label: "Status", kind: "cli", key: "status" },
 				{ label: "Daemon Status", kind: "cli", key: "daemon-status" },
@@ -50,7 +50,7 @@
 			id: "status",
 			title: "Status",
 			icon: Activity,
-			color: "var(--sig-success)",
+			color: "var(--sig-highlight)",
 			commands: [
 				{ label: "Health", kind: "api", method: "GET", path: "/health" },
 				{ label: "Diagnostics", kind: "api", method: "GET", path: "/api/diagnostics" },
@@ -64,7 +64,7 @@
 			id: "info",
 			title: "Info",
 			icon: Info,
-			color: "var(--sig-warning, #e8a832)",
+			color: "var(--sig-highlight)",
 			commands: [
 				{ label: "Embed Gaps", kind: "api", method: "GET", path: "/api/repair/embedding-gaps" },
 				{ label: "Dedup Stats", kind: "api", method: "GET", path: "/api/repair/dedup-stats" },
@@ -75,7 +75,7 @@
 			id: "repair",
 			title: "Repair",
 			icon: Wrench,
-			color: "var(--sig-danger)",
+			color: "var(--sig-highlight)",
 			commands: [
 				{ label: "Check FTS", kind: "api", method: "POST", path: "/api/repair/check-fts" },
 				{ label: "Re-embed", kind: "api", method: "POST", path: "/api/repair/re-embed" },

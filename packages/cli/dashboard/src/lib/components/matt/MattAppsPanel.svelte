@@ -191,7 +191,6 @@
 		background: var(--sig-surface);
 		border: 1px solid transparent;
 		border-radius: 10px;
-		cursor: pointer;
 		transition:
 			background var(--dur) var(--ease),
 			border-color var(--dur) var(--ease),
