@@ -12,6 +12,7 @@
 		fetchWidgetHtml,
 		onWidgetGenerated,
 		widgetHtmlCache,
+		findFreeGridPosition,
 		type GridPosition,
 	} from "$lib/stores/os.svelte";
 	import { API_BASE } from "$lib/api";
@@ -19,30 +20,6 @@
 	import AppDock from "$lib/components/os/AppDock.svelte";
 	import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-
-	const GRID_COLS = 12;
-
-	/** Find the first free grid position that can fit a widget of the given size. */
-	function findFreeGridPosition(
-		occupied: Array<{ x: number; y: number; w: number; h: number }>,
-		size: { w: number; h: number },
-	): GridPosition {
-		const collides = (x: number, y: number, w: number, h: number): boolean => {
-			for (const o of occupied) {
-				if (x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y) return true;
-			}
-			return false;
-		};
-		for (let y = 0; y < 50; y++) {
-			for (let x = 0; x <= GRID_COLS - size.w; x++) {
-				if (!collides(x, y, size.w, size.h)) {
-					return { x, y, w: size.w, h: size.h };
-				}
-			}
-		}
-		const maxY = occupied.reduce((max, o) => Math.max(max, o.y + o.h), 0);
-		return { x: 0, y: maxY, w: size.w, h: size.h };
-	}
 
 	const trayApps = $derived(getTrayApps());
 	const gridApps = $derived(getGridApps());

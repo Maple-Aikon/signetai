@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
 	import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
-	import { os, updateGridPosition, moveToTray, collapseWidget } from "$lib/stores/os.svelte";
+	import { os, updateGridPosition, moveToTray, collapseWidget, findFreeGridPosition } from "$lib/stores/os.svelte";
 	import WidgetCard from "./WidgetCard.svelte";
 
 	interface Props {
@@ -103,51 +103,12 @@
 		window.addEventListener("pointerup", onUp);
 	}
 
-	/** Check if two grid positions overlap */
-	function collides(a: GridPosition, b: GridPosition): boolean {
-		return !(
-			a.x + a.w <= b.x ||
-			b.x + b.w <= a.x ||
-			a.y + a.h <= b.y ||
-			b.y + b.h <= a.y
-		);
-	}
-
-	/** Check if a position collides with any placed widget (excluding a given id) */
-	function hasCollision(pos: GridPosition, excludeId: string): boolean {
-		return apps.some(
-			(a) => a.id !== excludeId && a.gridPosition && collides(pos, a.gridPosition),
-		);
-	}
-
 	/** Find the nearest non-colliding position by spiraling outward */
 	function findFreePosition(desired: GridPosition, excludeId: string): GridPosition {
-		if (!hasCollision(desired, excludeId)) return desired;
-
-		// Try positions in expanding rings around the desired spot
-		for (let radius = 1; radius <= 20; radius++) {
-			for (let dy = -radius; dy <= radius; dy++) {
-				for (let dx = -radius; dx <= radius; dx++) {
-					if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue; // Only ring edges
-					const candidate: GridPosition = {
-						x: Math.max(0, Math.min(GRID_COLS - desired.w, desired.x + dx)),
-						y: Math.max(0, desired.y + dy),
-						w: desired.w,
-						h: desired.h,
-					};
-					if (!hasCollision(candidate, excludeId)) return candidate;
-				}
-			}
-		}
-
-		// Fallback: push below all existing widgets
-		let maxBottom = 0;
-		for (const a of apps) {
-			if (a.id !== excludeId && a.gridPosition) {
-				maxBottom = Math.max(maxBottom, a.gridPosition.y + a.gridPosition.h);
-			}
-		}
-		return { x: desired.x, y: maxBottom, w: desired.w, h: desired.h };
+		const occupied = apps.flatMap((a) =>
+			a.id !== excludeId && a.gridPosition ? [a.gridPosition] : [],
+		);
+		return findFreeGridPosition(occupied, { w: desired.w, h: desired.h }, { x: desired.x, y: desired.y });
 	}
 
 	function commitDrag(): void {

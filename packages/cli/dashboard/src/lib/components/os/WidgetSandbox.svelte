@@ -98,7 +98,7 @@
 	}
 
 	function postToWidget(msg: Record<string, unknown>): void {
-		iframe?.contentWindow?.postMessage(msg, "*");
+		iframe?.contentWindow?.postMessage(msg, window.location.origin);
 	}
 
 	onMount(() => {

@@ -1,7 +1,6 @@
 /** Widget API routes — generation, retrieval, and deletion of LLM-generated widgets. */
 
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 

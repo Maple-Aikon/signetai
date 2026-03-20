@@ -168,7 +168,12 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
     }
   };
 
+  var expectedOrigin = (document.location.ancestorOrigins && document.location.ancestorOrigins.length > 0)
+    ? document.location.ancestorOrigins[0]
+    : null;
+
   window.addEventListener('message', function(e) {
+    if (expectedOrigin && e.origin !== expectedOrigin) return;
     var d = e.data;
     if (!d || typeof d.type !== 'string') return;
     if (d.type === 'signet:result' && pending.has(d.id)) {
@@ -204,7 +209,7 @@ export function buildSrcdoc(html: string, serverId: string): string {
 <style>${theme}\n${WIDGET_BASE_CSS}</style>
 <script>${WIDGET_BRIDGE_SCRIPT}<\/script>
 </head>
-<body data-server-id="${serverId}">
+<body data-server-id="${serverId.replace(/"/g, '&quot;')}">
 ${html}
 </body>
 </html>`;

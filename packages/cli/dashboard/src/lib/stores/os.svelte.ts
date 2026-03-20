@@ -129,19 +129,53 @@ export function getDockApps(): AppTrayEntry[] {
 
 const GRID_COLS = 12;
 
-function findFreePosition(
+/**
+ * Find a free grid position for a widget of the given size.
+ *
+ * Uses a ring-spiral scan outward from a desired origin (defaults to 0,0)
+ * so that widgets cluster near the top-left rather than filling row-by-row.
+ * Falls back to placing below all existing widgets if no gap is found
+ * within 20 rings.
+ */
+export function findFreeGridPosition(
 	occupied: readonly GridPosition[],
 	size: { w: number; h: number },
+	desired?: { x: number; y: number },
 ): GridPosition {
-	for (let y = 0; y < 50; y++) {
-		for (let x = 0; x <= GRID_COLS - size.w; x++) {
-			const candidate = { x, y, w: size.w, h: size.h };
-			const hit = occupied.some(
-				(o) => x < o.x + o.w && x + size.w > o.x && y < o.y + o.h && y + size.h > o.y,
-			);
-			if (!hit) return candidate;
+	const originX = desired?.x ?? 0;
+	const originY = desired?.y ?? 0;
+
+	function collides(x: number, y: number, w: number, h: number): boolean {
+		for (const o of occupied) {
+			if (x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Check origin first
+	const clampedX = Math.max(0, Math.min(GRID_COLS - size.w, originX));
+	const clampedY = Math.max(0, originY);
+	if (!collides(clampedX, clampedY, size.w, size.h)) {
+		return { x: clampedX, y: clampedY, w: size.w, h: size.h };
+	}
+
+	// Spiral outward in expanding rings
+	for (let radius = 1; radius <= 20; radius++) {
+		for (let dy = -radius; dy <= radius; dy++) {
+			for (let dx = -radius; dx <= radius; dx++) {
+				if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+				const cx = Math.max(0, Math.min(GRID_COLS - size.w, originX + dx));
+				const cy = Math.max(0, originY + dy);
+				if (!collides(cx, cy, size.w, size.h)) {
+					return { x: cx, y: cy, w: size.w, h: size.h };
+				}
+			}
 		}
 	}
+
+	// Fallback: place below all existing widgets
 	const bottom = occupied.reduce((max, o) => Math.max(max, o.y + o.h), 0);
 	return { x: 0, y: bottom, w: size.w, h: size.h };
 }
@@ -212,7 +246,7 @@ export async function moveToGrid(
 		e.id !== id && e.state === "grid" && e.gridPosition ? [e.gridPosition] : [],
 	);
 
-	const pos = findFreePosition(occupied, size);
+	const pos = findFreeGridPosition(occupied, size);
 	return updateAppState(id, "grid", pos);
 }
 
