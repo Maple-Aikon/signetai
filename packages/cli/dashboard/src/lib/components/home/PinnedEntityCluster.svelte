@@ -28,10 +28,10 @@
 				const data = await res.json();
 				const results = (data.memories ?? []) as SpotlightMemory[];
 				const valid = results
-					.filter((r) => typeof r.id === "string" && r.id.length > 0)
+					.filter((r) => typeof r.id === "string" && r.id.length > 0 && typeof r.content === "string")
 					.map((r) => ({
 						id: r.id,
-						content: r.content,
+						content: r.content ?? "",
 						access_count: r.access_count ?? 0,
 						importance: r.importance ?? 0.5,
 					}));
