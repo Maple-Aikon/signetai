@@ -7237,23 +7237,25 @@ app.post("/api/troubleshoot/exec", async (c) => {
 				write({ type: "stderr", data: chunk.toString("utf-8") });
 			});
 
-			child.on("close", (code) => {
-				write({ type: "exit", code: code ?? 1 });
-				try { controller.close(); } catch {}
-			});
-
-			child.on("error", (err) => {
-				write({ type: "error", message: err.message });
-				try { controller.close(); } catch {}
-			});
-
 			// 60s timeout — SIGTERM first, force kill after 5s
-			setTimeout(() => {
+			const killTimer = setTimeout(() => {
 				try { child.kill("SIGTERM"); } catch {}
 				setTimeout(() => {
 					try { child.kill(); } catch {}
 				}, 5_000);
 			}, 60_000);
+
+			child.on("close", (code) => {
+				clearTimeout(killTimer);
+				write({ type: "exit", code: code ?? 1 });
+				try { controller.close(); } catch {}
+			});
+
+			child.on("error", (err) => {
+				clearTimeout(killTimer);
+				write({ type: "error", message: err.message });
+				try { controller.close(); } catch {}
+			});
 		},
 	});
 

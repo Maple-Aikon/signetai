@@ -8,7 +8,6 @@
 		refreshMarketplaceMcpTools,
 	} from "$lib/stores/marketplace-mcp.svelte";
 	import { getMonogram, getMonogramBg, getAvatarFromSource } from "$lib/card-utils";
-	import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 	import Server from "@lucide/svelte/icons/server";
@@ -30,13 +29,6 @@
 		refreshing = false;
 	}
 
-	let detailOpen = $state(false);
-	let detailServer = $state<(typeof mcpMarket.installed)[number] | null>(null);
-
-	function openDetail(server: (typeof mcpMarket.installed)[number]): void {
-		detailServer = server;
-		detailOpen = true;
-	}
 </script>
 
 <div class="apps-panel">
@@ -66,11 +58,7 @@
 		<div class="apps-flow">
 			{#each mcpMarket.installed as server (server.id)}
 				{@const avatar = getAvatarFromSource(server.source, server.catalogId)}
-				<button
-					class="app-card"
-					type="button"
-					onclick={() => openDetail(server)}
-				>
+				<div class="app-card">
 					<div class="app-icon" style={`background: ${avatar && !avatarErrors.has(server.id) ? 'transparent' : getMonogramBg(server.name)};`}>
 						{#if avatar && !avatarErrors.has(server.id)}
 							<img
@@ -105,7 +93,7 @@
 							{mcpMarket.removingId === server.id ? "..." : "Remove"}
 						</Button>
 					</div>
-				</button>
+				</div>
 			{/each}
 		</div>
 	{/if}

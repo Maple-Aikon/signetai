@@ -272,19 +272,21 @@
 			"90": "var(--sig-text-muted)",
 			"36": "var(--sig-accent)",
 		};
-		let result = text;
+		// Escape all HTML first to prevent XSS, then apply styling
+		let result = escapeHtml(text);
+		// Process ANSI color codes (now operating on escaped text)
 		result = result.replace(/\x1b\[(\d+)m([\s\S]*?)\x1b\[0m/g, (_, code, content) => {
 			const color = colors[code];
-			if (color) return `<span style="color:${color}">${escapeHtml(content)}</span>`;
-			if (code === "1") return `<strong>${escapeHtml(content)}</strong>`;
-			return escapeHtml(content);
+			if (color) return `<span style="color:${color}">${content}</span>`;
+			if (code === "1") return `<strong>${content}</strong>`;
+			return content;
 		});
 		result = result.replace(/\x1b\[\d+m/g, "");
-		// JSON syntax highlighting for non-ANSI content
-		result = result.replace(/("(?:\\.|[^"\\])*")\s*:/g, '<span style="color:var(--sig-accent)">$1</span>:');
-		result = result.replace(/:\s*("(?:\\.|[^"\\])*")(?=[,\n\r}\]])/g, ': <span style="color:var(--sig-success)">$1</span>');
-		result = result.replace(/:\s*(true|false|null)(?=[,\n\r}\]])/g, ': <span style="color:var(--sig-warning, #e8a832)">$1</span>');
-		result = result.replace(/:\s*(\d+\.?\d*)(?=[,\n\r}\]])/g, ': <span style="color:var(--sig-highlight-text)">$1</span>');
+		// JSON syntax highlighting (content already escaped — safe to wrap in spans)
+		result = result.replace(/(&quot;(?:\\.|[^&])*?&quot;)\s*:/g, (_, key) => `<span style="color:var(--sig-accent)">${key}</span>:`);
+		result = result.replace(/:\s*(&quot;(?:\\.|[^&])*?&quot;)(?=[,\n\r}\]])/g, (_, val) => `: <span style="color:var(--sig-success)">${val}</span>`);
+		result = result.replace(/:\s*(true|false|null)(?=[,\n\r}\]])/g, (_, val) => `: <span style="color:var(--sig-warning, #e8a832)">${val}</span>`);
+		result = result.replace(/:\s*(\d+\.?\d*)(?=[,\n\r}\]])/g, (_, val) => `: <span style="color:var(--sig-highlight-text)">${val}</span>`);
 		return result;
 	}
 </script>

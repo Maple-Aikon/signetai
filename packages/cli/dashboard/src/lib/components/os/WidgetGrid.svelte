@@ -122,22 +122,23 @@
 			return;
 		}
 		const cellWidth = gridWidth / GRID_COLS;
-		const dx = dragOffsetX / cellWidth;
-		const dy = dragOffsetY / ROW_HEIGHT;
+		const dx = Math.round(dragOffsetX / cellWidth);
+		const dy = Math.round(dragOffsetY / ROW_HEIGHT);
 
-		if (Math.abs(dx) < 0.15 && Math.abs(dy) < 0.15) {
+		if (dx === 0 && dy === 0) {
 			dragId = null;
 			return;
 		}
 
-		// Use exact fractional position — no rounding, no snapping
-		const pos: GridPosition = {
+		const desired: GridPosition = {
 			x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
 			y: Math.max(0, app.gridPosition.y + dy),
 			w: app.gridPosition.w,
 			h: app.gridPosition.h,
 		};
 
+		// Resolve collisions so widgets don't stack
+		const pos = findFreePosition(desired, app.id);
 		updateGridPosition(app.id, pos);
 		dragId = null;
 		dragOffsetX = 0;
