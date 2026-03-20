@@ -9,6 +9,7 @@ import {
 	nav,
 	isEngineGroup,
 	isMemoryGroup,
+	isMattGroup,
 	setTab,
 } from "$lib/stores/navigation.svelte";
 import {
@@ -40,6 +41,7 @@ function isSidebarItem(value: string): value is SidebarFocusItem {
 
 export const ENGINE_TABS = ["settings", "pipeline", "predictor", "connectors", "logs"] as const;
 export const MEMORY_TABS = ["memory", "timeline", "knowledge", "embeddings"] as const;
+export const MATT_TABS = ["matt-memory", "matt-apps", "matt-tasks", "matt-troubleshooter"] as const;
 
 // --- State ---
 
@@ -49,6 +51,8 @@ export const tabFocus = $state({
 	engineIndex: 0,
 	memoryFocus: "tabs" as "tabs" | "content",
 	memoryIndex: 0,
+	mattFocus: "tabs" as "tabs" | "content",
+	mattIndex: 0,
 });
 
 // --- Focus functions ---
@@ -85,6 +89,22 @@ export function focusMemoryContent(): void {
 	focusFirstPageElement();
 }
 
+export function focusMattTab(index: number): void {
+	tabFocus.mattIndex = index;
+	tabFocus.mattFocus = "tabs";
+	setTab(MATT_TABS[index]);
+
+	const tabButton = document.querySelector(`[data-matt-tab="${MATT_TABS[index]}"]`);
+	if (tabButton instanceof HTMLElement) {
+		tabButton.focus();
+	}
+}
+
+export function focusMattContent(): void {
+	tabFocus.mattFocus = "content";
+	focusFirstPageElement();
+}
+
 // --- Window event handlers ---
 
 export function handleGlobalKey(e: KeyboardEvent): void {
@@ -102,7 +122,8 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 
 	if (focus.zone === "page-content" &&
 		((isEngineGroup(activeTab) && tabFocus.engineFocus === "content") ||
-		 (isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content"))) {
+		 (isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content") ||
+		 (isMattGroup(activeTab) && tabFocus.mattFocus === "content"))) {
 		// Already in content mode -- keep keyboardNavActive as-is
 	} else {
 		tabFocus.keyboardNavActive = true;
@@ -115,6 +136,9 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 	} else if (isMemoryGroup(activeTab)) {
 		const liveIndex = indexOfString(MEMORY_TABS, activeTab);
 		if (liveIndex !== -1) tabFocus.memoryIndex = liveIndex;
+	} else if (isMattGroup(activeTab)) {
+		const liveIndex = indexOfString(MATT_TABS, activeTab);
+		if (liveIndex !== -1) tabFocus.mattIndex = liveIndex;
 	}
 
 	// Escape from page content
@@ -133,6 +157,8 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 				focusEngineTab(tabFocus.engineIndex);
 			} else if (isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content") {
 				focusMemoryTab(tabFocus.memoryIndex);
+			} else if (isMattGroup(activeTab) && tabFocus.mattFocus === "content") {
+				focusMattTab(tabFocus.mattIndex);
 			} else {
 				returnToSidebar();
 			}
@@ -188,6 +214,31 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 			}
 		}
 	}
+
+	// Matt tab group navigation
+	if (isMattGroup(activeTab) && focus.zone === "page-content" && !e.defaultPrevented) {
+		if (tabFocus.mattFocus === "tabs") {
+			if (e.key === "ArrowLeft") {
+				e.preventDefault();
+				if (tabFocus.mattIndex === 0) {
+					returnToSidebar();
+				} else {
+					focusMattTab(tabFocus.mattIndex - 1);
+				}
+			} else if (e.key === "ArrowRight") {
+				e.preventDefault();
+				focusMattTab((tabFocus.mattIndex + 1) % MATT_TABS.length);
+			} else if (e.key === "ArrowDown") {
+				e.preventDefault();
+				focusMattContent();
+			}
+		} else if (tabFocus.mattFocus === "content") {
+			if (e.key === "ArrowUp") {
+				e.preventDefault();
+				focusMattTab(tabFocus.mattIndex);
+			}
+		}
+	}
 }
 
 export function handleFocusIn(e: FocusEvent): void {
@@ -235,6 +286,21 @@ export function handleFocusIn(e: FocusEvent): void {
 		return;
 	}
 
+	const mattTab = target.closest('[data-matt-tab]');
+	if (mattTab) {
+		if (focus.zone !== 'page-content') {
+			setFocusZone('page-content');
+		}
+		const rawTabName = mattTab.getAttribute('data-matt-tab');
+		if (rawTabName === null) return;
+		const index = indexOfString(MATT_TABS, rawTabName);
+		if (index !== -1) {
+			tabFocus.mattIndex = index;
+			tabFocus.mattFocus = "tabs";
+		}
+		return;
+	}
+
 	const pageContent = target.closest('[data-page-content="true"]');
 	if (pageContent && focus.zone !== 'page-content') {
 		setFocusZone('page-content');
@@ -251,6 +317,12 @@ export function handleFocusIn(e: FocusEvent): void {
 			if (index !== -1) {
 				tabFocus.memoryIndex = index;
 				tabFocus.memoryFocus = "content";
+			}
+		} else if (isMattGroup(activeTab)) {
+			const index = indexOfString(MATT_TABS, activeTab);
+			if (index !== -1) {
+				tabFocus.mattIndex = index;
+				tabFocus.mattFocus = "content";
 			}
 		}
 		return;
@@ -273,6 +345,7 @@ export function handlePageClick(e: MouseEvent): void {
 
 	const clickedEngineTab = target.closest('[data-engine-tab]');
 	const clickedMemoryTab = target.closest('[data-memory-tab]');
+	const clickedMattTab = target.closest('[data-matt-tab]');
 
 	if (isEngineGroup(activeTab)) {
 		const index = indexOfString(ENGINE_TABS, activeTab);
@@ -285,6 +358,12 @@ export function handlePageClick(e: MouseEvent): void {
 		if (index !== -1) {
 			tabFocus.memoryIndex = index;
 			tabFocus.memoryFocus = clickedMemoryTab ? "tabs" : "content";
+		}
+	} else if (isMattGroup(activeTab)) {
+		const index = indexOfString(MATT_TABS, activeTab);
+		if (index !== -1) {
+			tabFocus.mattIndex = index;
+			tabFocus.mattFocus = clickedMattTab ? "tabs" : "content";
 		}
 	}
 }
@@ -300,11 +379,16 @@ export function initTabGroupEffects(): () => void {
 	const handleEngineFocusTabs = () => {
 		focusEngineTab(tabFocus.engineIndex);
 	};
+	const handleMattFocusTabs = () => {
+		focusMattTab(tabFocus.mattIndex);
+	};
 	window.addEventListener("memory-focus-tabs", handleMemoryFocusTabs);
 	window.addEventListener("engine-focus-tabs", handleEngineFocusTabs);
+	window.addEventListener("matt-focus-tabs", handleMattFocusTabs);
 
 	return () => {
 		window.removeEventListener("memory-focus-tabs", handleMemoryFocusTabs);
 		window.removeEventListener("engine-focus-tabs", handleEngineFocusTabs);
+		window.removeEventListener("matt-focus-tabs", handleMattFocusTabs);
 	};
 }

@@ -211,6 +211,22 @@ const {
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
+{:else if activeTab === "matt-memory" || activeTab === "matt-apps" || activeTab === "matt-tasks" || activeTab === "matt-troubleshooter"}
+	{#await import("$lib/components/tabs/MattTab.svelte")}
+		{@render skeletonCards()}
+	{:then module}
+		<module.default
+			{activeTab}
+			memories={displayMemories}
+			{memoryStats}
+			{harnesses}
+			{daemonStatus}
+			{onopenglobalsimilar}
+			{ontimelinegeneratedforchange}
+		/>
+	{:catch error}
+		{@render skeletonError(error)}
+	{/await}
 {/if}
 </div>
 {/key}

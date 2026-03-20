@@ -22,7 +22,11 @@ export type TabId =
 	| "connectors"
 	| "predictor"
 	| "changelog"
-	| "os";
+	| "os"
+	| "matt-memory"
+	| "matt-apps"
+	| "matt-tasks"
+	| "matt-troubleshooter";
 
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"home",
@@ -40,14 +44,23 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"predictor",
 	"changelog",
 	"os",
+	"matt-memory",
+	"matt-apps",
+	"matt-tasks",
+	"matt-troubleshooter",
 ]);
 
 // Alias map for path-style hashes (e.g. #memory/constellation -> embeddings)
 const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
-	["memory/constellation", "embeddings"],
-	["memory/timeline", "timeline"],
-	["memory/knowledge", "knowledge"],
-	["memory/memories", "memory"],
+	["memory/constellation", "matt-memory"],
+	["memory/timeline", "matt-memory"],
+	["memory/knowledge", "matt-memory"],
+	["memory/memories", "matt-memory"],
+	["matt", "matt-memory"],
+	["matt/memory", "matt-memory"],
+	["matt/apps", "matt-apps"],
+	["matt/tasks", "matt-tasks"],
+	["matt/troubleshooter", "matt-troubleshooter"],
 	["engine/settings", "settings"],
 	["engine/pipeline", "pipeline"],
 	["engine/predictor", "predictor"],
@@ -82,17 +95,27 @@ const ENGINE_TABS: ReadonlySet<TabId> = new Set([
 	"connectors",
 	"logs",
 ]);
+const MATT_TABS: ReadonlySet<TabId> = new Set([
+	"matt-memory",
+	"matt-apps",
+	"matt-tasks",
+	"matt-troubleshooter",
+]);
 
-export type NavGroup = "memory" | "engine";
+export type NavGroup = "memory" | "engine" | "matt";
 
 const lastMemoryTab = $state({ value: "memory" as TabId });
 const lastEngineTab = $state({ value: "settings" as TabId });
+const lastMattTab = $state({ value: "matt-memory" as TabId });
 
 export function isMemoryGroup(tab: TabId): boolean {
 	return MEMORY_TABS.has(tab);
 }
 export function isEngineGroup(tab: TabId): boolean {
 	return ENGINE_TABS.has(tab);
+}
+export function isMattGroup(tab: TabId): boolean {
+	return MATT_TABS.has(tab);
 }
 
 export function setTab(tab: TabId): boolean {
@@ -101,6 +124,7 @@ export function setTab(tab: TabId): boolean {
 	nav.activeTab = tab;
 	if (MEMORY_TABS.has(tab)) lastMemoryTab.value = tab;
 	if (ENGINE_TABS.has(tab)) lastEngineTab.value = tab;
+	if (MATT_TABS.has(tab)) lastMattTab.value = tab;
 	if (typeof window !== "undefined") {
 		history.replaceState(null, "", `#${tab}`);
 	}
@@ -108,6 +132,7 @@ export function setTab(tab: TabId): boolean {
 }
 
 export function navigateToGroup(group: NavGroup): boolean {
+	if (group === "matt") return setTab(lastMattTab.value);
 	const tab =
 		group === "memory" ? lastMemoryTab.value : lastEngineTab.value;
 	return setTab(tab);

@@ -66,6 +66,22 @@ export const PAGE_HEADERS = {
 		title: "Apps",
 		eyebrow: "Signet OS — MCP app dashboard",
 	},
+	"matt-memory": {
+		title: "Matt",
+		eyebrow: "Memory index and knowledge graph",
+	},
+	"matt-apps": {
+		title: "Matt",
+		eyebrow: "Installed apps and tool servers",
+	},
+	"matt-tasks": {
+		title: "Matt",
+		eyebrow: "Scheduled agent prompts",
+	},
+	"matt-troubleshooter": {
+		title: "Matt",
+		eyebrow: "Diagnostics and repair terminal",
+	},
 } as const satisfies Record<TabId, PageHeaderDefinition>;
 
 // --- Tab group item arrays (drives TabGroupBar rendering) ---
@@ -83,6 +99,13 @@ export const ENGINE_TAB_ITEMS = [
 	{ id: "predictor", label: "Predictor" },
 	{ id: "connectors", label: "Connectors" },
 	{ id: "logs", label: "Logs" },
+] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
+
+export const MATT_TAB_ITEMS = [
+	{ id: "matt-memory", label: "Memory" },
+	{ id: "matt-apps", label: "Apps" },
+	{ id: "matt-tasks", label: "Tasks" },
+	{ id: "matt-troubleshooter", label: "Troubleshooter" },
 ] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
 
 // --- Footer definitions ---
@@ -108,4 +131,8 @@ export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
 	connectors: { left: "platform harnesses + data sources", right: "connector health" },
 	changelog: { left: "project docs + release history", right: "github.com/Signet-AI/signetai" },
 	os: { left: "MCP app dashboard", right: "drag apps from tray to grid" },
+	"matt-memory": { left: "Memory", right: "search, timeline, knowledge, constellation" },
+	"matt-apps": { left: "Apps", right: "installed tool servers" },
+	"matt-tasks": { left: "Tasks", right: "scheduled agent prompts" },
+	"matt-troubleshooter": { left: "Troubleshooter", right: "diagnostics and repair" },
 };

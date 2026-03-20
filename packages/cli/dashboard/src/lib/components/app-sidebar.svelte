@@ -5,6 +5,7 @@ import {
 	type TabId,
 	isEngineGroup,
 	isMemoryGroup,
+	isMattGroup,
 	nav,
 	navigateToGroup,
 	setTab,
@@ -24,10 +25,9 @@ import Cog from "@lucide/svelte/icons/cog";
 import ExternalLink from "@lucide/svelte/icons/external-link";
 import Github from "@lucide/svelte/icons/github";
 import House from "@lucide/svelte/icons/house";
-import ListChecks from "@lucide/svelte/icons/list-checks";
+import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
 import Moon from "@lucide/svelte/icons/moon";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
-import LayoutGrid from "@lucide/svelte/icons/layout-grid";
 import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
 import { onMount } from "svelte";
@@ -57,21 +57,19 @@ const {
 const sidebar = useSidebar();
 
 function maybePrefetchEmbeddings(id: string): void {
-	if (id !== "memory") return;
+	if (id !== "matt") return;
 	onprefetchembeddings?.();
 }
 
 type NavItem =
 	| { id: TabId; label: string; icon: typeof Brain; group?: undefined }
-	| { id: string; label: string; icon: typeof Brain; group: "memory" | "engine" };
+	| { id: string; label: string; icon: typeof Brain; group: "memory" | "engine" | "matt" };
 
 const navItems: NavItem[] = [
 	{ id: "home", label: "Home", icon: House },
-	{ id: "os", label: "Apps", icon: LayoutGrid },
-	{ id: "memory-group", label: "Memory", icon: Brain, group: "memory" },
+	{ id: "matt-group", label: "Matt", icon: LayoutDashboard, group: "matt" },
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },
-	{ id: "tasks", label: "Tasks", icon: ListChecks },
 	{ id: "engine-group", label: "Engine", icon: Cog, group: "engine" },
 ];
 
@@ -86,6 +84,7 @@ function openProjectPage(): void {
 function isActive(item: NavItem): boolean {
 	if (item.group === "memory") return isMemoryGroup(nav.activeTab);
 	if (item.group === "engine") return isEngineGroup(nav.activeTab);
+	if (item.group === "matt") return isMattGroup(nav.activeTab);
 	return nav.activeTab === item.id;
 }
 
