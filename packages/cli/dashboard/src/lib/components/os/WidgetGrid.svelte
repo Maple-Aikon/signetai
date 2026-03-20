@@ -122,24 +122,21 @@
 			return;
 		}
 		const cellWidth = gridWidth / GRID_COLS;
-		const dx = Math.round(dragOffsetX / cellWidth);
-		const dy = Math.round(dragOffsetY / ROW_HEIGHT);
+		const dx = dragOffsetX / cellWidth;
+		const dy = dragOffsetY / ROW_HEIGHT;
 
-		if (dx === 0 && dy === 0) {
+		if (Math.abs(dx) < 0.15 && Math.abs(dy) < 0.15) {
 			dragId = null;
 			return;
 		}
 
-		const desired: GridPosition = {
+		// Free placement — widget lands exactly where the user drops it
+		updateGridPosition(app.id, {
 			x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
 			y: Math.max(0, app.gridPosition.y + dy),
 			w: app.gridPosition.w,
 			h: app.gridPosition.h,
-		};
-
-		// Resolve collisions so widgets don't stack
-		const pos = findFreePosition(desired, app.id);
-		updateGridPosition(app.id, pos);
+		});
 		dragId = null;
 		dragOffsetX = 0;
 		dragOffsetY = 0;
