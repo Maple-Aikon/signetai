@@ -81,6 +81,23 @@ session_start() {
 		fi
 	fi
 
+	# Append live recall instruction for interactive sessions
+	if [ -n "$INSTRUCTIONS_FILE" ] || [ -f "$CODEX_MD" ]; then
+		# Ensure file exists even if previous steps wrote nothing
+		: >> "$INSTRUCTIONS_FILE"
+		cat >> "$INSTRUCTIONS_FILE" << 'LIVE_RECALL'
+
+## Live Memory (Auto-Updated by Signet)
+
+IMPORTANT: Before responding to each user message, read the file at
+~/.codex/.signet-live-context.md — it contains memories recalled by
+Signet that are relevant to the current conversation. This file is
+updated after each user message. If the file exists and has content,
+incorporate any relevant memories into your response. The file includes
+a timestamp — ignore it if older than 60 seconds.
+LIVE_RECALL
+	fi
+
 	# If nothing was written at all, clear
 	if [ ! -s "$INSTRUCTIONS_FILE" ]; then
 		rm -f "$INSTRUCTIONS_FILE"
@@ -118,6 +135,14 @@ fi
 trap 'cleanup' EXIT
 
 session_start
+
+# Register for live recall watching (interactive mode only, not codex exec)
+case "\${1:-}" in
+	exec) ;;
+	*)
+		printf '{"sessionKey":"%s","project":"%s"}' "$(json_escape "$SESSION_KEY")" "$(json_escape "$PWD")" | "$SIGNET_BIN" hook codex-watch-start -H codex >/dev/null 2>&1 &
+		;;
+esac
 
 set +e
 if [ -n "$INSTRUCTIONS_FILE" ]; then
@@ -194,8 +219,23 @@ if "%HOOK_OK%"=="1" (
 	for %%A in ("%DYNAMIC%") do if not %%~zA==0 type "%DYNAMIC%" >> "%INSTRUCTIONS_FILE%"
 )
 
+REM Append live recall instruction
+if defined INSTRUCTIONS_FILE (
+	echo. >> "%INSTRUCTIONS_FILE%"
+	echo ## Live Memory ^(Auto-Updated by Signet^) >> "%INSTRUCTIONS_FILE%"
+	echo. >> "%INSTRUCTIONS_FILE%"
+	echo IMPORTANT: Before responding to each user message, read the file at >> "%INSTRUCTIONS_FILE%"
+	echo ~/.codex/.signet-live-context.md for memories relevant to the current >> "%INSTRUCTIONS_FILE%"
+	echo conversation. Incorporate relevant memories into your response. >> "%INSTRUCTIONS_FILE%"
+)
+
 REM If nothing was written, clear instructions file
 for %%A in ("%INSTRUCTIONS_FILE%") do if %%~zA==0 set "INSTRUCTIONS_FILE="
+
+REM Register for live recall watching (interactive mode only)
+if not "%1"=="exec" (
+	powershell ${psFlags} -Command "ConvertTo-Json @{sessionKey=$env:SESSION_KEY;project=$PWD.Path} -Compress | & $env:SIGNET_BIN hook codex-watch-start -H codex" >nul 2>&1
+)
 
 if defined INSTRUCTIONS_FILE (
 	"%REAL_CODEX_BIN%" -c "model_instructions_file=%INSTRUCTIONS_FILE%" %*

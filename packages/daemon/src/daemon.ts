@@ -5038,6 +5038,13 @@ import {
 	unbypassSession,
 } from "./session-tracker.js";
 
+import {
+	registerCodexSession,
+	startCodexTranscriptWatcher,
+	stopCodexTranscriptWatcher,
+	unregisterCodexSession,
+} from "./codex-transcript-watcher.js";
+
 /** Read the runtime path from header or body, preferring header. */
 function resolveRuntimePath(c: Context, body?: { runtimePath?: string }): RuntimePath | undefined {
 	const header = c.req.header("x-signet-runtime-path");
@@ -5232,10 +5239,28 @@ app.post("/api/hooks/session-end", async (c) => {
 		if (sessionKey) {
 			releaseSession(sessionKey);
 			removeAgentPresence(sessionKey);
+			unregisterCodexSession(sessionKey);
 		}
 	}
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// Codex live recall — register a session for transcript watching
+app.post("/api/hooks/codex-watch-start", async (c) => {
+	try {
+		const body = (await c.req.json()) as { sessionKey?: string; project?: string };
+		const sessionKey = body.sessionKey;
+		const project = body.project || "";
+		if (!sessionKey) {
+			return c.json({ error: "sessionKey is required" }, 400);
+		}
+		registerCodexSession(sessionKey, project);
+		return c.json({ success: true });
+	} catch (e) {
+		logger.error("hooks", "Codex watch start failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
 	}
 });
@@ -9456,6 +9481,8 @@ async function cleanup() {
 
 	closeDbAccessor();
 
+	stopCodexTranscriptWatcher();
+
 	if (watcher) {
 		watcher.close();
 	}
@@ -9522,6 +9549,10 @@ async function main() {
 	// Start file watcher
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
+
+	// Start Codex transcript watcher for live recall
+	startCodexTranscriptWatcher();
+	logger.info("watcher", "Codex transcript watcher initialized");
 
 	// Ensure SIGNET-ARCHITECTURE.md exists on startup (file watcher uses
 	// ignoreInitial:true so it won't recreate missing files on its own)

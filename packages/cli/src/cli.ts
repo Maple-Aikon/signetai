@@ -6121,6 +6121,44 @@ hookCmd
 		}
 	});
 
+// signet hook codex-watch-start — register Codex session for live recall
+hookCmd
+	.command("codex-watch-start")
+	.description("Start live recall watcher for a Codex session")
+	.requiredOption("-H, --harness <harness>", "Harness name")
+	.action(async () => {
+		let body: Record<string, string> = {};
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of process.stdin) {
+				chunks.push(chunk);
+			}
+			const input = Buffer.concat(chunks).toString("utf-8").trim();
+			if (input) {
+				body = JSON.parse(input);
+			}
+		} catch {
+			// No stdin or invalid JSON
+		}
+
+		const data = await fetchFromDaemon<{
+			success?: boolean;
+			error?: string;
+		}>("/api/hooks/codex-watch-start", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionKey: body.sessionKey || body.session_key,
+				project: body.project || body.cwd,
+			}),
+		});
+
+		if (!data) {
+			// Daemon not running — fail silently (fire-and-forget from wrapper)
+			process.exit(0);
+		}
+	});
+
 // signet hook pre-compaction
 hookCmd
 	.command("pre-compaction")

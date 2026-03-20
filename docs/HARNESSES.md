@@ -174,9 +174,29 @@ Codex always loads Signet identity context.
 | Hook | Supported | Notes |
 |------|-----------|-------|
 | session-start | yes | Context injected via `model_instructions_file` |
-| user-prompt-submit | no | Codex has no mid-session hook support |
+| user-prompt-submit | best-effort | Live recall via transcript watcher (see below) |
 | pre-compaction | no | Codex has no mid-session hook support |
 | session-end | yes | Transcript path passed to daemon for memory extraction |
+
+### Live recall (transcript watcher)
+
+For interactive Codex sessions (`codex` without `exec`), the daemon
+watches the session transcript file in real-time. When a new user
+message is detected, the daemon runs a hybrid memory recall and writes
+the results to `~/.codex/.signet-live-context.md`. The model
+instructions file includes an instruction for Codex to read this file
+before each response.
+
+This is **best-effort** — Codex follows the file-read instruction most
+of the time but not always. The feature is enabled by default and can
+be disabled in `agent.yaml`:
+
+```yaml
+memory:
+  pipelineV2:
+    codexLiveRecall:
+      enabled: false
+```
 
 ### Memory commands
 
