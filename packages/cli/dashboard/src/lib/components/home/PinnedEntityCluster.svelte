@@ -26,9 +26,14 @@
 			const res = await fetch(`${API_BASE}/api/memories/most-used?limit=50`);
 			if (res.ok) {
 				const data = await res.json();
-				const results = data.memories ?? [];
+				const results = (data.memories ?? []) as SpotlightMemory[];
 				if (results.length > 0) {
-					items = results;
+					items = results.map((r) => ({
+						id: r.id,
+						content: r.content,
+						access_count: r.access_count ?? 0,
+						importance: r.importance ?? 0.5,
+					}));
 					loaded = true;
 					return;
 				}

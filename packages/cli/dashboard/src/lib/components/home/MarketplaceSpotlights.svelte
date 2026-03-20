@@ -57,7 +57,8 @@
 		return null;
 	}
 
-	function handleClick(entry: SpotlightEntry): void {
+	function handleClick(_entry: SpotlightEntry): void {
+		// Both skills and MCP servers live on the "skills" (Marketplace) tab
 		nav.activeTab = "skills";
 	}
 </script>

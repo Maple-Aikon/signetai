@@ -1728,7 +1728,8 @@ app.get("/api/memories", (c) => {
 
 app.get("/api/memories/most-used", (c) => {
 	try {
-		const limit = Number.parseInt(c.req.query("limit") || "6", 10);
+		const raw = Number.parseInt(c.req.query("limit") || "6", 10);
+		const limit = Number.isNaN(raw) || raw < 1 ? 6 : Math.min(raw, 200);
 		const memories = getDbAccessor().withReadDb((db) =>
 			db
 				.prepare(`
