@@ -8840,6 +8840,7 @@ function startFileWatcher() {
 			try {
 				const cfg = loadMemoryConfig(AGENTS_DIR);
 				if (!cfg.auth) throw new Error("Missing auth section in agent.yaml");
+				if (!cfg.auth.rateLimits) throw new Error("Missing rateLimits in auth config");
 				authConfig = cfg.auth;
 				const rl = authConfig.rateLimits;
 				authForgetLimiter = rl.forget ? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max) : new AuthRateLimiter(60_000, 30);
