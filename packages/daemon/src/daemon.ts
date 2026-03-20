@@ -8835,10 +8835,11 @@ function startFileWatcher() {
 		scheduleAutoCommit(path);
 
 		// Reload auth config when agent.yaml changes on disk
-		const base = path.split("/").pop();
+		const base = basename(path);
 		if (base === "agent.yaml" || base === "AGENT.yaml") {
 			try {
 				const cfg = loadMemoryConfig(AGENTS_DIR);
+				if (!cfg.auth) throw new Error("Missing auth section in agent.yaml");
 				authConfig = cfg.auth;
 				const rl = authConfig.rateLimits;
 				authForgetLimiter = rl.forget ? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max) : new AuthRateLimiter(60_000, 30);
