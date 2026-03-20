@@ -89,17 +89,17 @@ function extractNewUserMessages(path: string, session: TrackedSession): string[]
 
 	if (size <= session.lastOffset) return [];
 
-	let content: string;
+	let buf: Buffer;
 	try {
-		// Read full file and slice from last offset. The transcript is
-		// append-only so previously parsed bytes never change.
-		content = readFileSync(path, "utf-8");
+		// Read full file as buffer so offset tracking uses bytes (matching
+		// statSync.size) rather than UTF-16 code units from string.length.
+		buf = readFileSync(path);
 	} catch {
 		return [];
 	}
 
-	const chunk = content.slice(session.lastOffset);
-	session.lastOffset = content.length;
+	const chunk = buf.subarray(session.lastOffset).toString("utf-8");
+	session.lastOffset = buf.length;
 
 	const messages: string[] = [];
 	for (const line of chunk.split(/\r?\n/)) {
@@ -212,16 +212,33 @@ function simpleHash(s: string): string {
  * Uses chokidar's `add` event rather than date-path inference, avoiding
  * the midnight rollover bug where date directories change between
  * session registration and transcript creation.
+ *
+ * When multiple unbound sessions exist (rare — parallel interactive Codex
+ * windows), binds to the most recently registered one and logs a warning.
  */
 function tryBindTranscript(path: string): TrackedSession | null {
-	// Find the most recently registered session without a transcript
+	// Collect all unbound sessions (Map preserves insertion order)
+	let candidate: TrackedSession | null = null;
+	let unboundCount = 0;
 	for (const [, s] of sessions) {
 		if (!s.transcriptPath) {
-			s.transcriptPath = path;
-			return s;
+			candidate = s;
+			unboundCount++;
 		}
 	}
-	return null;
+
+	if (!candidate) return null;
+
+	if (unboundCount > 1) {
+		logger.warn("codex-watcher", "Multiple unbound sessions at bind time", {
+			unboundCount,
+			boundTo: candidate.sessionKey,
+			path,
+		});
+	}
+
+	candidate.transcriptPath = path;
+	return candidate;
 }
 
 // ---------------------------------------------------------------------------

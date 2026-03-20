@@ -219,7 +219,10 @@ if "%HOOK_OK%"=="1" (
 	for %%A in ("%DYNAMIC%") do if not %%~zA==0 type "%DYNAMIC%" >> "%INSTRUCTIONS_FILE%"
 )
 
-REM Append live recall instruction
+REM If nothing was written, clear instructions file
+for %%A in ("%INSTRUCTIONS_FILE%") do if %%~zA==0 set "INSTRUCTIONS_FILE="
+
+REM Append live recall instruction only when there is real content
 if defined INSTRUCTIONS_FILE (
 	echo. >> "%INSTRUCTIONS_FILE%"
 	echo ## Live Memory ^(Auto-Updated by Signet^) >> "%INSTRUCTIONS_FILE%"
@@ -228,9 +231,6 @@ if defined INSTRUCTIONS_FILE (
 	echo ~/.codex/.signet-live-context.md for memories relevant to the current >> "%INSTRUCTIONS_FILE%"
 	echo conversation. Incorporate relevant memories into your response. >> "%INSTRUCTIONS_FILE%"
 )
-
-REM If nothing was written, clear instructions file
-for %%A in ("%INSTRUCTIONS_FILE%") do if %%~zA==0 set "INSTRUCTIONS_FILE="
 
 REM Register for live recall watching (interactive mode only)
 if not "%1"=="exec" (
