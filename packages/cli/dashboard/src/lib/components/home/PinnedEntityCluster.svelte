@@ -27,13 +27,16 @@
 			if (res.ok) {
 				const data = await res.json();
 				const results = (data.memories ?? []) as SpotlightMemory[];
-				if (results.length > 0) {
-					items = results.map((r) => ({
+				const valid = results
+					.filter((r) => typeof r.id === "string" && r.id.length > 0)
+					.map((r) => ({
 						id: r.id,
 						content: r.content,
 						access_count: r.access_count ?? 0,
 						importance: r.importance ?? 0.5,
 					}));
+				if (valid.length > 0) {
+					items = valid;
 					loaded = true;
 					return;
 				}
