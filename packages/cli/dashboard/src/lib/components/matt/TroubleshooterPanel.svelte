@@ -91,6 +91,7 @@
 				{ label: "Prune Singletons", kind: "api", method: "POST", path: "/api/repair/prune-singleton-entities" },
 				{ label: "Stop Daemon", kind: "cli", key: "daemon-stop" },
 				{ label: "Restart Daemon", kind: "cli", key: "daemon-restart" },
+				{ label: "Update Signet", kind: "cli", key: "update" },
 			],
 		},
 	];

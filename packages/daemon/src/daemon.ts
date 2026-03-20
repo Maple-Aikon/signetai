@@ -7183,6 +7183,7 @@ const TROUBLESHOOT_COMMANDS: Record<string, readonly [string, ReadonlyArray<stri
 	"secret-list": ["signet", ["secret", "list"]],
 	"daemon-stop": ["signet", ["daemon", "stop"]],
 	"daemon-restart": ["signet", ["daemon", "restart"]],
+	"update": ["signet", ["update", "install"]],
 };
 
 app.get("/api/troubleshoot/commands", (c) => {
