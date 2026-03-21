@@ -12,42 +12,43 @@ import { getSynthesisProvider } from "../synthesis-llm.js";
 import { getWidgetProvider } from "../widget-llm.js";
 import { getSecret } from "../secrets.js";
 
-/** Cached API key to avoid re-decrypting each call */
+/** Cached API key */
 let cachedApiKey: string | null = null;
 
 /**
- * Direct Anthropic API call — bypasses the provider abstraction
- * for reliability (claude-code provider shells out and can fail).
+ * Call OpenAI API (GPT-4o) for chat routing.
+ * Falls back through: OPENAI_API_KEY env → signet secrets.
  */
-async function callAnthropic(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
+async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
 	if (!cachedApiKey) {
-		cachedApiKey = process.env.ANTHROPIC_API_KEY || await getSecret("ANTHROPIC_API_KEY").catch(() => "");
+		cachedApiKey = process.env.OPENAI_API_KEY || await getSecret("OPENAI_API_KEY").catch(() => "");
 	}
 	const apiKey = cachedApiKey;
-	if (!apiKey) throw new Error("ANTHROPIC_API_KEY not found in env or secrets");
+	if (!apiKey) throw new Error("OPENAI_API_KEY not found in env or secrets");
 
-	const res = await fetch("https://api.anthropic.com/v1/messages", {
+	const res = await fetch("https://api.openai.com/v1/chat/completions", {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
-			"x-api-key": apiKey,
-			"anthropic-version": "2023-06-01",
+			"Authorization": `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify({
-			model: "claude-sonnet-4-20250514",
+			model: "gpt-4o",
 			max_tokens: maxTokens,
-			system: systemPrompt,
-			messages: [{ role: "user", content: userMessage }],
+			messages: [
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: userMessage },
+			],
 		}),
 	});
 
 	if (!res.ok) {
 		const errText = await res.text();
-		throw new Error(`Anthropic API ${res.status}: ${errText.slice(0, 200)}`);
+		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
 	}
 
-	const data = await res.json() as { content: Array<{ type: string; text: string }> };
-	return data.content?.[0]?.text ?? "";
+	const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+	return data.choices?.[0]?.message?.content ?? "";
 }
 import { loadProbeResult } from "../mcp-probe.js";
 
@@ -197,7 +198,7 @@ export function mountOsChatRoutes(app: Hono): void {
 				availableTools: tools.length,
 			});
 
-			const rawResponse = await callAnthropic(systemPrompt, body.message);
+			const rawResponse = await callLlm(systemPrompt, body.message);
 
 			const parsed = parseLlmResponse(rawResponse);
 
@@ -269,7 +270,7 @@ ${resultsText}
 Now give a concise, natural language summary of the results for the user. Be specific — mention names, numbers, and key details. No JSON, just a friendly response.`;
 
 					try {
-						const summary = await callAnthropic(
+						const summary = await callLlm(
 							"You are the Signet OS agent. Summarize tool results concisely and conversationally. Mention specific names, numbers, and details. No JSON.",
 							followUp,
 							1024,
