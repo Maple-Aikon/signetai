@@ -10,6 +10,38 @@ import type { Hono } from "hono";
 import { logger } from "../logger.js";
 import { getSynthesisProvider } from "../synthesis-llm.js";
 import { getWidgetProvider } from "../widget-llm.js";
+
+/**
+ * Direct Anthropic API call — bypasses the provider abstraction
+ * for reliability (claude-code provider shells out and can fail).
+ */
+async function callAnthropic(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
+	const apiKey = process.env.ANTHROPIC_API_KEY;
+	if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+
+	const res = await fetch("https://api.anthropic.com/v1/messages", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"x-api-key": apiKey,
+			"anthropic-version": "2023-06-01",
+		},
+		body: JSON.stringify({
+			model: "claude-sonnet-4-20250514",
+			max_tokens: maxTokens,
+			system: systemPrompt,
+			messages: [{ role: "user", content: userMessage }],
+		}),
+	});
+
+	if (!res.ok) {
+		const errText = await res.text();
+		throw new Error(`Anthropic API ${res.status}: ${errText.slice(0, 200)}`);
+	}
+
+	const data = await res.json() as { content: Array<{ type: string; text: string }> };
+	return data.content?.[0]?.text ?? "";
+}
 import { loadProbeResult } from "../mcp-probe.js";
 
 interface ChatRequest {
@@ -150,34 +182,15 @@ export function mountOsChatRoutes(app: Hono): void {
 				});
 			}
 
-			// Get LLM provider — try synthesis first, fall back to widget provider
-			let llmProvider;
-			try {
-				llmProvider = getSynthesisProvider();
-			} catch {
-				try {
-					llmProvider = getWidgetProvider();
-				} catch {
-					return c.json({
-						response: `I can see ${tools.length} tools across your MCP servers, but no LLM provider is available. Check your agent.yaml synthesis settings.`,
-						toolCalls: [],
-					});
-				}
-			}
-
-			// Build prompt and call LLM
+			// Build prompt and call Anthropic API directly
 			const systemPrompt = buildSystemPrompt(tools);
-			const fullPrompt = `${systemPrompt}\n\nUser message: "${body.message}"`;
 
 			logger.info("os-chat", `Processing chat message`, {
 				message: body.message.slice(0, 100),
 				availableTools: tools.length,
 			});
 
-			const rawResponse = await llmProvider.generate(fullPrompt, {
-				maxTokens: 2048,
-				timeoutMs: 30000,
-			});
+			const rawResponse = await callAnthropic(systemPrompt, body.message);
 
 			const parsed = parseLlmResponse(rawResponse);
 
@@ -249,10 +262,11 @@ ${resultsText}
 Now give a concise, natural language summary of the results for the user. Be specific — mention names, numbers, and key details. No JSON, just a friendly response.`;
 
 					try {
-						const summary = await llmProvider.generate(followUp, {
-							maxTokens: 1024,
-							timeoutMs: 20000,
-						});
+						const summary = await callAnthropic(
+							"You are the Signet OS agent. Summarize tool results concisely and conversationally. Mention specific names, numbers, and details. No JSON.",
+							followUp,
+							1024,
+						);
 						return c.json({
 							response: summary.trim(),
 							toolCalls: toolCallResults,
