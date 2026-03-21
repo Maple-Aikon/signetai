@@ -101,7 +101,10 @@ function gatherAvailableTools(): ToolSpec[] {
  * and how to respond.
  */
 function buildSystemPrompt(tools: ToolSpec[]): string {
-	const toolList = tools
+	// Filter out view_* tools — they return HTML widgets, not data.
+	// The chat should use fetch_* tools for data retrieval.
+	const dataTools = tools.filter((t) => !t.toolName.startsWith("view_") && !t.toolName.startsWith("check_"));
+	const toolList = dataTools
 		.map((t) => `- ${t.serverId}/${t.toolName}: ${t.description}`)
 		.join("\n");
 
@@ -139,18 +142,15 @@ function parseLlmResponse(raw: string): {
 	toolCalls: Array<{ serverId: string; toolName: string; args: Record<string, unknown> }>;
 	response: string;
 } {
-	// Strip markdown fences if present
 	let cleaned = raw.trim();
-	if (cleaned.startsWith("```json")) {
-		cleaned = cleaned.slice(7);
-	} else if (cleaned.startsWith("```")) {
-		cleaned = cleaned.slice(3);
-	}
-	if (cleaned.endsWith("```")) {
-		cleaned = cleaned.slice(0, -3);
-	}
+
+	// Strip markdown fences
+	if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
+	else if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
+	if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
 	cleaned = cleaned.trim();
 
+	// Try direct JSON parse
 	try {
 		const parsed = JSON.parse(cleaned);
 		return {
@@ -159,7 +159,21 @@ function parseLlmResponse(raw: string): {
 			response: typeof parsed.response === "string" ? parsed.response : cleaned,
 		};
 	} catch {
-		// If JSON parsing fails, treat the whole thing as a plain response
+		// Try to extract JSON from within the text (LLM might wrap it in explanation)
+		const jsonMatch = cleaned.match(/\{[\s\S]*"toolCalls"[\s\S]*\}/);
+		if (jsonMatch) {
+			try {
+				const parsed = JSON.parse(jsonMatch[0]);
+				return {
+					thinking: parsed.thinking,
+					toolCalls: Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [],
+					response: typeof parsed.response === "string" ? parsed.response : jsonMatch[0],
+				};
+			} catch {
+				// Fall through
+			}
+		}
+		// Last resort — treat entire response as plain text
 		return { toolCalls: [], response: cleaned };
 	}
 }
