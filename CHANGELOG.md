@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.69.3] - 2026-03-21
+
+### Bug Fixes
+
+- use npm tauri CLI instead of cargo plugin in tray scripts (#254)
+
+
 ## [0.69.2] - 2026-03-20
 
 ### Bug Fixes
