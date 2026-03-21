@@ -68,6 +68,7 @@ interface ToolSpec {
 	serverName: string;
 	toolName: string;
 	description: string;
+	inputSchema?: unknown;
 }
 
 /**
@@ -89,6 +90,7 @@ function gatherAvailableTools(): ToolSpec[] {
 				serverName: probe.autoCard.name || server.name,
 				toolName: tool.name,
 				description: tool.description || "",
+				inputSchema: tool.inputSchema,
 			});
 		}
 	}
@@ -105,7 +107,10 @@ function buildSystemPrompt(tools: ToolSpec[]): string {
 	// The chat should use fetch_* tools for data retrieval.
 	const dataTools = tools.filter((t) => !t.toolName.startsWith("view_") && !t.toolName.startsWith("check_"));
 	const toolList = dataTools
-		.map((t) => `- ${t.serverId}/${t.toolName}: ${t.description}`)
+		.map((t) => {
+			const schemaStr = t.inputSchema ? ` Args: ${JSON.stringify(t.inputSchema).slice(0, 200)}` : "";
+			return `- ${t.serverId}/${t.toolName}: ${t.description}${schemaStr}`;
+		})
 		.join("\n");
 
 	return `You are Oogie — Jake's AI assistant living inside the Signet OS dashboard. You're direct, a little dorky, self-deprecating, and genuinely helpful. Use keyboard emojis like (╯°□°)╯ or ᕕ( ᐛ )ᕗ occasionally. Never use unicode emojis. Keep it casual and conversational — you're chatting with Jake, not writing a report.
@@ -130,6 +135,8 @@ Rules:
 - For GHL servers: "convos" = conversations, "contacts" = contacts, "deals" = pipeline opportunities
 - Use fetch_* tools for data retrieval, view_* tools return HTML widgets (prefer fetch_*)
 - If something fails, own it — "my bad, that didn't work" not "I apologize for the inconvenience"
+- When creating contacts: split full names into firstName + lastName. MUST include email (generate one like firstname.lastname@example.com if not provided). GHL requires email or phone.
+- Tool args must match the schema exactly — use camelCase field names (firstName, lastName, companyName, etc.)
 
 Respond with ONLY the JSON object, no markdown fences.`;
 }
@@ -227,7 +234,9 @@ export function mountOsChatRoutes(app: Hono): void {
 
 				for (const call of parsed.toolCalls.slice(0, 5)) { // Max 5 tool calls
 					try {
-						logger.info("os-chat", `Calling tool ${call.serverId}/${call.toolName}`);
+						logger.info("os-chat", `Calling tool ${call.serverId}/${call.toolName}`, {
+						args: JSON.stringify(call.args || {}).slice(0, 500),
+					});
 
 						// Call the tool via the marketplace /mcp/call endpoint internally
 						const callRes = await fetch(`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`, {
