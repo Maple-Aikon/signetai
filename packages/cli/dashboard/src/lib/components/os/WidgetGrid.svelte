@@ -130,13 +130,15 @@
 			return;
 		}
 
-		// Free placement — widget lands exactly where the user drops it
-		updateGridPosition(app.id, {
+		// Free placement with collision avoidance — land where dropped unless overlapping
+		const desired: GridPosition = {
 			x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
 			y: Math.max(0, app.gridPosition.y + dy),
 			w: app.gridPosition.w,
 			h: app.gridPosition.h,
-		});
+		};
+		const resolved = findFreePosition(desired, app.id);
+		updateGridPosition(app.id, resolved);
 		dragId = null;
 		dragOffsetX = 0;
 		dragOffsetY = 0;
