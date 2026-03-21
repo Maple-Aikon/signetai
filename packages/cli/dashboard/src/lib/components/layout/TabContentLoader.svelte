@@ -211,8 +211,8 @@ const {
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
-{:else if activeTab === "matt-memory" || activeTab === "matt-apps" || activeTab === "matt-tasks" || activeTab === "matt-troubleshooter"}
-	{#await import("$lib/components/tabs/MattTab.svelte")}
+{:else if activeTab === "cortex-memory" || activeTab === "cortex-apps" || activeTab === "cortex-tasks" || activeTab === "cortex-troubleshooter"}
+	{#await import("$lib/components/tabs/CortexTab.svelte")}
 		{@render skeletonCards()}
 	{:then module}
 		<module.default

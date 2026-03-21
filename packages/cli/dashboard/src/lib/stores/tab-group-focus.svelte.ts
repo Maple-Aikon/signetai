@@ -9,7 +9,7 @@ import {
 	nav,
 	isEngineGroup,
 	isMemoryGroup,
-	isMattGroup,
+	isCortexGroup,
 	setTab,
 } from "$lib/stores/navigation.svelte";
 import {
@@ -41,7 +41,7 @@ function isSidebarItem(value: string): value is SidebarFocusItem {
 
 export const ENGINE_TABS = ["settings", "pipeline", "predictor", "connectors", "logs"] as const;
 export const MEMORY_TABS = ["memory", "timeline", "knowledge", "embeddings"] as const;
-export const MATT_TABS = ["matt-memory", "matt-apps", "matt-tasks", "matt-troubleshooter"] as const;
+export const CORTEX_TABS = ["cortex-memory", "cortex-apps", "cortex-tasks", "cortex-troubleshooter"] as const;
 
 // --- State ---
 
@@ -51,8 +51,8 @@ export const tabFocus = $state({
 	engineIndex: 0,
 	memoryFocus: "tabs" as "tabs" | "content",
 	memoryIndex: 0,
-	mattFocus: "tabs" as "tabs" | "content",
-	mattIndex: 0,
+	cortexFocus: "tabs" as "tabs" | "content",
+	cortexIndex: 0,
 });
 
 // --- Focus functions ---
@@ -89,19 +89,19 @@ export function focusMemoryContent(): void {
 	focusFirstPageElement();
 }
 
-export function focusMattTab(index: number): void {
-	tabFocus.mattIndex = index;
-	tabFocus.mattFocus = "tabs";
-	setTab(MATT_TABS[index]);
+export function focusCortexTab(index: number): void {
+	tabFocus.cortexIndex = index;
+	tabFocus.cortexFocus = "tabs";
+	setTab(CORTEX_TABS[index]);
 
-	const tabButton = document.querySelector(`[data-matt-tab="${MATT_TABS[index]}"]`);
+	const tabButton = document.querySelector(`[data-cortex-tab="${CORTEX_TABS[index]}"]`);
 	if (tabButton instanceof HTMLElement) {
 		tabButton.focus();
 	}
 }
 
-export function focusMattContent(): void {
-	tabFocus.mattFocus = "content";
+export function focusCortexContent(): void {
+	tabFocus.cortexFocus = "content";
 	focusFirstPageElement();
 }
 
@@ -123,7 +123,7 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 	if (focus.zone === "page-content" &&
 		((isEngineGroup(activeTab) && tabFocus.engineFocus === "content") ||
 		 (isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content") ||
-		 (isMattGroup(activeTab) && tabFocus.mattFocus === "content"))) {
+		 (isCortexGroup(activeTab) && tabFocus.cortexFocus === "content"))) {
 		// Already in content mode -- keep keyboardNavActive as-is
 	} else {
 		tabFocus.keyboardNavActive = true;
@@ -136,9 +136,9 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 	} else if (isMemoryGroup(activeTab)) {
 		const liveIndex = indexOfString(MEMORY_TABS, activeTab);
 		if (liveIndex !== -1) tabFocus.memoryIndex = liveIndex;
-	} else if (isMattGroup(activeTab)) {
-		const liveIndex = indexOfString(MATT_TABS, activeTab);
-		if (liveIndex !== -1) tabFocus.mattIndex = liveIndex;
+	} else if (isCortexGroup(activeTab)) {
+		const liveIndex = indexOfString(CORTEX_TABS, activeTab);
+		if (liveIndex !== -1) tabFocus.cortexIndex = liveIndex;
 	}
 
 	// Escape from page content
@@ -157,8 +157,8 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 				focusEngineTab(tabFocus.engineIndex);
 			} else if (isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content") {
 				focusMemoryTab(tabFocus.memoryIndex);
-			} else if (isMattGroup(activeTab) && tabFocus.mattFocus === "content") {
-				focusMattTab(tabFocus.mattIndex);
+			} else if (isCortexGroup(activeTab) && tabFocus.cortexFocus === "content") {
+				focusCortexTab(tabFocus.cortexIndex);
 			} else {
 				returnToSidebar();
 			}
@@ -215,27 +215,27 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 		}
 	}
 
-	// Matt tab group navigation
-	if (isMattGroup(activeTab) && focus.zone === "page-content" && !e.defaultPrevented) {
-		if (tabFocus.mattFocus === "tabs") {
+	// Cortex tab group navigation
+	if (isCortexGroup(activeTab) && focus.zone === "page-content" && !e.defaultPrevented) {
+		if (tabFocus.cortexFocus === "tabs") {
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
-				if (tabFocus.mattIndex === 0) {
+				if (tabFocus.cortexIndex === 0) {
 					returnToSidebar();
 				} else {
-					focusMattTab(tabFocus.mattIndex - 1);
+					focusCortexTab(tabFocus.cortexIndex - 1);
 				}
 			} else if (e.key === "ArrowRight") {
 				e.preventDefault();
-				focusMattTab((tabFocus.mattIndex + 1) % MATT_TABS.length);
+				focusCortexTab((tabFocus.cortexIndex + 1) % CORTEX_TABS.length);
 			} else if (e.key === "ArrowDown") {
 				e.preventDefault();
-				focusMattContent();
+				focusCortexContent();
 			}
-		} else if (tabFocus.mattFocus === "content") {
+		} else if (tabFocus.cortexFocus === "content") {
 			if (e.key === "ArrowUp") {
 				e.preventDefault();
-				focusMattTab(tabFocus.mattIndex);
+				focusCortexTab(tabFocus.cortexIndex);
 			}
 		}
 	}
@@ -286,17 +286,17 @@ export function handleFocusIn(e: FocusEvent): void {
 		return;
 	}
 
-	const mattTab = target.closest('[data-matt-tab]');
-	if (mattTab) {
+	const cortexTab = target.closest('[data-cortex-tab]');
+	if (cortexTab) {
 		if (focus.zone !== 'page-content') {
 			setFocusZone('page-content');
 		}
-		const rawTabName = mattTab.getAttribute('data-matt-tab');
+		const rawTabName = cortexTab.getAttribute('data-cortex-tab');
 		if (rawTabName === null) return;
-		const index = indexOfString(MATT_TABS, rawTabName);
+		const index = indexOfString(CORTEX_TABS, rawTabName);
 		if (index !== -1) {
-			tabFocus.mattIndex = index;
-			tabFocus.mattFocus = "tabs";
+			tabFocus.cortexIndex = index;
+			tabFocus.cortexFocus = "tabs";
 		}
 		return;
 	}
@@ -318,11 +318,11 @@ export function handleFocusIn(e: FocusEvent): void {
 				tabFocus.memoryIndex = index;
 				tabFocus.memoryFocus = "content";
 			}
-		} else if (isMattGroup(activeTab)) {
-			const index = indexOfString(MATT_TABS, activeTab);
+		} else if (isCortexGroup(activeTab)) {
+			const index = indexOfString(CORTEX_TABS, activeTab);
 			if (index !== -1) {
-				tabFocus.mattIndex = index;
-				tabFocus.mattFocus = "content";
+				tabFocus.cortexIndex = index;
+				tabFocus.cortexFocus = "content";
 			}
 		}
 		return;
@@ -345,7 +345,7 @@ export function handlePageClick(e: MouseEvent): void {
 
 	const clickedEngineTab = target.closest('[data-engine-tab]');
 	const clickedMemoryTab = target.closest('[data-memory-tab]');
-	const clickedMattTab = target.closest('[data-matt-tab]');
+	const clickedCortexTab = target.closest('[data-cortex-tab]');
 
 	if (isEngineGroup(activeTab)) {
 		const index = indexOfString(ENGINE_TABS, activeTab);
@@ -359,11 +359,11 @@ export function handlePageClick(e: MouseEvent): void {
 			tabFocus.memoryIndex = index;
 			tabFocus.memoryFocus = clickedMemoryTab ? "tabs" : "content";
 		}
-	} else if (isMattGroup(activeTab)) {
-		const index = indexOfString(MATT_TABS, activeTab);
+	} else if (isCortexGroup(activeTab)) {
+		const index = indexOfString(CORTEX_TABS, activeTab);
 		if (index !== -1) {
-			tabFocus.mattIndex = index;
-			tabFocus.mattFocus = clickedMattTab ? "tabs" : "content";
+			tabFocus.cortexIndex = index;
+			tabFocus.cortexFocus = clickedCortexTab ? "tabs" : "content";
 		}
 	}
 }
@@ -379,16 +379,16 @@ export function initTabGroupEffects(): () => void {
 	const handleEngineFocusTabs = () => {
 		focusEngineTab(tabFocus.engineIndex);
 	};
-	const handleMattFocusTabs = () => {
-		focusMattTab(tabFocus.mattIndex);
+	const handleCortexFocusTabs = () => {
+		focusCortexTab(tabFocus.cortexIndex);
 	};
 	window.addEventListener("memory-focus-tabs", handleMemoryFocusTabs);
 	window.addEventListener("engine-focus-tabs", handleEngineFocusTabs);
-	window.addEventListener("matt-focus-tabs", handleMattFocusTabs);
+	window.addEventListener("cortex-focus-tabs", handleCortexFocusTabs);
 
 	return () => {
 		window.removeEventListener("memory-focus-tabs", handleMemoryFocusTabs);
 		window.removeEventListener("engine-focus-tabs", handleEngineFocusTabs);
-		window.removeEventListener("matt-focus-tabs", handleMattFocusTabs);
+		window.removeEventListener("cortex-focus-tabs", handleCortexFocusTabs);
 	};
 }

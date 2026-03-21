@@ -2,10 +2,10 @@
 	import type { TabId } from "$lib/stores/navigation.svelte";
 	import type { Memory, MemoryStats, Harness, DaemonStatus } from "$lib/api";
 	import { nav } from "$lib/stores/navigation.svelte";
-	import { focusMattTab } from "$lib/stores/tab-group-focus.svelte";
+	import { focusCortexTab } from "$lib/stores/tab-group-focus.svelte";
 	import PageBanner from "$lib/components/layout/PageBanner.svelte";
 	import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
-	import { MATT_TAB_ITEMS } from "$lib/components/layout/page-headers";
+	import { CORTEX_TAB_ITEMS } from "$lib/components/layout/page-headers";
 
 	interface Props {
 		activeTab: TabId;
@@ -31,9 +31,9 @@
 
 	function readMemorySectionFromHash(): MemorySection {
 		const hash = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-		// Check for matt-memory/constellation style hashes
+		// Check for cortex-memory/constellation style hashes
 		const parts = hash.split("/");
-		if (parts[0] === "matt-memory" && parts[1] && MEMORY_SECTION_SET.has(parts[1])) {
+		if (parts[0] === "cortex-memory" && parts[1] && MEMORY_SECTION_SET.has(parts[1])) {
 			return parts[1] as MemorySection;
 		}
 		// Check legacy memory/constellation
@@ -49,8 +49,8 @@
 	$effect(() => {
 		const section = activeMemory;
 		if (typeof window === "undefined") return;
-		if (activeTab !== "matt-memory") return;
-		const target = section === "index" ? "matt-memory" : `matt-memory/${section}`;
+		if (activeTab !== "cortex-memory") return;
+		const target = section === "index" ? "cortex-memory" : `cortex-memory/${section}`;
 		if (window.location.hash !== `#${target}`) {
 			window.history.replaceState(null, "", `#${target}`);
 		}
@@ -64,30 +64,30 @@
 	];
 
 	const titleMap: Record<string, string> = {
-		"matt-memory": "Memory",
-		"matt-apps": "Apps",
-		"matt-tasks": "Tasks",
-		"matt-troubleshooter": "Troubleshooter",
+		"cortex-memory": "Memory",
+		"cortex-apps": "Apps",
+		"cortex-tasks": "Tasks",
+		"cortex-troubleshooter": "Troubleshooter",
 	};
 
-	const bannerTitle = $derived(titleMap[activeTab] ?? "Matt");
+	const bannerTitle = $derived(titleMap[activeTab] ?? "Cortex");
 
 	const subBtn = "px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer whitespace-nowrap";
 	const subActive = `${subBtn} text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)] border border-[color-mix(in_srgb,var(--sig-highlight),transparent_85%)]`;
 	const subInactive = `${subBtn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var(--sig-highlight)] hover:bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_94%)]`;
 </script>
 
-<div class="matt-tab">
+<div class="cortex-tab">
 	<PageBanner title={bannerTitle}>
 		<TabGroupBar
-			group="matt"
-			tabs={MATT_TAB_ITEMS}
+			group="cortex"
+			tabs={CORTEX_TAB_ITEMS}
 			activeTab={nav.activeTab}
-			onselect={(_tab, index) => focusMattTab(index)}
+			onselect={(_tab, index) => focusCortexTab(index)}
 		/>
 	</PageBanner>
 
-	{#if activeTab === "matt-memory"}
+	{#if activeTab === "cortex-memory"}
 		<!-- Memory sub-tab bar (replaces the internal PageBanner of memory components) -->
 		<header class="sub-bar">
 			<div class="sub-group">
@@ -103,76 +103,76 @@
 		</header>
 
 		<!-- Memory content — wrapper hides the internal PageBanner from nested tabs -->
-		<div class="matt-content matt-memory-embed">
+		<div class="cortex-content cortex-memory-embed">
 			{#if activeMemory === "index"}
 				{#await import("$lib/components/tabs/MemoryTab.svelte")}
-					<div class="matt-loading">Loading memory index...</div>
+					<div class="cortex-loading">Loading memory index...</div>
 				{:then mod}
 					<mod.default {memories} />
 				{:catch err}
-					<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+					<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 				{/await}
 			{:else if activeMemory === "timeline"}
 				{#await import("$lib/components/tabs/TimelineTab.svelte")}
-					<div class="matt-loading">Loading timeline...</div>
+					<div class="cortex-loading">Loading timeline...</div>
 				{:then mod}
 					<mod.default {ontimelinegeneratedforchange} />
 				{:catch err}
-					<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+					<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 				{/await}
 			{:else if activeMemory === "knowledge"}
 				{#await import("$lib/components/tabs/KnowledgeTab.svelte")}
-					<div class="matt-loading">Loading knowledge graph...</div>
+					<div class="cortex-loading">Loading knowledge graph...</div>
 				{:then mod}
 					<mod.default />
 				{:catch err}
-					<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+					<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 				{/await}
 			{:else if activeMemory === "constellation"}
 				{#await import("$lib/components/tabs/EmbeddingsTab.svelte")}
-					<div class="matt-loading">Loading constellation...</div>
+					<div class="cortex-loading">Loading constellation...</div>
 				{:then mod}
 					<mod.default {onopenglobalsimilar} />
 				{:catch err}
-					<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+					<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 				{/await}
 			{/if}
 		</div>
-	{:else if activeTab === "matt-apps"}
-		<div class="matt-content">
+	{:else if activeTab === "cortex-apps"}
+		<div class="cortex-content">
 			{#await import("$lib/components/tabs/OsTab.svelte")}
-				<div class="matt-loading">Loading apps...</div>
+				<div class="cortex-loading">Loading apps...</div>
 			{:then mod}
 				<mod.default />
 			{:catch err}
-				<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+				<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 			{/await}
 		</div>
-	{:else if activeTab === "matt-tasks"}
-		<div class="matt-content">
-			{#await import("$lib/components/matt/MattTasksPanel.svelte")}
-				<div class="matt-loading">Loading tasks...</div>
+	{:else if activeTab === "cortex-tasks"}
+		<div class="cortex-content">
+			{#await import("$lib/components/cortex/CortexTasksPanel.svelte")}
+				<div class="cortex-loading">Loading tasks...</div>
 			{:then mod}
 				<mod.default />
 			{:catch err}
-				<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+				<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 			{/await}
 		</div>
-	{:else if activeTab === "matt-troubleshooter"}
-		<div class="matt-content">
-			{#await import("$lib/components/matt/TroubleshooterPanel.svelte")}
-				<div class="matt-loading">Loading troubleshooter...</div>
+	{:else if activeTab === "cortex-troubleshooter"}
+		<div class="cortex-content">
+			{#await import("$lib/components/cortex/TroubleshooterPanel.svelte")}
+				<div class="cortex-loading">Loading troubleshooter...</div>
 			{:then mod}
 				<mod.default />
 			{:catch err}
-				<div class="matt-error">Failed to load: {err?.message ?? "unknown"}</div>
+				<div class="cortex-error">Failed to load: {err?.message ?? "unknown"}</div>
 			{/await}
 		</div>
 	{/if}
 </div>
 
 <style>
-	.matt-tab {
+	.cortex-tab {
 		display: flex;
 		flex-direction: column;
 		flex: 1;
@@ -200,7 +200,7 @@
 		padding: 1px;
 	}
 
-	.matt-content {
+	.cortex-content {
 		display: flex;
 		flex-direction: column;
 		flex: 1;
@@ -209,11 +209,11 @@
 	}
 
 	/* Hide the internal PageBanner rendered by memory sub-tab components */
-	.matt-memory-embed :global(.banner) {
+	.cortex-memory-embed :global(.banner) {
 		display: none;
 	}
 
-	.matt-loading {
+	.cortex-loading {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -225,7 +225,7 @@
 		letter-spacing: 0.06em;
 	}
 
-	.matt-error {
+	.cortex-error {
 		display: flex;
 		align-items: center;
 		justify-content: center;

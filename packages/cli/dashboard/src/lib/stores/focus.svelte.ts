@@ -11,7 +11,7 @@ export type FocusZone = "sidebar-menu" | "sidebar-footer" | "page-content";
 
 export type SidebarFocusItem =
 	| "home"
-	| "matt"
+	| "cortex"
 	| "secrets"
 	| "skills"
 	| "engine-group"
@@ -23,7 +23,7 @@ export type SidebarFocusItem =
  */
 export const SIDEBAR_ORDER: readonly SidebarFocusItem[] = [
 	"home",
-	"matt",
+	"cortex",
 	"secrets",
 	"skills",
 	"engine-group",
@@ -46,13 +46,13 @@ function tabToSidebarItem(tab: string): SidebarFocusItem {
 		case "timeline":
 		case "embeddings":
 		case "knowledge":
-		case "matt-memory":
-		case "matt-apps":
-		case "matt-tasks":
-		case "matt-troubleshooter":
+		case "cortex-memory":
+		case "cortex-apps":
+		case "cortex-tasks":
+		case "cortex-troubleshooter":
 		case "os":
 		case "tasks":
-			return "matt";
+			return "cortex";
 		case "home":
 		case "secrets":
 		case "skills":
@@ -82,8 +82,8 @@ export function setFocusZone(zone: FocusZone): void {
  */
 function sidebarItemToTab(item: SidebarFocusItem): TabId | null {
 	switch (item) {
-		case "matt":
-			return "matt-memory";
+		case "cortex":
+			return "cortex-memory";
 		case "engine-group":
 			return "settings";
 		case "theme-toggle":

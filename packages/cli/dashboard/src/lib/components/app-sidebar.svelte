@@ -5,7 +5,7 @@ import {
 	type TabId,
 	isEngineGroup,
 	isMemoryGroup,
-	isMattGroup,
+	isCortexGroup,
 	nav,
 	navigateToGroup,
 	setTab,
@@ -25,7 +25,6 @@ import Cog from "@lucide/svelte/icons/cog";
 import ExternalLink from "@lucide/svelte/icons/external-link";
 import Github from "@lucide/svelte/icons/github";
 import House from "@lucide/svelte/icons/house";
-import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
 import Moon from "@lucide/svelte/icons/moon";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Store from "@lucide/svelte/icons/store";
@@ -57,17 +56,17 @@ const {
 const sidebar = useSidebar();
 
 function maybePrefetchEmbeddings(id: string): void {
-	if (id !== "matt") return;
+	if (id !== "cortex") return;
 	onprefetchembeddings?.();
 }
 
 type NavItem =
 	| { id: TabId; label: string; icon: typeof Brain; group?: undefined }
-	| { id: string; label: string; icon: typeof Brain; group: "memory" | "engine" | "matt" };
+	| { id: string; label: string; icon: typeof Brain; group: "memory" | "engine" | "cortex" };
 
 const navItems: NavItem[] = [
 	{ id: "home", label: "Home", icon: House },
-	{ id: "matt-group", label: "Matt", icon: LayoutDashboard, group: "matt" },
+	{ id: "cortex-group", label: "Cortex", icon: Brain, group: "cortex" },
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },
 	{ id: "engine-group", label: "Engine", icon: Cog, group: "engine" },
@@ -84,7 +83,7 @@ function openProjectPage(): void {
 function isActive(item: NavItem): boolean {
 	if (item.group === "memory") return isMemoryGroup(nav.activeTab);
 	if (item.group === "engine") return isEngineGroup(nav.activeTab);
-	if (item.group === "matt") return isMattGroup(nav.activeTab);
+	if (item.group === "cortex") return isCortexGroup(nav.activeTab);
 	return nav.activeTab === item.id;
 }
 
