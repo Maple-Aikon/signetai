@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { buildSrcdoc } from "./widget-theme";
 	import { API_BASE } from "$lib/api";
+	import { getLastEvent, broadcastWidgetEvent } from "./widget-events.svelte";
 
 	interface Props {
 		html: string;
@@ -34,6 +35,11 @@
 
 		if (data.type === "signet:readResource") {
 			readResource(data.id, data.uri);
+			return;
+		}
+
+		if (data.type === "signet:emit") {
+			broadcastWidgetEvent(serverId, data.eventType, data.data);
 			return;
 		}
 	}
@@ -100,6 +106,14 @@
 	function postToWidget(msg: Record<string, unknown>): void {
 		iframe?.contentWindow?.postMessage(msg, window.location.origin);
 	}
+
+	// Watch the cross-widget event bus and forward events from other widgets
+	$effect(() => {
+		const evt = getLastEvent();
+		if (evt && evt.serverId !== serverId && ready) {
+			postToWidget({ type: 'signet:event', eventType: evt.eventType, data: evt.data });
+		}
+	});
 
 	onMount(() => {
 		window.addEventListener("message", handleMessage);

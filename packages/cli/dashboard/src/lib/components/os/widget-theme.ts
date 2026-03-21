@@ -150,6 +150,7 @@ export function buildThemeVars(): string {
 export const WIDGET_BRIDGE_SCRIPT = `(function() {
   var rid = 0;
   var pending = new Map();
+  var eventListeners = new Map();
 
   window.signet = {
     callTool: function(name, args) {
@@ -165,6 +166,20 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
         pending.set(id, { resolve: resolve, reject: reject });
         parent.postMessage({ type: 'signet:readResource', id: id, uri: uri }, '*');
       });
+    },
+    emit: function(eventType, data) {
+      parent.postMessage({ type: 'signet:emit', eventType: eventType, data: data }, '*');
+    },
+    on: function(eventType, callback) {
+      if (!eventListeners.has(eventType)) eventListeners.set(eventType, []);
+      eventListeners.get(eventType).push(callback);
+      return function unsubscribe() {
+        var list = eventListeners.get(eventType);
+        if (list) {
+          var idx = list.indexOf(callback);
+          if (idx >= 0) list.splice(idx, 1);
+        }
+      };
     }
   };
 
@@ -190,6 +205,12 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
         if (Object.prototype.hasOwnProperty.call(d.vars, k)) {
           root.style.setProperty(k, d.vars[k]);
         }
+      }
+    }
+    if (d.type === 'signet:event' && d.eventType) {
+      var listeners = eventListeners.get(d.eventType) || [];
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i](d.data); } catch(e) { console.error('signet event handler error:', e); }
       }
     }
   });
