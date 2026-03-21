@@ -223,4 +223,11 @@
 			overflow-y: hidden;
 		}
 	}
+
+	/* Safe area inset for notched phones */
+	@supports (padding: env(safe-area-inset-top)) {
+		.os-topbar {
+			padding-top: max(10px, env(safe-area-inset-top));
+		}
+	}
 </style>
