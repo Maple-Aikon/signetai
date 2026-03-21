@@ -10,14 +10,21 @@ import type { Hono } from "hono";
 import { logger } from "../logger.js";
 import { getSynthesisProvider } from "../synthesis-llm.js";
 import { getWidgetProvider } from "../widget-llm.js";
+import { getSecret } from "../secrets.js";
+
+/** Cached API key to avoid re-decrypting each call */
+let cachedApiKey: string | null = null;
 
 /**
  * Direct Anthropic API call — bypasses the provider abstraction
  * for reliability (claude-code provider shells out and can fail).
  */
 async function callAnthropic(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
-	const apiKey = process.env.ANTHROPIC_API_KEY;
-	if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+	if (!cachedApiKey) {
+		cachedApiKey = process.env.ANTHROPIC_API_KEY || await getSecret("ANTHROPIC_API_KEY").catch(() => "");
+	}
+	const apiKey = cachedApiKey;
+	if (!apiKey) throw new Error("ANTHROPIC_API_KEY not found in env or secrets");
 
 	const res = await fetch("https://api.anthropic.com/v1/messages", {
 		method: "POST",
