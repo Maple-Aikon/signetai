@@ -104,7 +104,11 @@
 	}
 
 	function postToWidget(msg: Record<string, unknown>): void {
-		iframe?.contentWindow?.postMessage(msg, window.location.origin);
+		// srcdoc iframes have a null origin, so we must use "*" as the targetOrigin.
+		// This is safe because: (1) sandbox="allow-scripts" prevents navigation,
+		// (2) there's no allow-same-origin so the iframe can't access parent cookies/storage,
+		// (3) the iframe content is our own generated HTML, not an external URL.
+		iframe?.contentWindow?.postMessage(msg, "*");
 	}
 
 	// Watch the cross-widget event bus and forward events from other widgets
