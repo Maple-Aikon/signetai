@@ -4,23 +4,82 @@
 	import Bot from "@lucide/svelte/icons/bot";
 	import User from "@lucide/svelte/icons/user";
 	import Wrench from "@lucide/svelte/icons/wrench";
+	import ExternalLink from "@lucide/svelte/icons/external-link";
 	import { API_BASE } from "$lib/api";
+	import { os, moveToGrid, fetchWidgetHtml, fetchTrayEntries } from "$lib/stores/os.svelte";
+
+	interface ToolCall {
+		tool: string;
+		server: string;
+		result?: unknown;
+		error?: string;
+	}
 
 	interface ChatMessage {
 		role: "user" | "agent";
 		content: string;
 		timestamp: number;
-		toolCalls?: Array<{ tool: string; server: string; result?: string }>;
+		toolCalls?: ToolCall[];
+		openedWidget?: string;  // server ID of widget that was opened
 	}
 
 	let messages = $state<ChatMessage[]>([]);
 	let input = $state("");
 	let loading = $state(false);
+	let loadingStatus = $state("");
 	let chatEl: HTMLDivElement | null = $state(null);
 
 	async function scrollToBottom() {
 		await tick();
 		if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+	}
+
+	/**
+	 * Place a widget on the grid and load its HTML.
+	 * Returns true if the widget was placed/already on grid.
+	 */
+	async function openWidgetForServer(serverId: string): Promise<boolean> {
+		const entry = os.entries.find((e) => e.id === serverId);
+		if (!entry) {
+			// Refresh tray entries in case the server was just installed
+			await fetchTrayEntries();
+			const refreshed = os.entries.find((e) => e.id === serverId);
+			if (!refreshed) return false;
+		}
+
+		const target = os.entries.find((e) => e.id === serverId);
+		if (!target) return false;
+
+		// Move to grid if not already there
+		if (target.state !== "grid") {
+			await moveToGrid(serverId);
+		}
+
+		// Ensure widget HTML is loaded
+		await fetchWidgetHtml(serverId);
+
+		// Highlight the widget briefly
+		highlightWidget(serverId);
+
+		return true;
+	}
+
+	/** Flash a highlight border on a widget to draw attention */
+	function highlightWidget(serverId: string): void {
+		const gridItems = document.querySelectorAll('.grid-item');
+		for (const item of gridItems) {
+			const card = item.querySelector('.widget-card');
+			if (!card) continue;
+			// Check if this grid item contains the target widget
+			const titleEl = item.querySelector('.widget-title');
+			const entry = os.entries.find((e) => e.id === serverId);
+			if (titleEl && entry && titleEl.textContent?.toLowerCase().includes(entry.name.toLowerCase())) {
+				item.classList.add('widget-chat-highlight');
+				item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+				setTimeout(() => item.classList.remove('widget-chat-highlight'), 2000);
+				break;
+			}
+		}
 	}
 
 	async function send() {
@@ -30,6 +89,7 @@
 		messages.push({ role: "user", content: text, timestamp: Date.now() });
 		input = "";
 		loading = true;
+		loadingStatus = "thinking...";
 		scrollToBottom();
 
 		try {
@@ -39,11 +99,25 @@
 				body: JSON.stringify({ message: text }),
 			});
 			const data = await res.json();
+			const toolCalls: ToolCall[] = data.toolCalls ?? [];
+
+			// If tools were called, open the related widget(s)
+			let openedWidget: string | undefined;
+			if (toolCalls.length > 0) {
+				const serverIds = [...new Set(toolCalls.map((tc) => tc.server))];
+				for (const sid of serverIds) {
+					loadingStatus = `opening ${sid.replace('ghl-', '')}...`;
+					const opened = await openWidgetForServer(sid);
+					if (opened) openedWidget = sid;
+				}
+			}
+
 			messages.push({
 				role: "agent",
 				content: data.response ?? data.error ?? "No response",
 				timestamp: Date.now(),
-				toolCalls: data.toolCalls,
+				toolCalls,
+				openedWidget,
 			});
 		} catch (err) {
 			messages.push({
@@ -53,6 +127,7 @@
 			});
 		} finally {
 			loading = false;
+			loadingStatus = "";
 			scrollToBottom();
 		}
 	}
@@ -67,6 +142,15 @@
 	function formatTime(ts: number): string {
 		return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	}
+
+	function getWidgetName(serverId: string): string {
+		const entry = os.entries.find((e) => e.id === serverId);
+		return entry?.name ?? serverId;
+	}
+
+	function scrollToWidget(serverId: string): void {
+		highlightWidget(serverId);
+	}
 </script>
 
 <div class="agent-chat">
@@ -76,7 +160,7 @@
 			<div class="chat-empty">
 				<Bot class="size-5 opacity-30" />
 				<span class="sig-label" style="color: var(--sig-text-muted)">
-					Ask your agent to query tools, filter data, or run actions across your MCP servers.
+					Ask me anything — I'll pull up the right app and show you the data live.
 				</span>
 			</div>
 		{/if}
@@ -98,12 +182,23 @@
 								<div class="chat-tool-call">
 									<Wrench class="size-2.5" />
 									<span class="chat-tool-name">{tc.server}/{tc.tool}</span>
-									{#if tc.result}
-										<span class="chat-tool-result">{tc.result}</span>
+									{#if tc.error}
+										<span class="chat-tool-error">failed</span>
+									{:else}
+										<span class="chat-tool-ok">done</span>
 									{/if}
 								</div>
 							{/each}
 						</div>
+					{/if}
+					{#if msg.openedWidget}
+						<button
+							class="chat-widget-link"
+							onclick={() => scrollToWidget(msg.openedWidget!)}
+						>
+							<ExternalLink class="size-2.5" />
+							<span>Showing in {getWidgetName(msg.openedWidget)}</span>
+						</button>
 					{/if}
 					<span class="chat-msg-time">{formatTime(msg.timestamp)}</span>
 				</div>
@@ -120,6 +215,7 @@
 						<span class="dot"></span>
 						<span class="dot"></span>
 						<span class="dot"></span>
+						<span class="chat-status-text">{loadingStatus}</span>
 					</div>
 				</div>
 			</div>
@@ -273,8 +369,39 @@
 		color: var(--sig-accent);
 	}
 
-	.chat-tool-result {
-		opacity: 0.7;
+	.chat-tool-ok {
+		color: var(--sig-success, #5a7a5a);
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.chat-tool-error {
+		color: var(--sig-danger, #7a4a4a);
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.chat-widget-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-accent);
+		padding: 2px 8px;
+		background: color-mix(in srgb, var(--sig-accent) 8%, var(--sig-bg));
+		border: 1px solid color-mix(in srgb, var(--sig-accent) 25%, var(--sig-border));
+		border-radius: 4px;
+		cursor: pointer;
+		margin-top: 2px;
+		transition: all 0.15s ease;
+	}
+
+	.chat-widget-link:hover {
+		background: color-mix(in srgb, var(--sig-accent) 15%, var(--sig-bg));
+		border-color: var(--sig-accent);
 	}
 
 	/* Thinking dots */
@@ -286,6 +413,15 @@
 		background: var(--sig-surface);
 		border: 1px solid var(--sig-border);
 		border-radius: 8px;
+	}
+
+	.chat-status-text {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		margin-left: 4px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
 	.dot {

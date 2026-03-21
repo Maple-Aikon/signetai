@@ -395,6 +395,24 @@
 		border-color: var(--sig-accent);
 	}
 
+	/* Chat-triggered highlight animation */
+	:global(.widget-chat-highlight) {
+		z-index: 50 !important;
+		animation: widgetHighlight 2s ease-out !important;
+	}
+
+	@keyframes widgetHighlight {
+		0% {
+			box-shadow: 0 0 0 3px var(--sig-accent), 0 0 20px rgba(200, 255, 0, 0.3);
+		}
+		50% {
+			box-shadow: 0 0 0 2px var(--sig-accent), 0 0 12px rgba(200, 255, 0, 0.2);
+		}
+		100% {
+			box-shadow: none;
+		}
+	}
+
 	.widget-grid.has-focus .grid-item {
 		opacity: 0.15;
 		pointer-events: none;
