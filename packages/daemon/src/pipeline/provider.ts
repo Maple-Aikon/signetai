@@ -426,13 +426,17 @@ export function createClaudeCodeProvider(
 				"--output-format", outputFormat,
 			];
 
-			// Strip ALL Claude Code env vars to prevent nested-session
-			// detection when the daemon is launched from a CC session.
-			// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
+			// Strip env vars that interfere with the subprocess:
+			// - CLAUDECODE / CLAUDE_CODE_* — prevents nested-session detection
+			// - SIGNET_NO_HOOKS — re-injected below to prevent recursive hooks
+			// - ANTHROPIC_API_KEY — when set to an OAuth token (sk-ant-oat01-*)
+			//   the CLI rejects it as "Invalid API key" and exits 1. Stripping
+			//   lets the subprocess fall back to its own auth (claude.ai OAuth).
 			const cleanEnv: Record<string, string> = {};
 			for (const [k, v] of Object.entries(process.env)) {
 				if (v === undefined) continue;
 				if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
+				if (k === "ANTHROPIC_API_KEY" && v.startsWith("sk-ant-oat")) continue;
 				cleanEnv[k] = v;
 			}
 
