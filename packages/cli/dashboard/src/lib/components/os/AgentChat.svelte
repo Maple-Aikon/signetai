@@ -118,34 +118,39 @@
 					const sid = tc.server;
 
 					// Mutation tools → refresh the widget to show changes
-					if (tool.startsWith("create_") || tool.startsWith("update_") ||
+					const isMutation = tool.startsWith("create_") || tool.startsWith("update_") ||
 						tool.startsWith("delete_") || tool.startsWith("add_") ||
-						tool.startsWith("remove_") || tool.startsWith("merge_")) {
+						tool.startsWith("remove_") || tool.startsWith("merge_");
+
+					if (isMutation) {
 						loadingStatus = `updating ${sid.replace('ghl-', '')}...`;
-						// Brief delay to let the MCP server process the change
-						await new Promise((r) => setTimeout(r, 500));
+						// Brief delay to let GHL process the change
+						await new Promise((r) => setTimeout(r, 800));
+						// Force widget to reload (iframe srcdoc reset → React remount → fresh data)
 						sendWidgetAction(sid, "refresh");
 					}
 
-					// If we got a result with an ID, try to highlight/navigate to it
+					// If we got a result with identifying info, highlight it after refresh
 					if (tc.result) {
 						try {
 							const resultData = typeof tc.result === "string" ? JSON.parse(tc.result) : tc.result;
 							const content = resultData?.content?.[0]?.text;
 							const parsed = content ? JSON.parse(content) : resultData;
 
-							// Extract name or identifier from result for highlighting
-							const name = parsed?.contact?.firstName ||
-								parsed?.contactName || parsed?.firstName ||
-								parsed?.name || parsed?.title || null;
-							const id = parsed?.contact?.id || parsed?.id || parsed?.contactId || null;
+							// Extract name from result for highlighting
+							const firstName = parsed?.contact?.firstName || parsed?.firstName || "";
+							const lastName = parsed?.contact?.lastName || parsed?.lastName || "";
+							const name = `${firstName} ${lastName}`.trim() ||
+								parsed?.contactName || parsed?.name || parsed?.title || null;
 
-							if (name) {
-								await new Promise((r) => setTimeout(r, 300));
+							if (name && isMutation) {
+								// Wait for widget to reload and render fresh data
+								// (iframe reset + React mount + API call + render)
+								await new Promise((r) => setTimeout(r, 3000));
 								sendWidgetAction(sid, "highlight", { text: name });
 							}
 						} catch {
-							// Result parsing failed — that's fine, skip highlight
+							// Result parsing failed — skip highlight
 						}
 					}
 				}

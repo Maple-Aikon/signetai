@@ -106,12 +106,28 @@
 
 	/**
 	 * Send an action to this widget (refresh, navigate, highlight).
-	 * Called from outside via the widgetActions store.
+	 * For 'refresh': force iframe reload so React re-mounts and fetches fresh data.
+	 * For 'highlight': send postMessage to find and highlight matching element.
 	 */
 	$effect(() => {
 		const action = getWidgetAction(serverId);
 		if (action && ready) {
-			postToWidget({ type: 'signet:action', ...action });
+			if (action.action === 'refresh') {
+				// Force full iframe reload: reset srcdoc to trigger React remount
+				// This causes useEffect to re-run, fetching fresh data from MCP
+				if (iframe) {
+					ready = false;
+					const currentSrcdoc = iframe.srcdoc;
+					iframe.srcdoc = '';
+					requestAnimationFrame(() => {
+						if (iframe) {
+							iframe.srcdoc = currentSrcdoc;
+						}
+					});
+				}
+			} else {
+				postToWidget({ type: 'signet:action', ...action });
+			}
 		}
 	});
 
