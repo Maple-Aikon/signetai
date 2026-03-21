@@ -335,6 +335,7 @@ function fitCameraToBounds(): void {
 	camX = (bounds.minX + bounds.maxX) / 2;
 	camY = (bounds.minY + bounds.maxY) / 2;
 	camZoom = Math.max(0.08, fitZoom);
+	initialFitDone = true;
 }
 
 function screenToWorld(sx: number, sy: number): [number, number] {

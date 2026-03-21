@@ -841,9 +841,10 @@ export class SpatialGrid {
 		const maxCol = Math.floor((wx + r - this.offsetX) / GRID_CELL);
 		const minRow = Math.floor((wy - r - this.offsetY) / GRID_CELL);
 		const maxRow = Math.floor((wy + r - this.offsetY) / GRID_CELL);
+		const rows = Math.ceil((this.maxY - this.minY) / GRID_CELL);
 		const result: GraphNode[] = [];
-		for (let row = minRow; row <= maxRow; row++) {
-			for (let col = minCol; col <= maxCol; col++) {
+		for (let row = Math.max(0, minRow); row <= maxRow && row < rows; row++) {
+			for (let col = Math.max(0, minCol); col <= Math.min(this.cols - 1, maxCol); col++) {
 				const bucket = this.cells.get(row * this.cols + col);
 				if (bucket) {
 					for (const node of bucket) result.push(node);
