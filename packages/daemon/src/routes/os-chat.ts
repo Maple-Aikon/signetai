@@ -121,12 +121,21 @@ ${toolList}
 
 When Jake asks a question or makes a request:
 1. Figure out which tool(s) to call
-2. Respond in this JSON format:
+2. Decide if this should use the VISUAL AGENT or direct tool calls
 
-{"thinking":"brief reasoning","toolCalls":[{"serverId":"server-id","toolName":"tool_name","args":{}}],"response":"your response to Jake"}
+**VISUAL AGENT MODE** — use when Jake wants to CREATE, UPDATE, DELETE, or MODIFY something in a widget. The visual agent shows an AI cursor clicking through the widget UI in real-time. Set "useAgent": true and "agentServerId" to the server that owns the widget. Do NOT include toolCalls when using agent mode — the agent handles tool execution visually.
+
+**DIRECT MODE** — use for READ operations (fetching data, searching, listing). Set "useAgent": false and include toolCalls as normal.
+
+Respond in this JSON format:
+
+{"thinking":"brief reasoning","useAgent":false,"agentServerId":null,"toolCalls":[{"serverId":"server-id","toolName":"tool_name","args":{}}],"response":"your response to Jake"}
+
+For agent mode (mutations):
+{"thinking":"this needs visual agent","useAgent":true,"agentServerId":"ghl-contacts-hub","toolCalls":[],"response":"on it — watch the contacts widget (cursor incoming)"}
 
 If no tools are needed (casual chat), respond with:
-{"thinking":"no tools needed","toolCalls":[],"response":"your response"}
+{"thinking":"no tools needed","useAgent":false,"agentServerId":null,"toolCalls":[],"response":"your response"}
 
 Rules:
 - Be concise. No walls of text
@@ -137,6 +146,8 @@ Rules:
 - If something fails, own it — "my bad, that didn't work" not "I apologize for the inconvenience"
 - When creating contacts: split full names into firstName + lastName. MUST include email (generate one like firstname.lastname@example.com if not provided). GHL requires email or phone.
 - Tool args must match the schema exactly — use camelCase field names (firstName, lastName, companyName, etc.)
+- USE AGENT MODE for: create, update, delete, add, remove, merge, edit, change, modify actions
+- USE DIRECT MODE for: fetch, get, list, search, find, show, count, lookup actions
 
 Respond with ONLY the JSON object, no markdown fences.`;
 }
@@ -146,6 +157,8 @@ Respond with ONLY the JSON object, no markdown fences.`;
  */
 function parseLlmResponse(raw: string): {
 	thinking?: string;
+	useAgent?: boolean;
+	agentServerId?: string | null;
 	toolCalls: Array<{ serverId: string; toolName: string; args: Record<string, unknown> }>;
 	response: string;
 } {
@@ -162,17 +175,21 @@ function parseLlmResponse(raw: string): {
 		const parsed = JSON.parse(cleaned);
 		return {
 			thinking: parsed.thinking,
+			useAgent: parsed.useAgent === true,
+			agentServerId: typeof parsed.agentServerId === "string" ? parsed.agentServerId : null,
 			toolCalls: Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [],
 			response: typeof parsed.response === "string" ? parsed.response : cleaned,
 		};
 	} catch {
 		// Try to extract JSON from within the text (LLM might wrap it in explanation)
-		const jsonMatch = cleaned.match(/\{[\s\S]*"toolCalls"[\s\S]*\}/);
+		const jsonMatch = cleaned.match(/\{[\s\S]*"(?:toolCalls|useAgent)"[\s\S]*\}/);
 		if (jsonMatch) {
 			try {
 				const parsed = JSON.parse(jsonMatch[0]);
 				return {
 					thinking: parsed.thinking,
+					useAgent: parsed.useAgent === true,
+					agentServerId: typeof parsed.agentServerId === "string" ? parsed.agentServerId : null,
 					toolCalls: Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [],
 					response: typeof parsed.response === "string" ? parsed.response : jsonMatch[0],
 				};
@@ -223,6 +240,22 @@ export function mountOsChatRoutes(app: Hono): void {
 			const rawResponse = await callLlm(systemPrompt, body.message);
 
 			const parsed = parseLlmResponse(rawResponse);
+
+			// If LLM decided this needs the visual agent, return immediately
+			// (no tool execution — the dashboard will handle it via agent executor)
+			if (parsed.useAgent && parsed.agentServerId) {
+				logger.info("os-chat", `Routing to visual agent`, {
+					serverId: parsed.agentServerId,
+					task: body.message.slice(0, 100),
+				});
+				return c.json({
+					response: parsed.response,
+					toolCalls: [],
+					useAgent: true,
+					agentServerId: parsed.agentServerId,
+					agentTask: body.message,
+				});
+			}
 
 			// Execute tool calls if any
 			const toolCallResults: ToolCallResult[] = [];

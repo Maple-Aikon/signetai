@@ -3,7 +3,7 @@
 	import { buildSrcdoc } from "./widget-theme";
 	import { API_BASE } from "$lib/api";
 	import { getLastEvent, broadcastWidgetEvent } from "./widget-events.svelte";
-	import { getWidgetAction } from "$lib/stores/os.svelte";
+	import { getWidgetAction, registerWidgetSandbox, unregisterWidgetSandbox } from "$lib/stores/os.svelte";
 
 	interface Props {
 		html: string;
@@ -15,6 +15,70 @@
 
 	let iframe: HTMLIFrameElement | null = $state(null);
 	let ready = $state(false);
+
+	// Pending promises for page-agent bridge calls
+	let agentRid = 0;
+	const agentPending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+
+	/**
+	 * Get DOM state from the widget iframe (for agent automation).
+	 * Returns simplified HTML of interactive elements for LLM consumption.
+	 */
+	export function getDomState(): Promise<unknown> {
+		return new Promise((resolve, reject) => {
+			if (!iframe?.contentWindow || !ready) {
+				return reject(new Error("Widget iframe not ready"));
+			}
+			const id = `agent_${++agentRid}`;
+			agentPending.set(id, { resolve, reject });
+			postToWidget({ type: "signet:getDomState", id });
+			// Timeout after 10s
+			setTimeout(() => {
+				if (agentPending.has(id)) {
+					agentPending.delete(id);
+					reject(new Error("getDomState timeout"));
+				}
+			}, 10000);
+		});
+	}
+
+	/**
+	 * Execute an action in the widget iframe (click, type, scroll, etc.).
+	 */
+	export function executeAction(action: { type: string; index?: number; text?: string; direction?: string; amount?: number }): Promise<unknown> {
+		return new Promise((resolve, reject) => {
+			if (!iframe?.contentWindow || !ready) {
+				return reject(new Error("Widget iframe not ready"));
+			}
+			const id = `agent_${++agentRid}`;
+			agentPending.set(id, { resolve, reject });
+			postToWidget({ type: "signet:executeAction", id, action });
+			setTimeout(() => {
+				if (agentPending.has(id)) {
+					agentPending.delete(id);
+					reject(new Error("executeAction timeout"));
+				}
+			}, 10000);
+		});
+	}
+
+	/**
+	 * Start agent mode — shows mask + cursor overlay in the widget.
+	 */
+	export function agentStart(): void {
+		if (iframe?.contentWindow && ready) {
+			postToWidget({ type: "signet:agentStart" });
+		}
+	}
+
+	/**
+	 * Stop agent mode — hides the mask/cursor overlay.
+	 */
+	export function agentStop(): void {
+		if (iframe?.contentWindow && ready) {
+			postToWidget({ type: "signet:agentStop" });
+		}
+	}
 
 	const srcdoc = $derived(buildSrcdoc(html, serverId));
 
@@ -41,6 +105,19 @@
 
 		if (data.type === "signet:emit") {
 			broadcastWidgetEvent(serverId, data.eventType, data.data);
+			return;
+		}
+
+		// Page-agent bridge responses
+		if (data.type === "signet:domState" && data.id && agentPending.has(data.id)) {
+			agentPending.get(data.id)!.resolve(data.result);
+			agentPending.delete(data.id);
+			return;
+		}
+
+		if (data.type === "signet:actionResult" && data.id && agentPending.has(data.id)) {
+			agentPending.get(data.id)!.resolve(data.result);
+			agentPending.delete(data.id);
 			return;
 		}
 	}
@@ -149,10 +226,13 @@
 
 	onMount(() => {
 		window.addEventListener("message", handleMessage);
+		// Register this sandbox so AgentChat can call getDomState/executeAction
+		registerWidgetSandbox(serverId, { getDomState, executeAction, agentStart, agentStop });
 	});
 
 	onDestroy(() => {
 		window.removeEventListener("message", handleMessage);
+		unregisterWidgetSandbox(serverId);
 	});
 </script>
 

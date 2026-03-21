@@ -407,3 +407,55 @@ export function onWidgetGenerated(serverId: string, html: string): void {
 	widgetGenerating.delete(serverId);
 	os.widgetCacheVersion++;
 }
+
+// ============================================================================
+// Widget Sandbox Registry — allows AgentChat to find and control widget iframes
+// ============================================================================
+
+export interface WidgetSandboxRef {
+	getDomState: () => Promise<unknown>;
+	executeAction: (action: { type: string; index?: number; text?: string; direction?: string; amount?: number }) => Promise<unknown>;
+	agentStart: () => void;
+	agentStop: () => void;
+}
+
+const widgetSandboxRegistry = new Map<string, WidgetSandboxRef>();
+
+export function registerWidgetSandbox(serverId: string, ref: WidgetSandboxRef): void {
+	widgetSandboxRegistry.set(serverId, ref);
+}
+
+export function unregisterWidgetSandbox(serverId: string): void {
+	widgetSandboxRegistry.delete(serverId);
+}
+
+export function getWidgetSandbox(serverId: string): WidgetSandboxRef | undefined {
+	return widgetSandboxRegistry.get(serverId);
+}
+
+// ============================================================================
+// Agent Session State — tracks active page-agent automation sessions
+// ============================================================================
+
+export interface AgentSession {
+	serverId: string;
+	status: "starting" | "observing" | "thinking" | "acting" | "done" | "error";
+	currentStep: number;
+	totalSteps: number;
+	lastAction?: string;
+	error?: string;
+}
+
+export const agentSession = $state<{ current: AgentSession | null }>({ current: null });
+
+export function setAgentSession(session: AgentSession | null): void {
+	agentSession.current = session;
+}
+
+export function updateAgentStep(step: number, status: AgentSession["status"], lastAction?: string): void {
+	if (agentSession.current) {
+		agentSession.current.currentStep = step;
+		agentSession.current.status = status;
+		if (lastAction) agentSession.current.lastAction = lastAction;
+	}
+}

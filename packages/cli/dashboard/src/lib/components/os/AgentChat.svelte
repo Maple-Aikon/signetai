@@ -5,8 +5,9 @@
 	import User from "@lucide/svelte/icons/user";
 	import Wrench from "@lucide/svelte/icons/wrench";
 	import ExternalLink from "@lucide/svelte/icons/external-link";
+	import Cpu from "@lucide/svelte/icons/cpu";
 	import { API_BASE } from "$lib/api";
-	import { os, moveToGrid, fetchWidgetHtml, fetchTrayEntries, sendWidgetAction } from "$lib/stores/os.svelte";
+	import { os, moveToGrid, fetchWidgetHtml, fetchTrayEntries, sendWidgetAction, getWidgetSandbox, setAgentSession } from "$lib/stores/os.svelte";
 
 	interface ToolCall {
 		tool: string;
@@ -82,6 +83,173 @@
 		}
 	}
 
+	let agentRunning = $state(false);
+
+	/**
+	 * Execute a visual agent task — the AI cursor clicks through the widget
+	 * while the user watches in real-time.
+	 */
+	async function executeAgentTask(serverId: string, task: string): Promise<string> {
+		agentRunning = true;
+
+		try {
+			// 1. Open the widget on the grid
+			loadingStatus = `opening ${serverId.replace('ghl-', '')}...`;
+			const opened = await openWidgetForServer(serverId);
+			if (!opened) throw new Error(`Could not open widget for ${serverId}`);
+
+			// Wait for widget to be ready and PageController to initialize
+			await new Promise((r) => setTimeout(r, 1500));
+
+			// 2. Start agent session on daemon
+			loadingStatus = "starting agent...";
+			const execRes = await fetch(`${API_BASE}/api/os/agent-execute`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ serverId, task }),
+			});
+			const execData = await execRes.json();
+
+			if (!execRes.ok || !execData.sessionId) {
+				throw new Error(execData.error || "Failed to start agent session");
+			}
+
+			const sessionId = execData.sessionId;
+
+			setAgentSession({
+				serverId,
+				status: "starting",
+				currentStep: 0,
+				totalSteps: 20,
+			});
+
+			// 3. Connect to SSE stream for agent events
+			return await new Promise<string>((resolve, reject) => {
+				const evtSource = new EventSource(`${API_BASE}/api/os/agent-events?session=${sessionId}`);
+				let result = "Agent task completed";
+
+				evtSource.onmessage = async (e) => {
+					try {
+						const event = JSON.parse(e.data);
+
+						if (event.type === "connected") return;
+
+						if (event.type === "agentStart") {
+							// Tell the widget iframe to show the mask/cursor
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox) sandbox.agentStart();
+							return;
+						}
+
+						if (event.type === "agentStop") {
+							// Tell the widget iframe to hide the mask/cursor
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox) sandbox.agentStop();
+							return;
+						}
+
+						if (event.type === "getDomState") {
+							// Daemon is requesting DOM state — get it from the widget
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (!sandbox) {
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({
+										sessionId,
+										domState: { success: false, error: "Widget sandbox not found" },
+									}),
+								});
+								return;
+							}
+
+							try {
+								const domState = await sandbox.getDomState();
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ sessionId, domState }),
+								});
+							} catch (err) {
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({
+										sessionId,
+										domState: { success: false, error: err instanceof Error ? err.message : String(err) },
+									}),
+								});
+							}
+							return;
+						}
+
+						if (event.type === "executeAction") {
+							// Daemon wants us to execute an action in the widget
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox && event.data?.action) {
+								try {
+									await sandbox.executeAction(event.data.action);
+								} catch (err) {
+									console.warn("executeAction error:", err);
+								}
+							}
+							return;
+						}
+
+						if (event.type === "status") {
+							const d = event.data as { step?: number; status?: string; message?: string };
+							loadingStatus = d?.message || `step ${d?.step}...`;
+							setAgentSession({
+								serverId: event.serverId,
+								status: (d?.status as "observing" | "thinking" | "acting") || "starting",
+								currentStep: d?.step || 0,
+								totalSteps: 20,
+								lastAction: d?.message,
+							});
+							scrollToBottom();
+							return;
+						}
+
+						if (event.type === "done") {
+							const d = event.data as { summary?: string };
+							result = d?.summary || "Task completed";
+							setAgentSession(null);
+							evtSource.close();
+							resolve(result);
+							return;
+						}
+
+						if (event.type === "error") {
+							const d = event.data as { error?: string };
+							setAgentSession(null);
+							evtSource.close();
+							reject(new Error(d?.error || "Agent error"));
+							return;
+						}
+					} catch (err) {
+						console.warn("Agent SSE parse error:", err);
+					}
+				};
+
+				evtSource.onerror = () => {
+					setAgentSession(null);
+					evtSource.close();
+					reject(new Error("Agent event stream disconnected"));
+				};
+
+				// Timeout after 5 minutes
+				setTimeout(() => {
+					setAgentSession(null);
+					evtSource.close();
+					reject(new Error("Agent execution timed out"));
+				}, 300000);
+			});
+		} finally {
+			agentRunning = false;
+			setAgentSession(null);
+		}
+	}
+
 	async function send() {
 		const text = input.trim();
 		if (!text || loading) return;
@@ -93,12 +261,53 @@
 		scrollToBottom();
 
 		try {
+			// Send to chat endpoint — LLM decides if this needs visual agent or direct tools
 			const res = await fetch(`${API_BASE}/api/os/chat`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ message: text }),
 			});
 			const data = await res.json();
+
+			// ═══════════════════════════════════════════════════════════════
+			// VISUAL AGENT MODE — LLM decided this needs the AI cursor
+			// ═══════════════════════════════════════════════════════════════
+			if (data.useAgent && data.agentServerId) {
+				// Show the LLM's immediate response first
+				messages.push({
+					role: "agent",
+					content: data.response ?? "starting visual agent...",
+					timestamp: Date.now(),
+				});
+				scrollToBottom();
+
+				loadingStatus = "starting visual agent...";
+
+				try {
+					const agentResult = await executeAgentTask(data.agentServerId, data.agentTask || text);
+					messages.push({
+						role: "agent",
+						content: agentResult,
+						timestamp: Date.now(),
+						openedWidget: data.agentServerId,
+					});
+				} catch (err) {
+					messages.push({
+						role: "agent",
+						content: `agent hit a wall: ${err instanceof Error ? err.message : String(err)}`,
+						timestamp: Date.now(),
+					});
+				}
+
+				loading = false;
+				loadingStatus = "";
+				scrollToBottom();
+				return;
+			}
+
+			// ═══════════════════════════════════════════════════════════════
+			// DIRECT TOOL MODE — standard tool calls (read operations)
+			// ═══════════════════════════════════════════════════════════════
 			const toolCalls: ToolCall[] = data.toolCalls ?? [];
 
 			// If tools were called, open the related widget(s) and trigger actions
@@ -111,7 +320,6 @@
 					if (opened) openedWidget = sid;
 				}
 
-				// Determine what happened and send actions to widgets
 				for (const tc of toolCalls) {
 					if (tc.error) continue;
 					const tool = tc.tool;
@@ -124,28 +332,22 @@
 
 					if (isMutation) {
 						loadingStatus = `updating ${sid.replace('ghl-', '')}...`;
-						// Brief delay to let GHL process the change
 						await new Promise((r) => setTimeout(r, 800));
-						// Force widget to reload (iframe srcdoc reset → React remount → fresh data)
 						sendWidgetAction(sid, "refresh");
 					}
 
-					// If we got a result with identifying info, highlight it after refresh
 					if (tc.result) {
 						try {
 							const resultData = typeof tc.result === "string" ? JSON.parse(tc.result) : tc.result;
 							const content = resultData?.content?.[0]?.text;
 							const parsed = content ? JSON.parse(content) : resultData;
 
-							// Extract name from result for highlighting
 							const firstName = parsed?.contact?.firstName || parsed?.firstName || "";
 							const lastName = parsed?.contact?.lastName || parsed?.lastName || "";
 							const name = `${firstName} ${lastName}`.trim() ||
 								parsed?.contactName || parsed?.name || parsed?.title || null;
 
 							if (name && isMutation) {
-								// Wait for widget to reload and render fresh data
-								// (iframe reset + React mount + API call + render)
 								await new Promise((r) => setTimeout(r, 3000));
 								sendWidgetAction(sid, "highlight", { text: name });
 							}
@@ -195,6 +397,9 @@
 	function scrollToWidget(serverId: string): void {
 		highlightWidget(serverId);
 	}
+
+	// Agent mode is now auto-detected by the LLM in os-chat.ts
+	// No manual /agent command needed — just type naturally
 </script>
 
 <div class="agent-chat">
@@ -252,13 +457,21 @@
 		{#if loading}
 			<div class="chat-msg chat-msg--agent">
 				<div class="chat-msg-icon">
-					<Bot class="size-3" />
+					{#if agentRunning}
+						<Cpu class="size-3 agent-pulse" />
+					{:else}
+						<Bot class="size-3" />
+					{/if}
 				</div>
 				<div class="chat-msg-body">
-					<div class="chat-thinking">
-						<span class="dot"></span>
-						<span class="dot"></span>
-						<span class="dot"></span>
+					<div class="chat-thinking" class:agent-active={agentRunning}>
+						{#if agentRunning}
+							<span class="agent-indicator"></span>
+						{:else}
+							<span class="dot"></span>
+							<span class="dot"></span>
+							<span class="dot"></span>
+						{/if}
 						<span class="chat-status-text">{loadingStatus}</span>
 					</div>
 				</div>
@@ -493,6 +706,30 @@
 			opacity: 1;
 			transform: scale(1);
 		}
+	}
+
+	/* Agent mode styles */
+	.agent-active {
+		border-color: var(--sig-electric, #39b6ff) !important;
+		background: color-mix(in srgb, var(--sig-electric, #39b6ff) 8%, var(--sig-surface)) !important;
+	}
+
+	.agent-indicator {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--sig-electric, #39b6ff);
+		animation: agentPulse 1s ease-in-out infinite;
+	}
+
+	:global(.agent-pulse) {
+		color: var(--sig-electric, #39b6ff) !important;
+		animation: agentPulse 1s ease-in-out infinite;
+	}
+
+	@keyframes agentPulse {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.4; }
 	}
 
 	@keyframes chatFadeIn {

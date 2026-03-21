@@ -1,6 +1,8 @@
 // Widget sandbox theme stylesheet and postMessage bridge.
 // Injected into every widget iframe via srcdoc.
 
+import { PAGE_AGENT_SCRIPT } from "./page-agent-bundle";
+
 export const WIDGET_BASE_CSS = `
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-family: 'Geist Mono', 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.5; color: var(--sig-text); background: var(--sig-bg); -webkit-font-smoothing: antialiased; }
@@ -248,6 +250,45 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
         }
       }
     }
+    // --- Page Agent bridge handlers ---
+    if (d.type === 'signet:getDomState') {
+      (async function() {
+        try {
+          if (window.signet && window.signet.getDomState) {
+            var result = await window.signet.getDomState();
+            parent.postMessage({ type: 'signet:domState', id: d.id, result: result }, '*');
+          } else {
+            parent.postMessage({ type: 'signet:domState', id: d.id, result: { success: false, error: 'PageController not ready' } }, '*');
+          }
+        } catch(err) {
+          parent.postMessage({ type: 'signet:domState', id: d.id, result: { success: false, error: err.message || String(err) } }, '*');
+        }
+      })();
+    }
+    if (d.type === 'signet:executeAction') {
+      (async function() {
+        try {
+          if (window.signet && window.signet.executeAction) {
+            var result = await window.signet.executeAction(d.action);
+            parent.postMessage({ type: 'signet:actionResult', id: d.id, result: result }, '*');
+          } else {
+            parent.postMessage({ type: 'signet:actionResult', id: d.id, result: { success: false, message: 'PageController not ready' } }, '*');
+          }
+        } catch(err) {
+          parent.postMessage({ type: 'signet:actionResult', id: d.id, result: { success: false, message: err.message || String(err) } }, '*');
+        }
+      })();
+    }
+    if (d.type === 'signet:agentStart') {
+      if (window.signet && window.signet.agentStart) {
+        window.signet.agentStart().catch(function(e) { console.warn('agentStart error:', e); });
+      }
+    }
+    if (d.type === 'signet:agentStop') {
+      if (window.signet && window.signet.agentStop) {
+        window.signet.agentStop().catch(function(e) { console.warn('agentStop error:', e); });
+      }
+    }
   });
 
   parent.postMessage({ type: 'signet:ready' }, '*');
@@ -264,6 +305,7 @@ export function buildSrcdoc(html: string, serverId: string): string {
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&family=Chakra+Petch:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>${theme}\n${WIDGET_BASE_CSS}</style>
 <script>${WIDGET_BRIDGE_SCRIPT}<\/script>
+<script>${PAGE_AGENT_SCRIPT}<\/script>
 </head>
 <body data-server-id="${serverId.replace(/"/g, '&quot;')}">
 ${html}
