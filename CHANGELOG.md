@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.71.1] - 2026-03-21
+
+### Bug Fixes
+
+- pipeline worker stall after burst processing (#259)
+
+
 ## [0.71.0] - 2026-03-21
 
 ### Bug Fixes
