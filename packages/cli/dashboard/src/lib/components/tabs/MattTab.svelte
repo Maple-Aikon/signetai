@@ -24,9 +24,37 @@
 		ontimelinegeneratedforchange,
 	}: Props = $props();
 
-	// Memory sub-tab state
+	// Memory sub-tab state — persisted in URL hash fragment
 	type MemorySection = "index" | "timeline" | "knowledge" | "constellation";
-	let activeMemory = $state<MemorySection>("index");
+	const MEMORY_SECTIONS: readonly MemorySection[] = ["index", "timeline", "knowledge", "constellation"];
+	const MEMORY_SECTION_SET = new Set<string>(MEMORY_SECTIONS);
+
+	function readMemorySectionFromHash(): MemorySection {
+		const hash = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
+		// Check for matt-memory/constellation style hashes
+		const parts = hash.split("/");
+		if (parts[0] === "matt-memory" && parts[1] && MEMORY_SECTION_SET.has(parts[1])) {
+			return parts[1] as MemorySection;
+		}
+		// Check legacy memory/constellation
+		if (parts[0] === "memory" && parts[1] && MEMORY_SECTION_SET.has(parts[1])) {
+			return parts[1] as MemorySection;
+		}
+		return "index";
+	}
+
+	let activeMemory = $state<MemorySection>(readMemorySectionFromHash());
+
+	// Sync hash when sub-tab changes
+	$effect(() => {
+		const section = activeMemory;
+		if (typeof window === "undefined") return;
+		if (activeTab !== "matt-memory") return;
+		const target = section === "index" ? "matt-memory" : `matt-memory/${section}`;
+		if (window.location.hash !== `#${target}`) {
+			window.history.replaceState(null, "", `#${target}`);
+		}
+	});
 
 	const memSections = [
 		{ id: "index" as const, title: "Index" },
