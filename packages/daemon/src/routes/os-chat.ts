@@ -9,6 +9,7 @@
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
 import { getSynthesisProvider } from "../synthesis-llm.js";
+import { getWidgetProvider } from "../widget-llm.js";
 import { loadProbeResult } from "../mcp-probe.js";
 
 interface ChatRequest {
@@ -149,16 +150,19 @@ export function mountOsChatRoutes(app: Hono): void {
 				});
 			}
 
-			// Get the synthesis LLM provider
+			// Get LLM provider — try synthesis first, fall back to widget provider
 			let llmProvider;
 			try {
 				llmProvider = getSynthesisProvider();
 			} catch {
-				// Synthesis provider not available — return a helpful message
-				return c.json({
-					response: `I can see ${tools.length} tools across your MCP servers, but my LLM provider isn't configured yet. Check your agent.yaml synthesis settings.`,
-					toolCalls: [],
-				});
+				try {
+					llmProvider = getWidgetProvider();
+				} catch {
+					return c.json({
+						response: `I can see ${tools.length} tools across your MCP servers, but no LLM provider is available. Check your agent.yaml synthesis settings.`,
+						toolCalls: [],
+					});
+				}
 			}
 
 			// Build prompt and call LLM
