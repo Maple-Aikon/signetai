@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.71.5] - 2026-03-21
+
+### Bug Fixes
+
+- **troubleshooter**: handle daemon stop/restart lifecycle commands (#265)
+
+
 ## [0.71.4] - 2026-03-21
 
 ### Bug Fixes
