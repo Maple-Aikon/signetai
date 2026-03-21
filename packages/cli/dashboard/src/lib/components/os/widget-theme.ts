@@ -213,6 +213,41 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
         try { listeners[i](d.data); } catch(e) { console.error('signet event handler error:', e); }
       }
     }
+    if (d.type === 'signet:action') {
+      if (d.action === 'refresh') {
+        // Dispatch DOM event for any listener, then trigger full re-fetch
+        window.dispatchEvent(new CustomEvent('signet:refresh', { detail: d.data }));
+        // Re-run all useEffect cleanups + mounts by forcing React reconciliation
+        // Simplest: dispatch event that our React apps can hook into
+        var refreshEvent = new Event('signet-data-refresh');
+        window.dispatchEvent(refreshEvent);
+      }
+      if (d.action === 'navigate') {
+        // Dispatch navigate event with target info (e.g., {view: "contact", id: "xxx"})
+        window.dispatchEvent(new CustomEvent('signet:navigate', { detail: d.data }));
+      }
+      if (d.action === 'highlight') {
+        // Highlight a specific element by text content match
+        var target = d.data && d.data.text;
+        if (target) {
+          var allCells = document.querySelectorAll('td, .contact-name, .deal-name, [data-id]');
+          for (var j = 0; j < allCells.length; j++) {
+            if (allCells[j].textContent && allCells[j].textContent.toLowerCase().includes(target.toLowerCase())) {
+              allCells[j].scrollIntoView({ behavior: 'smooth', block: 'center' });
+              allCells[j].style.outline = '2px solid var(--sig-accent, #c8ff00)';
+              allCells[j].style.outlineOffset = '2px';
+              allCells[j].style.transition = 'outline 0.3s ease';
+              var cell = allCells[j];
+              // Find the parent row and click it
+              var row = cell.closest('tr') || cell.closest('[data-id]') || cell;
+              if (row && row.click) row.click();
+              setTimeout(function() { cell.style.outline = 'none'; }, 3000);
+              break;
+            }
+          }
+        }
+      }
+    }
   });
 
   parent.postMessage({ type: 'signet:ready' }, '*');

@@ -326,6 +326,30 @@ export function setActiveGroup(groupId: string | null): void {
 
 // Widget focus & generation
 
+// Widget actions — sent from chat to trigger widget behavior (refresh, navigate, highlight)
+interface WidgetAction {
+	action: string;
+	data?: unknown;
+	_seq: number;
+}
+let widgetActions = $state<Map<string, WidgetAction>>(new Map());
+let actionSeq = 0;
+
+export function sendWidgetAction(serverId: string, action: string, data?: unknown): void {
+	widgetActions.set(serverId, { action, data, _seq: ++actionSeq });
+	// Auto-clear after a short delay
+	setTimeout(() => {
+		const current = widgetActions.get(serverId);
+		if (current && current._seq === actionSeq) {
+			widgetActions.delete(serverId);
+		}
+	}, 500);
+}
+
+export function getWidgetAction(serverId: string): WidgetAction | undefined {
+	return widgetActions.get(serverId);
+}
+
 export function expandWidget(id: string): void {
 	os.focusedId = id;
 }

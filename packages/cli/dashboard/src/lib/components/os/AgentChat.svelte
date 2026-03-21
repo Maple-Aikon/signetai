@@ -6,7 +6,7 @@
 	import Wrench from "@lucide/svelte/icons/wrench";
 	import ExternalLink from "@lucide/svelte/icons/external-link";
 	import { API_BASE } from "$lib/api";
-	import { os, moveToGrid, fetchWidgetHtml, fetchTrayEntries } from "$lib/stores/os.svelte";
+	import { os, moveToGrid, fetchWidgetHtml, fetchTrayEntries, sendWidgetAction } from "$lib/stores/os.svelte";
 
 	interface ToolCall {
 		tool: string;
@@ -101,7 +101,7 @@
 			const data = await res.json();
 			const toolCalls: ToolCall[] = data.toolCalls ?? [];
 
-			// If tools were called, open the related widget(s)
+			// If tools were called, open the related widget(s) and trigger actions
 			let openedWidget: string | undefined;
 			if (toolCalls.length > 0) {
 				const serverIds = [...new Set(toolCalls.map((tc) => tc.server))];
@@ -109,6 +109,45 @@
 					loadingStatus = `opening ${sid.replace('ghl-', '')}...`;
 					const opened = await openWidgetForServer(sid);
 					if (opened) openedWidget = sid;
+				}
+
+				// Determine what happened and send actions to widgets
+				for (const tc of toolCalls) {
+					if (tc.error) continue;
+					const tool = tc.tool;
+					const sid = tc.server;
+
+					// Mutation tools → refresh the widget to show changes
+					if (tool.startsWith("create_") || tool.startsWith("update_") ||
+						tool.startsWith("delete_") || tool.startsWith("add_") ||
+						tool.startsWith("remove_") || tool.startsWith("merge_")) {
+						loadingStatus = `updating ${sid.replace('ghl-', '')}...`;
+						// Brief delay to let the MCP server process the change
+						await new Promise((r) => setTimeout(r, 500));
+						sendWidgetAction(sid, "refresh");
+					}
+
+					// If we got a result with an ID, try to highlight/navigate to it
+					if (tc.result) {
+						try {
+							const resultData = typeof tc.result === "string" ? JSON.parse(tc.result) : tc.result;
+							const content = resultData?.content?.[0]?.text;
+							const parsed = content ? JSON.parse(content) : resultData;
+
+							// Extract name or identifier from result for highlighting
+							const name = parsed?.contact?.firstName ||
+								parsed?.contactName || parsed?.firstName ||
+								parsed?.name || parsed?.title || null;
+							const id = parsed?.contact?.id || parsed?.id || parsed?.contactId || null;
+
+							if (name) {
+								await new Promise((r) => setTimeout(r, 300));
+								sendWidgetAction(sid, "highlight", { text: name });
+							}
+						} catch {
+							// Result parsing failed — that's fine, skip highlight
+						}
+					}
 				}
 			}
 

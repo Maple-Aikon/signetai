@@ -3,6 +3,7 @@
 	import { buildSrcdoc } from "./widget-theme";
 	import { API_BASE } from "$lib/api";
 	import { getLastEvent, broadcastWidgetEvent } from "./widget-events.svelte";
+	import { getWidgetAction } from "$lib/stores/os.svelte";
 
 	interface Props {
 		html: string;
@@ -102,6 +103,17 @@
 			});
 		}
 	}
+
+	/**
+	 * Send an action to this widget (refresh, navigate, highlight).
+	 * Called from outside via the widgetActions store.
+	 */
+	$effect(() => {
+		const action = getWidgetAction(serverId);
+		if (action && ready) {
+			postToWidget({ type: 'signet:action', ...action });
+		}
+	});
 
 	function postToWidget(msg: Record<string, unknown>): void {
 		// srcdoc iframes have a null origin, so we must use "*" as the targetOrigin.
