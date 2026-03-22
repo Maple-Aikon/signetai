@@ -7,15 +7,15 @@ const ALLOWED_ORIGINS = [
 	'https://www.signetai.sh',
 ];
 
-function isAllowedOrigin(origin: string): boolean {
-	if (!origin) return false;
-	return ALLOWED_ORIGINS.includes(origin);
+function corsHeaders(origin: string): Record<string, string> {
+	if (!origin || !ALLOWED_ORIGINS.includes(origin)) return {};
+	return { 'Access-Control-Allow-Origin': origin };
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
 	const origin = context.request.headers.get('Origin') ?? '';
 	const headers = {
-		'Access-Control-Allow-Origin': isAllowedOrigin(origin) ? origin : '',
+		...corsHeaders(origin),
 		'Content-Type': 'application/json',
 	};
 
@@ -66,7 +66,7 @@ export const onRequestOptions: PagesFunction = async (context) => {
 	return new Response(null, {
 		status: 204,
 		headers: {
-			'Access-Control-Allow-Origin': isAllowedOrigin(origin) ? origin : '',
+			...corsHeaders(origin),
 			'Access-Control-Allow-Methods': 'POST, OPTIONS',
 			'Access-Control-Allow-Headers': 'Content-Type',
 		},

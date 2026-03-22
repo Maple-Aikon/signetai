@@ -3,7 +3,7 @@ import { DEFAULT_OPENAI_BASE_URL, DEFAULT_OLLAMA_BASE_URL } from "./memory-confi
 import { logger } from "./logger";
 import { getSecret } from "./secrets.js";
 
-function resolveOllamaUrl(): string {
+export function resolveOllamaUrl(): string {
 	const raw = process.env.OLLAMA_HOST;
 	if (!raw) return DEFAULT_OLLAMA_BASE_URL;
 	try {

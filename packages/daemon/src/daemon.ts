@@ -94,6 +94,7 @@ import {
 	resolveEmbeddingBaseUrl,
 	resolveEmbeddingApiKey,
 	setNativeFallbackToOllama,
+	resolveOllamaUrl,
 } from "./embedding-fetch";
 import { detectDrift } from "./predictor-comparison";
 import { getPredictorState } from "./predictor-state";
@@ -105,7 +106,7 @@ import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 import { type LogEntry, logger } from "./logger";
 import { migrateConfig } from "./config-migration";
-import { type EmbeddingConfig, loadMemoryConfig, DEFAULT_OLLAMA_BASE_URL } from "./memory-config";
+import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import {
 	getAttributesForAspectFiltered,
 	getKnowledgeGraphForConstellation,
@@ -1064,8 +1065,7 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
 				// Native unavailable — check if ollama is available as fallback
 				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
 				try {
-					const ollamaUrl = process.env.OLLAMA_HOST || DEFAULT_OLLAMA_BASE_URL;
-					const ollamaRes = await fetch(`${ollamaUrl.replace(/\/$/, "")}/api/tags`, {
+					const ollamaRes = await fetch(`${resolveOllamaUrl().replace(/\/$/, "")}/api/tags`, {
 						method: "GET",
 						signal: AbortSignal.timeout(3000),
 					});
