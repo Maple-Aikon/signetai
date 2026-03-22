@@ -10474,14 +10474,16 @@ async function main() {
 				if (bytes > REQUEST_BODY_LIMIT) {
 					aborted = true;
 					logger.warn("http", "Request body exceeded limit", { bytes, limit: REQUEST_BODY_LIMIT });
-					// Send a proper 413 before closing so clients get a structured
-					// error instead of ECONNRESET. Use res.end() to avoid aborting
-					// pipelined keep-alive requests on the same socket.
+					// Send a proper 413 then destroy the socket so Hono's handler
+					// doesn't try to write a second response (ERR_HTTP_HEADERS_SENT).
 					if (!res.headersSent) {
 						res.writeHead(413, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: "payload too large" }));
+						res.end(JSON.stringify({ error: "payload too large" }), () => {
+							// Destroy after the 413 is flushed — prevents Hono's
+							// pipeline from racing to write headers on a closed res.
+							req.socket?.destroy();
+						});
 					}
-					req.resume(); // drain remaining body to avoid backpressure
 				}
 			});
 		});
