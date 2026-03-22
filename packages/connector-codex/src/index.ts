@@ -137,7 +137,7 @@ function removeSignetHooks(hooks: HooksJson): HooksJson {
 function tomlQuote(s: string): string {
 	// Use TOML literal strings (single-quoted) to avoid backslash escaping
 	if (!s.includes("'")) return `'${s}'`;
-	return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n")}"`;
 }
 
 function tomlInlineArray(items: string[]): string {
