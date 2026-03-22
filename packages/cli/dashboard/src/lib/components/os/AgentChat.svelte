@@ -17,12 +17,15 @@
 	}
 
 	interface ChatMessage {
+		id: number;
 		role: "user" | "agent";
 		content: string;
 		timestamp: number;
 		toolCalls?: ToolCall[];
 		openedWidget?: string;  // server ID of widget that was opened
 	}
+
+	let msgId = 0;
 
 	let messages = $state<ChatMessage[]>([]);
 	let input = $state("");
@@ -254,7 +257,7 @@
 		const text = input.trim();
 		if (!text || loading) return;
 
-		messages.push({ role: "user", content: text, timestamp: Date.now() });
+		messages.push({ id: ++msgId, role: "user", content: text, timestamp: Date.now() });
 		input = "";
 		loading = true;
 		loadingStatus = "thinking...";
@@ -275,6 +278,7 @@
 			if (data.useAgent && data.agentServerId) {
 				// Show the LLM's immediate response first
 				messages.push({
+					id: ++msgId,
 					role: "agent",
 					content: data.response ?? "starting visual agent...",
 					timestamp: Date.now(),
@@ -286,6 +290,7 @@
 				try {
 					const agentResult = await executeAgentTask(data.agentServerId, data.agentTask || text);
 					messages.push({
+						id: ++msgId,
 						role: "agent",
 						content: agentResult,
 						timestamp: Date.now(),
@@ -293,6 +298,7 @@
 					});
 				} catch (err) {
 					messages.push({
+						id: ++msgId,
 						role: "agent",
 						content: `agent hit a wall: ${err instanceof Error ? err.message : String(err)}`,
 						timestamp: Date.now(),
@@ -359,6 +365,7 @@
 			}
 
 			messages.push({
+				id: ++msgId,
 				role: "agent",
 				content: data.response ?? data.error ?? "No response",
 				timestamp: Date.now(),
@@ -367,6 +374,7 @@
 			});
 		} catch (err) {
 			messages.push({
+				id: ++msgId,
 				role: "agent",
 				content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
 				timestamp: Date.now(),
@@ -414,7 +422,7 @@
 			</div>
 		{/if}
 
-		{#each messages as msg (msg.timestamp)}
+		{#each messages as msg (msg.id)}
 			<div class="chat-msg chat-msg--{msg.role}">
 				<div class="chat-msg-icon">
 					{#if msg.role === "user"}

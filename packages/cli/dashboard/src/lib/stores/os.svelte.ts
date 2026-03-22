@@ -336,11 +336,12 @@ let widgetActions = $state<Map<string, WidgetAction>>(new Map());
 let actionSeq = 0;
 
 export function sendWidgetAction(serverId: string, action: string, data?: unknown): void {
-	widgetActions.set(serverId, { action, data, _seq: ++actionSeq });
+	const seq = ++actionSeq;
+	widgetActions.set(serverId, { action, data, _seq: seq });
 	// Auto-clear after a short delay
 	setTimeout(() => {
 		const current = widgetActions.get(serverId);
-		if (current && current._seq === actionSeq) {
+		if (current && current._seq === seq) {
 			widgetActions.delete(serverId);
 		}
 	}, 500);

@@ -12,6 +12,7 @@ import { logger } from "../logger.js";
 import { getSynthesisProvider } from "../synthesis-llm.js";
 import { loadProbeResult } from "../mcp-probe.js";
 import { generateWithTracking } from "../pipeline/provider.js";
+import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,7 +43,6 @@ interface ToolResult {
 // ---------------------------------------------------------------------------
 
 function gatherTools(): ToolSpec[] {
-	const { readInstalledServersPublic } = require("./marketplace-helpers.js");
 	const servers = readInstalledServersPublic();
 	const out: ToolSpec[] = [];
 
@@ -185,8 +185,15 @@ export function mountOsChatRoutes(app: Hono): void {
 			const parsed = parse(raw.text);
 			const results: ToolResult[] = [];
 
+			// Build set of valid tool keys for validation
+			const validTools = new Set(tools.map((t) => `${t.server}/${t.name}`));
+
 			// Execute tool calls (max 5)
 			for (const call of parsed.toolCalls.slice(0, 5)) {
+				if (!validTools.has(`${call.serverId}/${call.toolName}`)) {
+					results.push({ tool: call.toolName, server: call.serverId, error: "unknown tool" });
+					continue;
+				}
 				try {
 					logger.info("os-chat", `Calling ${call.serverId}/${call.toolName}`, {
 						args: JSON.stringify(call.args || {}).slice(0, 500),

@@ -52,6 +52,21 @@ interface AgentEvent {
 
 const activeSessions = new Map<string, AgentSessionState>();
 
+// Recent event buffer per session — replayed to newly connected SSE clients
+const MAX_BUFFERED_EVENTS = 50;
+const eventBuffer = new Map<string, AgentEvent[]>();
+
+function bufferEvent(sessionId: string, event: AgentEvent): void {
+	const buf = eventBuffer.get(sessionId) ?? [];
+	buf.push(event);
+	if (buf.length > MAX_BUFFERED_EVENTS) buf.shift();
+	eventBuffer.set(sessionId, buf);
+}
+
+function getBufferedEvents(sessionId: string): readonly AgentEvent[] {
+	return eventBuffer.get(sessionId) ?? [];
+}
+
 let sessionCounter = 0;
 
 function createSessionId(): string {
@@ -325,6 +340,7 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 		// Clean up after a delay to let SSE clients receive final events
 		setTimeout(() => {
 			activeSessions.delete(session.id);
+			eventBuffer.delete(session.id);
 		}, 30000);
 	}
 }
@@ -387,6 +403,7 @@ async function requestDomState(session: AgentSessionState): Promise<unknown> {
 }
 
 function broadcastToSession(session: AgentSessionState, event: AgentEvent): void {
+	bufferEvent(session.id, event);
 	const listeners = session.sseListeners.slice();
 	for (let i = 0; i < listeners.length; i++) {
 		try {
@@ -534,6 +551,15 @@ export function mountOsAgentRoutes(app: Hono): void {
 								})}\n\n`,
 							),
 						);
+
+						// Replay buffered events so late-connecting clients catch up
+						for (const past of getBufferedEvents(session.id)) {
+							try {
+								controller.enqueue(encoder.encode(`data: ${JSON.stringify(past)}\n\n`));
+							} catch {
+								// Client disconnected during replay
+							}
+						}
 					} else {
 						controller.enqueue(
 							encoder.encode(
