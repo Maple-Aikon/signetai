@@ -54,15 +54,15 @@ Compiled from published papers, vendor docs, and independent evaluations.
 | 4 | MemMachine v0.2 | 91.7% | Judge | GPT-4.1-mini | No | memmachine.ai blog |
 | 5 | Hindsight | 89.6% | Judge | Cloud | Yes (MIT) | arXiv:2512.12818 |
 | 6 | SLM V3 Mode C | 87.7% | Judge | Yes (synthesis) | Yes (MIT) | arXiv:2603.14588 |
-| 7 | Zep/Graphiti | ~85% | Judge (third-party) | Cloud | Partial | DEV Community |
-| 8 | Letta/MemGPT | ~83% | Judge | Cloud | Yes (Apache) | letta.com blog |
-| 9 | Engram | 80.0% | Judge | Gemini 2.0 Flash | Yes | engram.fyi/research |
-| 10 | SLM V3 Mode A | 74.8% | Judge | **None** | Yes (MIT) | arXiv:2603.14588 |
-| 11 | Mem0+Graph | 68.4% | J-score (disputed) | GPT-4o | Partial | arXiv:2504.19413 |
-| 12 | **Signet (full stack)** | **87.5%** | **Judge** | **Local + GPT-4o judge** | **Yes** | **Internal (8-Q sample)** |
-| 13 | SLM Zero-LLM | 60.4% | Judge | **None** | Yes (MIT) | arXiv:2603.14588 |
-| 14 | Mem0 (independent) | ~58% | Judge | Cloud | Partial | Letta blog |
-| 15 | RAG baseline | 61.0% | J-score | Cloud | - | Mem0 paper |
+| 7 | **Signet (full stack)** | **87.5%** | **Judge** | **Local + GPT-4o judge** | **Yes** | **Internal (8-Q sample)** |
+| 8 | Zep/Graphiti | ~85% | Judge (third-party) | Cloud | Partial | DEV Community |
+| 9 | Letta/MemGPT | ~83% | Judge | Cloud | Yes (Apache) | letta.com blog |
+| 10 | Engram | 80.0% | Judge | Gemini 2.0 Flash | Yes | engram.fyi/research |
+| 11 | SLM V3 Mode A | 74.8% | Judge | **None** | Yes (MIT) | arXiv:2603.14588 |
+| 12 | Mem0+Graph | 68.4% | J-score (disputed) | GPT-4o | Partial | arXiv:2504.19413 |
+| 13 | RAG baseline | 61.0% | J-score | Cloud | - | Mem0 paper |
+| 14 | SLM Zero-LLM | 60.4% | Judge | **None** | Yes (MIT) | arXiv:2603.14588 |
+| 15 | Mem0 (independent) | ~58% | Judge | Cloud | Partial | Letta blog |
 
 ### LongMemEval Scores (where available)
 

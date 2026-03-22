@@ -5646,9 +5646,13 @@ app.post("/api/hooks/remember", async (c) => {
 
 		// Forward to the full remember endpoint for transcript, structured,
 		// and pipeline support instead of the bare handleRemember path.
+		const auth = c.req.header("authorization");
+		const headers = auth
+			? { "Content-Type": "application/json", Authorization: auth }
+			: { "Content-Type": "application/json" };
 		return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(body),
 		});
 	} catch (e) {

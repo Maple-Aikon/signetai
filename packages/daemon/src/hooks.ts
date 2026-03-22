@@ -2078,8 +2078,10 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 					VALUES (?, ?, ?, ?, ?, ?)`,
 				).run(sessionKey, transcript, req.harness, req.cwd ?? null, agentId, now);
 			});
-		} catch {
-			// Non-fatal — table may not exist pre-migration
+		} catch (e) {
+			logger.warn("hooks", "Transcript write failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
 		}
 	}
 
