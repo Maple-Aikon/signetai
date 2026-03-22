@@ -10479,8 +10479,9 @@ async function main() {
 					if (!res.headersSent) {
 						res.writeHead(413, { "Content-Type": "application/json" });
 						res.end(JSON.stringify({ error: "payload too large" }), () => {
-							// Destroy after the 413 is flushed — prevents Hono's
-							// pipeline from racing to write headers on a closed res.
+							// Destroy after flush so Hono's subsequent write fails
+							// silently on a closed socket rather than emitting
+							// ERR_HTTP_HEADERS_SENT on a finished response.
 							req.socket?.destroy();
 						});
 					}
