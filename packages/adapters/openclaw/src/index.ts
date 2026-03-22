@@ -816,7 +816,7 @@ async function registerMarketplaceProxyTools(
 
 	let registeredNow = 0;
 	for (const tool of candidates) {
-		const toolKey = `${tool.serverId}:${tool.toolName}`;
+		const toolKey = `${tool.serverId}\0${tool.toolName}`;
 		let proxyName = proxyNameByToolKey.get(toolKey);
 		if (!proxyName) {
 			proxyName = buildProxyToolName(usedNames, tool.serverId, tool.toolName);

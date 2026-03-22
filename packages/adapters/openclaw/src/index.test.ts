@@ -1,6 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import signetPlugin from "./index";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import type { OpenClawPluginApi } from "./openclaw-types";
+
+// Mock readStaticIdentity so staticFallback() always returns a
+// truthy result regardless of whether ~/.agents exists on the host.
+mock.module("@signet/core", () => ({
+	readStaticIdentity: () => "mocked-static-identity",
+}));
+
+// Import after mock so the module picks up the stub.
+const signetPlugin = (await import("./index")).default;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
