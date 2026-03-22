@@ -10,7 +10,6 @@ import {
 	lstatSync,
 	mkdirSync,
 	readdirSync,
-	statSync,
 	symlinkSync,
 	unlinkSync,
 } from "node:fs";
@@ -93,9 +92,13 @@ export function symlinkSkills(
 		const srcPath = join(sourceDir, entry);
 		const destPath = join(targetDir, entry);
 
-		// Skip if not a directory
+		// Skip if not a real directory — use lstatSync (not statSync) to
+		// detect symlinks at the source. statSync follows symlinks, which
+		// would let an attacker replace srcPath with a symlink to a
+		// sensitive directory between the check and the link operation.
 		try {
-			if (!statSync(srcPath).isDirectory()) {
+			const src = lstatSync(srcPath);
+			if (src.isSymbolicLink() || !src.isDirectory()) {
 				result.skipped.push(srcPath);
 				continue;
 			}

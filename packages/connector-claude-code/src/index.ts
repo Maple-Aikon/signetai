@@ -16,6 +16,7 @@ import {
 	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
+	atomicWriteJson,
 } from "@signet/connector-base";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -158,7 +159,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 				}
 			}
 
-			writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+			atomicWriteJson(settingsPath, settings);
 			filesRemoved.push(settingsPath);
 		} catch {
 			// If parsing fails, leave settings as-is
@@ -378,7 +379,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		// Migration: remove stale PreCompaction key from existing installs
 		delete (settings.hooks as Record<string, unknown>).PreCompaction;
 
-		writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+		atomicWriteJson(settingsPath, settings);
 
 		// Register Signet MCP server in ~/.claude.json (user scope)
 		this.registerMcpServer();
@@ -435,7 +436,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			},
 		};
 
-		writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2));
+		atomicWriteJson(claudeJsonPath, config);
 	}
 
 	/**
@@ -463,7 +464,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			if (Object.keys(mcp).length === 0) {
 				delete config.mcpServers;
 			}
-			writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2));
+			atomicWriteJson(claudeJsonPath, config);
 		}
 	}
 

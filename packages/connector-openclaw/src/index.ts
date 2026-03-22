@@ -24,7 +24,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 import { parse as parseJson5 } from "json5";
 
 // ============================================================================
@@ -570,7 +570,7 @@ export class OpenClawConnector extends BaseConnector {
 				}
 
 				config.plugins = pluginsObj;
-				writeFileSync(configPath, JSON.stringify(config, null, indent));
+				atomicWriteJson(configPath, config, indent);
 				patched.push(configPath);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
@@ -866,7 +866,7 @@ export class OpenClawConnector extends BaseConnector {
 				config.plugins = pluginsObj;
 
 				deepMerge(config, patch);
-				writeFileSync(configPath, JSON.stringify(config, null, indent));
+				atomicWriteJson(configPath, config, indent);
 				patched.push(configPath);
 			} catch (e) {
 				const message = (e as Error).message || "unknown parse/write error";
@@ -912,7 +912,7 @@ export class OpenClawConnector extends BaseConnector {
 
 		const indent = this.detectIndent(raw);
 		deepMerge(config, patch);
-		writeFileSync(configPath, JSON.stringify(config, null, indent));
+		atomicWriteJson(configPath, config, indent);
 	}
 
 	/**
@@ -991,7 +991,7 @@ export class OpenClawConnector extends BaseConnector {
 
 				if (dirty) {
 					config.plugins = pluginsObj;
-					writeFileSync(configPath, JSON.stringify(config, null, indent));
+					atomicWriteJson(configPath, config, indent);
 					patched.push(configPath);
 				}
 			} catch (e) {
@@ -1131,7 +1131,7 @@ configured by rejecting session claims from the second path (HTTP 409).
 
 		writeFileSync(hookMdPath, hookMd);
 		writeFileSync(handlerJsPath, handlerJs);
-		writeFileSync(packageJsonPath, JSON.stringify({ name: "agent-memory", version: "1.0.0", type: "module" }, null, 2));
+		atomicWriteJson(packageJsonPath, { name: "agent-memory", version: "1.0.0", type: "module" });
 		writeFileSync(migrationMdPath, migrationMd);
 
 		return [hookMdPath, handlerJsPath, packageJsonPath, migrationMdPath];

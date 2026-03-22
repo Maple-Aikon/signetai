@@ -32,6 +32,7 @@ import {
 	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
+	atomicWriteJson,
 } from "@signet/connector-base";
 import { hasValidIdentity } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
@@ -377,7 +378,7 @@ export class OpenCodeConnector extends BaseConnector {
 
 			const changed = this.removeMemoryMjsEntries(config);
 			if (changed) {
-				writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+				atomicWriteJson(configPath, config);
 			}
 		}
 	}
@@ -434,7 +435,7 @@ export class OpenCodeConnector extends BaseConnector {
 			const existing = toStringArray(config.plugin);
 			if (!existing.includes(pluginEntry)) {
 				config.plugin = [...existing, pluginEntry];
-				writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+				atomicWriteJson(configPath, config);
 			}
 			return;
 		}
@@ -457,7 +458,7 @@ export class OpenCodeConnector extends BaseConnector {
 			const filtered = existing.filter((entry) => entry !== pluginEntry);
 			if (filtered.length !== existing.length) {
 				config.plugin = filtered;
-				writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+				atomicWriteJson(configPath, config);
 			}
 			return;
 		}
@@ -500,7 +501,7 @@ export class OpenCodeConnector extends BaseConnector {
 					enabled: true,
 				},
 			};
-			writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+			atomicWriteJson(configPath, config);
 			return; // Only update first found config
 		}
 	}
@@ -525,7 +526,7 @@ export class OpenCodeConnector extends BaseConnector {
 				if (Object.keys(mcp).length === 0) {
 					delete config.mcp;
 				}
-				writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+				atomicWriteJson(configPath, config);
 			}
 		}
 	}

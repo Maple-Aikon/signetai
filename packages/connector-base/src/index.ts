@@ -32,8 +32,9 @@
  * ```
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 import {
 	buildSignetBlock,
 	stripSignetBlock,
@@ -209,6 +210,19 @@ export abstract class BaseConnector {
 	 * Get the path to the harness's main config file.
 	 */
 	abstract getConfigPath(): string;
+}
+
+// ============================================================================
+// Atomic file write — prevents TOCTOU corruption when multiple
+// connector runs race on the same config file. Writes to a temp file
+// then renames (atomic on POSIX, near-atomic on Windows).
+// ============================================================================
+
+export function atomicWriteJson(path: string, data: unknown, indent: number | string = 2): void {
+	const content = `${JSON.stringify(data, null, indent)}\n`;
+	const tmp = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
+	writeFileSync(tmp, content, "utf-8");
+	renameSync(tmp, path);
 }
 
 // ============================================================================

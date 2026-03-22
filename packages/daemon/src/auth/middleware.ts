@@ -24,18 +24,24 @@ function extractBearerToken(header: string | undefined): string | null {
 	return parts[1] ?? null;
 }
 
-// Known limitation: checks Host header, not connection peer address.
-// Spoofable by remote clients in theory, but daemon typically binds to
-// localhost anyway. Hono doesn't expose peer IP portably. Acceptable
-// for v1; revisit if daemon gets exposed to untrusted networks.
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+// Check actual TCP peer address first (not spoofable), fall back to Host
+// header only when socket info is unavailable (e.g. test environments).
 function isLocalhost(c: Context): boolean {
+	try {
+		// @hono/node-server stores the raw IncomingMessage in env bindings
+		const addr = (c.env as Record<string, unknown>)?.incoming as
+			| { socket?: { remoteAddress?: string } }
+			| undefined;
+		const remote = addr?.socket?.remoteAddress;
+		if (remote) return LOOPBACK.has(remote);
+	} catch {
+		// getConnInfo unavailable — fall through to Host header
+	}
 	const host = c.req.header("host") ?? "";
-	const hostWithoutPort = host.split(":")[0] ?? "";
-	return (
-		hostWithoutPort === "localhost" ||
-		hostWithoutPort === "127.0.0.1" ||
-		hostWithoutPort === "::1"
-	);
+	const bare = host.split(":")[0] ?? "";
+	return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
 }
 
 export function createAuthMiddleware(

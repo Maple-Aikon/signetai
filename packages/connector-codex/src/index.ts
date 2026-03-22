@@ -11,6 +11,7 @@ import {
 	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
+	atomicWriteJson,
 } from "@signet/connector-base";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +92,7 @@ function isSignetOwned(hooks: HooksJson): boolean {
 
 function writeHooksJson(path: string, hooks: HooksJson): void {
 	mkdirSync(join(path, ".."), { recursive: true });
-	writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
+	atomicWriteJson(path, hooks);
 }
 
 const SIGNET_HOOK_CMDS = ["hook session-start", "hook user-prompt-submit", "hook session-end"] as const;

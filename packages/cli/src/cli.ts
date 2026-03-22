@@ -3642,10 +3642,18 @@ async function importFromGitHub(basePath: string) {
 		rmSync(tmpDir, { recursive: true });
 	}
 
+	// Validate URL scheme — reject file:// and bare local paths to prevent
+	// local filesystem reads and crafted repo content execution.
+	const SAFE_SCHEMES = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i;
+	if (!SAFE_SCHEMES.test(gitUrl)) {
+		console.log(chalk.red("  Invalid git URL — only https://, ssh://, and git:// are allowed"));
+		return;
+	}
+
 	const spinner = ora("Cloning repository...").start();
 
 	try {
-		const cloneResult = spawnSync("git", ["clone", "--depth", "1", gitUrl, tmpDir], {
+		const cloneResult = spawnSync("git", ["clone", "--depth", "1", "--single-branch", gitUrl, tmpDir], {
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 			windowsHide: true,
@@ -4237,11 +4245,20 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 		return false;
 	}
 
+	// Parse command into argv to avoid sh -c shell injection.
+	// agent.yaml is user-controlled — a tampered file could inject
+	// arbitrary commands if passed directly to a shell wrapper.
+	const argv = restartCommand.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
+	if (!argv || argv.length === 0) {
+		console.log(chalk.red("  Invalid restart command"));
+		return false;
+	}
+	// Strip surrounding quotes from each arg
+	const cmd = argv.map((a: string) => a.replace(/^["']|["']$/g, ""));
+
 	const spinner = ora("Restarting OpenClaw...").start();
 	try {
-		const shell = process.platform === "win32" ? "cmd" : "sh";
-		const shellArgs = process.platform === "win32" ? ["/c", restartCommand] : ["-c", restartCommand];
-		const result = spawnSync(shell, shellArgs, {
+		const result = spawnSync(cmd[0], cmd.slice(1), {
 			timeout: 15_000,
 			stdio: "pipe",
 			windowsHide: true,

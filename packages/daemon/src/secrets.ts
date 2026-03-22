@@ -222,15 +222,23 @@ export function deleteSecret(name: string): boolean {
 	return true;
 }
 
+// Reject commands containing shell metacharacters that could enable
+// injection when passed to sh -c. The endpoint is admin-gated, but
+// defense-in-depth prevents a compromised token from pivoting.
+const SHELL_META = /[;&|`$(){}[\]<>!\\]/;
+
 /**
  * Spawn a subprocess with one or more secrets injected as environment
  * variables. The agent only supplies references (env var names), never
  * the actual values.
  *
- * @param command  Shell command string to execute
+ * @param command  Shell command string to execute (no shell metacharacters allowed)
  * @param secretRefs  Map of env var name → secret name, e.g. { OPENAI_API_KEY: "OPENAI_API_KEY" }
  */
 export async function execWithSecrets(command: string, secretRefs: Record<string, string>): Promise<ExecResult> {
+	if (SHELL_META.test(command)) {
+		return { stdout: "", stderr: "command contains disallowed shell metacharacters", code: 1 };
+	}
 	// Resolve all secret values up front so we can redact them from output
 	const resolved: Record<string, string> = {};
 	for (const [envVar, secretName] of Object.entries(secretRefs)) {

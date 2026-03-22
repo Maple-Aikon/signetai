@@ -1207,12 +1207,29 @@ function getDashboardPath(): string | null {
 // Create the Hono app
 export const app = new Hono();
 
-// Middleware
-app.use("*", cors());
+// Middleware — restrict CORS to localhost origins only
+const ALLOWED_ORIGINS = new Set([
+	"http://localhost:3850",
+	"http://127.0.0.1:3850",
+	"http://localhost:5173",
+	"http://127.0.0.1:5173",
+	"tauri://localhost",
+	"http://tauri.localhost",
+]);
+app.use("*", cors({
+	origin: (origin) => ALLOWED_ORIGINS.has(origin) ? origin : "",
+	credentials: true,
+}));
 
 // Auth middleware — reads from module-level authConfig/authSecret
 // which are initialized properly in main(). In local mode this is a no-op.
+// Guard: reject requests if auth is required but secret isn't initialized yet
+// (startup race between middleware registration and main() completing).
 app.use("*", async (c, next) => {
+	if (authConfig.mode !== "local" && !authSecret) {
+		c.status(503);
+		return c.json({ error: "server initializing" });
+	}
 	const mw = createAuthMiddleware(authConfig, authSecret);
 	return mw(c, next);
 });
@@ -1510,6 +1527,32 @@ app.use("/api/repair/*", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
 });
 
+// Secrets — admin only (can exec commands, exfiltrate secrets)
+app.use("/api/secrets", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+app.use("/api/secrets/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
+// Git operations — admin only (can push, change remotes)
+app.use("/api/git/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
+// Troubleshooter — admin only (can stop/restart daemon, run CLI commands)
+app.use("/api/troubleshoot/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
+// Config writes — admin only (can overwrite agent.yaml, AGENTS.md)
+app.use("/api/config", async (c, next) => {
+	if (c.req.method === "POST") {
+		return requirePermission("admin", authConfig)(c, next);
+	}
+	return next();
+});
+
 // Per-memory PATCH and DELETE need method-specific guards + scope check
 app.use("/api/memory/:id", async (c, next) => {
 	// Scope enforcement on mutations: if token has project scope, verify
@@ -1644,6 +1687,12 @@ app.post("/api/config", async (c) => {
 
 		if (!file || typeof content !== "string") {
 			return c.json({ error: "Invalid request" }, 400);
+		}
+
+		// Reject oversized payloads (1MB) to prevent disk exhaustion
+		const MAX_CONFIG_BYTES = 1_048_576;
+		if (content.length > MAX_CONFIG_BYTES) {
+			return c.json({ error: `Content exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
 		}
 
 		if (file.includes("/") || file.includes("..")) {
