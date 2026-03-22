@@ -88,6 +88,10 @@ export async function spawnTask(
 		env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
 	});
 
+	// Close stdin immediately — we never write to it, and leaving it open
+	// causes CLIs like claude to wait for input before proceeding.
+	child.stdin?.end();
+
 	const procStdout = new ReadableStream<Uint8Array>({
 		start(controller) {
 			child.stdout?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
