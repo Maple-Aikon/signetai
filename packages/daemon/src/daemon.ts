@@ -275,6 +275,24 @@ function parseOriginPort(url: URL): number | null {
 	return null;
 }
 
+function normalizeOriginHost(host: string): string {
+	return host.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function isLoopbackOriginHost(host: string): boolean {
+	return host === "localhost" || host === "::1" || host === "0:0:0:0:0:0:0:1" || host.startsWith("127.");
+}
+
+function isTailscaleOriginHost(host: string): boolean {
+	if (host.endsWith(".ts.net")) return true;
+	if (host.startsWith("fd7a:115c:a1e0:")) return true;
+	if (!host.startsWith("100.")) return false;
+	const parts = host.split(".");
+	if (parts.length !== 4) return false;
+	const second = Number.parseInt(parts[1], 10);
+	return Number.isInteger(second) && second >= 64 && second <= 127;
+}
+
 function isAllowedOrigin(origin: string | undefined): boolean {
 	if (!origin) return false;
 	if (ALLOWED_ORIGINS.has(origin)) return true;
@@ -283,7 +301,10 @@ function isAllowedOrigin(origin: string | undefined): boolean {
 	try {
 		const url = new URL(origin);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-		return parseOriginPort(url) === PORT;
+		if (parseOriginPort(url) !== PORT) return false;
+		const host = normalizeOriginHost(url.hostname);
+		if (isLoopbackOriginHost(host)) return false;
+		return isTailscaleOriginHost(host);
 	} catch {
 		return false;
 	}

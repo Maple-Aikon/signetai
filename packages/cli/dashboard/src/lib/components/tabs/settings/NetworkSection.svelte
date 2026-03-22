@@ -10,6 +10,9 @@ const selectTriggerClass =
 const selectContentClass =
 	"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
 const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
+const mode = $derived(st.aStr(["network", "mode"]) || "localhost");
+const auth = $derived(st.sStr(["auth", "mode"]) || "local");
+const warn = $derived(mode === "tailscale" && auth === "local");
 
 function setMode(value: string | undefined): void {
 	st.aSetStr(["network", "mode"], value ?? "localhost");
@@ -26,11 +29,11 @@ function modeLabel(value: string): string {
 		<FormField label="Hosting mode" description="If auth.mode is local, anyone on your trusted tailnet can access the dashboard and API when tailscale mode is enabled.">
 			<Select.Root
 				type="single"
-				value={st.aStr(["network", "mode"]) || "localhost"}
+				value={mode}
 				onValueChange={setMode}
 			>
 				<Select.Trigger class={selectTriggerClass}>
-					{modeLabel(st.aStr(["network", "mode"]) || "localhost")}
+					{modeLabel(mode)}
 				</Select.Trigger>
 				<Select.Content class={selectContentClass}>
 					{#each NETWORK_MODES as value (value)}
@@ -38,6 +41,13 @@ function modeLabel(value: string): string {
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			{#if warn}
+				<div
+					class="mt-3 px-3 py-2 text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-warning,#d4a017)] bg-[color-mix(in_srgb,var(--sig-warning,#d4a017)_10%,transparent)] border border-[var(--sig-warning,#d4a017)]"
+				>
+					Tailscale mode with local auth exposes the dashboard and API to other devices on your tailnet. Switch auth.mode before saving if you do not want shared access.
+				</div>
+			{/if}
 		</FormField>
 	</FormSection>
 {/if}
