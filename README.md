@@ -45,7 +45,7 @@ Everything runs locally. You own the data. The agent is yours.
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | **Supported** | Hooks + CLAUDE.md sync |
 | [OpenCode](https://github.com/sst/opencode) | **Supported** | Plugin + AGENTS.md sync |
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
-| [Codex](https://github.com/openai/codex) | In progress | WIP |
+| [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | — |
 
 ## Install
