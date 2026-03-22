@@ -79,6 +79,14 @@ export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
 export {
+	NETWORK_MODES,
+	normalizeNetworkMode,
+	networkModeFromBindHost,
+	readNetworkMode,
+	resolveNetworkBinding,
+} from "./network";
+export type { NetworkMode } from "./network";
+export {
 	search,
 	vectorSearch,
 	keywordSearch,

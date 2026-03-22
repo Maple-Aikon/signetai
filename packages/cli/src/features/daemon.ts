@@ -1,13 +1,14 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { detectSchema, ensureUnifiedSchema, parseSimpleYaml, runMigrations } from "@signet/core";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import open from "open";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions } from "../commands/shared.js";
+import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 
 interface DaemonStatus {
@@ -15,6 +16,9 @@ interface DaemonStatus {
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
+	readonly host: string | null;
+	readonly bindHost: string | null;
+	readonly networkMode: string | null;
 }
 
 interface LogEntry {
@@ -191,7 +195,10 @@ export async function doStart(options: PathOptions, deps: Deps): Promise<void> {
 	const started = await deps.startDaemon(basePath);
 	if (started) {
 		spinner.succeed("Daemon started");
-		console.log(chalk.dim(`  Dashboard: http://localhost:${deps.defaultPort}`));
+		const status = await deps.getDaemonStatus();
+		for (const line of daemonAccessLines(deps.defaultPort, status)) {
+			console.log(chalk.dim(`  ${line}`));
+		}
 		return;
 	}
 
@@ -236,7 +243,10 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 
 	if (started) {
 		spinner.succeed(running ? "Daemon restarted" : "Daemon started");
-		console.log(chalk.dim(`  Dashboard: http://localhost:${deps.defaultPort}`));
+		const status = await deps.getDaemonStatus();
+		for (const line of daemonAccessLines(deps.defaultPort, status)) {
+			console.log(chalk.dim(`  ${line}`));
+		}
 	} else {
 		spinner.fail("Failed to restart daemon");
 		return;

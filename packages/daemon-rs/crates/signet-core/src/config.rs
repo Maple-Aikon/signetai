@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::constants::{
-    DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HOST, DEFAULT_HYBRID_ALPHA, DEFAULT_PORT,
-};
+use crate::constants::{DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HYBRID_ALPHA, DEFAULT_PORT};
 
 // ---------------------------------------------------------------------------
 // Daemon runtime config (resolved from env + agent.yaml)
@@ -27,15 +25,29 @@ impl DaemonConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| dirs_home().join(".agents"));
 
+        let manifest = load_manifest(&base).unwrap_or_default();
+        let (cfg_host, cfg_bind) = resolve_network_binding(
+            manifest
+                .network
+                .as_ref()
+                .and_then(|network| network.mode.as_deref()),
+        );
         let db = base.join("memory").join("memories.db");
         let port = std::env::var("SIGNET_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_PORT);
-        let host = std::env::var("SIGNET_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
-        let bind = std::env::var("SIGNET_BIND").ok();
-
-        let manifest = load_manifest(&base).unwrap_or_default();
+        let host_env = std::env::var("SIGNET_HOST").ok();
+        let host_from_env = host_env.is_some();
+        let bind_env = std::env::var("SIGNET_BIND").ok();
+        let host = host_env.unwrap_or_else(|| cfg_host.to_string());
+        let bind = bind_env.or_else(|| {
+            if host_from_env {
+                Some(host.clone())
+            } else {
+                Some(cfg_bind.to_string())
+            }
+        });
 
         Self {
             base_path: base,
@@ -69,7 +81,9 @@ fn dirs_home() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            tracing::warn!("neither HOME nor USERPROFILE is set; falling back to current directory");
+            tracing::warn!(
+                "neither HOME nor USERPROFILE is set; falling back to current directory"
+            );
             PathBuf::from(".")
         })
 }
@@ -78,6 +92,20 @@ fn load_manifest(base: &Path) -> Option<AgentManifest> {
     let path = base.join("agent.yaml");
     let content = std::fs::read_to_string(&path).ok()?;
     serde_yml::from_str(&content).ok()
+}
+
+fn resolve_network_binding(mode: Option<&str>) -> (&'static str, &'static str) {
+    match mode {
+        Some("tailscale") => ("127.0.0.1", "0.0.0.0"),
+        _ => ("127.0.0.1", "127.0.0.1"),
+    }
+}
+
+pub fn network_mode_from_bind(bind: &str) -> &'static str {
+    match bind {
+        "127.0.0.1" | "localhost" | "::1" | "::ffff:127.0.0.1" => "localhost",
+        _ => "tailscale",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +118,7 @@ pub struct AgentManifest {
     pub version: Option<serde_json::Value>,
     pub schema: Option<String>,
     pub agent: AgentIdentity,
+    pub network: Option<NetworkConfig>,
     pub owner: Option<OwnerConfig>,
     pub harnesses: Option<Vec<String>>,
     pub embedding: Option<EmbeddingConfig>,
@@ -102,6 +131,11 @@ pub struct AgentManifest {
     pub capabilities: Option<Vec<String>>,
     #[serde(rename = "harnessCompatibility")]
     pub harness_compatibility: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,6 +173,30 @@ impl Default for EmbeddingConfig {
             base_url: None,
             api_key: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{network_mode_from_bind, resolve_network_binding};
+
+    #[test]
+    fn resolves_localhost_binding_by_default() {
+        assert_eq!(resolve_network_binding(None), ("127.0.0.1", "127.0.0.1"));
+    }
+
+    #[test]
+    fn resolves_tailscale_binding_from_manifest() {
+        assert_eq!(
+            resolve_network_binding(Some("tailscale")),
+            ("127.0.0.1", "0.0.0.0")
+        );
+    }
+
+    #[test]
+    fn infers_network_mode_from_bind_host() {
+        assert_eq!(network_mode_from_bind("127.0.0.1"), "localhost");
+        assert_eq!(network_mode_from_bind("0.0.0.0"), "tailscale");
     }
 }
 
