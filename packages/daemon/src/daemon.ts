@@ -298,7 +298,9 @@ function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
 	try {
 		const parsed = new URL(baseUrl);
 		const isLoopbackHost =
-			parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1";
+			parsed.hostname === "127.0.0.1" ||
+			parsed.hostname === "localhost" ||
+			parsed.hostname === "::1";
 		if (!isLoopbackHost) return false;
 		if (parsed.protocol !== "http:") return false;
 		const port = parsed.port.length > 0 ? Number.parseInt(parsed.port, 10) : 80;
@@ -325,7 +327,8 @@ function redactUrlForLogs(url: string | undefined): string | undefined {
 const PORT = parsePort(readEnvTrimmed("SIGNET_PORT"), 3850);
 const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? "127.0.0.1");
 const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? HOST);
-const INTERNAL_SELF_HOST = BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
+const INTERNAL_SELF_HOST =
+	BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
 
 type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
 
@@ -368,10 +371,12 @@ let shadowProcess: ChildProcess | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
-let diagnosticsCache: {
-	readonly report: DiagnosticsReport;
-	readonly expiresAt: number;
-} | null = null;
+let diagnosticsCache:
+	| {
+			readonly report: DiagnosticsReport;
+			readonly expiresAt: number;
+	  }
+	| null = null;
 const DIAGNOSTICS_CACHE_TTL_MS = 2000;
 
 // Prevents concurrent UMAP computations for the same dimension count
@@ -464,7 +469,9 @@ function setupShadowDb(agentsDir: string): string {
 
 	const mainDb = join(agentsDir, "memory", "memories.db");
 	const shadowDb = join(shadowMemDir, "memories.db");
-	const stale = !existsSync(shadowDb) || Date.now() - statSync(shadowDb).mtimeMs > 24 * 60 * 60 * 1000;
+	const stale =
+		!existsSync(shadowDb) ||
+		Date.now() - statSync(shadowDb).mtimeMs > 24 * 60 * 60 * 1000;
 	if (stale && existsSync(mainDb)) {
 		// Copy WAL and SHM alongside the main DB so the shadow starts from a
 		// consistent snapshot — without them it may see uncheckpointed pages as missing.
@@ -730,7 +737,11 @@ function getConfiguredProviderHints(agentsDir: string): {
 	readonly extraction: string | null;
 	readonly synthesis: string | null;
 } {
-	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
+	const paths = [
+		join(agentsDir, "agent.yaml"),
+		join(agentsDir, "AGENT.yaml"),
+		join(agentsDir, "config.yaml"),
+	];
 	let extraction: string | null = null;
 	let synthesis: string | null = null;
 
@@ -748,7 +759,10 @@ function getConfiguredProviderHints(agentsDir: string): {
 					: typeof extractionObj?.provider === "string"
 						? extractionObj.provider
 						: null;
-			const synthesisInFile = typeof synthesisObj?.provider === "string" ? synthesisObj.provider : null;
+			const synthesisInFile =
+				typeof synthesisObj?.provider === "string"
+					? synthesisObj.provider
+					: null;
 			if (extraction === null && extractionInFile !== null) {
 				extraction = extractionInFile;
 			}
@@ -1218,13 +1232,10 @@ const ALLOWED_ORIGINS = new Set([
 	"tauri://localhost",
 	"http://tauri.localhost",
 ]);
-app.use(
-	"*",
-	cors({
-		origin: (origin) => (ALLOWED_ORIGINS.has(origin) ? origin : null),
-		credentials: true,
-	}),
-);
+app.use("*", cors({
+	origin: (origin) => ALLOWED_ORIGINS.has(origin) ? origin : null,
+	credentials: true,
+}));
 
 // Auth middleware — reads from module-level authConfig/authSecret
 // which are initialized properly in main(). In local mode this is a no-op.
@@ -1636,9 +1647,7 @@ app.get("/api/logs/stream", (c) => {
 				if (dead) return;
 				dead = true;
 				logger.off("log", onLog);
-				try {
-					controller.close();
-				} catch {}
+				try { controller.close(); } catch {}
 			};
 
 			const onLog = (entry: LogEntry) => {
@@ -1843,7 +1852,9 @@ app.get("/api/memory/timeline", (c) => {
 	try {
 		const raw = Number.parseInt(c.req.query("tzOffset") || "0", 10);
 		const tzOffsetMin = Number.isNaN(raw) ? 0 : Math.max(-840, Math.min(840, raw));
-		const timeline = getDbAccessor().withReadDb((db) => buildMemoryTimeline(db, { tzOffsetMin }));
+		const timeline = getDbAccessor().withReadDb((db) =>
+			buildMemoryTimeline(db, { tzOffsetMin }),
+		);
 		return c.json(timeline);
 	} catch (e) {
 		logger.error("memory", "Error building memory timeline", e as Error);
@@ -5321,16 +5332,16 @@ app.post("/api/hooks/session-end", async (c) => {
 			return c.json({ memoriesSaved: 0, bypassed: true });
 		}
 
-		try {
-			const result = await handleSessionEnd(body);
-			return c.json(result);
-		} finally {
-			// Always release session claim and agent presence, even if extraction throws
-			if (sessionKey) {
-				releaseSession(sessionKey);
-				removeAgentPresence(sessionKey);
-			}
+	try {
+		const result = await handleSessionEnd(body);
+		return c.json(result);
+	} finally {
+		// Always release session claim and agent presence, even if extraction throws
+		if (sessionKey) {
+			releaseSession(sessionKey);
+			removeAgentPresence(sessionKey);
 		}
+	}
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
@@ -5768,9 +5779,7 @@ app.get("/api/cross-agent/stream", (c) => {
 				dead = true;
 				clearInterval(keepAlive);
 				unsubscribe();
-				try {
-					controller.close();
-				} catch {}
+				try { controller.close(); } catch {}
 			};
 
 			const writeEvent = (event: unknown) => {
@@ -6005,10 +6014,7 @@ app.get("/api/sessions/summaries", (c) => {
 	const project = c.req.query("project");
 	const depthRaw = c.req.query("depth");
 	const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
-	if (
-		depthNum !== undefined &&
-		(Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")
-	) {
+	if (depthNum !== undefined && (Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")) {
 		return c.json({ error: "depth must be a non-negative integer" }, 400);
 	}
 	const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
@@ -6018,7 +6024,11 @@ app.get("/api/sessions/summaries", (c) => {
 
 	// Check table exists
 	const tableExists = accessor.withReadDb((db) =>
-		db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
+		db
+			.prepare(
+				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`,
+			)
+			.get(),
 	);
 	if (!tableExists) {
 		return c.json({ summaries: [], total: 0 });
@@ -6037,9 +6047,11 @@ app.get("/api/sessions/summaries", (c) => {
 			params.push(depthNum);
 		}
 
-		const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM session_summaries ${where}`).get(...params) as
-			| { cnt: number }
-			| undefined;
+		const countRow = db
+			.prepare(
+				`SELECT COUNT(*) as cnt FROM session_summaries ${where}`,
+			)
+			.get(...params) as { cnt: number } | undefined;
 
 		const summaries = db
 			.prepare(
@@ -6052,10 +6064,14 @@ app.get("/api/sessions/summaries", (c) => {
 			)
 			.all(...params, limit, offset) as Array<Record<string, unknown>>;
 
-		const childCountStmt = db.prepare(`SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?`);
+		const childCountStmt = db.prepare(
+			`SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?`,
+		);
 
 		const enriched = summaries.map((s) => {
-			const childRow = childCountStmt.get(s.id) as { cnt: number } | undefined;
+			const childRow = childCountStmt.get(s.id) as
+				| { cnt: number }
+				| undefined;
 			return { ...s, childCount: childRow?.cnt ?? 0 };
 		});
 
@@ -6693,7 +6709,10 @@ app.get("/api/status", (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 	const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
 	const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
-	const datedLogFile = join(configuredLogDir, `signet-${new Date().toISOString().slice(0, 10)}.log`);
+	const datedLogFile = join(
+		configuredLogDir,
+		`signet-${new Date().toISOString().slice(0, 10)}.log`,
+	);
 
 	let health: { score: number; status: string } | undefined;
 	try {
@@ -6936,38 +6955,34 @@ const REFRESH_COOLDOWN_MS = 60_000;
 app.post("/api/pipeline/models/refresh", async (c) => {
 	const now = Date.now();
 	if (now - lastRefreshRequestAt < REFRESH_COOLDOWN_MS) {
-		return c.json(
-			{
-				models: getModelsByProvider(),
-				registry: getRegistryStatus(),
-				throttled: true,
-			},
-			429,
-		);
+		return c.json({
+			models: getModelsByProvider(),
+			registry: getRegistryStatus(),
+			throttled: true,
+		}, 429);
 	}
 	lastRefreshRequestAt = now;
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	let anthropicKey: string | undefined = process.env.ANTHROPIC_API_KEY;
 	if (!anthropicKey) {
 		try {
-			anthropicKey = (await getSecret("ANTHROPIC_API_KEY")) ?? undefined;
-		} catch {
-			/* ignore */
-		}
+			anthropicKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+		} catch { /* ignore */ }
 	}
 	let openRouterKey: string | undefined = process.env.OPENROUTER_API_KEY;
 	if (!openRouterKey) {
 		try {
-			openRouterKey = (await getSecret("OPENROUTER_API_KEY")) ?? undefined;
-		} catch {
-			/* ignore */
-		}
+			openRouterKey = await getSecret("OPENROUTER_API_KEY") ?? undefined;
+		} catch { /* ignore */ }
 	}
 	await refreshRegistry(
 		resolveRegistryOllamaBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
 		anthropicKey,
 		openRouterKey,
-		resolveRegistryOpenRouterBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
+		resolveRegistryOpenRouterBaseUrl(
+			cfg.pipelineV2.extraction.provider,
+			cfg.pipelineV2.extraction.endpoint,
+		),
 	);
 	return c.json({
 		models: getModelsByProvider(),
@@ -7254,47 +7269,43 @@ app.post("/api/repair/structural-backfill", async (c) => {
 
 app.get("/api/repair/cold-stats", (c) => {
 	const accessor = getDbAccessor();
-	return c.json(
-		accessor.withReadDb((db) => {
-			// Check if table exists
-			const tableExists = db
-				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`)
-				.get();
+	return c.json(accessor.withReadDb((db) => {
+		// Check if table exists
+		const tableExists = db
+			.prepare(
+				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`,
+			)
+			.get();
 
-			if (!tableExists) {
-				return { count: 0, message: "Cold tier not yet initialized (migration pending)" };
-			}
+		if (!tableExists) {
+			return { count: 0, message: "Cold tier not yet initialized (migration pending)" };
+		}
 
-			const stats = db
-				.prepare(`
+		const stats = db.prepare(`
 			SELECT
 				COUNT(*) as total,
 				MIN(archived_at) as oldest,
 				MAX(archived_at) as newest,
 				SUM(LENGTH(CAST(content AS BLOB)) + LENGTH(CAST(COALESCE(original_row_json, '') AS BLOB))) as total_bytes
 			FROM memories_cold
-		`)
-				.get() as
-				| { total: number; oldest: string | null; newest: string | null; total_bytes: number | null }
-				| undefined;
+		`).get() as { total: number; oldest: string | null; newest: string | null; total_bytes: number | null } | undefined;
 
-			const byReason = db
-				.prepare(`
+		const byReason = db.prepare(`
 			SELECT archived_reason, COUNT(*) as count
 			FROM memories_cold
 			GROUP BY archived_reason
-		`)
-				.all() as Array<{ archived_reason: string | null; count: number }>;
+		`).all() as Array<{ archived_reason: string | null; count: number }>;
 
-			return {
-				count: stats?.total ?? 0,
-				oldest: stats?.oldest ?? null,
-				newest: stats?.newest ?? null,
-				totalBytes: stats?.total_bytes ?? 0,
-				byReason: Object.fromEntries(byReason.map((r) => [r.archived_reason ?? "unknown", r.count])),
-			};
-		}),
-	);
+		return {
+			count: stats?.total ?? 0,
+			oldest: stats?.oldest ?? null,
+			newest: stats?.newest ?? null,
+			totalBytes: stats?.total_bytes ?? 0,
+			byReason: Object.fromEntries(
+				byReason.map((r) => [r.archived_reason ?? "unknown", r.count]),
+			),
+		};
+	}));
 });
 
 // ============================================================================
@@ -7302,18 +7313,18 @@ app.get("/api/repair/cold-stats", (c) => {
 // ============================================================================
 
 const TROUBLESHOOT_COMMANDS: Record<string, readonly [string, ReadonlyArray<string>]> = {
-	status: ["signet", ["status"]],
+	"status": ["signet", ["status"]],
 	"daemon-status": ["signet", ["daemon", "status"]],
 	"daemon-logs": ["signet", ["daemon", "logs", "--lines", "50"]],
 	"embed-audit": ["signet", ["embed", "audit"]],
 	"embed-backfill": ["signet", ["embed", "backfill"]],
-	sync: ["signet", ["sync"]],
+	"sync": ["signet", ["sync"]],
 	"recall-test": ["signet", ["recall", "test query"]],
 	"skill-list": ["signet", ["skill", "list"]],
 	"secret-list": ["signet", ["secret", "list"]],
 	"daemon-stop": ["signet", ["daemon", "stop"]],
 	"daemon-restart": ["signet", ["daemon", "restart"]],
-	update: ["signet", ["update", "install"]],
+	"update": ["signet", ["update", "install"]],
 };
 
 app.get("/api/troubleshoot/commands", (c) => {
@@ -7362,9 +7373,7 @@ app.post("/api/troubleshoot/exec", async (c) => {
 					write({ type: "stdout", data: "Dashboard will lose connection.\n" });
 				}
 				write({ type: "exit", code: 0 });
-				try {
-					controller.close();
-				} catch {}
+				try { controller.close(); } catch {}
 
 				// Give the response time to flush, then trigger graceful shutdown.
 				// SIGTERM triggers cleanup() which handles PID file, DB, watchers.
@@ -7418,9 +7427,7 @@ app.post("/api/troubleshoot/exec", async (c) => {
 					write({ type: "stdout", data: chunk.toString("utf-8") });
 				} catch {
 					clearTimeout(killTimer);
-					try {
-						child.kill("SIGTERM");
-					} catch {}
+					try { child.kill("SIGTERM"); } catch {}
 				}
 			});
 
@@ -7429,38 +7436,28 @@ app.post("/api/troubleshoot/exec", async (c) => {
 					write({ type: "stderr", data: chunk.toString("utf-8") });
 				} catch {
 					clearTimeout(killTimer);
-					try {
-						child.kill("SIGTERM");
-					} catch {}
+					try { child.kill("SIGTERM"); } catch {}
 				}
 			});
 
 			// 60s timeout — SIGTERM first, force kill after 5s
 			const killTimer = setTimeout(() => {
-				try {
-					child.kill("SIGTERM");
-				} catch {}
+				try { child.kill("SIGTERM"); } catch {}
 				setTimeout(() => {
-					try {
-						child.kill();
-					} catch {}
+					try { child.kill(); } catch {}
 				}, 5_000);
 			}, 60_000);
 
 			child.on("close", (code) => {
 				clearTimeout(killTimer);
 				write({ type: "exit", code: code ?? 1 });
-				try {
-					controller.close();
-				} catch {}
+				try { controller.close(); } catch {}
 			});
 
 			child.on("error", (err) => {
 				clearTimeout(killTimer);
 				write({ type: "error", message: err.message });
-				try {
-					controller.close();
-				} catch {}
+				try { controller.close(); } catch {}
 			});
 		},
 	});
@@ -8933,7 +8930,9 @@ const COMMIT_DEBOUNCE_MS = 5000; // Wait 5 seconds after last change before comm
 
 function ensureProtectedGitignore(dir: string): void {
 	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+	const existingContent = existsSync(gitignorePath)
+		? readFileSync(gitignorePath, "utf-8")
+		: "";
 	const nextContent = mergeSignetGitignoreEntries(existingContent);
 	if (nextContent !== existingContent) {
 		writeFileSync(gitignorePath, nextContent, "utf-8");
@@ -8942,11 +8941,18 @@ function ensureProtectedGitignore(dir: string): void {
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
 	return new Promise((resolve) => {
-		const proc = spawn("git", ["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], {
-			cwd: dir,
-			stdio: "pipe",
-			windowsHide: true,
-		});
+		const proc = spawn(
+			"git",
+			[
+				"rm",
+				"--cached",
+				"--ignore-unmatch",
+				"--quiet",
+				"--",
+				...SIGNET_GIT_PROTECTED_PATHS,
+			],
+			{ cwd: dir, stdio: "pipe", windowsHide: true },
+		);
 		proc.on("close", () => resolve());
 		proc.on("error", () => resolve());
 	});
@@ -9021,9 +9027,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		const timeout = new Promise<void>((resolve) => {
 			timer = setTimeout(() => {
 				logger.warn("git", "Auto-commit timed out after 30s");
-				try {
-					active?.kill("SIGTERM");
-				} catch {}
+				try { active?.kill("SIGTERM"); } catch {}
 				resolve();
 			}, GIT_AUTOCOMMIT_TIMEOUT_MS);
 		});
@@ -9196,18 +9200,10 @@ function startFileWatcher() {
 				if (!cfg.auth.rateLimits) throw new Error("Missing rateLimits in auth config");
 				authConfig = cfg.auth;
 				const rl = authConfig.rateLimits;
-				authForgetLimiter = rl.forget
-					? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max)
-					: new AuthRateLimiter(60_000, 30);
-				authModifyLimiter = rl.modify
-					? new AuthRateLimiter(rl.modify.windowMs, rl.modify.max)
-					: new AuthRateLimiter(60_000, 60);
-				authBatchForgetLimiter = rl.batchForget
-					? new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max)
-					: new AuthRateLimiter(60_000, 5);
-				authAdminLimiter = rl.admin
-					? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max)
-					: new AuthRateLimiter(60_000, 10);
+				authForgetLimiter = rl.forget ? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max) : new AuthRateLimiter(60_000, 30);
+				authModifyLimiter = rl.modify ? new AuthRateLimiter(rl.modify.windowMs, rl.modify.max) : new AuthRateLimiter(60_000, 60);
+				authBatchForgetLimiter = rl.batchForget ? new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max) : new AuthRateLimiter(60_000, 5);
+				authAdminLimiter = rl.admin ? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max) : new AuthRateLimiter(60_000, 10);
 				logger.info("config", "Auth config reloaded from disk");
 			} catch (e) {
 				logger.error("config", "Failed to reload auth config", e as Error);
@@ -9223,11 +9219,7 @@ function startFileWatcher() {
 		// Ingest memory markdown files (excluding MEMORY.md index)
 		// Normalize path separators for Windows compatibility (watcher returns backslashes on Windows)
 		const normalizedPath = path.replace(/\\/g, "/");
-		if (
-			normalizedPath.includes("/memory/") &&
-			normalizedPath.endsWith(".md") &&
-			!normalizedPath.endsWith("MEMORY.md")
-		) {
+		if (normalizedPath.includes("/memory/") && normalizedPath.endsWith(".md") && !normalizedPath.endsWith("MEMORY.md")) {
 			ingestMemoryMarkdown(path).catch((e) =>
 				logger.error("watcher", "Ingestion failed", undefined, {
 					path,
@@ -9253,11 +9245,7 @@ function startFileWatcher() {
 		// Ingest new memory markdown files
 		// Normalize path separators for Windows compatibility
 		const normalizedAddPath = path.replace(/\\/g, "/");
-		if (
-			normalizedAddPath.includes("/memory/") &&
-			normalizedAddPath.endsWith(".md") &&
-			!normalizedAddPath.endsWith("MEMORY.md")
-		) {
+		if (normalizedAddPath.includes("/memory/") && normalizedAddPath.endsWith(".md") && !normalizedAddPath.endsWith("MEMORY.md")) {
 			ingestMemoryMarkdown(path).catch((e) =>
 				logger.error("watcher", "Ingestion failed", undefined, {
 					path,
@@ -9848,6 +9836,7 @@ async function main() {
 	// Migrations may have created traversal tables — clear the cache
 	invalidateTraversalCache();
 
+
 	// Write PID file
 	writeFileSync(PID_FILE, process.pid.toString());
 	logger.info("daemon", "Process ID", { pid: process.pid });
@@ -9894,8 +9883,21 @@ async function main() {
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
-	const validExtractionProviders = new Set(["ollama", "claude-code", "opencode", "codex", "anthropic", "openrouter"]);
-	const validSynthesisProviders = new Set(["ollama", "claude-code", "opencode", "anthropic", "openrouter"]);
+	const validExtractionProviders = new Set([
+		"ollama",
+		"claude-code",
+		"opencode",
+		"codex",
+		"anthropic",
+		"openrouter",
+	]);
+	const validSynthesisProviders = new Set([
+		"ollama",
+		"claude-code",
+		"opencode",
+		"anthropic",
+		"openrouter",
+	]);
 
 	providerRuntimeResolution.extraction = {
 		configured: providerHints.extraction,
@@ -9932,7 +9934,9 @@ async function main() {
 		"http://127.0.0.1:11434",
 	);
 	const extractionOllamaFallbackBaseUrl =
-		memoryCfg.pipelineV2.extraction.provider === "opencode" ? "http://127.0.0.1:11434" : extractionOllamaBaseUrl;
+		memoryCfg.pipelineV2.extraction.provider === "opencode"
+			? "http://127.0.0.1:11434"
+			: extractionOllamaBaseUrl;
 	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"http://127.0.0.1:4096",
@@ -9941,8 +9945,11 @@ async function main() {
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"https://openrouter.ai/api/v1",
 	);
-	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
+	const ollamaFallbackMaxContextTokens =
+		resolveDefaultOllamaFallbackMaxContextTokens();
+	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
+		extractionOpenCodeBaseUrl,
+	);
 	if (effectiveExtractionProvider === "opencode") {
 		if (extractionOpenCodeShouldManage) {
 			const serverReady = await ensureOpenCodeServer(4096);
@@ -10011,7 +10018,7 @@ async function main() {
 		let key = process.env[name];
 		if (!key) {
 			try {
-				key = (await getSecret(name)) ?? undefined;
+				key = await getSecret(name) ?? undefined;
 			} catch {
 				logger.warn("config", `Failed to resolve ${name} from secrets store`);
 			}
@@ -10023,14 +10030,12 @@ async function main() {
 	// Resolve Anthropic API key once — shared by extraction and synthesis
 	let anthropicApiKey: string | undefined;
 	const needsAnthropicForSynthesis =
-		memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider === "anthropic";
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		memoryCfg.pipelineV2.synthesis.provider === "anthropic";
 	if (effectiveExtractionProvider === "anthropic" || needsAnthropicForSynthesis) {
 		anthropicApiKey = await getKey("ANTHROPIC_API_KEY");
 		if (!anthropicApiKey) {
-			logger.error(
-				"config",
-				"ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
-			);
+			logger.error("config", "ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
 			if (effectiveExtractionProvider === "anthropic") {
 				effectiveExtractionProvider = "ollama";
 			}
@@ -10040,8 +10045,12 @@ async function main() {
 	// Resolve OpenRouter API key once — shared by extraction and synthesis
 	let openRouterApiKey: string | undefined;
 	const needsOpenRouterForSynthesis =
-		memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider === "openrouter";
-	if (effectiveExtractionProvider === "openrouter" || needsOpenRouterForSynthesis) {
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		memoryCfg.pipelineV2.synthesis.provider === "openrouter";
+	if (
+		effectiveExtractionProvider === "openrouter" ||
+		needsOpenRouterForSynthesis
+	) {
 		openRouterApiKey = await getKey("OPENROUTER_API_KEY");
 		if (!openRouterApiKey) {
 			logger.error(
@@ -10061,7 +10070,8 @@ async function main() {
 		effectiveExtractionModel = undefined;
 	}
 	const usingExtractionOllamaFallback =
-		effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama";
+		effectiveExtractionProvider === "ollama" &&
+		memoryCfg.pipelineV2.extraction.provider !== "ollama";
 	providerRuntimeResolution.extraction = {
 		configured: providerHints.extraction,
 		resolved: memoryCfg.pipelineV2.extraction.provider,
@@ -10085,7 +10095,7 @@ async function main() {
 					? extractionOpenCodeBaseUrl
 					: effectiveExtractionProvider === "openrouter"
 						? extractionOpenRouterBaseUrl
-						: undefined,
+					: undefined,
 		),
 	});
 
@@ -10106,46 +10116,53 @@ async function main() {
 						title: readEnvTrimmed("OPENROUTER_TITLE"),
 						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 					})
-				: effectiveExtractionProvider === "opencode"
-					? createOpenCodeProvider({
-							model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
-							baseUrl: extractionOpenCodeBaseUrl,
-							ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
-							ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
+			: effectiveExtractionProvider === "opencode"
+				? createOpenCodeProvider({
+						model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
+						baseUrl: extractionOpenCodeBaseUrl,
+						ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
+						ollamaFallbackMaxContextTokens:
+							ollamaFallbackMaxContextTokens,
+						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+					})
+				: effectiveExtractionProvider === "claude-code"
+					? createClaudeCodeProvider({
+							model: effectiveExtractionModel || "haiku",
 							defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 						})
-					: effectiveExtractionProvider === "claude-code"
-						? createClaudeCodeProvider({
-								model: effectiveExtractionModel || "haiku",
+					: effectiveExtractionProvider === "codex"
+						? createCodexProvider({
+								model: effectiveExtractionModel || "gpt-5.3-codex",
 								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 							})
-						: effectiveExtractionProvider === "codex"
-							? createCodexProvider({
-									model: effectiveExtractionModel || "gpt-5.3-codex",
-									defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-								})
-							: createOllamaProvider({
-									...(effectiveExtractionModel ? { model: effectiveExtractionModel } : {}),
-									baseUrl: extractionOllamaFallbackBaseUrl,
-									defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-									...(usingExtractionOllamaFallback
-										? {
-												maxContextTokens: ollamaFallbackMaxContextTokens,
-											}
-										: {}),
-								});
+						: createOllamaProvider({
+								...(effectiveExtractionModel
+									? { model: effectiveExtractionModel }
+									: {}),
+								baseUrl: extractionOllamaFallbackBaseUrl,
+								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+								...(usingExtractionOllamaFallback
+									? {
+										maxContextTokens:
+											ollamaFallbackMaxContextTokens,
+									}
+									: {}),
+							});
 	initLlmProvider(llmProvider);
 
 	// Initialize model registry for dynamic model discovery
 	if (memoryCfg.pipelineV2.modelRegistry.enabled) {
-		const registryAnthropicApiKey = anthropicApiKey ?? (await getKey("ANTHROPIC_API_KEY"));
-		const registryOpenRouterApiKey = openRouterApiKey ?? (await getKey("OPENROUTER_API_KEY"));
+		const registryAnthropicApiKey = anthropicApiKey ?? await getKey("ANTHROPIC_API_KEY");
+		const registryOpenRouterApiKey =
+			openRouterApiKey ?? await getKey("OPENROUTER_API_KEY");
 		initModelRegistry(
 			memoryCfg.pipelineV2.modelRegistry,
 			effectiveExtractionProvider === "ollama" ? extractionOllamaBaseUrl : undefined,
 			registryAnthropicApiKey,
 			registryOpenRouterApiKey,
-			effectiveExtractionProvider === "openrouter" ? extractionOpenRouterBaseUrl : undefined,
+			effectiveExtractionProvider === "openrouter"
+				? extractionOpenRouterBaseUrl
+				: undefined,
 		);
 	}
 
@@ -10158,7 +10175,9 @@ async function main() {
 			"http://127.0.0.1:11434",
 		);
 		const synthesisOllamaFallbackBaseUrl =
-			memoryCfg.pipelineV2.synthesis.provider === "opencode" ? "http://127.0.0.1:11434" : synthesisOllamaBaseUrl;
+			memoryCfg.pipelineV2.synthesis.provider === "opencode"
+				? "http://127.0.0.1:11434"
+				: synthesisOllamaBaseUrl;
 		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:4096",
@@ -10167,7 +10186,9 @@ async function main() {
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"https://openrouter.ai/api/v1",
 		);
-		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(synthesisOpenCodeBaseUrl);
+		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
+			synthesisOpenCodeBaseUrl,
+		);
 		if (effectiveSynthesisProvider === "opencode") {
 			if (synthesisOpenCodeShouldManage) {
 				const serverReady = await ensureOpenCodeServer(4096);
@@ -10237,7 +10258,7 @@ async function main() {
 						? synthesisOpenCodeBaseUrl
 						: effectiveSynthesisProvider === "openrouter"
 							? synthesisOpenRouterBaseUrl
-							: undefined,
+						: undefined,
 			),
 		});
 
@@ -10247,7 +10268,8 @@ async function main() {
 			effectiveSynthesisModel = undefined;
 		}
 		const usingSynthesisOllamaFallback =
-			effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama";
+			effectiveSynthesisProvider === "ollama" &&
+			memoryCfg.pipelineV2.synthesis.provider !== "ollama";
 
 		const synthesisProvider =
 			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
@@ -10265,29 +10287,33 @@ async function main() {
 							title: readEnvTrimmed("OPENROUTER_TITLE"),
 							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 						})
-					: effectiveSynthesisProvider === "opencode"
-						? createOpenCodeProvider({
-								model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
-								baseUrl: synthesisOpenCodeBaseUrl,
-								ollamaFallbackBaseUrl: synthesisOllamaFallbackBaseUrl,
-								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
+				: effectiveSynthesisProvider === "opencode"
+					? createOpenCodeProvider({
+							model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
+							baseUrl: synthesisOpenCodeBaseUrl,
+							ollamaFallbackBaseUrl: synthesisOllamaFallbackBaseUrl,
+							ollamaFallbackMaxContextTokens:
+								ollamaFallbackMaxContextTokens,
+							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+						})
+					: effectiveSynthesisProvider === "claude-code"
+						? createClaudeCodeProvider({
+								model: effectiveSynthesisModel || "haiku",
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 							})
-						: effectiveSynthesisProvider === "claude-code"
-							? createClaudeCodeProvider({
-									model: effectiveSynthesisModel || "haiku",
-									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-								})
-							: createOllamaProvider({
-									...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
-									baseUrl: synthesisOllamaFallbackBaseUrl,
-									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-									...(usingSynthesisOllamaFallback
-										? {
-												maxContextTokens: ollamaFallbackMaxContextTokens,
-											}
-										: {}),
-								});
+					: createOllamaProvider({
+							...(effectiveSynthesisModel
+								? { model: effectiveSynthesisModel }
+								: {}),
+							baseUrl: synthesisOllamaFallbackBaseUrl,
+							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+							...(usingSynthesisOllamaFallback
+								? {
+									maxContextTokens:
+										ollamaFallbackMaxContextTokens,
+								}
+								: {}),
+						});
 		initSynthesisProvider(synthesisProvider);
 		// Widget provider defaults to synthesis provider (needs smart model for HTML gen)
 		initWidgetProvider(synthesisProvider);
