@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.72.6] - 2026-03-22
+
+### Bug Fixes
+
+- security hardening — auth timing, SSRF, YAML injection, scope enforcement (#276)
+
+
 ## [0.72.5] - 2026-03-22
 
 ### Bug Fixes

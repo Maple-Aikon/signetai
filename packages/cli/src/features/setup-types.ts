@@ -6,6 +6,7 @@ export interface SetupWizardOptions {
 	nonInteractive?: boolean;
 	name?: string;
 	description?: string;
+	networkMode?: string;
 	harness?: string[];
 	embeddingProvider?: string;
 	embeddingModel?: string;
@@ -56,6 +57,7 @@ export interface FreshSetupConfig {
 	readonly basePath: string;
 	readonly agentName: string;
 	readonly agentDescription: string;
+	readonly networkMode: "localhost" | "tailscale";
 	readonly harnesses: string[];
 	readonly openclawRuntimePath: OpenClawRuntimeChoice;
 	readonly configureOpenClawWs: boolean;
