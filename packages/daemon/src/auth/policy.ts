@@ -5,7 +5,10 @@
 import type { AuthMode, Permission, PolicyDecision, TokenClaims, TokenRole, TokenScope } from "./types";
 import { logger } from "../logger";
 
-// Track which subs have been warned about empty scope to avoid log flooding
+// Track which subs have been warned about empty scope to avoid log flooding.
+// Unbounded for the process lifetime — acceptable for typical deployments
+// where the number of distinct token subjects is small. If ephemeral per-session
+// subs are used at high volume, consider replacing with a bounded LRU.
 const warnedEmptyScope = new Set<string>();
 
 const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
