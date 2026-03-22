@@ -5398,7 +5398,6 @@ import {
 	type SynthesisRequest,
 	type UserPromptSubmitRequest,
 	handlePreCompaction,
-	handleRemember,
 	handleSessionEnd,
 	handleSessionStart,
 	handleSynthesisRequest,
@@ -5645,8 +5644,13 @@ app.post("/api/hooks/remember", async (c) => {
 			return c.json({ success: true, memories: [], bypassed: true });
 		}
 
-		const result = handleRemember(body);
-		return c.json(result);
+		// Forward to the full remember endpoint for transcript, structured,
+		// and pipeline support instead of the bare handleRemember path.
+		return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
 	} catch (e) {
 		logger.error("hooks", "Remember hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);

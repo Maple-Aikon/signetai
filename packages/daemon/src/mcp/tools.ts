@@ -560,6 +560,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("Memory type (fact, preference, decision, etc.)"),
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
+				transcript: z
+					.string()
+					.optional()
+					.describe("Raw source text (conversation transcript) to preserve alongside extracted memory"),
 				structured: z
 					.object({
 						entities: z
@@ -593,7 +597,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, structured }) => {
+		async ({ content, type, importance, tags, transcript, structured }) => {
 			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
 			let body = content;
 			if (tags) {
@@ -605,6 +609,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				body: {
 					content: body,
 					importance,
+					transcript,
 					structured,
 				},
 			});

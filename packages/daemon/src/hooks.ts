@@ -2066,6 +2066,23 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	}
 
+	// Lossless retention: write transcript immediately regardless of length
+	// or whether the summary worker succeeds later.
+	if (transcript && sessionKey) {
+		try {
+			const now = new Date().toISOString();
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT OR IGNORE INTO session_transcripts
+					 (session_key, content, harness, project, agent_id, created_at)
+					VALUES (?, ?, ?, ?, ?, ?)`,
+				).run(sessionKey, transcript, req.harness, req.cwd ?? null, agentId, now);
+			});
+		} catch {
+			// Non-fatal — table may not exist pre-migration
+		}
+	}
+
 	let feedbackAspectsUpdated = 0;
 	let feedbackFtsConfirmations = 0;
 	let feedbackDecayedAspects = 0;
