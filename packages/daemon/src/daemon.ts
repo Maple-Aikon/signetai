@@ -1575,20 +1575,29 @@ app.get("/api/logs/stream", (c) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
+			const cleanup = () => {
+				logger.off("log", onLog);
+			};
+
 			const onLog = (entry: LogEntry) => {
-				const data = `data: ${JSON.stringify(entry)}\n\n`;
-				controller.enqueue(encoder.encode(data));
+				try {
+					const data = `data: ${JSON.stringify(entry)}\n\n`;
+					controller.enqueue(encoder.encode(data));
+				} catch {
+					cleanup();
+				}
 			};
 
 			logger.on("log", onLog);
 
 			// Send initial connection message
-			controller.enqueue(encoder.encode(`data: {"type":"connected"}\n\n`));
+			try {
+				controller.enqueue(encoder.encode(`data: {"type":"connected"}\n\n`));
+			} catch {
+				cleanup();
+			}
 
-			// Cleanup on close
-			c.req.raw.signal.addEventListener("abort", () => {
-				logger.off("log", onLog);
-			});
+			c.req.raw.signal.addEventListener("abort", cleanup);
 		},
 	});
 
@@ -5688,9 +5697,23 @@ app.get("/api/cross-agent/stream", (c) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
+			let dead = false;
+			const cleanup = () => {
+				if (dead) return;
+				dead = true;
+				clearInterval(keepAlive);
+				unsubscribe();
+				try { controller.close(); } catch {}
+			};
+
 			const writeEvent = (event: unknown) => {
-				const data = `data: ${JSON.stringify(event)}\n\n`;
-				controller.enqueue(encoder.encode(data));
+				if (dead) return;
+				try {
+					const data = `data: ${JSON.stringify(event)}\n\n`;
+					controller.enqueue(encoder.encode(data));
+				} catch {
+					cleanup();
+				}
 			};
 
 			writeEvent({
@@ -5721,8 +5744,6 @@ app.get("/api/cross-agent/stream", (c) => {
 			});
 
 			const unsubscribe = subscribeCrossAgentEvents((event) => {
-				// Message visibility uses isMessageVisibleToAgent(includeBroadcast=true);
-				// includeSent allows showing self-authored messages even when not addressed here.
 				if (event.type === "message") {
 					if (
 						!isMessageVisibleToAgent(event.message, {
@@ -5737,8 +5758,6 @@ app.get("/api/cross-agent/stream", (c) => {
 					}
 				}
 
-				// Presence visibility suppresses self-updates unless includeSelf=true.
-				// Without a sessionKey context we ignore same-agent presence events entirely.
 				if (event.type === "presence" && !includeSelf && event.presence.agentId === agentId) {
 					if (!sessionKey) {
 						return;
@@ -5755,18 +5774,15 @@ app.get("/api/cross-agent/stream", (c) => {
 			});
 
 			const keepAlive = setInterval(() => {
-				controller.enqueue(encoder.encode(": keepalive\n\n"));
+				if (dead) return;
+				try {
+					controller.enqueue(encoder.encode(": keepalive\n\n"));
+				} catch {
+					cleanup();
+				}
 			}, 15_000);
 
-			c.req.raw.signal.addEventListener("abort", () => {
-				clearInterval(keepAlive);
-				unsubscribe();
-				try {
-					controller.close();
-				} catch {
-					// Stream may already be closed by the runtime.
-				}
-			});
+			c.req.raw.signal.addEventListener("abort", cleanup);
 		},
 	});
 
@@ -6204,9 +6220,22 @@ app.get("/api/tasks/:id/stream", (c) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
+			let dead = false;
+			const cleanup = () => {
+				if (dead) return;
+				dead = true;
+				clearInterval(keepAlive);
+				unsubscribe();
+			};
+
 			const writeEvent = (event: unknown) => {
-				const data = `data: ${JSON.stringify(event)}\n\n`;
-				controller.enqueue(encoder.encode(data));
+				if (dead) return;
+				try {
+					const data = `data: ${JSON.stringify(event)}\n\n`;
+					controller.enqueue(encoder.encode(data));
+				} catch {
+					cleanup();
+				}
 			};
 
 			writeEvent({
@@ -6253,13 +6282,15 @@ app.get("/api/tasks/:id/stream", (c) => {
 			});
 
 			const keepAlive = setInterval(() => {
-				controller.enqueue(encoder.encode(": keepalive\n\n"));
+				if (dead) return;
+				try {
+					controller.enqueue(encoder.encode(": keepalive\n\n"));
+				} catch {
+					cleanup();
+				}
 			}, 15_000);
 
-			c.req.raw.signal.addEventListener("abort", () => {
-				clearInterval(keepAlive);
-				unsubscribe();
-			});
+			c.req.raw.signal.addEventListener("abort", cleanup);
 		},
 	});
 
@@ -7316,11 +7347,21 @@ app.post("/api/troubleshoot/exec", async (c) => {
 			});
 
 			child.stdout?.on("data", (chunk: Buffer) => {
-				write({ type: "stdout", data: chunk.toString("utf-8") });
+				try {
+					write({ type: "stdout", data: chunk.toString("utf-8") });
+				} catch {
+					clearTimeout(killTimer);
+					try { child.kill("SIGTERM"); } catch {}
+				}
 			});
 
 			child.stderr?.on("data", (chunk: Buffer) => {
-				write({ type: "stderr", data: chunk.toString("utf-8") });
+				try {
+					write({ type: "stderr", data: chunk.toString("utf-8") });
+				} catch {
+					clearTimeout(killTimer);
+					try { child.kill("SIGTERM"); } catch {}
+				}
 			});
 
 			// 60s timeout — SIGTERM first, force kill after 5s
@@ -8841,58 +8882,75 @@ async function gitUntrackProtectedFiles(dir: string): Promise<void> {
 	});
 }
 
+const GIT_AUTOCOMMIT_TIMEOUT_MS = 30_000;
+let autocommitInFlight = false;
+
 async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void> {
 	if (!isGitRepo(dir)) return;
-	ensureProtectedGitignore(dir);
-	await gitUntrackProtectedFiles(dir);
+	// Prevent concurrent auto-commits from piling up
+	if (autocommitInFlight) return;
+	autocommitInFlight = true;
 
-	const fileList = changedFiles.map((f) => f.replace(dir + "/", "")).join(", ");
-	const now = new Date();
-	const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const message = `${timestamp}_auto_${fileList.slice(0, 50)}`;
+	try {
+		ensureProtectedGitignore(dir);
+		await gitUntrackProtectedFiles(dir);
 
-	return new Promise((resolve) => {
-		// git add -A
-		const add = spawn("git", ["add", "-A"], { cwd: dir, stdio: "pipe", windowsHide: true });
-		add.on("close", (addCode) => {
-			if (addCode !== 0) {
-				logger.warn("git", "Git add failed");
-				resolve();
-				return;
-			}
-			// Check for changes
-			const status = spawn("git", ["status", "--porcelain"], {
-				cwd: dir,
-				stdio: "pipe",
-				windowsHide: true,
-			});
-			let statusOutput = "";
-			status.stdout?.on("data", (d) => {
-				statusOutput += d.toString();
-			});
-			status.on("close", (statusCode) => {
-				if (statusCode !== 0 || !statusOutput.trim()) {
+		const fileList = changedFiles.map((f) => f.replace(dir + "/", "")).join(", ");
+		const now = new Date();
+		const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+		const message = `${timestamp}_auto_${fileList.slice(0, 50)}`;
+
+		const work = new Promise<void>((resolve) => {
+			const add = spawn("git", ["add", "-A"], { cwd: dir, stdio: "pipe", windowsHide: true });
+			add.on("close", (addCode) => {
+				if (addCode !== 0) {
+					logger.warn("git", "Git add failed");
 					resolve();
 					return;
 				}
-				// Commit
-				const commit = spawn("git", ["commit", "-m", message], {
+				const status = spawn("git", ["status", "--porcelain"], {
 					cwd: dir,
 					stdio: "pipe",
 					windowsHide: true,
 				});
-				commit.on("close", (commitCode) => {
-					if (commitCode === 0) {
-						logger.git.commit(message, changedFiles.length);
-					}
-					resolve();
+				let statusOutput = "";
+				status.stdout?.on("data", (d) => {
+					statusOutput += d.toString();
 				});
-				commit.on("error", () => resolve());
+				status.on("close", (statusCode) => {
+					if (statusCode !== 0 || !statusOutput.trim()) {
+						resolve();
+						return;
+					}
+					const commit = spawn("git", ["commit", "-m", message], {
+						cwd: dir,
+						stdio: "pipe",
+						windowsHide: true,
+					});
+					commit.on("close", (commitCode) => {
+						if (commitCode === 0) {
+							logger.git.commit(message, changedFiles.length);
+						}
+						resolve();
+					});
+					commit.on("error", () => resolve());
+				});
+				status.on("error", () => resolve());
 			});
-			status.on("error", () => resolve());
+			add.on("error", () => resolve());
 		});
-		add.on("error", () => resolve());
-	});
+
+		const timeout = new Promise<void>((resolve) => {
+			setTimeout(() => {
+				logger.warn("git", "Auto-commit timed out after 30s");
+				resolve();
+			}, GIT_AUTOCOMMIT_TIMEOUT_MS);
+		});
+
+		await Promise.race([work, timeout]);
+	} finally {
+		autocommitInFlight = false;
+	}
 }
 
 let pendingChanges: string[] = [];

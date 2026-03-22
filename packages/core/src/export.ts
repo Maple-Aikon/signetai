@@ -72,6 +72,7 @@ interface ImportDb {
 		run(...args: unknown[]): void;
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 	};
+	exec(sql: string): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,123 +266,166 @@ export function importMemories(
 	db: ImportDb,
 	memoriesJsonl: string,
 	options: ImportOptions = {},
-): { imported: number; skipped: number } {
+): { imported: number; skipped: number; errors: number } {
 	const strategy = options.conflictStrategy ?? "skip";
 	const lines = memoriesJsonl.split("\n").filter(Boolean);
 	let imported = 0;
 	let skipped = 0;
+	let errors = 0;
 
-	for (const line of lines) {
-		const mem = JSON.parse(line) as Record<string, unknown>;
-		const id = mem.id as string;
-
-		// Check for existing
-		const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(id);
-
-		if (existing) {
-			if (strategy === "skip") {
-				skipped++;
+	// Wrap in transaction so partial import doesn't leave inconsistent state
+	db.exec("BEGIN");
+	try {
+		for (const line of lines) {
+			let mem: Record<string, unknown>;
+			try {
+				mem = JSON.parse(line) as Record<string, unknown>;
+			} catch {
+				errors++;
 				continue;
 			}
-			if (strategy === "overwrite") {
-				db.prepare(
-					`UPDATE memories
-					 SET content = ?, type = ?, importance = ?, tags = ?,
-					     who = ?, project = ?, updated_at = ?
-					 WHERE id = ?`,
-				).run(
-					mem.content,
-					mem.type,
-					mem.importance ?? 0.3,
-					mem.tags ?? null,
-					mem.who ?? null,
-					mem.project ?? null,
-					new Date().toISOString(),
-					id,
-				);
-				imported++;
-				continue;
+			const id = mem.id as string;
+
+			// Check for existing
+			const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(id);
+
+			if (existing) {
+				if (strategy === "skip") {
+					skipped++;
+					continue;
+				}
+				if (strategy === "overwrite") {
+					db.prepare(
+						`UPDATE memories
+						 SET content = ?, type = ?, importance = ?, tags = ?,
+						     who = ?, project = ?, updated_at = ?
+						 WHERE id = ?`,
+					).run(
+						mem.content,
+						mem.type,
+						mem.importance ?? 0.3,
+						mem.tags ?? null,
+						mem.who ?? null,
+						mem.project ?? null,
+						new Date().toISOString(),
+						id,
+					);
+					imported++;
+					continue;
+				}
 			}
+
+			// Insert new
+			db.prepare(
+				`INSERT OR IGNORE INTO memories
+				 (id, content, type, category, confidence, source_type,
+				  tags, importance, pinned, who, project, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				id,
+				mem.content,
+				mem.type ?? "fact",
+				mem.category ?? null,
+				mem.confidence ?? 0.8,
+				mem.source_type ?? "import",
+				mem.tags ?? null,
+				mem.importance ?? 0.3,
+				mem.pinned ?? 0,
+				mem.who ?? null,
+				mem.project ?? null,
+				mem.created_at ?? new Date().toISOString(),
+				mem.updated_at ?? new Date().toISOString(),
+			);
+			imported++;
 		}
-
-		// Insert new
-		db.prepare(
-			`INSERT OR IGNORE INTO memories
-			 (id, content, type, category, confidence, source_type,
-			  tags, importance, pinned, who, project, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			id,
-			mem.content,
-			mem.type ?? "fact",
-			mem.category ?? null,
-			mem.confidence ?? 0.8,
-			mem.source_type ?? "import",
-			mem.tags ?? null,
-			mem.importance ?? 0.3,
-			mem.pinned ?? 0,
-			mem.who ?? null,
-			mem.project ?? null,
-			mem.created_at ?? new Date().toISOString(),
-			mem.updated_at ?? new Date().toISOString(),
-		);
-		imported++;
+		db.exec("COMMIT");
+	} catch (err) {
+		db.exec("ROLLBACK");
+		throw err;
 	}
 
-	return { imported, skipped };
+	return { imported, skipped, errors };
 }
 
-export function importEntities(db: ImportDb, entitiesJsonl: string): number {
+export function importEntities(db: ImportDb, entitiesJsonl: string): { imported: number; errors: number } {
 	const lines = entitiesJsonl.split("\n").filter(Boolean);
-	let count = 0;
+	let imported = 0;
+	let errors = 0;
 
-	for (const line of lines) {
-		const entity = JSON.parse(line) as Record<string, unknown>;
-		db.prepare(
-			`INSERT OR IGNORE INTO entities
-			 (id, name, canonical_name, entity_type, description,
-			  mentions, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			entity.id,
-			entity.name,
-			entity.canonical_name ?? null,
-			entity.entity_type ?? "unknown",
-			entity.description ?? null,
-			entity.mentions ?? 1,
-			entity.created_at ?? new Date().toISOString(),
-			entity.updated_at ?? new Date().toISOString(),
-		);
-		count++;
+	db.exec("BEGIN");
+	try {
+		for (const line of lines) {
+			let entity: Record<string, unknown>;
+			try {
+				entity = JSON.parse(line) as Record<string, unknown>;
+			} catch {
+				errors++;
+				continue;
+			}
+			db.prepare(
+				`INSERT OR IGNORE INTO entities
+				 (id, name, canonical_name, entity_type, description,
+				  mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				entity.id,
+				entity.name,
+				entity.canonical_name ?? null,
+				entity.entity_type ?? "unknown",
+				entity.description ?? null,
+				entity.mentions ?? 1,
+				entity.created_at ?? new Date().toISOString(),
+				entity.updated_at ?? new Date().toISOString(),
+			);
+			imported++;
+		}
+		db.exec("COMMIT");
+	} catch (err) {
+		db.exec("ROLLBACK");
+		throw err;
 	}
 
-	return count;
+	return { imported, errors };
 }
 
-export function importRelations(db: ImportDb, relationsJsonl: string): number {
+export function importRelations(db: ImportDb, relationsJsonl: string): { imported: number; errors: number } {
 	const lines = relationsJsonl.split("\n").filter(Boolean);
-	let count = 0;
+	let imported = 0;
+	let errors = 0;
 
-	for (const line of lines) {
-		const rel = JSON.parse(line) as Record<string, unknown>;
-		db.prepare(
-			`INSERT OR IGNORE INTO relations
-			 (id, source_entity_id, target_entity_id, relation_type,
-			  strength, mentions, confidence, metadata, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			rel.id,
-			rel.source_entity_id,
-			rel.target_entity_id,
-			rel.relation_type ?? "related",
-			rel.strength ?? 1,
-			rel.mentions ?? 1,
-			rel.confidence ?? 0.8,
-			rel.metadata ?? null,
-			rel.created_at ?? new Date().toISOString(),
-		);
-		count++;
+	db.exec("BEGIN");
+	try {
+		for (const line of lines) {
+			let rel: Record<string, unknown>;
+			try {
+				rel = JSON.parse(line) as Record<string, unknown>;
+			} catch {
+				errors++;
+				continue;
+			}
+			db.prepare(
+				`INSERT OR IGNORE INTO relations
+				 (id, source_entity_id, target_entity_id, relation_type,
+				  strength, mentions, confidence, metadata, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				rel.id,
+				rel.source_entity_id,
+				rel.target_entity_id,
+				rel.relation_type ?? "related",
+				rel.strength ?? 1,
+				rel.mentions ?? 1,
+				rel.confidence ?? 0.8,
+				rel.metadata ?? null,
+				rel.created_at ?? new Date().toISOString(),
+			);
+			imported++;
+		}
+		db.exec("COMMIT");
+	} catch (err) {
+		db.exec("ROLLBACK");
+		throw err;
 	}
 
-	return count;
+	return { imported, errors };
 }

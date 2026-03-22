@@ -600,6 +600,15 @@ export class Database {
 
 // -- Row mappers (module-level, no `this`) --
 
+function safeJsonParse(raw: unknown, fallback: unknown): unknown {
+	if (typeof raw !== "string" || raw.length === 0) return fallback;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return fallback;
+	}
+}
+
 function rowToMemory(row: Record<string, unknown>): Memory {
 	return {
 		id: row.id as string,
@@ -609,11 +618,11 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		confidence: row.confidence as number,
 		sourceId: row.source_id as string | undefined,
 		sourceType: row.source_type as string | undefined,
-		tags: JSON.parse((row.tags as string) || "[]"),
+		tags: safeJsonParse(row.tags, []) as string[],
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
 		updatedBy: row.updated_by as string,
-		vectorClock: JSON.parse((row.vector_clock as string) || "{}"),
+		vectorClock: safeJsonParse(row.vector_clock, {}) as Record<string, number>,
 		version: row.version as number,
 		manualOverride: Boolean(row.manual_override),
 		// v2 optional fields

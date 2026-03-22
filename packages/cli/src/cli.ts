@@ -5840,9 +5840,9 @@ program
 				})
 			: { imported: 0, skipped: 0 };
 
-		const entityCount = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl")!) : 0;
+		const entityResult = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl")!) : { imported: 0, errors: 0 };
 
-		const relationCount = fileMap.has("relations.jsonl") ? importRelations(db, fileMap.get("relations.jsonl")!) : 0;
+		const relationResult = fileMap.has("relations.jsonl") ? importRelations(db, fileMap.get("relations.jsonl")!) : { imported: 0, errors: 0 };
 
 		db.close();
 
@@ -5863,8 +5863,12 @@ program
 		if (memResult.skipped > 0) {
 			console.log(chalk.dim(`  ${memResult.skipped} memories skipped (conflict: ${options.conflict})`));
 		}
-		console.log(chalk.dim(`  ${entityCount} entities imported`));
-		console.log(chalk.dim(`  ${relationCount} relations imported`));
+		console.log(chalk.dim(`  ${entityResult.imported} entities imported`));
+		console.log(chalk.dim(`  ${relationResult.imported} relations imported`));
+		const totalErrors = (memResult.errors ?? 0) + entityResult.errors + relationResult.errors;
+		if (totalErrors > 0) {
+			console.log(chalk.yellow(`  ${totalErrors} malformed lines skipped`));
+		}
 		console.log(chalk.dim(`  ${identityCount} identity files written`));
 		if (skillCount > 0) {
 			console.log(chalk.dim(`  ${skillCount} skill files written`));
