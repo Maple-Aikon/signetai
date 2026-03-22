@@ -2,14 +2,14 @@
  * Permission matrix and scope enforcement.
  */
 
-import type {
-	AuthMode,
-	Permission,
-	PolicyDecision,
-	TokenClaims,
-	TokenRole,
-	TokenScope,
-} from "./types";
+import type { AuthMode, Permission, PolicyDecision, TokenClaims, TokenRole, TokenScope } from "./types";
+import { logger } from "../logger";
+
+// Track which subs have been warned about empty scope to avoid log flooding.
+// Unbounded for the process lifetime — acceptable for typical deployments
+// where the number of distinct token subjects is small. If ephemeral per-session
+// subs are used at high volume, consider replacing with a bounded LRU.
+const warnedEmptyScope = new Set<string>();
 
 const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 	admin: [
@@ -40,10 +40,7 @@ const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 };
 
 const permissionSets = new Map<TokenRole, ReadonlySet<Permission>>(
-	Object.entries(PERMISSION_MATRIX).map(([role, perms]) => [
-		role as TokenRole,
-		new Set(perms),
-	]),
+	Object.entries(PERMISSION_MATRIX).map(([role, perms]) => [role as TokenRole, new Set(perms)]),
 );
 
 export function checkPermission(
@@ -70,11 +67,7 @@ export function checkPermission(
 	return { allowed: true };
 }
 
-export function checkScope(
-	claims: TokenClaims | null,
-	target: TokenScope,
-	authMode: AuthMode,
-): PolicyDecision {
+export function checkScope(claims: TokenClaims | null, target: TokenScope, authMode: AuthMode): PolicyDecision {
 	if (authMode === "local") {
 		return { allowed: true };
 	}
@@ -88,9 +81,22 @@ export function checkScope(
 		return { allowed: true };
 	}
 
-	// Unscoped tokens (empty scope object) have full access
+	// DEPRECATION: Non-admin tokens with empty scope currently get full access
+	// but will be denied in a future release. Log once per sub to avoid
+	// flooding structured logs on busy deployments.
 	const scope = claims.scope;
 	if (!scope.project && !scope.agent && !scope.user) {
+		if (!warnedEmptyScope.has(claims.sub)) {
+			warnedEmptyScope.add(claims.sub);
+			logger.warn(
+				"daemon",
+				"DEPRECATION: non-admin token has empty scope — will be denied in a future release. Issue tokens with explicit scope fields.",
+				{
+					sub: claims.sub,
+					role: claims.role,
+				},
+			);
+		}
 		return { allowed: true };
 	}
 

@@ -5,6 +5,61 @@
  * to plain text for downstream chunking and embedding.
  */
 
+import { resolve4, resolve6 } from "node:dns/promises";
+
+// Private/reserved IP ranges that must never be fetched (SSRF protection)
+const PRIVATE_RANGES = [
+	/^127\./,
+	/^10\./,
+	/^172\.(1[6-9]|2\d|3[01])\./,
+	/^192\.168\./,
+	/^169\.254\./,
+	/^0\./,
+	/^::1$/,
+	/^fc00:/i,
+	/^fd[0-9a-f]{2}:/i,
+	/^fe80:/i,
+	/^::ffff:127\./,
+	/^::ffff:10\./,
+	/^::ffff:172\.(1[6-9]|2\d|3[01])\./,
+	/^::ffff:192\.168\./,
+];
+
+function isPrivateIp(ip: string): boolean {
+	return PRIVATE_RANGES.some((r) => r.test(ip));
+}
+
+/**
+ * Resolve hostname and reject private/reserved IPs.
+ *
+ * Note: DNS rebinding can bypass this check — an attacker with a low-TTL
+ * DNS record could return a public IP here and a private IP when fetch()
+ * resolves the same hostname moments later. Defence-in-depth via
+ * network-level egress filtering is recommended for production deployments.
+ */
+export async function validateUrl(url: string): Promise<void> {
+	const parsed = new URL(url);
+	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+		throw new Error(`Unsupported protocol: ${parsed.protocol}`);
+	}
+
+	// Resolve both A and AAAA records; reject if any resolve to private ranges
+	const [v4, v6] = await Promise.allSettled([resolve4(parsed.hostname), resolve6(parsed.hostname)]);
+
+	const addresses: string[] = [];
+	if (v4.status === "fulfilled") addresses.push(...v4.value);
+	if (v6.status === "fulfilled") addresses.push(...v6.value);
+
+	if (addresses.length === 0) {
+		throw new Error(`DNS resolution failed for ${parsed.hostname}`);
+	}
+
+	const blocked = addresses.find(isPrivateIp);
+	if (blocked) {
+		throw new Error(`URL resolves to private IP (${blocked}) — blocked for SSRF protection`);
+	}
+}
+
 export interface FetchResult {
 	readonly content: string;
 	readonly contentType: string;
@@ -20,6 +75,36 @@ export interface FetchOptions {
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10MB
 
+const MAX_REDIRECTS = 5;
+
+/** Fetch with manual redirect handling — validates each hop against SSRF. */
+async function fetchWithSsrfProtection(url: string, timeoutMs: number): Promise<Response> {
+	await validateUrl(url);
+	let target = url;
+
+	for (let hops = 0; hops < MAX_REDIRECTS; hops++) {
+		const resp = await fetch(target, {
+			signal: AbortSignal.timeout(timeoutMs),
+			headers: {
+				"User-Agent": "Signet/1.0 (document-ingest)",
+				Accept: "text/html, text/plain, text/markdown, */*;q=0.1",
+			},
+			redirect: "manual",
+		});
+
+		if (resp.status < 300 || resp.status >= 400) return resp;
+
+		const location = resp.headers.get("location");
+		if (!location) {
+			throw new Error(`Redirect ${resp.status} with no Location header`);
+		}
+		target = new URL(location, target).href;
+		await validateUrl(target);
+	}
+
+	throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
+}
+
 /**
  * Fetch URL content with timeout and size guards.
  *
@@ -27,26 +112,15 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10MB
  * For plain text, returns content directly.
  * Rejects unsupported content types (binary, PDF, etc.).
  */
-export async function fetchUrlContent(
-	url: string,
-	opts?: FetchOptions,
-): Promise<FetchResult> {
+export async function fetchUrlContent(url: string, opts?: FetchOptions): Promise<FetchResult> {
 	const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
 
-	const response = await fetch(url, {
-		signal: AbortSignal.timeout(timeoutMs),
-		headers: {
-			"User-Agent": "Signet/1.0 (document-ingest)",
-			Accept: "text/html, text/plain, text/markdown, */*;q=0.1",
-		},
-		redirect: "follow",
-	});
+	// SSRF protection: validate URL resolves to public IP before fetching
+	const response = await fetchWithSsrfProtection(url, timeoutMs);
 
 	if (!response.ok) {
-		throw new Error(
-			`Fetch failed: ${response.status} ${response.statusText}`,
-		);
+		throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
 	}
 
 	const contentType = response.headers.get("content-type") ?? "text/plain";
@@ -56,9 +130,7 @@ export async function fetchUrlContent(
 	if (contentLength) {
 		const declared = Number.parseInt(contentLength, 10);
 		if (Number.isFinite(declared) && declared > maxBytes) {
-			throw new Error(
-				`Content too large: ${declared} bytes exceeds ${maxBytes} limit`,
-			);
+			throw new Error(`Content too large: ${declared} bytes exceeds ${maxBytes} limit`);
 		}
 	}
 
@@ -70,9 +142,7 @@ export async function fetchUrlContent(
 		contentType.includes("application/xml");
 
 	if (!isText) {
-		throw new Error(
-			`Unsupported content type: ${contentType}. Only text-based content is supported.`,
-		);
+		throw new Error(`Unsupported content type: ${contentType}. Only text-based content is supported.`);
 	}
 
 	// Stream-read with size guard
@@ -90,9 +160,7 @@ export async function fetchUrlContent(
 			if (done) break;
 			totalBytes += value.byteLength;
 			if (totalBytes > maxBytes) {
-				throw new Error(
-					`Content too large: exceeded ${maxBytes} byte limit during streaming`,
-				);
+				throw new Error(`Content too large: exceeded ${maxBytes} byte limit during streaming`);
 			}
 			chunks.push(value);
 		}
