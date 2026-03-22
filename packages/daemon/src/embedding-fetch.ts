@@ -1,7 +1,11 @@
 import type { EmbeddingConfig } from "./memory-config";
-import { DEFAULT_OPENAI_BASE_URL } from "./memory-config";
+import { DEFAULT_OPENAI_BASE_URL, DEFAULT_OLLAMA_BASE_URL } from "./memory-config";
 import { logger } from "./logger";
 import { getSecret } from "./secrets.js";
+
+function resolveOllamaUrl(): string {
+	return process.env.OLLAMA_HOST || DEFAULT_OLLAMA_BASE_URL;
+}
 
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
 let nativeFallbackToOllama = false;
@@ -75,7 +79,7 @@ export async function fetchEmbedding(
 			if (nativeFallbackToOllama) {
 				return await fetchOllamaEmbedding(
 					text,
-					"http://localhost:11434",
+					resolveOllamaUrl(),
 					"nomic-embed-text",
 				);
 			}
@@ -97,7 +101,7 @@ export async function fetchEmbedding(
 				try {
 					const result = await fetchOllamaEmbedding(
 						text,
-						"http://localhost:11434",
+						resolveOllamaUrl(),
 						"nomic-embed-text",
 					);
 					if (result !== null) {

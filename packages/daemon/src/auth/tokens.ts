@@ -27,9 +27,18 @@ export function generateSecret(): Buffer {
 	return randomBytes(32);
 }
 
+const SECRET_LENGTH = 32;
+
 export function loadOrCreateSecret(secretPath: string): Buffer {
 	if (existsSync(secretPath)) {
-		return readFileSync(secretPath);
+		const secret = readFileSync(secretPath);
+		if (secret.length !== SECRET_LENGTH) {
+			// Corrupted or truncated — regenerate
+			const fresh = generateSecret();
+			writeFileSync(secretPath, fresh, { mode: 0o600 });
+			return fresh;
+		}
+		return secret;
 	}
 	const dir = dirname(secretPath);
 	if (!existsSync(dir)) {
