@@ -1546,12 +1546,14 @@ app.use("/api/troubleshoot/*", async (c, next) => {
 });
 
 // Config writes — admin only (can overwrite agent.yaml, AGENTS.md)
-// Pre-check content-length to reject oversized bodies before buffering
+// Reject oversized bodies: content-length fast path + post-buffer check
+// for chunked encoding. The server-level REQUEST_BODY_LIMIT caps all
+// routes, but this gives a clear per-route error message.
 const MAX_CONFIG_BYTES = 1_048_576;
 app.use("/api/config", async (c, next) => {
 	if (c.req.method === "POST") {
-		const len = Number(c.req.header("content-length") ?? 0);
-		if (len > MAX_CONFIG_BYTES) {
+		const cl = c.req.header("content-length");
+		if (cl && Number(cl) > MAX_CONFIG_BYTES) {
 			return c.json({ error: `payload exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
 		}
 		return requirePermission("admin", authConfig)(c, next);
@@ -10457,12 +10459,30 @@ async function main() {
 	initFeatureFlags(AGENTS_DIR);
 	startUpdateTimer();
 
-	// Start HTTP server
+	// Start HTTP server with global body size limit (10MB) to prevent
+	// OOM from chunked-encoding requests that bypass content-length checks.
+	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
+	const { createServer: nodeCreateServer } = await import("node:http");
+	const createBoundedServer: typeof nodeCreateServer = (...args: Parameters<typeof nodeCreateServer>) => {
+		const server = nodeCreateServer(...args);
+		server.on("request", (req) => {
+			let bytes = 0;
+			req.on("data", (chunk: Buffer) => {
+				bytes += chunk.length;
+				if (bytes > REQUEST_BODY_LIMIT) {
+					req.destroy();
+				}
+			});
+		});
+		return server;
+	};
+
 	serve(
 		{
 			fetch: app.fetch,
 			port: PORT,
 			hostname: BIND_HOST,
+			createServer: createBoundedServer,
 		},
 		(info) => {
 			logger.info("daemon", "Server listening", {
