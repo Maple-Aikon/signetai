@@ -107,9 +107,9 @@ describe("createMcpServer", () => {
 		expect(names).toContain("mcp_server_policy_set");
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
-		// Use a minimum bound instead of exact count — new tools shouldn't
-		// require updating this assertion, only missing ones should fail.
-		expect(names.length).toBeGreaterThanOrEqual(19);
+		// Floor at the current known-good count — additions pass freely,
+		// but accidental deletions or registration failures are caught.
+		expect(names.length).toBeGreaterThanOrEqual(23);
 	});
 
 	describe("memory_search", () => {
