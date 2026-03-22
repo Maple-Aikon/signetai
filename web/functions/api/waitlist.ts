@@ -2,10 +2,20 @@ interface Env {
 	RESEND_API_KEY: string;
 }
 
+const ALLOWED_ORIGINS = [
+	'https://signetai.sh',
+	'https://www.signetai.sh',
+];
+
+function isAllowedOrigin(origin: string): boolean {
+	if (!origin) return false;
+	return ALLOWED_ORIGINS.includes(origin);
+}
+
 export const onRequestPost: PagesFunction<Env> = async (context) => {
 	const origin = context.request.headers.get('Origin') ?? '';
 	const headers = {
-		'Access-Control-Allow-Origin': origin,
+		'Access-Control-Allow-Origin': isAllowedOrigin(origin) ? origin : '',
 		'Content-Type': 'application/json',
 	};
 
@@ -56,7 +66,7 @@ export const onRequestOptions: PagesFunction = async (context) => {
 	return new Response(null, {
 		status: 204,
 		headers: {
-			'Access-Control-Allow-Origin': origin,
+			'Access-Control-Allow-Origin': isAllowedOrigin(origin) ? origin : '',
 			'Access-Control-Allow-Methods': 'POST, OPTIONS',
 			'Access-Control-Allow-Headers': 'Content-Type',
 		},

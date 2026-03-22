@@ -398,6 +398,7 @@ function createAccessor(writeConn: Database): DbAccessor {
 			return pooled;
 		}
 		if (readInUse.size >= MAX_READ_CONNECTIONS) {
+			console.warn(`[db] Read connection limit exceeded (${readInUse.size}/${MAX_READ_CONNECTIONS})`);
 			throw new Error("Read connection limit exceeded");
 		}
 		const conn = new Database(dbPath, { readonly: true });

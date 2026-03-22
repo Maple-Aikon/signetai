@@ -4,7 +4,15 @@ import { logger } from "./logger";
 import { getSecret } from "./secrets.js";
 
 function resolveOllamaUrl(): string {
-	return process.env.OLLAMA_HOST || DEFAULT_OLLAMA_BASE_URL;
+	const raw = process.env.OLLAMA_HOST;
+	if (!raw) return DEFAULT_OLLAMA_BASE_URL;
+	try {
+		new URL(raw);
+		return raw;
+	} catch {
+		logger.warn("embedding", `OLLAMA_HOST is not a valid URL ("${raw}"), falling back to default`);
+		return DEFAULT_OLLAMA_BASE_URL;
+	}
 }
 
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
