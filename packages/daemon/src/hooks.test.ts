@@ -126,6 +126,30 @@ describe("normalizeJsonConversationTranscript", () => {
 		);
 	});
 
+	it("normalizes Claude Code records with nested message objects", () => {
+		const raw = [
+			'{"type":"user","message":{"role":"user","content":"Can you pull up the last ideation doc?"},"uuid":"1"}',
+			'{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"checking"},{"type":"text","text":"Here is the latest ideation doc."}]},"uuid":"2"}',
+		].join("\n");
+
+		expect(normalizeJsonConversationTranscript(raw)).toBe(
+			"User: Can you pull up the last ideation doc?\nAssistant: Here is the latest ideation doc.",
+		);
+	});
+
+	it("ignores non-conversation Claude Code records while keeping real turns", () => {
+		const raw = [
+			'{"type":"progress","data":{"type":"hook_progress","message":"working"}}',
+			'{"type":"file-history-snapshot","snapshot":{"files":[]}}',
+			'{"type":"user","message":{"role":"user","content":"status?"},"uuid":"1"}',
+			'{"message":{"role":"assistant","content":[{"type":"text","text":"all good"}]},"uuid":"2"}',
+		].join("\n");
+
+		expect(normalizeJsonConversationTranscript(raw)).toBe(
+			"User: status?\nAssistant: all good",
+		);
+	});
+
 	it("returns empty string for empty input", () => {
 		expect(normalizeJsonConversationTranscript("")).toBe("");
 	});

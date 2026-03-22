@@ -2251,17 +2251,23 @@ function normalizeJsonConversationRecord(record: Record<string, unknown>): strin
 		}
 	}
 
+	if (isRecord(record.message)) {
+		const msg = record.message;
+		const role = extractString(msg, ["role", "speaker"]);
+		const text = extractMessageText(msg);
+		if (role && text) {
+			const lower = role.toLowerCase();
+			if (lower === "user") return `User: ${text}`;
+			if (lower === "assistant") return `Assistant: ${text}`;
+		}
+	}
+
 	const role = extractString(record, ["role", "speaker"]);
 	if (role) {
 		const lowerRole = role.toLowerCase();
-		if (lowerRole === "user") {
-			const text = extractString(record, ["content", "text", "message"]);
-			if (text) return `User: ${text}`;
-		}
-		if (lowerRole === "assistant") {
-			const text = extractString(record, ["content", "text", "message"]);
-			if (text) return `Assistant: ${text}`;
-		}
+		const text = extractMessageText(record);
+		if (lowerRole === "user" && text) return `User: ${text}`;
+		if (lowerRole === "assistant" && text) return `Assistant: ${text}`;
 	}
 
 	return "";
@@ -2280,6 +2286,22 @@ function extractString(record: Record<string, unknown>, keys: readonly string[])
 		}
 	}
 	return "";
+}
+
+function extractMessageText(record: Record<string, unknown>): string {
+	const direct = extractString(record, ["content", "text", "message"]);
+	if (direct) return direct;
+
+	const content = record.content;
+	if (!Array.isArray(content)) return "";
+
+	const parts = content.flatMap((item) => {
+		if (!isRecord(item) || item.type !== "text") return [];
+		const text = extractString(item, ["text", "content"]);
+		return text ? [text] : [];
+	});
+
+	return parts.join(" ");
 }
 
 export function normalizeCodexTranscript(raw: string): string {
