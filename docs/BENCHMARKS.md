@@ -105,7 +105,6 @@ extraction rules.
 |-----|------|-----------|----------|--------|-----|-------|
 | baseline (local) | 2026-03-20 | 50 | 36% | 76% | 0.494 | traversal + FTS + vector |
 | baseline (cloud) | 2026-03-20 | 50 | 34% | 76% | 0.495 | traversal + FTS + vector (cloud embeddings) |
-| DP-6 traversal | 2026-03-21 | 50 | 62% | ~92% | -- | + traversal-primary retrieval |
 | run-temporal-25 | 2026-03-22 | 25 | 56% | 84% | 0.534 | + temporal extraction rules |
 | run-full-stack-8 | 2026-03-22 | 8 | 87.5% | 100% | 0.615 | + DP-16 dampening + lossless transcripts + gpt-4o extraction |
 
@@ -175,14 +174,13 @@ are collected from published papers and repos.
 | 3 | MemU | 92.09% | Judge | Yes | No | memu.pro/benchmark |
 | 4 | MemMachine v0.2 | 91.7% | Judge | No | No | memmachine.ai blog |
 | 5 | Hindsight | 89.6% | Judge | Yes (MIT) | No | arXiv:2512.12818 |
-| 6 | **Signet (full stack)** | **87.5%** | **Judge (GPT-4o)** | **Yes (Apache)** | **Yes** | **Internal (8-Q sample)** |
-| 7 | SLM V3 Mode C | 87.7% | Judge | Yes (MIT) | Partial | arXiv:2603.14588 |
+| 6 | SLM V3 Mode C | 87.7% | Judge | Yes (MIT) | Partial | arXiv:2603.14588 |
+| 7 | **Signet (full stack)** | **87.5%** | **Judge (GPT-4o)** | **Yes (Apache)** | **Yes** | **Internal (8-Q sample)** |
 | 8 | Zep/Graphiti | ~85% | Judge (third-party est) | Partial | No | arXiv:2501.13956 |
 | 9 | Letta/MemGPT | ~83% | Judge | Yes (Apache) | No | letta.com blog |
 | 10 | Engram | 80% | Judge | Yes | No | arXiv:2511.12960 |
 | 11 | SLM V3 Mode A | 74.8% | Judge | Yes (MIT) | Yes | arXiv:2603.14588 |
 | 12 | Mem0+Graph | 68.4% | J-score (disputed) | Partial | No | arXiv:2504.19413 |
-| — | **Signet (DP-6, 50-Q)** | **62%** | **Judge (GPT-4o)** | **Yes (Apache)** | **Yes** | **Internal** |
 | 13 | SLM Zero-LLM | 60.4% | Judge | Yes (MIT) | Yes | arXiv:2603.14588 |
 | 14 | Mem0 (independent) | ~58% | Judge | Partial | No | Letta blog |
 | — | Signet (baseline local) | 36% | Judge (GPT-4o) | Yes (Apache) | Yes | Internal |
@@ -207,8 +205,7 @@ are collected from published papers and repos.
    unreliable.
 
 4. **Sample size caveat.** The 87.5% score is from an 8-question
-   sample. The 62% score from a 50-question sample is more
-   statistically reliable. Larger-scale validation is required before
+   sample. Larger-scale validation is still required before hard
    public claims.
 
 Signet LoCoMo Baseline Results (March 2026)

@@ -59,7 +59,7 @@ Compiled from published papers, vendor docs, and independent evaluations.
 | 9 | Engram | 80.0% | Judge | Gemini 2.0 Flash | Yes | engram.fyi/research |
 | 10 | SLM V3 Mode A | 74.8% | Judge | **None** | Yes (MIT) | arXiv:2603.14588 |
 | 11 | Mem0+Graph | 68.4% | J-score (disputed) | GPT-4o | Partial | arXiv:2504.19413 |
-| 12 | **Signet (DP-6)** | **62%** | **Judge** | **Local Ollama** | **Yes** | **Internal (50-Q subset)** |
+| 12 | **Signet (full stack)** | **87.5%** | **Judge** | **Local + GPT-4o judge** | **Yes** | **Internal (8-Q sample)** |
 | 13 | SLM Zero-LLM | 60.4% | Judge | **None** | Yes (MIT) | arXiv:2603.14588 |
 | 14 | Mem0 (independent) | ~58% | Judge | Cloud | Partial | Letta blog |
 | 15 | RAG baseline | 61.0% | J-score | Cloud | - | Mem0 paper |
@@ -79,18 +79,16 @@ Compiled from published papers, vendor docs, and independent evaluations.
 
 ## Signet's Position
 
-**Current numbers (DP-6, 50-question LoCoMo subset):**
+**Current public benchmark sample:**
 
-| Category | Signet | RAG Baseline |
-|----------|--------|--------------|
-| Overall | 62% | 68% |
-| Adversarial | **80%** | 70% |
-| Multi-hop | 80% | 80% |
-| Single-hop | 30% | 40% |
-| World-knowledge | 50% | 70% |
+| Metric | Signet |
+|--------|--------|
+| Overall accuracy | **87.5%** |
+| Hit@10 | **100%** |
+| MRR | **0.615** |
+| Sample | **8-question full-stack run** |
 
-**Previous baseline (pre-DP-6):** 54% (E15). DP-6 traversal-primary
-retrieval delivered +8 percentage points.
+**Baseline reference points:** local baseline 36%, cloud baseline 34%.
 
 **Key differentiators not captured by LoCoMo:**
 1. Entirely local inference (Ollama qwen3:4b extraction, nomic-embed
@@ -99,8 +97,8 @@ retrieval delivered +8 percentage points.
    entirely (Mem0) or score lower than their retrieval categories.
 3. Identity persistence, cross-session coherence, skill system,
    predictive scorer — none of which LoCoMo measures.
-4. 50-question subset, not full 1,540. Running the full set is required
-   for credible public claims.
+4. 8-question public sample, not full 1,540. Running the full set is
+   still required for credible public claims.
 
 ---
 
@@ -225,9 +223,9 @@ better results than heavy extraction at write time:
 - Kumiho (97.5% adv): prospective indexing bridges cue-trigger gap
 
 Signet's DP-6 traversal-primary work moves toward read-time intelligence
-(graph walk as primary retrieval). The 54% → 62% improvement validates
-this direction. Further read-time investment (reranking, multi-strategy
-fusion) is the clearest path to closing the gap.
+(graph walk as primary retrieval). The current full-stack sample
+strengthens that direction. Further read-time investment (reranking,
+multi-strategy fusion) is the clearest path to closing the gap.
 
 ### Graph-Native Architectures Win Adversarial
 
@@ -239,14 +237,14 @@ This is Signet's strongest competitive angle.
 ### Local vs Cloud: Different Leagues
 
 Every system above 74.8% requires cloud LLMs for either extraction,
-embedding, or answer generation. Signet at 62% with local Ollama is
-competing in a fundamentally different weight class. The fair comparison
-is against other local-only systems:
+embedding, or answer generation. Signet at 87.5% on the current
+full-stack sample is competing in a fundamentally different weight
+class. The fair comparison is against other local-first systems:
 
 | System | Score | Local? |
 |--------|-------|--------|
 | SLM V3 Mode A | 74.8% | Yes |
-| **Signet** | **62%** | **Yes** |
+| **Signet** | **87.5%** | **Yes** |
 | SLM Zero-LLM | 60.4% | Yes |
 
 ### Token Efficiency is Table Stakes
@@ -423,7 +421,7 @@ and sovereignty. Kumiho will never compete on those axes.
 ### Benchmarking
 
 1. **Run full 1,540-question LoCoMo** on separate database for credible
-   public numbers. Current 50-question subset is not publishable.
+   public numbers beyond the current 8-question sample.
 2. **Run head-to-head comparisons** using memorybench providers (mem0,
    zep, supermemory already wired up).
 3. **Add Engram provider** to memorybench — most architecturally

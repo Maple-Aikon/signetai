@@ -20,7 +20,7 @@
 
 ---
 
-**87.5% LoCoMo accuracy. 100% retrieval. Zero LLM calls at search time. [See how.](#locomo-benchmark)**
+**87.5% LoCoMo accuracy on an 8-question full-stack sample. 100% retrieval. Zero LLM calls at search time. [See how.](#locomo-benchmark)**
 
 Signet is a persistent cognition and local-first stateful runtime layer
 for AI agents. It gives your agent memory that works the way memory
@@ -96,8 +96,8 @@ prompts. These numbers are collected from published papers and repos.
 | 3 | [MemU](https://memu.pro/benchmark) | 92.09% | Judge | Yes | No | Yes |
 | 4 | MemMachine | 91.7% | Judge | No | No | Yes |
 | 5 | [Hindsight](https://arxiv.org/abs/2512.12818) | 89.6% | Judge | Yes (MIT) | No | Yes |
-| 6 | **Signet** | **87.5%** | **Judge (GPT-4o)** | **Yes (Apache)** | **Yes** | **No** |
-| 7 | [SLM V3 Mode C](https://arxiv.org/abs/2603.14588) | 87.7% | Judge | Yes (MIT) | Partial | Yes |
+| 6 | [SLM V3 Mode C](https://arxiv.org/abs/2603.14588) | 87.7% | Judge | Yes (MIT) | Partial | Yes |
+| 7 | **Signet** | **87.5%** | **Judge (GPT-4o)** | **Yes (Apache)** | **Yes** | **No** |
 | 8 | [Zep/Graphiti](https://arxiv.org/abs/2501.13956) | ~85% | Judge (third-party est) | Partial | No | Yes |
 | 9 | [Letta/MemGPT](https://letta.com) | ~83% | Judge | Yes (Apache) | No | Yes |
 | 10 | [Engram](https://arxiv.org/abs/2511.12960) | 80% | Judge | Yes | No | Yes |
@@ -106,7 +106,7 @@ prompts. These numbers are collected from published papers and repos.
 | 13 | [SLM Zero-LLM](https://arxiv.org/abs/2603.14588) | 60.4% | Judge | Yes (MIT) | Yes | No |
 | 14 | [Mem0](https://mem0.ai) (independent) | ~58% | Judge | Partial | No | Yes |
 
-**87.5% accuracy. 100% retrieval. Zero inference at search time.**
+**87.5% accuracy on an 8-question full-stack sample. 100% retrieval. Zero inference at search time.**
 
 100% Hit@10 means Signet found relevant context for every single question.
 Not one miss. The retrieval layer never came up empty. Every query walked
