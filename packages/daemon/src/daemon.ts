@@ -265,6 +265,30 @@ function normalizeLoopbackHost(host: string): string {
 	return host === "localhost" || host === "::1" ? "127.0.0.1" : host;
 }
 
+function parseOriginPort(url: URL): number | null {
+	if (url.port.length > 0) {
+		const port = Number.parseInt(url.port, 10);
+		return Number.isInteger(port) ? port : null;
+	}
+	if (url.protocol === "http:") return 80;
+	if (url.protocol === "https:") return 443;
+	return null;
+}
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+	if (!origin) return false;
+	if (ALLOWED_ORIGINS.has(origin)) return true;
+	if (NETWORK_MODE !== "tailscale") return false;
+
+	try {
+		const url = new URL(origin);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+		return parseOriginPort(url) === PORT;
+	} catch {
+		return false;
+	}
+}
+
 function readConfiguredNetworkBinding(agentsDir: string): {
 	readonly host: string;
 	readonly bind: string;
@@ -575,7 +599,7 @@ function buildPredictorHealthParams(): PredictorHealthParams {
 
 	return {
 		enabled: true,
-		sidecarAlive: client?.isAlive(),
+		sidecarAlive: client?.isAlive() ?? false,
 		crashCount: client?.crashCount ?? 0,
 		crashDisabled: client?.crashDisabled ?? false,
 		modelVersion,
@@ -1235,7 +1259,7 @@ const ALLOWED_ORIGINS = new Set([
 app.use(
 	"*",
 	cors({
-		origin: (origin) => (ALLOWED_ORIGINS.has(origin) ? origin : null),
+		origin: (origin) => (isAllowedOrigin(origin) ? origin : null),
 		credentials: true,
 	}),
 );

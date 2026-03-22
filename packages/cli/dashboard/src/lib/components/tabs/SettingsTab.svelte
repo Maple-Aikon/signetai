@@ -1,7 +1,7 @@
 <script lang="ts">
 import { invalidateAll } from "$app/navigation";
 import type { ConfigFile } from "$lib/api";
-import type IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
+import IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
@@ -95,10 +95,10 @@ const tabBtn =
 const tabActive = `${tabBtn} text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)] border border-[color-mix(in_srgb,var(--sig-highlight),transparent_85%)]`;
 const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var(--sig-highlight)] hover:bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_94%)]`;
 
-const activeSection = $state("agent");
+let activeSection = $state("agent");
 let discardDialogOpen = $state(false);
-const identityPanel = $state<IdentityPanel | null>(null);
-const identityDirty = $state(false);
+let identityPanel = $state<IdentityPanel | null>(null);
+let identityDirty = $state(false);
 
 const sections = $derived(
 	sectionDefs.map((def) => ({

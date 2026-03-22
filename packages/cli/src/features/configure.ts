@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import { parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 
 interface Deps {
@@ -117,11 +118,6 @@ function readValue(yaml: string, key: string, fallback: string): string {
 	return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
 }
 
-function readNetworkMode(yaml: string): string {
-	const match = yaml.match(/^network:\n(?: {2}.+\n)*? {2}mode:\s*(.+)$/m);
-	return match ? match[1].trim().replace(/^["']|["']$/g, "") : "localhost";
-}
-
 function writeNetworkSection(yaml: string, mode: string): string {
 	const block = `network:\n  mode: ${mode}\n`;
 	if (yaml.match(/^network:\n(?: {2}.+\n)*/m)) {
@@ -154,7 +150,7 @@ async function configureNetwork(yaml: string): Promise<string> {
 			{ value: "localhost", name: "localhost only (127.0.0.1)" },
 			{ value: "tailscale", name: "Tailscale / remote (bind 0.0.0.0)" },
 		],
-		default: readNetworkMode(yaml),
+		default: readNetworkMode(parseSimpleYaml(yaml)),
 	});
 
 	return writeNetworkSection(yaml, mode);

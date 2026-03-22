@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
-use signet_core::config::DaemonConfig;
+use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
 use tracing::info;
@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
     info!(
         port = config.port,
         host = %config.host,
+        bind = %config.bind.as_deref().unwrap_or(&config.host),
         db = %config.db_path.display(),
         base = %config.base_path.display(),
         "starting signet daemon"
@@ -507,6 +508,7 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
     let db_stats = state
         .pool
         .read(|conn| {
@@ -538,6 +540,10 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
+        "port": state.config.port,
+        "host": state.config.host,
+        "bindHost": bind,
+        "networkMode": network_mode_from_bind(bind),
         "db": db_stats,
         "agent": state.config.manifest.agent.name,
     }))
