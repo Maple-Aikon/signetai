@@ -7,15 +7,12 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHmac, randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { AuthResult, TokenClaims, TokenRole, TokenScope } from "./types";
+import { TOKEN_ROLES } from "./types";
 
 function base64urlEncode(data: Buffer | Uint8Array): string {
-	return Buffer.from(data)
-		.toString("base64")
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
+	return Buffer.from(data).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function base64urlDecode(str: string): Buffer {
@@ -79,10 +76,7 @@ export function verifyToken(secret: Buffer, token: string): AuthResult {
 	const expectedSig = sign(secret, payloadB64);
 	const actualSig = base64urlDecode(sigB64);
 
-	if (
-		expectedSig.length !== actualSig.length ||
-		!expectedSig.equals(actualSig)
-	) {
+	if (expectedSig.length !== actualSig.length || !timingSafeEqual(expectedSig, actualSig)) {
 		return { authenticated: false, claims: null, error: "invalid signature" };
 	}
 
@@ -92,6 +86,18 @@ export function verifyToken(secret: Buffer, token: string): AuthResult {
 		claims = JSON.parse(raw) as TokenClaims;
 	} catch {
 		return { authenticated: false, claims: null, error: "malformed payload" };
+	}
+
+	if (typeof claims.sub !== "string") {
+		return { authenticated: false, claims: null, error: "invalid sub" };
+	}
+
+	if (!TOKEN_ROLES.includes(claims.role)) {
+		return { authenticated: false, claims: null, error: "invalid role" };
+	}
+
+	if (typeof claims.scope !== "object" || claims.scope === null || Array.isArray(claims.scope)) {
+		return { authenticated: false, claims: null, error: "invalid scope" };
 	}
 
 	if (typeof claims.exp !== "number" || typeof claims.iat !== "number") {

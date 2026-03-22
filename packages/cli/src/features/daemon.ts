@@ -122,7 +122,9 @@ export async function migrateSchema(options: PathOptions, deps: Deps): Promise<v
 		printMigrationErrors(result.errors);
 
 		if (result.migrated) {
-			console.log(chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`));
+			console.log(
+				chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`),
+			);
 		} else {
 			console.log(chalk.dim("  No migration needed"));
 		}
@@ -400,6 +402,22 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 		console.log(chalk.dim("    services:"));
 		console.log(chalk.dim("      openclaw:"));
 		console.log(chalk.dim('        restart_command: "systemctl --user restart openclaw"'));
+		return false;
+	}
+
+	// Validate command against known safe restart patterns to prevent
+	// injection via tampered agent.yaml (git sync, social engineering).
+	const SAFE_PATTERNS = [
+		/^systemctl\s+--user\s+restart\s+[\w.-]+$/,
+		/^launchctl\s+kickstart\s+-k\s+[\w./-]+$/,
+		/^brew\s+services\s+restart\s+[\w.-]+$/,
+		/^supervisorctl\s+restart\s+[\w.-]+$/,
+	];
+	if (!SAFE_PATTERNS.some((p) => p.test(cmd))) {
+		console.log();
+		console.log(chalk.red("  Restart command rejected — does not match safe patterns."));
+		console.log(chalk.dim(`  Command: ${cmd}`));
+		console.log(chalk.dim("  Allowed: systemctl --user restart <name>, launchctl kickstart -k <path>"));
 		return false;
 	}
 
