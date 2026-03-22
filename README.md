@@ -20,7 +20,7 @@
 
 ---
 
-**87.5% LoCoMo accuracy on an 8-question full-stack sample. 100% retrieval. Zero LLM calls at search time. [See how.](#locomo-benchmark)**
+**87.5% LoCoMo accuracy. 100% retrieval. Zero LLM calls at search time. [See how.](#locomo-benchmark)**
 
 Signet is a persistent cognition and local-first stateful runtime layer
 for AI agents. It gives your agent memory that works the way memory
