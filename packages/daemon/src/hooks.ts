@@ -211,6 +211,7 @@ export interface UserPromptSubmitResponse {
 export interface SessionEndRequest {
 	harness: string;
 	transcriptPath?: string;
+	transcript?: string;
 	sessionId?: string;
 	sessionKey?: string;
 	cwd?: string;
@@ -2050,7 +2051,7 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		return { memoriesSaved: 0 };
 	}
 
-	// Read transcript if available
+	// Read transcript: prefer file path, fall back to inline body
 	let transcript = "";
 	if (req.transcriptPath && existsSync(req.transcriptPath)) {
 		try {
@@ -2061,6 +2062,8 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 				path: req.transcriptPath,
 			});
 		}
+	} else if (req.transcript) {
+		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	}
 
 	let feedbackAspectsUpdated = 0;

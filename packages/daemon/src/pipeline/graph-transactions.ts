@@ -10,6 +10,7 @@
 import type { ExtractedEntity } from "@signet/core";
 import type { WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
+import { isDecisionContent } from "../inline-entity-linker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -257,6 +258,7 @@ export interface PersistStructuredInput {
 	readonly entities: readonly ExtractedEntity[];
 	readonly aspects: readonly StructuredAspect[];
 	readonly sourceMemoryId: string;
+	readonly content: string;
 	readonly agentId: string;
 	readonly now: string;
 }
@@ -289,6 +291,12 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 
 	let aspectsCreated = 0;
 	let attributesCreated = 0;
+
+	// Decision detection: promote attributes to constraints when
+	// the source memory contains decision-indicating language.
+	const decision = isDecisionContent(input.content);
+	const kind = decision ? "constraint" : "attribute";
+	const baseImportance = decision ? 0.85 : 0.5;
 
 	// Collect resolved entity ids for dependency linking
 	const resolved: string[] = [];
@@ -344,19 +352,20 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 			if (dup) continue;
 
 			const confidence = attr.confidence ?? 0.7;
-			const importance = attr.importance ?? 0.5;
+			const importance = attr.importance ?? baseImportance;
 			try {
 				db.prepare(
 					`INSERT INTO entity_attributes
 					 (id, aspect_id, agent_id, memory_id, kind, content,
 					  normalized_content, confidence, importance, status,
 					  created_at, updated_at)
-					 VALUES (?, ?, ?, ?, 'attribute', ?, ?, ?, ?, 'active', ?, ?)`,
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
 				).run(
 					crypto.randomUUID(),
 					stored.id,
 					input.agentId,
 					input.sourceMemoryId,
+					kind,
 					attr.content,
 					normalized,
 					confidence,

@@ -3022,6 +3022,7 @@ app.post("/api/memory/remember", async (c) => {
 					})),
 					aspects: body.structured?.aspects ?? [],
 					sourceMemoryId: id,
+					content: body.content,
 					agentId: "default",
 					now,
 				}),
@@ -4047,6 +4048,7 @@ app.get("/api/memory/search", async (c) => {
 	const pinned = c.req.query("pinned");
 	const importanceMin = c.req.query("importance_min");
 	const since = c.req.query("since");
+	const expand = c.req.query("expand");
 
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
@@ -4060,6 +4062,7 @@ app.get("/api/memory/search", async (c) => {
 				pinned: pinned === "1" || pinned === "true",
 				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
 				since,
+				expand: expand === "1" || expand === "true",
 			},
 			cfg,
 			fetchEmbedding,
