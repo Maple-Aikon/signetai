@@ -188,7 +188,12 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	mkdirSync(daemonDir, { recursive: true });
 	mkdirSync(logDir, { recursive: true });
 
+	// In dev, runtime.ts lives in lib/ so cliDir (dirname(__dirname)) = src/.
+	// In the published bundle, everything flattens into dist/cli.js so
+	// __dirname already points at dist/ — check it first to handle the
+	// bundled layout where cliDir overshoots to the package root.
 	const daemonLocations = [
+		join(__dirname, "daemon.js"),
 		join(cliDir, "daemon.js"),
 		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
 		join(pkgDir, "..", "daemon", "src", "daemon.ts"),
