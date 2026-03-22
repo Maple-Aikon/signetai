@@ -49,6 +49,9 @@ const ANSI_COLORS: Record<string, string> = {
 	"35": "var(--sig-accent)",
 };
 
+// INVARIANT: escapeHtml must run on the raw input before any HTML tags are
+// inserted. {@html} in the template relies on this — any future change that
+// interpolates user-controlled content into replacement strings will introduce XSS.
 function ansiToHtml(text: string): string {
 	let result = escapeHtml(text);
 	// Match compound CSI sequences like \x1b[1;31m as well as simple \x1b[31m.

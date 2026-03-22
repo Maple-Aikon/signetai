@@ -165,11 +165,14 @@ function normalizeOutputChunk(chunk: string): string {
 	let sawAnyJsonLine = false;
 	let sawAnyNonJsonLine = false;
 
+	const plainLines: string[] = [];
+
 	for (const line of lines) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
 		if (!trimmed.startsWith("{")) {
 			sawAnyNonJsonLine = true;
+			plainLines.push(line);
 			continue;
 		}
 
@@ -202,10 +205,11 @@ function normalizeOutputChunk(chunk: string): string {
 
 	// Only extract events when the chunk is purely structured JSON (no plain text
 	// mixed in). OpenCode/Codex output is pure JSONL; claude-code is plain text.
-	// If there's any non-JSON content, fall back to the full cleaned output so
-	// error messages and plain text aren't silently dropped.
 	if (extractedAnyEvent && !sawAnyNonJsonLine) return extractedText;
 	if (sawAnyJsonLine && !sawAnyNonJsonLine) return "";
+	// Mixed (JSON + plain text): return only the plain-text lines so raw JSONL
+	// protocol data doesn't leak into the run log UI.
+	if (sawAnyJsonLine && sawAnyNonJsonLine) return plainLines.join("\n");
 	return cleanChunk;
 }
 

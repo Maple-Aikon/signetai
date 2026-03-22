@@ -112,11 +112,12 @@ export async function spawnTask(
 	});
 
 	let timedOut = false;
+	let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
 	const timer = setTimeout(() => {
 		timedOut = true;
 		child.kill("SIGTERM");
 		// Force kill after 5s if still alive
-		setTimeout(() => {
+		forceKillTimer = setTimeout(() => {
 			try {
 				child.kill();
 			} catch {
@@ -133,6 +134,7 @@ export async function spawnTask(
 		]);
 
 		clearTimeout(timer);
+		if (forceKillTimer) clearTimeout(forceKillTimer);
 
 		return {
 			exitCode,
@@ -143,6 +145,7 @@ export async function spawnTask(
 		};
 	} catch (err) {
 		clearTimeout(timer);
+		if (forceKillTimer) clearTimeout(forceKillTimer);
 		return {
 			exitCode: null,
 			stdout: "",
