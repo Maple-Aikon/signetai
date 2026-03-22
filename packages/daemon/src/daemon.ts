@@ -1217,7 +1217,7 @@ const ALLOWED_ORIGINS = new Set([
 	"http://tauri.localhost",
 ]);
 app.use("*", cors({
-	origin: (origin) => ALLOWED_ORIGINS.has(origin) ? origin : "",
+	origin: (origin) => ALLOWED_ORIGINS.has(origin) ? origin : null,
 	credentials: true,
 }));
 
@@ -1546,8 +1546,14 @@ app.use("/api/troubleshoot/*", async (c, next) => {
 });
 
 // Config writes — admin only (can overwrite agent.yaml, AGENTS.md)
+// Pre-check content-length to reject oversized bodies before buffering
+const MAX_CONFIG_BYTES = 1_048_576;
 app.use("/api/config", async (c, next) => {
 	if (c.req.method === "POST") {
+		const len = Number(c.req.header("content-length") ?? 0);
+		if (len > MAX_CONFIG_BYTES) {
+			return c.json({ error: `payload exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
+		}
 		return requirePermission("admin", authConfig)(c, next);
 	}
 	return next();
@@ -1689,10 +1695,9 @@ app.post("/api/config", async (c) => {
 			return c.json({ error: "Invalid request" }, 400);
 		}
 
-		// Reject oversized payloads (1MB) to prevent disk exhaustion
-		const MAX_CONFIG_BYTES = 1_048_576;
+		// Defense-in-depth: also check after parse (content-length can be absent)
 		if (content.length > MAX_CONFIG_BYTES) {
-			return c.json({ error: `Content exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
+			return c.json({ error: `content exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
 		}
 
 		if (file.includes("/") || file.includes("..")) {

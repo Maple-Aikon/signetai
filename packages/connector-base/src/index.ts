@@ -32,7 +32,7 @@
  * ```
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -221,8 +221,13 @@ export abstract class BaseConnector {
 export function atomicWriteJson(path: string, data: unknown, indent: number | string = 2): void {
 	const content = `${JSON.stringify(data, null, indent)}\n`;
 	const tmp = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
-	writeFileSync(tmp, content, "utf-8");
-	renameSync(tmp, path);
+	try {
+		writeFileSync(tmp, content, "utf-8");
+		renameSync(tmp, path);
+	} catch (err) {
+		try { unlinkSync(tmp); } catch {}
+		throw err;
+	}
 }
 
 // ============================================================================
