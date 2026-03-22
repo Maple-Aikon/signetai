@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HYBRID_ALPHA } from "./constants";
+import { DEFAULT_HYBRID_ALPHA } from "./constants";
 import type { Memory } from "./types";
 
 // Try to load native Rust implementation, fall back to pure TS

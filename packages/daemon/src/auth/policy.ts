@@ -3,6 +3,7 @@
  */
 
 import type { AuthMode, Permission, PolicyDecision, TokenClaims, TokenRole, TokenScope } from "./types";
+import { logger } from "../logger";
 
 const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 	admin: [
@@ -74,14 +75,20 @@ export function checkScope(claims: TokenClaims | null, target: TokenScope, authM
 		return { allowed: true };
 	}
 
-	// Non-admin tokens with empty scope are denied — they must specify
-	// at least one scope dimension (project, agent, or user).
+	// DEPRECATION: Non-admin tokens with empty scope currently get full access
+	// but will be denied in a future release. Log a warning so operators can
+	// rotate tokens with explicit scopes before enforcement begins.
 	const scope = claims.scope;
 	if (!scope.project && !scope.agent && !scope.user) {
-		return {
-			allowed: false,
-			reason: "non-admin token requires explicit scope",
-		};
+		logger.warn(
+			"daemon",
+			"DEPRECATION: non-admin token has empty scope — will be denied in a future release. Issue tokens with explicit scope fields.",
+			{
+				sub: claims.sub,
+				role: claims.role,
+			},
+		);
+		return { allowed: true };
 	}
 
 	if (scope.project && target.project && scope.project !== target.project) {

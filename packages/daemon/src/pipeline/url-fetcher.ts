@@ -17,7 +17,7 @@ const PRIVATE_RANGES = [
 	/^0\./,
 	/^::1$/,
 	/^fc00:/i,
-	/^fd/i,
+	/^fd[0-9a-f]{2}:/i,
 	/^fe80:/i,
 	/^::ffff:127\./,
 	/^::ffff:10\./,
@@ -29,7 +29,14 @@ function isPrivateIp(ip: string): boolean {
 	return PRIVATE_RANGES.some((r) => r.test(ip));
 }
 
-/** Resolve hostname and reject private/reserved IPs. */
+/**
+ * Resolve hostname and reject private/reserved IPs.
+ *
+ * Note: DNS rebinding can bypass this check — an attacker with a low-TTL
+ * DNS record could return a public IP here and a private IP when fetch()
+ * resolves the same hostname moments later. Defence-in-depth via
+ * network-level egress filtering is recommended for production deployments.
+ */
 export async function validateUrl(url: string): Promise<void> {
 	const parsed = new URL(url);
 	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {

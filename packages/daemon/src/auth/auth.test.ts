@@ -87,7 +87,7 @@ describe("tokens", () => {
 		expect(result.claims?.scope).toEqual(scope);
 	});
 
-	test("empty scope object means full access (no scope fields set)", () => {
+	test("verifyToken accepts token with empty scope object", () => {
 		const token = createToken(secret, { sub: "x", scope: {}, role: "agent" }, 60);
 		const result = verifyToken(secret, token);
 		expect(result.authenticated).toBe(true);
@@ -269,11 +269,12 @@ describe("policy - checkScope", () => {
 		expect(d.reason).toMatch(/proj-a/);
 	});
 
-	test("empty scope on non-admin token is denied", () => {
+	test("empty scope on non-admin token is allowed with deprecation warning", () => {
 		const claims = makeClaims("agent", {});
 		const d = checkScope(claims, { project: "anything" }, "team");
-		expect(d.allowed).toBe(false);
-		expect(d.reason).toMatch(/non-admin/);
+		// Currently allowed for backwards compatibility — will be denied
+		// in a future release after operators rotate tokens.
+		expect(d.allowed).toBe(true);
 	});
 
 	test("empty scope on admin token grants full access", () => {

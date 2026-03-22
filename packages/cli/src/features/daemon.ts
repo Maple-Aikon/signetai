@@ -409,7 +409,7 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 	// injection via tampered agent.yaml (git sync, social engineering).
 	const SAFE_PATTERNS = [
 		/^systemctl\s+--user\s+restart\s+[\w.-]+$/,
-		/^launchctl\s+kickstart\s+-k\s+[\w./-]+$/,
+		/^launchctl\s+kickstart\s+-k\s+[\w.-]+(\/[\w.-]+)*$/,
 		/^brew\s+services\s+restart\s+[\w.-]+$/,
 		/^supervisorctl\s+restart\s+[\w.-]+$/,
 	];
