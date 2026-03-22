@@ -8951,8 +8951,9 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 			add.on("error", () => resolve());
 		});
 
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		const timeout = new Promise<void>((resolve) => {
-			setTimeout(() => {
+			timer = setTimeout(() => {
 				logger.warn("git", "Auto-commit timed out after 30s");
 				try { active?.kill("SIGTERM"); } catch {}
 				resolve();
@@ -8960,6 +8961,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		});
 
 		await Promise.race([work, timeout]);
+		clearTimeout(timer);
 	} finally {
 		autocommitInFlight = false;
 	}
