@@ -5398,7 +5398,6 @@ import {
 	type SynthesisRequest,
 	type UserPromptSubmitRequest,
 	handlePreCompaction,
-	handleRecall,
 	handleRemember,
 	handleSessionEnd,
 	handleSessionStart,
@@ -5676,7 +5675,12 @@ app.post("/api/hooks/recall", async (c) => {
 			return c.json({ memories: [], count: 0, bypassed: true });
 		}
 
-		const result = handleRecall(body);
+		const agentId = c.req.header("x-signet-agent-id") ?? "default";
+		const result = await hybridRecall(
+			{ query: body.query, limit: body.limit, scope: body.project, agentId },
+			cfg,
+			fetchEmbedding,
+		);
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "Recall hook failed", e as Error);
