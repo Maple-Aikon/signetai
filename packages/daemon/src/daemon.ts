@@ -10465,12 +10465,23 @@ async function main() {
 	const { createServer: nodeCreateServer } = await import("node:http");
 	const createBoundedServer: typeof nodeCreateServer = (...args: Parameters<typeof nodeCreateServer>) => {
 		const server = nodeCreateServer(...args);
-		server.on("request", (req) => {
+		server.on("request", (req, res) => {
 			let bytes = 0;
+			let aborted = false;
 			req.on("data", (chunk: Buffer) => {
+				if (aborted) return;
 				bytes += chunk.length;
 				if (bytes > REQUEST_BODY_LIMIT) {
-					req.destroy();
+					aborted = true;
+					logger.warn("http", "Request body exceeded limit", { bytes, limit: REQUEST_BODY_LIMIT });
+					// Send a proper 413 before closing so clients get a structured
+					// error instead of ECONNRESET. Use res.end() to avoid aborting
+					// pipelined keep-alive requests on the same socket.
+					if (!res.headersSent) {
+						res.writeHead(413, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: "payload too large" }));
+					}
+					req.resume(); // drain remaining body to avoid backpressure
 				}
 			});
 		});
