@@ -1,24 +1,33 @@
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import {
 	Database as CoreDatabase,
+	type ImportResult,
+	type SetupDetection,
+	type SkillsResult,
 	ensureUnifiedSchema,
 	formatYaml,
 	importMemoryLogs,
 	resolvePrimaryPackageManager,
 	runMigrations,
-	type ImportResult,
-	type SetupDetection,
-	type SkillsResult,
 	unifySkills,
 } from "@signet/core";
+import { readNetworkMode } from "@signet/core";
 import chalk from "chalk";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import open from "open";
 import ora from "ora";
+import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
-import { getEmbeddingDimensions, readErr, readRecord, readString, type EmbeddingProviderChoice, type ExtractionProviderChoice } from "./setup-shared.js";
+import {
+	type EmbeddingProviderChoice,
+	type ExtractionProviderChoice,
+	getEmbeddingDimensions,
+	readErr,
+	readRecord,
+	readString,
+} from "./setup-shared.js";
 import type { SetupDeps } from "./setup-types.js";
 
 export async function runExistingSetupWizard(
@@ -94,9 +103,13 @@ export async function runExistingSetupWizard(
 			schema: "signet/v1",
 			agent: {
 				name: agentName,
-				description: readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant",
+				description:
+					readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant",
 				created: now,
 				updated: now,
+			},
+			network: {
+				mode: readNetworkMode(existingConfig),
 			},
 			harnesses: detectedHarnesses,
 			install: {
@@ -125,7 +138,9 @@ export async function runExistingSetupWizard(
 		};
 
 		if (options?.embeddingProvider && options.embeddingProvider !== "none") {
-			const model = options.embeddingModel || (options.embeddingProvider === "openai" ? "text-embedding-3-small" : "nomic-embed-text");
+			const model =
+				options.embeddingModel ||
+				(options.embeddingProvider === "openai" ? "text-embedding-3-small" : "nomic-embed-text");
 			config.embedding = {
 				provider: options.embeddingProvider,
 				model,
@@ -247,7 +262,9 @@ export async function runExistingSetupWizard(
 		}
 
 		if (skillsResult && (skillsResult.imported > 0 || skillsResult.symlinked > 0)) {
-			console.log(chalk.dim(`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`));
+			console.log(
+				chalk.dim(`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`),
+			);
 		}
 
 		if (configuredHarnesses.length > 0) {
@@ -260,7 +277,10 @@ export async function runExistingSetupWizard(
 
 		if (daemonStarted) {
 			console.log();
-			console.log(chalk.green(`  ● Daemon running at http://localhost:${deps.DEFAULT_PORT}`));
+			console.log(chalk.green("  ● Daemon running"));
+			for (const line of daemonAccessLines(deps.DEFAULT_PORT, readNetworkMode(config))) {
+				console.log(chalk.dim(`    ${line}`));
+			}
 		}
 
 		if (options?.skipGit !== true && gitEnabled) {

@@ -1,6 +1,7 @@
+import { join } from "node:path";
 import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
 import chalk from "chalk";
-import { join } from "node:path";
+import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 
 interface Existing {
@@ -15,6 +16,9 @@ interface DaemonStatus {
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
+	readonly host: string | null;
+	readonly bindHost: string | null;
+	readonly networkMode: string | null;
 }
 
 interface DbReport {
@@ -116,10 +120,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 	}
 }
 
-export async function showStatus(
-	options: { path?: string; json?: boolean },
-	deps: StatusDeps,
-): Promise<void> {
+export async function showStatus(options: { path?: string; json?: boolean }, deps: StatusDeps): Promise<void> {
 	const basePath = deps.normalizeAgentPath(deps.extractPathOption(options) ?? deps.agentsDir);
 	const report = await getStatusReport(basePath, deps);
 
@@ -143,7 +144,9 @@ export async function showStatus(
 		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}`);
 		console.log(chalk.dim(`    PID: ${report.daemon.pid}`));
 		console.log(chalk.dim(`    Uptime: ${deps.formatUptime(report.daemon.uptime || 0)}`));
-		console.log(chalk.dim(`    Dashboard: http://localhost:${deps.defaultPort}`));
+		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
+			console.log(chalk.dim(`    ${line}`));
+		}
 	} else {
 		console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
 	}
@@ -181,10 +184,7 @@ export async function showStatus(
 	console.log();
 }
 
-export async function showDoctor(
-	options: { path?: string; json?: boolean },
-	deps: StatusDeps,
-): Promise<void> {
+export async function showDoctor(options: { path?: string; json?: boolean }, deps: StatusDeps): Promise<void> {
 	const basePath = deps.normalizeAgentPath(deps.extractPathOption(options) ?? deps.agentsDir);
 	const report = await getStatusReport(basePath, deps);
 	const findings = getDoctorFindings(report);

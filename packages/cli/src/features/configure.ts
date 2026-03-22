@@ -1,7 +1,7 @@
-import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import chalk from "chalk";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import chalk from "chalk";
 
 interface Deps {
 	readonly agentsDir: string;
@@ -11,6 +11,7 @@ interface Deps {
 
 const sections = [
 	{ value: "agent", name: "👤 Agent identity (name, description)" },
+	{ value: "network", name: "🌐 Network access" },
 	{ value: "harnesses", name: "[link] Harnesses (AI platforms)" },
 	{ value: "embedding", name: "🧠 Embedding provider" },
 	{ value: "search", name: "🔍 Search settings" },
@@ -53,6 +54,15 @@ export async function configureAgent(deps: Deps): Promise<void> {
 			yaml = await configureIdentity(yaml);
 			writeFileSync(path, yaml);
 			console.log(chalk.green("  ✓ Agent identity updated"));
+			console.log();
+			continue;
+		}
+
+		if (section === "network") {
+			yaml = await configureNetwork(yaml);
+			writeFileSync(path, yaml);
+			console.log(chalk.green("  ✓ Network settings updated"));
+			console.log(chalk.dim("    Restart the daemon to apply the new bind mode."));
 			console.log();
 			continue;
 		}
@@ -107,6 +117,19 @@ function readValue(yaml: string, key: string, fallback: string): string {
 	return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
 }
 
+function readNetworkMode(yaml: string): string {
+	const match = yaml.match(/^network:\n(?: {2}.+\n)*? {2}mode:\s*(.+)$/m);
+	return match ? match[1].trim().replace(/^["']|["']$/g, "") : "localhost";
+}
+
+function writeNetworkSection(yaml: string, mode: string): string {
+	const block = `network:\n  mode: ${mode}\n`;
+	if (yaml.match(/^network:\n(?: {2}.+\n)*/m)) {
+		return yaml.replace(/^network:\n(?: {2}.+\n)*/m, block);
+	}
+	return `${yaml.trimEnd()}\n\n${block}`;
+}
+
 async function configureIdentity(yaml: string): Promise<string> {
 	const name = await input({
 		message: "Agent name:",
@@ -122,6 +145,19 @@ async function configureIdentity(yaml: string): Promise<string> {
 	next = next.replace(/^(\s*description:)\s*.+$/m, `$1 "${description}"`);
 	next = next.replace(/^(\s*updated:)\s*.+$/m, `$1 "${new Date().toISOString()}"`);
 	return next;
+}
+
+async function configureNetwork(yaml: string): Promise<string> {
+	const mode = await select({
+		message: "How should the daemon be hosted?",
+		choices: [
+			{ value: "localhost", name: "localhost only (127.0.0.1)" },
+			{ value: "tailscale", name: "Tailscale / remote (bind 0.0.0.0)" },
+		],
+		default: readNetworkMode(yaml),
+	});
+
+	return writeNetworkSection(yaml, mode);
 }
 
 async function configureHarnesses(yaml: string, deps: Deps): Promise<string> {

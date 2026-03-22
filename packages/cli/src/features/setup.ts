@@ -1,20 +1,22 @@
-import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { OpenClawConnector } from "@signet/connector-openclaw";
-import {
-	parseSimpleYaml,
-	type SetupDetection,
-} from "@signet/core";
-import chalk from "chalk";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import { OpenClawConnector } from "@signet/connector-openclaw";
+import { NETWORK_MODES, type NetworkMode, type SetupDetection, parseSimpleYaml, readNetworkMode } from "@signet/core";
+import chalk from "chalk";
 import open from "open";
 import ora from "ora";
-import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
 import { runFreshSetup } from "./setup-fresh.js";
+import { runExistingSetupWizard } from "./setup-migrate.js";
+import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
 	EXTRACTION_PROVIDER_CHOICES,
+	type EmbeddingProviderChoice,
+	type ExtractionProviderChoice,
+	type HarnessChoice,
 	OPENCLAW_RUNTIME_CHOICES,
+	type OpenClawRuntimeChoice,
 	SETUP_HARNESS_CHOICES,
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
@@ -26,12 +28,7 @@ import {
 	readHarnesses,
 	readRecord,
 	readString,
-	type EmbeddingProviderChoice,
-	type ExtractionProviderChoice,
-	type HarnessChoice,
-	type OpenClawRuntimeChoice,
 } from "./setup-shared.js";
-import { runExistingSetupWizard } from "./setup-migrate.js";
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
@@ -91,8 +88,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingPipeline = readRecord(existingMemory.pipelineV2);
 	const existingExtraction = readRecord(existingPipeline.extraction);
 	const existingName = readString(existingConfig.name) ?? readString(existingAgent.name) ?? "My Agent";
-	const existingDesc = readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
+	const existingDesc =
+		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
 	const existingHarnesses = readHarnesses(existingConfig.harnesses);
+	const existingNetworkMode = readNetworkMode(existingConfig);
 
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
@@ -344,6 +343,29 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				default: existingDesc,
 			});
 
+	let networkMode: NetworkMode;
+	if (nonInteractive) {
+		networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
+	} else {
+		console.log();
+		networkMode = await select({
+			message: "How should the daemon be hosted?",
+			choices: [
+				{
+					value: "localhost",
+					name: "localhost only (default)",
+					description: "Bind to 127.0.0.1 only",
+				},
+				{
+					value: "tailscale",
+					name: "Tailscale / remote",
+					description: "Keep localhost working and also bind 0.0.0.0",
+				},
+			],
+			default: existingNetworkMode,
+		});
+	}
+
 	const requestedEmbeddingProvider = deps.normalizeChoice(options.embeddingProvider, EMBEDDING_PROVIDER_CHOICES);
 	const requestedExtractionProvider = deps.normalizeChoice(options.extractionProvider, EXTRACTION_PROVIDER_CHOICES);
 
@@ -383,7 +405,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =
-				deps.normalizeStringValue(options.embeddingModel) || deps.normalizeStringValue(existingEmbedding.model) || "nomic-embed-text";
+				deps.normalizeStringValue(options.embeddingModel) ||
+				deps.normalizeStringValue(existingEmbedding.model) ||
+				"nomic-embed-text";
 			embeddingModel = configuredModel;
 			embeddingDimensions = getEmbeddingDimensions(configuredModel);
 		} else {
@@ -420,7 +444,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingSearchBalance = deps.parseSearchBalanceValue(existingSearch.alpha);
 	const requestedSearchBalance = deps.parseSearchBalanceValue(options.searchBalance);
 	const searchBalance = nonInteractive
-		? requestedSearchBalance ?? existingSearchBalance ?? 0.7
+		? (requestedSearchBalance ?? existingSearchBalance ?? 0.7)
 		: await select({
 				message: "Search style (semantic vs keyword matching):",
 				choices: [
@@ -642,6 +666,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		basePath,
 		agentName,
 		agentDescription,
+		networkMode,
 		harnesses,
 		openclawRuntimePath,
 		configureOpenClawWs,

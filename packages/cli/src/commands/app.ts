@@ -6,6 +6,7 @@ interface SetupOptions {
 	nonInteractive?: boolean;
 	name?: string;
 	description?: string;
+	networkMode?: string;
 	harness?: string[];
 	embeddingProvider?: string;
 	embeddingModel?: string;
@@ -45,6 +46,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--non-interactive", "Run setup without prompts")
 		.option("--name <name>", "Agent name (non-interactive mode)")
 		.option("--description <description>", "Agent description (non-interactive mode)")
+		.option("--network-mode <mode>", "Daemon network mode in non-interactive mode (localhost, tailscale)")
 		.option(
 			"--harness <harness>",
 			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw)",
