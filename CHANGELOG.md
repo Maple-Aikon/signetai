@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.72.8] - 2026-03-22
+
+### Features
+
+- desire paths retrieval + prospective indexing (#253)
+
+
 ## [0.72.7] - 2026-03-22
 
 ### Bug Fixes
