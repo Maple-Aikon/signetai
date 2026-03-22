@@ -51,13 +51,21 @@ const ANSI_COLORS: Record<string, string> = {
 
 function ansiToHtml(text: string): string {
 	let result = escapeHtml(text);
-	result = result.replace(/\x1b\[(\d+)m([\s\S]*?)\x1b\[0m/g, (_, code, content) => {
-		const color = ANSI_COLORS[code];
-		if (color) return `<span style="color:${color}">${content}</span>`;
-		if (code === "1") return `<strong>${content}</strong>`;
-		return content;
+	// Match compound CSI sequences like \x1b[1;31m as well as simple \x1b[31m.
+	// For compound codes, prefer the last numeric segment as the color code and
+	// apply bold when "1" is present.
+	result = result.replace(/\x1b\[(\d+(?:;\d+)*)m([\s\S]*?)\x1b\[0m/g, (_, codes, content) => {
+		const parts = codes.split(";");
+		const bold = parts.includes("1");
+		const color = parts.map((c: string) => ANSI_COLORS[c]).find(Boolean);
+		let out = content;
+		if (color) out = `<span style="color:${color}">${out}</span>`;
+		if (bold) out = `<strong>${out}</strong>`;
+		return out;
 	});
-	return result.replace(/\x1b\[\d+m/g, "");
+	// Strip any remaining CSI sequences (including compound ones) that weren't
+	// wrapped above (e.g. codes with no matching reset).
+	return result.replace(/\x1b\[\d+(?:;\d+)*m/g, "");
 }
 
 function toLines(text: string | null): string[] {
