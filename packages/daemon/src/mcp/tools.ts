@@ -114,6 +114,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_forget",
 	"memory_feedback",
 	"knowledge_expand",
+	"knowledge_expand_session",
 	"agent_peers",
 	"agent_message_send",
 	"agent_message_inbox",
@@ -554,10 +555,40 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("Memory type (fact, preference, decision, etc.)"),
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
+				structured: z
+					.object({
+						entities: z
+							.array(
+								z.object({
+									source: z.string(),
+									sourceType: z.string().optional(),
+									relationship: z.string(),
+									target: z.string(),
+									targetType: z.string().optional(),
+									confidence: z.number().optional(),
+								}),
+							)
+							.optional(),
+						aspects: z
+							.array(
+								z.object({
+									entity: z.string(),
+									aspect: z.string(),
+									value: z.string(),
+									confidence: z.number().optional(),
+								}),
+							)
+							.optional(),
+						hints: z.array(z.string()).optional(),
+					})
+					.optional()
+					.describe(
+						"Pre-extracted structured data (entities, aspects, hints). Skips pipeline extraction when provided.",
+					),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags }) => {
+		async ({ content, type, importance, tags, structured }) => {
 			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
 			let body = content;
 			if (tags) {
@@ -569,6 +600,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				body: {
 					content: body,
 					importance,
+					structured,
 				},
 			});
 
@@ -1315,6 +1347,42 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 			if (!result.ok) {
 				return errorResult(`Expand failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	// ------------------------------------------------------------------
+	// knowledge_expand_session — temporal drill-down via session DAG
+	// ------------------------------------------------------------------
+	server.registerTool(
+		"knowledge_expand_session",
+		{
+			title: "Expand Entity Sessions",
+			description:
+				"Drill into session summaries that reference a given " +
+				"entity. Returns formatted session summary text linked " +
+				"through memory→entity mentions.",
+			inputSchema: z.object({
+				entity_name: z.string().describe("Entity name to look up"),
+				session_id: z.string().optional().describe("Filter to a specific session key"),
+				time_range: z.string().optional().describe('Time range filter: "last_week", "last_month", or ISO date'),
+				max_results: z.number().optional().describe("Max summaries to return (default 10)"),
+			}),
+		},
+		async ({ entity_name, session_id, time_range, max_results }) => {
+			const result = await daemonFetch<unknown>(baseUrl, "/api/knowledge/expand/session", {
+				method: "POST",
+				body: {
+					entityName: entity_name,
+					sessionId: session_id,
+					timeRange: time_range,
+					maxResults: max_results ?? 10,
+				},
+			});
+
+			if (!result.ok) {
+				return errorResult(`Session expansion failed: ${result.error}`);
 			}
 			return textResult(result.data);
 		},
