@@ -1575,11 +1575,16 @@ app.get("/api/logs/stream", (c) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
+			let dead = false;
 			const cleanup = () => {
+				if (dead) return;
+				dead = true;
 				logger.off("log", onLog);
+				try { controller.close(); } catch {}
 			};
 
 			const onLog = (entry: LogEntry) => {
+				if (dead) return;
 				try {
 					const data = `data: ${JSON.stringify(entry)}\n\n`;
 					controller.enqueue(encoder.encode(data));
@@ -1590,7 +1595,6 @@ app.get("/api/logs/stream", (c) => {
 
 			logger.on("log", onLog);
 
-			// Send initial connection message
 			try {
 				controller.enqueue(encoder.encode(`data: {"type":"connected"}\n\n`));
 			} catch {
@@ -8900,8 +8904,13 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const message = `${timestamp}_auto_${fileList.slice(0, 50)}`;
 
+		// Track the active child so the timeout can kill stalled processes
+		// that hold .git/index.lock
+		let active: ReturnType<typeof spawn> | null = null;
+
 		const work = new Promise<void>((resolve) => {
 			const add = spawn("git", ["add", "-A"], { cwd: dir, stdio: "pipe", windowsHide: true });
+			active = add;
 			add.on("close", (addCode) => {
 				if (addCode !== 0) {
 					logger.warn("git", "Git add failed");
@@ -8913,6 +8922,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 					stdio: "pipe",
 					windowsHide: true,
 				});
+				active = status;
 				let statusOutput = "";
 				status.stdout?.on("data", (d) => {
 					statusOutput += d.toString();
@@ -8927,6 +8937,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 						stdio: "pipe",
 						windowsHide: true,
 					});
+					active = commit;
 					commit.on("close", (commitCode) => {
 						if (commitCode === 0) {
 							logger.git.commit(message, changedFiles.length);
@@ -8943,6 +8954,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		const timeout = new Promise<void>((resolve) => {
 			setTimeout(() => {
 				logger.warn("git", "Auto-commit timed out after 30s");
+				try { active?.kill("SIGTERM"); } catch {}
 				resolve();
 			}, GIT_AUTOCOMMIT_TIMEOUT_MS);
 		});

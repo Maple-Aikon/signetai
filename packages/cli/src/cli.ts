@@ -5838,7 +5838,7 @@ program
 			? importMemories(db, fileMap.get("memories.jsonl")!, {
 					conflictStrategy: options.conflict as "skip" | "overwrite" | "merge",
 				})
-			: { imported: 0, skipped: 0 };
+			: { imported: 0, skipped: 0, errors: 0 };
 
 		const entityResult = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl")!) : { imported: 0, errors: 0 };
 
@@ -5865,7 +5865,7 @@ program
 		}
 		console.log(chalk.dim(`  ${entityResult.imported} entities imported`));
 		console.log(chalk.dim(`  ${relationResult.imported} relations imported`));
-		const totalErrors = (memResult.errors ?? 0) + entityResult.errors + relationResult.errors;
+		const totalErrors = memResult.errors + entityResult.errors + relationResult.errors;
 		if (totalErrors > 0) {
 			console.log(chalk.yellow(`  ${totalErrors} malformed lines skipped`));
 		}
