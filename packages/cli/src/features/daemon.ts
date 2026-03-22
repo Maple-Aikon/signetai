@@ -1,13 +1,14 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { detectSchema, ensureUnifiedSchema, parseSimpleYaml, runMigrations } from "@signet/core";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import open from "open";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions } from "../commands/shared.js";
+import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 
 interface DaemonStatus {
@@ -15,6 +16,9 @@ interface DaemonStatus {
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
+	readonly host: string | null;
+	readonly bindHost: string | null;
+	readonly networkMode: string | null;
 }
 
 interface LogEntry {
@@ -122,7 +126,9 @@ export async function migrateSchema(options: PathOptions, deps: Deps): Promise<v
 		printMigrationErrors(result.errors);
 
 		if (result.migrated) {
-			console.log(chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`));
+			console.log(
+				chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`),
+			);
 		} else {
 			console.log(chalk.dim("  No migration needed"));
 		}
@@ -189,7 +195,10 @@ export async function doStart(options: PathOptions, deps: Deps): Promise<void> {
 	const started = await deps.startDaemon(basePath);
 	if (started) {
 		spinner.succeed("Daemon started");
-		console.log(chalk.dim(`  Dashboard: http://localhost:${deps.defaultPort}`));
+		const status = await deps.getDaemonStatus();
+		for (const line of daemonAccessLines(deps.defaultPort, status)) {
+			console.log(chalk.dim(`  ${line}`));
+		}
 		return;
 	}
 
@@ -234,7 +243,10 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 
 	if (started) {
 		spinner.succeed(running ? "Daemon restarted" : "Daemon started");
-		console.log(chalk.dim(`  Dashboard: http://localhost:${deps.defaultPort}`));
+		const status = await deps.getDaemonStatus();
+		for (const line of daemonAccessLines(deps.defaultPort, status)) {
+			console.log(chalk.dim(`  ${line}`));
+		}
 	} else {
 		spinner.fail("Failed to restart daemon");
 		return;
@@ -400,6 +412,22 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 		console.log(chalk.dim("    services:"));
 		console.log(chalk.dim("      openclaw:"));
 		console.log(chalk.dim('        restart_command: "systemctl --user restart openclaw"'));
+		return false;
+	}
+
+	// Validate command against known safe restart patterns to prevent
+	// injection via tampered agent.yaml (git sync, social engineering).
+	const SAFE_PATTERNS = [
+		/^systemctl\s+--user\s+restart\s+[\w.-]+$/,
+		/^launchctl\s+kickstart\s+-k\s+[\w.-]+(\/[\w.-]+)*$/,
+		/^brew\s+services\s+restart\s+[\w.-]+$/,
+		/^supervisorctl\s+restart\s+[\w.-]+$/,
+	];
+	if (!SAFE_PATTERNS.some((p) => p.test(cmd))) {
+		console.log();
+		console.log(chalk.red("  Restart command rejected — does not match safe patterns."));
+		console.log(chalk.dim(`  Command: ${cmd}`));
+		console.log(chalk.dim("  Allowed: systemctl --user restart <name>, launchctl kickstart -k <path>"));
 		return false;
 	}
 

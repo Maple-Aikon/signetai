@@ -1,15 +1,11 @@
-import {
-	ensureUnifiedSchema,
-	formatYaml,
-	resolvePrimaryPackageManager,
-	runMigrations,
-} from "@signet/core";
-import chalk from "chalk";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { OpenClawConnector } from "@signet/connector-openclaw";
+import { ensureUnifiedSchema, formatYaml, resolvePrimaryPackageManager, runMigrations } from "@signet/core";
+import chalk from "chalk";
 import open from "open";
 import ora from "ora";
-import { OpenClawConnector } from "@signet/connector-openclaw";
+import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
@@ -81,6 +77,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 				description: cfg.agentDescription,
 				created: now,
 				updated: now,
+			},
+			network: {
+				mode: cfg.networkMode,
 			},
 			harnesses: cfg.harnesses,
 			install: {
@@ -205,7 +204,10 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		if (daemonStarted) {
 			console.log();
-			console.log(chalk.green(`  ● Daemon running at http://localhost:${deps.DEFAULT_PORT}`));
+			console.log(chalk.green("  ● Daemon running"));
+			for (const line of daemonAccessLines(deps.DEFAULT_PORT, cfg.networkMode)) {
+				console.log(chalk.dim(`    ${line}`));
+			}
 		}
 
 		console.log();

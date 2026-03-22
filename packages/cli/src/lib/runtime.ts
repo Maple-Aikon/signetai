@@ -1,11 +1,23 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSimpleYaml } from "@signet/core";
 import chalk from "chalk";
+import { resolveDaemonNetwork } from "./network.js";
 
 export const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 export const DEFAULT_PORT = 3850;
@@ -16,6 +28,9 @@ interface DaemonInstance {
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
+	readonly host: string | null;
+	readonly bindHost: string | null;
+	readonly networkMode: string | null;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -58,12 +73,18 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						pid?: number;
 						uptime?: number;
 						version?: string;
+						host?: string;
+						bindHost?: string;
+						networkMode?: string;
 					};
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
 						uptime: data.uptime ?? null,
 						version: data.version ?? null,
+						host: data.host ?? null,
+						bindHost: data.bindHost ?? null,
+						networkMode: data.networkMode ?? null,
 					};
 				}
 			} catch {
@@ -75,6 +96,9 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				pid: null,
 				uptime: null,
 				version: null,
+				host: null,
+				bindHost: null,
+				networkMode: null,
 			};
 		}),
 	);
@@ -90,6 +114,9 @@ export async function getDaemonStatus(): Promise<{
 	pid: number | null;
 	uptime: number | null;
 	version: string | null;
+	host: string | null;
+	bindHost: string | null;
+	networkMode: string | null;
 }> {
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
@@ -99,10 +126,21 @@ export async function getDaemonStatus(): Promise<{
 			pid: preferred.pid,
 			uptime: preferred.uptime,
 			version: preferred.version,
+			host: preferred.host,
+			bindHost: preferred.bindHost,
+			networkMode: preferred.networkMode,
 		};
 	}
 
-	return { running: false, pid: null, uptime: null, version: null };
+	return {
+		running: false,
+		pid: null,
+		uptime: null,
+		version: null,
+		host: null,
+		bindHost: null,
+		networkMode: null,
+	};
 }
 
 async function downloadDaemonBinary(): Promise<void> {
@@ -150,15 +188,15 @@ async function downloadDaemonBinary(): Promise<void> {
 		const buf = Buffer.from(bytes);
 		const actualHash = sha256(buf);
 		if (actualHash !== expectedHash) {
-			process.stdout.write(` skipped (checksum mismatch — possible tampering)\n`);
+			process.stdout.write(" skipped (checksum mismatch — possible tampering)\n");
 			return;
 		}
 
 		writeFileSync(dest, buf);
 		if (plat !== "win32") chmodSync(dest, 0o755);
-		process.stdout.write(` done\n`);
+		process.stdout.write(" done\n");
 	} catch {
-		process.stdout.write(` skipped (download failed)\n`);
+		process.stdout.write(" skipped (download failed)\n");
 		try {
 			unlinkSync(dest);
 		} catch {
@@ -182,6 +220,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	} catch {
 		// Non-fatal — agent.yaml may not exist yet.
 	}
+
+	const net = resolveDaemonNetwork(agentsDir, process.env);
 
 	const daemonDir = join(agentsDir, ".daemon");
 	const logDir = join(daemonDir, "logs");
@@ -229,7 +269,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		env: {
 			...process.env,
 			SIGNET_PORT: DEFAULT_PORT.toString(),
-			SIGNET_HOST: process.env.SIGNET_HOST || "127.0.0.1",
+			SIGNET_HOST: net.host,
+			SIGNET_BIND: net.bind,
 			SIGNET_PATH: agentsDir,
 		},
 	});

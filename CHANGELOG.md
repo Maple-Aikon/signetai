@@ -2,6 +2,28 @@
 
 All notable changes to Signet are documented here.
 
+## [0.72.7] - 2026-03-22
+
+### Bug Fixes
+
+- **dashboard**: replace @signet/core runtime import with local constant
+- **openclaw**: dedupe marketplace proxy refresh (#281)
+
+
+## [0.72.6] - 2026-03-22
+
+### Bug Fixes
+
+- security hardening — auth timing, SSRF, YAML injection, scope enforcement (#276)
+
+
+## [0.72.5] - 2026-03-22
+
+### Bug Fixes
+
+- address 9 security and stability issues (#275)
+
+
 ## [0.72.4] - 2026-03-22
 
 ### Bug Fixes

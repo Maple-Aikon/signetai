@@ -105,14 +105,17 @@ export function formatYaml(obj: Record<string, unknown>, indent = 0): string {
 		} else if (value === null) {
 			result += `${pad}${key}: null\n`;
 		} else if (typeof value === "string") {
-			// Quote strings that need it (contain special chars or start with number)
 			if (
 				value.includes(":") ||
 				value.includes("#") ||
 				value.includes("\n") ||
+				value.includes('"') ||
+				value.includes("\\") ||
+				value.includes("\t") ||
 				/^\d/.test(value)
 			) {
-				result += `${pad}${key}: "${value}"\n`;
+				const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+				result += `${pad}${key}: "${escaped}"\n`;
 			} else {
 				result += `${pad}${key}: ${value}\n`;
 			}
