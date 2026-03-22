@@ -294,6 +294,12 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
   parent.postMessage({ type: 'signet:ready' }, '*');
 })();`;
 
+// SECURITY: html is LLM-generated and may contain <script> tags that call
+// window.signet.callTool(). This is by design — the widget bridge validates
+// tool calls against installed MCP servers server-side. The iframe sandbox
+// (allow-scripts only, no allow-same-origin) prevents access to parent
+// cookies, storage, and DOM. The LLM prompt instructs no external fetch
+// calls but this is not enforced at the iframe level.
 export function buildSrcdoc(html: string, serverId: string): string {
 	const theme = buildThemeVars();
 	return `<!DOCTYPE html>

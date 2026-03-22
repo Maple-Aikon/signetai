@@ -225,6 +225,7 @@ function extractHtml(raw: string): string | null {
 // ---------------------------------------------------------------------------
 
 export function loadCachedWidget(serverId: string): string | null {
+	if (!/^[a-zA-Z0-9_.-]+$/.test(serverId)) return null;
 	const path = widgetPath(serverId);
 	if (!existsSync(path)) return null;
 
@@ -237,6 +238,7 @@ export function loadCachedWidget(serverId: string): string | null {
 }
 
 export function deleteCachedWidget(serverId: string): boolean {
+	if (!/^[a-zA-Z0-9_.-]+$/.test(serverId)) return false;
 	const path = widgetPath(serverId);
 	if (!existsSync(path)) return false;
 
@@ -255,6 +257,11 @@ export function deleteCachedWidget(serverId: string): boolean {
 // ---------------------------------------------------------------------------
 
 export async function generateWidgetHtml(serverId: string): Promise<string> {
+	// Validate serverId to prevent path traversal (used in join(widgetDir(), `${serverId}.html`))
+	if (!/^[a-zA-Z0-9_.-]+$/.test(serverId)) {
+		throw new Error(`Invalid server ID: ${serverId}`);
+	}
+
 	const probe = loadProbeResult(serverId);
 	if (!probe) {
 		throw new Error(`No probe result found for server: ${serverId}`);

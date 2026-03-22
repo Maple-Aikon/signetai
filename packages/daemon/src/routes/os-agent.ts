@@ -16,7 +16,30 @@
 
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { getSecret } from "../secrets.js";
+import { getSynthesisProvider } from "../synthesis-llm.js";
+import { generateWithTracking } from "../pipeline/provider.js";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function safeJsonParse(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
+	}
+}
+
+const VALID_ACTIONS = new Set(["click_element", "input_text", "select_option", "scroll", "done"]);
+
+function isAgentAction(v: unknown): v is AgentAction {
+	return isRecord(v) && typeof v.action === "string" && VALID_ACTIONS.has(v.action);
+}
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -77,16 +100,6 @@ function createSessionId(): string {
 // LLM Integration
 // ============================================================================
 
-let cachedApiKey: string | null = null;
-
-async function getApiKey(): Promise<string> {
-	if (!cachedApiKey) {
-		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
-	}
-	if (!cachedApiKey) throw new Error("OPENAI_API_KEY not found");
-	return cachedApiKey;
-}
-
 const AGENT_SYSTEM_PROMPT = `You are a GUI automation agent operating inside a web widget. You can see the page as simplified HTML with indexed interactive elements like [0]<button>Click me</button>.
 
 Available actions (respond with exactly ONE action per turn as JSON):
@@ -128,31 +141,19 @@ interface AgentAction {
 }
 
 async function callAgentLlm(messages: Array<{ role: string; content: string }>): Promise<AgentAction> {
-	const apiKey = await getApiKey();
+	const provider = getSynthesisProvider();
 
-	const res = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o",
-			max_tokens: 512,
-			temperature: 0.1,
-			messages,
-		}),
+	// Build a single prompt from the message history (provider.generate takes a flat string)
+	const prompt = messages
+		.map((m) => (m.role === "system" ? `[System]\n${m.content}` : m.role === "user" ? `[User]\n${m.content}` : `[Assistant]\n${m.content}`))
+		.join("\n\n");
+
+	const result = await generateWithTracking(provider, prompt, {
+		maxTokens: 512,
+		timeoutMs: 30000,
 	});
 
-	if (!res.ok) {
-		const errText = await res.text();
-		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
-	}
-
-	const data = (await res.json()) as {
-		choices: Array<{ message: { content: string } }>;
-	};
-	const raw = data.choices?.[0]?.message?.content ?? "";
+	const raw = result.text;
 
 	// Parse the action JSON
 	let cleaned = raw.trim();
@@ -161,16 +162,16 @@ async function callAgentLlm(messages: Array<{ role: string; content: string }>):
 	if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
 	cleaned = cleaned.trim();
 
-	try {
-		return JSON.parse(cleaned) as AgentAction;
-	} catch {
-		// Try to extract JSON from within text
-		const jsonMatch = cleaned.match(/\{[\s\S]*"action"[\s\S]*\}/);
-		if (jsonMatch) {
-			return JSON.parse(jsonMatch[0]) as AgentAction;
-		}
-		throw new Error(`Failed to parse agent response: ${cleaned.slice(0, 200)}`);
+	const parsed: unknown = safeJsonParse(cleaned);
+	if (isAgentAction(parsed)) return parsed;
+
+	// Try to extract JSON from within text
+	const jsonMatch = cleaned.match(/\{[\s\S]*"action"[\s\S]*\}/);
+	if (jsonMatch) {
+		const extracted: unknown = safeJsonParse(jsonMatch[0]);
+		if (isAgentAction(extracted)) return extracted;
 	}
+	throw new Error(`Failed to parse agent response: ${cleaned.slice(0, 200)}`);
 }
 
 // ============================================================================
@@ -205,22 +206,21 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 
 			const domState = await requestDomState(session);
 
-			if (!domState || !(domState as Record<string, unknown>).success) {
-				const errMsg = (domState as Record<string, unknown>)?.error || "Failed to get DOM state";
+			if (!isRecord(domState) || !domState.success) {
+				const errMsg = isRecord(domState) ? domState.error : "Failed to get DOM state";
 				logger.warn("os-agent", `DOM state error: ${errMsg}`);
 				// Retry once
 				await sleep(500);
 				continue;
 			}
 
-			const browserState = (domState as Record<string, unknown>).state as {
-				header: string;
-				content: string;
-				footer: string;
-			};
+			const browserState = isRecord(domState.state) ? domState.state : { header: "", content: "", footer: "" };
+			const header = typeof browserState.header === "string" ? browserState.header : "";
+			const content = typeof browserState.content === "string" ? browserState.content : "";
+			const footer = typeof browserState.footer === "string" ? browserState.footer : "";
 
 			// Build observation message for LLM
-			const observation = `${browserState.header}\n\n${browserState.content}\n\n${browserState.footer}`;
+			const observation = `${header}\n\n${content}\n\n${footer}`;
 
 			// Add observation to conversation
 			session.messages.push({
@@ -404,13 +404,17 @@ async function requestDomState(session: AgentSessionState): Promise<unknown> {
 
 function broadcastToSession(session: AgentSessionState, event: AgentEvent): void {
 	bufferEvent(session.id, event);
-	const listeners = session.sseListeners.slice();
-	for (let i = 0; i < listeners.length; i++) {
+	const dead: number[] = [];
+	for (let i = 0; i < session.sseListeners.length; i++) {
 		try {
-			listeners[i](event);
+			session.sseListeners[i](event);
 		} catch {
-			// Listener may have disconnected
+			dead.push(i);
 		}
+	}
+	// Remove dead listeners in reverse order to preserve indices
+	for (let i = dead.length - 1; i >= 0; i--) {
+		session.sseListeners.splice(dead[i], 1);
 	}
 }
 

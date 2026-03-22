@@ -380,27 +380,36 @@ export async function requestWidgetGen(serverId: string): Promise<void> {
 	if (widgetGenerating.has(serverId)) return;
 	widgetGenerating.add(serverId);
 	os.widgetCacheVersion++;
-	try {
-		const res = await fetch(`${API_BASE}/api/os/widget/generate`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ serverId, force: false }),
-		});
-		const data = await res.json();
-		if (data.status === "cached" && data.html) {
-			widgetHtmlCache.set(serverId, data.html);
-		}
-		// If status is "generating", we wait for SSE event
-	} catch {
-		// Generation failed silently — widget stays as AutoCard
-	} finally {
-		if (!widgetHtmlCache.has(serverId)) {
-			// Still generating, keep in set
-		} else {
-			widgetGenerating.delete(serverId);
-		}
+
+	const res = await fetch(`${API_BASE}/api/os/widget/generate`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ serverId, force: false }),
+	}).catch(() => null);
+
+	if (!res || !res.ok) {
+		// Fetch failed or HTTP error — clear generating state
+		widgetGenerating.delete(serverId);
 		os.widgetCacheVersion++;
+		return;
 	}
+
+	const data = await res.json().catch(() => null);
+	if (data && data.status === "cached" && data.html) {
+		widgetHtmlCache.set(serverId, data.html);
+		widgetGenerating.delete(serverId);
+	} else if (data && data.error) {
+		// Server reported an error — clear generating state
+		widgetGenerating.delete(serverId);
+	}
+	// If status is "generating", we wait for SSE event (keep in set)
+	os.widgetCacheVersion++;
+}
+
+/** Handle widget generation error events from SSE. */
+export function onWidgetError(serverId: string): void {
+	widgetGenerating.delete(serverId);
+	os.widgetCacheVersion++;
 }
 
 export function onWidgetGenerated(serverId: string, html: string): void {

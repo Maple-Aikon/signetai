@@ -109,15 +109,21 @@
 		}
 
 		// Page-agent bridge responses
-		if (data.type === "signet:domState" && data.id && agentPending.has(data.id)) {
-			agentPending.get(data.id)!.resolve(data.result);
-			agentPending.delete(data.id);
+		if (data.type === "signet:domState" && data.id) {
+			const p = agentPending.get(data.id);
+			if (p) {
+				p.resolve(data.result);
+				agentPending.delete(data.id);
+			}
 			return;
 		}
 
-		if (data.type === "signet:actionResult" && data.id && agentPending.has(data.id)) {
-			agentPending.get(data.id)!.resolve(data.result);
-			agentPending.delete(data.id);
+		if (data.type === "signet:actionResult" && data.id) {
+			const p = agentPending.get(data.id);
+			if (p) {
+				p.resolve(data.result);
+				agentPending.delete(data.id);
+			}
 			return;
 		}
 	}

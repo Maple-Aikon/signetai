@@ -15,6 +15,31 @@ import { generateWithTracking } from "../pipeline/provider.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** JSON.parse that returns null on failure instead of throwing. */
+function safeJsonParse(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
+	}
+}
+
+interface ToolCallResult {
+	readonly ok: boolean;
+	readonly tool: string;
+	readonly server: string;
+	readonly result?: unknown;
+	readonly error?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -112,6 +137,15 @@ ${results}`;
 // Response parsing
 // ---------------------------------------------------------------------------
 
+function extractParsed(d: unknown, fallback: string): ParsedResponse {
+	if (!isRecord(d)) return { toolCalls: [], response: fallback };
+	return {
+		thinking: typeof d.thinking === "string" ? d.thinking : undefined,
+		toolCalls: Array.isArray(d.toolCalls) ? d.toolCalls : [],
+		response: typeof d.response === "string" ? d.response : fallback,
+	};
+}
+
 function parse(raw: string): ParsedResponse {
 	let text = raw.trim();
 	if (text.startsWith("```json")) text = text.slice(7);
@@ -119,28 +153,58 @@ function parse(raw: string): ParsedResponse {
 	if (text.endsWith("```")) text = text.slice(0, -3);
 	text = text.trim();
 
-	try {
-		const d = JSON.parse(text);
-		return {
-			thinking: d.thinking,
-			toolCalls: Array.isArray(d.toolCalls) ? d.toolCalls : [],
-			response: typeof d.response === "string" ? d.response : text,
-		};
-	} catch {
-		// Try extracting JSON from surrounding text
-		const m = text.match(/\{[\s\S]*"toolCalls"[\s\S]*\}/);
-		if (m) {
-			try {
-				const d = JSON.parse(m[0]);
-				return {
-					thinking: d.thinking,
-					toolCalls: Array.isArray(d.toolCalls) ? d.toolCalls : [],
-					response: typeof d.response === "string" ? d.response : m[0],
-				};
-			} catch { /* fall through */ }
-		}
-		return { toolCalls: [], response: text };
+	const d = safeJsonParse(text);
+	if (d !== null) return extractParsed(d, text);
+
+	// Try extracting JSON from surrounding text
+	const m = text.match(/\{[\s\S]*"toolCalls"[\s\S]*\}/);
+	if (m) {
+		const nested = safeJsonParse(m[0]);
+		if (nested !== null) return extractParsed(nested, m[0]);
 	}
+	return { toolCalls: [], response: text };
+}
+
+// ---------------------------------------------------------------------------
+// Tool execution
+// ---------------------------------------------------------------------------
+
+async function executeToolCall(
+	call: { serverId: string; toolName: string; args?: Record<string, unknown> },
+	validTools: Set<string>,
+	port: string | number,
+): Promise<ToolResult> {
+	const key = `${call.serverId}/${call.toolName}`;
+	if (!validTools.has(key)) {
+		return { tool: call.toolName, server: call.serverId, error: "unknown tool" };
+	}
+
+	logger.info("os-chat", `Calling ${key}`, {
+		args: JSON.stringify(call.args || {}).slice(0, 500),
+	});
+
+	const res = await fetch(`http://127.0.0.1:${port}/api/marketplace/mcp/call`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			serverId: call.serverId,
+			toolName: call.toolName,
+			args: call.args || {},
+		}),
+	}).catch((err: unknown) => {
+		return err instanceof Error ? err : new Error(String(err));
+	});
+
+	if (res instanceof Error) {
+		return { tool: call.toolName, server: call.serverId, error: res.message };
+	}
+
+	const raw: unknown = await res.json().catch(() => null);
+	if (isRecord(raw) && raw.success) {
+		return { tool: call.toolName, server: call.serverId, result: raw.result };
+	}
+	const errMsg = isRecord(raw) ? String(raw.error || "failed") : "failed";
+	return { tool: call.toolName, server: call.serverId, error: errMsg };
 }
 
 // ---------------------------------------------------------------------------
@@ -189,40 +253,10 @@ export function mountOsChatRoutes(app: Hono): void {
 			const validTools = new Set(tools.map((t) => `${t.server}/${t.name}`));
 
 			// Execute tool calls (max 5)
+			const port = process.env.SIGNET_PORT || 3850;
 			for (const call of parsed.toolCalls.slice(0, 5)) {
-				if (!validTools.has(`${call.serverId}/${call.toolName}`)) {
-					results.push({ tool: call.toolName, server: call.serverId, error: "unknown tool" });
-					continue;
-				}
-				try {
-					logger.info("os-chat", `Calling ${call.serverId}/${call.toolName}`, {
-						args: JSON.stringify(call.args || {}).slice(0, 500),
-					});
-
-					const port = process.env.SIGNET_PORT || 3850;
-					const res = await fetch(`http://127.0.0.1:${port}/api/marketplace/mcp/call`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							serverId: call.serverId,
-							toolName: call.toolName,
-							args: call.args || {},
-						}),
-					});
-
-					const data = await res.json() as Record<string, unknown>;
-					if (data.success) {
-						results.push({ tool: call.toolName, server: call.serverId, result: data.result });
-					} else {
-						results.push({ tool: call.toolName, server: call.serverId, error: String(data.error || "failed") });
-					}
-				} catch (err) {
-					results.push({
-						tool: call.toolName,
-						server: call.serverId,
-						error: err instanceof Error ? err.message : String(err),
-					});
-				}
+				const result = await executeToolCall(call, validTools, port);
+				results.push(result);
 			}
 
 			// Summarize results through the provider
