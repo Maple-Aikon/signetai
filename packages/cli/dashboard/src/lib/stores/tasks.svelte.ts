@@ -163,10 +163,15 @@ function normalizeOutputChunk(chunk: string): string {
 	let extractedText = "";
 	let extractedAnyEvent = false;
 	let sawAnyJsonLine = false;
+	let sawAnyNonJsonLine = false;
 
 	for (const line of lines) {
 		const trimmed = line.trim();
-		if (!trimmed.startsWith("{")) continue;
+		if (!trimmed) continue;
+		if (!trimmed.startsWith("{")) {
+			sawAnyNonJsonLine = true;
+			continue;
+		}
 
 		try {
 			const parsed: unknown = JSON.parse(trimmed);
@@ -190,12 +195,17 @@ function normalizeOutputChunk(chunk: string): string {
 				}
 			}
 		} catch {
-			// Non-JSON output line, keep fallback behavior
+			// Partial or non-JSON line — treat as plain text
+			sawAnyNonJsonLine = true;
 		}
 	}
 
-	if (extractedAnyEvent) return extractedText;
-	if (sawAnyJsonLine) return "";
+	// Only extract events when the chunk is purely structured JSON (no plain text
+	// mixed in). OpenCode/Codex output is pure JSONL; claude-code is plain text.
+	// If there's any non-JSON content, fall back to the full cleaned output so
+	// error messages and plain text aren't silently dropped.
+	if (extractedAnyEvent && !sawAnyNonJsonLine) return extractedText;
+	if (sawAnyJsonLine && !sawAnyNonJsonLine) return "";
 	return cleanChunk;
 }
 

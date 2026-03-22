@@ -2,6 +2,7 @@
 import type { TaskRun } from "$lib/api";
 import * as Card from "$lib/components/ui/card/index.js";
 import { Badge } from "$lib/components/ui/badge/index.js";
+import { tick } from "svelte";
 
 interface Props {
 	run: TaskRun;
@@ -10,6 +11,7 @@ interface Props {
 let { run }: Props = $props();
 
 let expanded = $state(false);
+let termRef: HTMLDivElement | undefined = $state(undefined);
 
 function formatDate(iso: string | null): string {
 	if (!iso) return "—";
@@ -32,6 +34,47 @@ const statusColors: Record<string, string> = {
 	completed: "var(--sig-success)",
 	failed: "var(--sig-error, #ef4444)",
 };
+
+function escapeHtml(s: string): string {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+const ANSI_COLORS: Record<string, string> = {
+	"31": "var(--sig-error, #ef4444)",
+	"32": "var(--sig-success)",
+	"33": "var(--sig-warning, #e8a832)",
+	"90": "var(--sig-text-muted)",
+	"36": "var(--sig-accent)",
+	"34": "var(--sig-highlight)",
+	"35": "var(--sig-accent)",
+};
+
+function ansiToHtml(text: string): string {
+	let result = escapeHtml(text);
+	result = result.replace(/\x1b\[(\d+)m([\s\S]*?)\x1b\[0m/g, (_, code, content) => {
+		const color = ANSI_COLORS[code];
+		if (color) return `<span style="color:${color}">${content}</span>`;
+		if (code === "1") return `<strong>${content}</strong>`;
+		return content;
+	});
+	return result.replace(/\x1b\[\d+m/g, "");
+}
+
+function toLines(text: string | null): string[] {
+	if (!text) return [];
+	return text.split("\n");
+}
+
+async function scrollToBottom(): Promise<void> {
+	await tick();
+	termRef?.scrollTo({ top: termRef.scrollHeight, behavior: "smooth" });
+}
+
+$effect(() => {
+	if (expanded && (run.stdout || run.stderr || run.error)) {
+		void scrollToBottom();
+	}
+});
 </script>
 
 <button
@@ -51,93 +94,64 @@ const statusColors: Record<string, string> = {
 					></span>
 					<Badge
 						variant="outline"
-						class="text-[9px] px-1.5 py-0
-							border-[var(--sig-border)]"
+						class="text-[9px] px-1.5 py-0 border-[var(--sig-border)]"
 						style="color: {statusColors[run.status] ?? statusColors.pending}"
 					>
 						{run.status}
 					</Badge>
 					{#if run.exit_code !== null}
-						<span
-							class="text-[10px] font-[family-name:var(--font-mono)]
-								text-[var(--sig-text-muted)]"
-						>
+						<span class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
 							exit {run.exit_code}
 						</span>
 					{/if}
 				</div>
-				<span
-					class="text-[10px] font-[family-name:var(--font-mono)]
-						text-[var(--sig-text-muted)]"
-				>
+				<span class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
 					{formatDuration(run.started_at, run.completed_at)}
 				</span>
 			</div>
 
-			<div class="text-[10px] text-[var(--sig-text-muted)]
-				font-[family-name:var(--font-mono)]">
+			<div class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
 				{formatDate(run.started_at)}
 			</div>
 
 			{#if expanded}
-				{#if run.error}
-					<div class="mt-2">
-						<span
-							class="text-[9px] font-bold uppercase tracking-[0.08em]
-								text-[var(--sig-error, #ef4444)]"
-						>
-							Error
-						</span>
-						<pre
-							class="mt-1 p-2 text-[10px] leading-[1.5]
-								bg-[var(--sig-surface)] border border-[var(--sig-border)]
-								rounded overflow-x-auto whitespace-pre-wrap
-								text-[var(--sig-error, #ef4444)]
-								font-[family-name:var(--font-mono)]
-								max-h-[120px] overflow-y-auto"
-						>{run.error}</pre>
-					</div>
-				{/if}
-				{#if run.stdout}
-					<div class="mt-2">
-						<span
-							class="text-[9px] font-bold uppercase tracking-[0.08em]
-								text-[var(--sig-text-muted)]"
-						>
-							stdout
-						</span>
-						<pre
-							class="mt-1 p-2 text-[10px] leading-[1.5]
-								bg-[var(--sig-surface)] border border-[var(--sig-border)]
-								rounded overflow-x-auto whitespace-pre-wrap
-								text-[var(--sig-text)]
-								font-[family-name:var(--font-mono)]
-								max-h-[200px] overflow-y-auto"
-						>{run.stdout}</pre>
-					</div>
-				{/if}
-				{#if run.stderr}
-					<div class="mt-2">
-						<span
-							class="text-[9px] font-bold uppercase tracking-[0.08em]
-								text-[var(--sig-text-muted)]"
-						>
-							stderr
-						</span>
-						<pre
-							class="mt-1 p-2 text-[10px] leading-[1.5]
-								bg-[var(--sig-surface)] border border-[var(--sig-border)]
-								rounded overflow-x-auto whitespace-pre-wrap
-								text-[var(--sig-warning, #f59e0b)]
-								font-[family-name:var(--font-mono)]
-								max-h-[200px] overflow-y-auto"
-						>{run.stderr}</pre>
-					</div>
-				{/if}
-				{#if !run.error && !run.stdout && !run.stderr}
+				{@const stdoutLines = toLines(run.stdout)}
+				{@const stderrLines = toLines(run.stderr)}
+				{@const hasOutput = run.error || stdoutLines.length > 0 || stderrLines.length > 0}
+
+				{#if !hasOutput}
 					<span class="text-[10px] text-[var(--sig-text-muted)] mt-2 block">
 						No output captured
 					</span>
+				{:else}
+					<div
+						bind:this={termRef}
+						class="mt-2 bg-[var(--sig-bg)] border border-[var(--sig-border)]
+							rounded max-h-[280px] overflow-y-auto
+							font-[family-name:var(--font-mono)] text-[10px] leading-[1.55]
+							text-[var(--sig-text)] p-2.5"
+						role="log"
+					>
+						{#if run.error}
+							<div class="text-[var(--sig-error,#ef4444)] mb-1">
+								error: {run.error}
+							</div>
+						{/if}
+						{#if stderrLines.length > 0}
+							{#each stderrLines as line, i (i)}
+								<div class="whitespace-pre-wrap break-words min-h-[1em] text-[var(--sig-warning,#e8a832)]">
+									{@html ansiToHtml(line) || "&nbsp;"}
+								</div>
+							{/each}
+						{/if}
+						{#if stdoutLines.length > 0}
+							{#each stdoutLines as line, i (i)}
+								<div class="whitespace-pre-wrap break-words min-h-[1em]">
+									{@html ansiToHtml(line) || "&nbsp;"}
+								</div>
+							{/each}
+						{/if}
+					</div>
 				{/if}
 			{:else if run.stdout || run.stderr || run.error}
 				<span class="text-[10px] text-[var(--sig-accent)] mt-0.5 block">
