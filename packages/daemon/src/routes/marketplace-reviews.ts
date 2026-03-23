@@ -27,9 +27,7 @@ interface ReviewsSyncConfig {
 	readonly lastSyncError: string | null;
 }
 
-// Production sync endpoint — set by Nicholai after deploying the Cloudflare Worker.
-// Until then, users can override via PATCH /api/marketplace/reviews/config.
-// TODO: replace placeholder with live Worker URL once deployed.
+// Production sync endpoint. Pre-configured so users only need to set enabled: true.
 const REVIEWS_SYNC_URL = "https://reviews.signetai.sh/api/reviews/sync";
 
 const DEFAULT_CONFIG: ReviewsSyncConfig = {
@@ -145,7 +143,7 @@ function readConfig(): ReviewsSyncConfig {
 		if (!isRecord(raw)) return DEFAULT_CONFIG;
 		return {
 			enabled: raw.enabled === true,
-			endpointUrl: typeof raw.endpointUrl === "string" ? raw.endpointUrl : "",
+			endpointUrl: typeof raw.endpointUrl === "string" && raw.endpointUrl.length > 0 ? raw.endpointUrl : REVIEWS_SYNC_URL,
 			lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
 			lastSyncError: typeof raw.lastSyncError === "string" ? raw.lastSyncError : null,
 		};
