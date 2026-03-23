@@ -201,6 +201,26 @@ describe("migration framework", () => {
 		expect(colNames).toContain("structural_density");
 	});
 
+	test("path feedback tables and session path_json column exist after migration 041", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const tableRows = db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+			name: string;
+		}>;
+		const tableNames = new Set(tableRows.map((row) => row.name));
+		expect(tableNames.has("path_feedback_events")).toBe(true);
+		expect(tableNames.has("path_feedback_stats")).toBe(true);
+		expect(tableNames.has("entity_retrieval_stats")).toBe(true);
+		expect(tableNames.has("entity_cooccurrence")).toBe(true);
+		expect(tableNames.has("path_feedback_sessions")).toBe(true);
+
+		const cols = db.query("PRAGMA table_info(session_memories)").all() as Array<{
+			name: string;
+		}>;
+		expect(cols.map((col) => col.name)).toContain("path_json");
+	});
+
 	test("entities table has pinning columns after migration 022", () => {
 		db = createFreshDb();
 		runMigrations(db);

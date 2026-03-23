@@ -392,7 +392,7 @@ Phase ordering based on hard dependencies and integration contracts.
   single-hop 66.7% (2/3). Precision 26.3%, recall 100%, NDCG 0.639.
 - **Desire Paths Phase 4**: path learning
   - DP-8: Predictor bug fixes (cache invalidation) — COMPLETE
-  - DP-9: Path feedback propagation + co-occurrence growth + Q-value rewards — NOT STARTED
+  - DP-9: Path feedback propagation + co-occurrence growth + Q-value rewards — COMPLETE
   - DP-10: Path scoring (predictor evolution) — NOT STARTED
   - DP-11: Temporal reinforcement + intent-aware routing — NOT STARTED
 - **Desire Paths Phase 5**: emergence

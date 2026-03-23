@@ -76,11 +76,12 @@ function getSessionMemoryRows(
 	was_injected: number;
 	relevance_score: number | null;
 	fts_hit_count: number;
+	path_json: string | null;
 }> {
 	return db
 		.prepare(
 			`SELECT id, session_key, memory_id, source, effective_score,
-			        final_score, rank, was_injected, relevance_score, fts_hit_count
+			        final_score, rank, was_injected, relevance_score, fts_hit_count, path_json
 			 FROM session_memories WHERE session_key = ? ORDER BY rank ASC`,
 		)
 		.all(sessionKey) as Array<{
@@ -94,6 +95,7 @@ function getSessionMemoryRows(
 		was_injected: number;
 		relevance_score: number | null;
 		fts_hit_count: number;
+		path_json: string | null;
 	}>;
 }
 
@@ -180,6 +182,30 @@ describe("recordSessionCandidates", () => {
 
 		expect(rows[0].effective_score).toBeCloseTo(0.85, 2);
 		expect(rows[0].final_score).toBeCloseTo(0.85, 2);
+	});
+
+	it("stores path_json when provided", () => {
+		const candidates = [
+			{
+				id: "mem-aaa-111",
+				effScore: 0.9,
+				source: "ka_traversal" as const,
+				pathJson: JSON.stringify({
+					entity_ids: ["ent-a"],
+					aspect_ids: ["asp-a"],
+					dependency_ids: ["dep-a"],
+				}),
+			},
+		];
+
+		recordSessionCandidates("session-path-001", candidates, new Set(["mem-aaa-111"]));
+
+		const testDb = openTestDb();
+		const rows = getSessionMemoryRows(testDb, "session-path-001");
+		testDb.close();
+
+		expect(rows.length).toBe(1);
+		expect(rows[0].path_json).toContain("entity_ids");
 	});
 
 	it("is idempotent (INSERT OR IGNORE on duplicate session+memory)", () => {

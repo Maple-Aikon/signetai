@@ -32,6 +32,7 @@ export interface SessionMemoryCandidate {
 	readonly aspectSlot?: number;
 	readonly isConstraint?: number;
 	readonly structuralDensity?: number;
+	readonly pathJson?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,13 +59,13 @@ export function recordSessionCandidates(
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)";
+			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)";
 			const BASE_SQL = `INSERT OR IGNORE INTO session_memories
 					 (id, session_key, memory_id, source, effective_score,
 					  predictor_score, final_score, rank, was_injected,
 					  fts_hit_count, created_at,
 					  entity_slot, aspect_slot, is_constraint, structural_density,
-					  predictor_rank)
+					  predictor_rank, path_json)
 					 VALUES `;
 
 			// Pre-compile the full-chunk statement once to avoid recompiling
@@ -105,6 +106,7 @@ export function recordSessionCandidates(
 						c.isConstraint ?? 0,
 						c.structuralDensity ?? null,
 						c.predictorRank ?? null,
+						c.pathJson ?? null,
 					);
 				}
 

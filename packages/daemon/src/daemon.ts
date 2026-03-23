@@ -214,6 +214,7 @@ import {
 	redactCheckpointRow,
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
+import { recordPathFeedback } from "./path-feedback";
 import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { type TimelineSources, buildTimeline } from "./timeline";
@@ -3751,8 +3752,33 @@ app.post("/api/memory/feedback", async (c) => {
 		return c.json({ error: "Invalid feedback format — expected map of ID to number (-1 to 1)" }, 400);
 	}
 
-	recordAgentFeedback(sessionKey, parsed);
-	return c.json({ ok: true, recorded: Object.keys(parsed).length });
+	const agentId = parseOptionalString(payload.agentId) ?? "default";
+	const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
+	try {
+		const result = recordPathFeedback(getDbAccessor(), {
+			sessionKey,
+			agentId,
+			ratings: parsed,
+			paths: payload.paths,
+			rewards: payload.rewards,
+			maxAspectWeight: cfg.maxAspectWeight,
+			minAspectWeight: cfg.minAspectWeight,
+		});
+		return c.json({
+			ok: true,
+			recorded: result.recorded,
+			propagated: result.propagated,
+			cooccurrenceUpdated: result.cooccurrenceUpdated,
+			dependenciesUpdated: result.dependenciesUpdated,
+		});
+	} catch (error) {
+		recordAgentFeedback(sessionKey, parsed);
+		logger.warn("daemon", "Path feedback failed; fell back to legacy feedback", {
+			error: error instanceof Error ? error.message : String(error),
+			sessionKey,
+		});
+		return c.json({ ok: true, recorded: Object.keys(parsed).length, fallback: true });
+	}
 });
 
 app.post("/api/memory/forget", async (c) => {

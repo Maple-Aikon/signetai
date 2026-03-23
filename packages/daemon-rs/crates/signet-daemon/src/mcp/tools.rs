@@ -98,11 +98,23 @@ pub fn definitions() -> Vec<ToolDefinition> {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "memory_id": { "type": "string" },
-                    "rating": { "type": "string", "enum": ["helpful", "not_helpful", "wrong"] },
-                    "context": { "type": "string" },
+                    "session_key": { "type": "string", "description": "Current session key" },
+                    "agent_id": { "type": "string", "description": "Agent id scope (default: default)" },
+                    "ratings": {
+                        "type": "object",
+                        "additionalProperties": { "type": "number" },
+                        "description": "Map of memory ID to score (-1 to 1)"
+                    },
+                    "paths": {
+                        "type": "object",
+                        "description": "Optional path provenance keyed by memory id"
+                    },
+                    "rewards": {
+                        "type": "object",
+                        "description": "Optional reward signals keyed by memory id"
+                    }
                 },
-                "required": ["memory_id", "rating"],
+                "required": ["session_key", "ratings"],
             }),
         },
         // Knowledge graph (1)
