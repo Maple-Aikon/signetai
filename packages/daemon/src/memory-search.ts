@@ -291,7 +291,7 @@ export async function hybridRecall(
 					   ORDER BY raw_score LIMIT ?`;
 
 				const agentId = params.agentId ?? "default";
-			const args = scoped
+				const args = scoped
 					? [keywordQuery, agentId, params.scope, cfg.search.top_k]
 					: [keywordQuery, agentId, cfg.search.top_k];
 

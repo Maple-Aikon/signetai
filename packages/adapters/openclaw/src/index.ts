@@ -1291,6 +1291,11 @@ const signetPlugin = {
 		const sessionlessSessionStarts = new Map<string, number>();
 		// Maps sessionKey → last injected messageCount for per-turn idempotency.
 		const injectedTurns = new Map<string, number>();
+		// Tracks turn signatures currently in-flight — provides a synchronous
+		// guard so concurrent before_prompt_build / before_agent_start calls on
+		// the same event-loop tick don't both pass the guard before either await
+		// completes (injectedTurns is only written after the daemon responds).
+		const inFlightTurns = new Set<string>();
 
 		const resolveHookContext = (
 			ctx: unknown,
@@ -1364,13 +1369,19 @@ const signetPlugin = {
 
 			// Deduplicate by (sessionKey, messageCount): both before_prompt_build
 			// and before_agent_start fire on the same turn; only the first should
-			// call the daemon. When messageCount is unavailable we fall through
-			// rather than risk suppressing a valid injection.
+			// call the daemon. Sessionless agents (no sessionKey) cannot be
+			// reliably correlated and are allowed to fall through rather than
+			// risk cross-suppressing concurrent independent sessions.
 			const count = Array.isArray(event.messages) ? event.messages.length : undefined;
-			const key = sessionKey ?? "";
-			if (typeof count === "number" && injectedTurns.get(key) === count) {
+			// sig is only defined when we have both a stable session identity and
+			// a message count — the two values that make dedup meaningful.
+			const sig = sessionKey && typeof count === "number" ? `${sessionKey}|${count}` : undefined;
+			if (sig && (inFlightTurns.has(sig) || (sessionKey !== undefined && injectedTurns.get(sessionKey) === count))) {
 				return undefined;
 			}
+			// Mark in-flight synchronously before any await so concurrent
+			// invocations in the same event-loop tick see the guard immediately.
+			if (sig) inFlightTurns.add(sig);
 
 			const lastAssistantMessage = extractLastAssistantMessage(event);
 			const result = await onUserPromptSubmit("openclaw", {
@@ -1380,12 +1391,16 @@ const signetPlugin = {
 				lastAssistantMessage,
 				sessionKey,
 			});
+
+			// Always clear in-flight regardless of outcome.
+			if (sig) inFlightTurns.delete(sig);
 			if (!result) {
 				// daemonFetch already logged the specific error (ECONNREFUSED or HTTP status).
 				return undefined;
 			}
-			if (typeof count === "number") {
-				injectedTurns.set(key, count);
+			// Record the completed turn so the other hook sees it on arrival.
+			if (sessionKey && typeof count === "number") {
+				injectedTurns.set(sessionKey, count);
 			}
 			return buildInjectionResult(result);
 		};
@@ -1420,6 +1435,7 @@ const signetPlugin = {
 			await onSessionEnd("openclaw", { ...opts, sessionKey });
 			if (sessionKey) {
 				claimedSessions.delete(sessionKey);
+				injectedTurns.delete(sessionKey);
 			}
 			return undefined;
 		});
