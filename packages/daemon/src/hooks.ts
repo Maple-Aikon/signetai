@@ -762,7 +762,8 @@ function updateAccessTracking(ids: string[]): void {
 // Config Loading
 // ============================================================================
 
-const KNOWN_HOOKS_KEYS = new Set(["sessionStart", "userPromptSubmit", "preCompaction"]);
+// Derived from HooksConfig — update when adding new config sections.
+const KNOWN_HOOKS_KEYS: ReadonlySet<keyof HooksConfig> = new Set<keyof HooksConfig>(["sessionStart", "userPromptSubmit", "preCompaction"]);
 
 function loadHooksConfig(): HooksConfig {
 	const configPath = join(AGENTS_DIR, "agent.yaml");

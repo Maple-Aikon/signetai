@@ -1925,6 +1925,9 @@ export interface DeadMemory {
 	readonly reason: "low_confidence" | "never_accessed" | "stale";
 }
 
+export const DEAD_MEMORY_DEFAULT_CONFIDENCE = 0.1;
+export const DEAD_MEMORY_DEFAULT_ACCESS_DAYS = 90;
+
 export interface DeadMemoryOpts {
 	/** Max confidence to flag as dead. Default: 0.10. */
 	readonly maxConfidence?: number;
@@ -1943,8 +1946,8 @@ export interface DeadMemoryOpts {
  * Never flags memories with importance > 0.8 regardless of other criteria.
  */
 export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMemory[] {
-	const maxConf = opts.maxConfidence ?? 0.1;
-	const maxDays = opts.maxAccessDays ?? 90;
+	const maxConf = opts.maxConfidence ?? DEAD_MEMORY_DEFAULT_CONFIDENCE;
+	const maxDays = opts.maxAccessDays ?? DEAD_MEMORY_DEFAULT_ACCESS_DAYS;
 	const limit = opts.limit ?? 200;
 
 	const rows = db
