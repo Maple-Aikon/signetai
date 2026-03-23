@@ -275,11 +275,11 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(id).toBe("mem-1");
 		expect(lastRememberBody).toEqual({
 			content: "save this",
-			type: undefined,
-			importance: undefined,
 			tags: "alpha,beta",
 			who: "openclaw",
 		});
+		expect(lastRememberBody).not.toHaveProperty("type");
+		expect(lastRememberBody).not.toHaveProperty("importance");
 	});
 
 	it("deduplicates session-start for sessionless turns when both hooks fire", async () => {

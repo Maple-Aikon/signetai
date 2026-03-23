@@ -137,18 +137,20 @@ describe("mutation API routes", () => {
 	});
 
 	it("POST /api/memory/remember rejects invalid tag payloads", async () => {
-		const res = await app.request("http://localhost/api/memory/remember", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				content: "Memory with invalid tags",
-				tags: 42,
-			}),
-		});
-		const json = (await res.json()) as { error?: string };
+		for (const tags of [42, ["alpha", 42]]) {
+			const res = await app.request("http://localhost/api/memory/remember", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: "Memory with invalid tags",
+					tags,
+				}),
+			});
+			const json = (await res.json()) as { error?: string };
 
-		expect(res.status).toBe(400);
-		expect(json.error).toBe("tags must be a string, string array, or null");
+			expect(res.status).toBe(400);
+			expect(json.error).toBe("tags must be a string, string array, or null");
+		}
 	});
 
 	it("PATCH /api/memory/:id requires reason", async () => {

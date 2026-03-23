@@ -2275,8 +2275,10 @@ function parseTagsMutation(value: unknown): string | null | undefined {
 		return trimmed.length > 0 ? trimmed : null;
 	}
 	if (Array.isArray(value)) {
+		if (value.some((entry) => typeof entry !== "string")) {
+			return undefined;
+		}
 		const tags = value
-			.filter((entry): entry is string => typeof entry === "string")
 			.map((tag) => tag.trim())
 			.filter((tag) => tag.length > 0)
 			.join(",");

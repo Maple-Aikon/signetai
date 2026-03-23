@@ -74,14 +74,20 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
             .filter(|tag| !tag.is_empty())
             .map(str::to_string)
             .collect()),
-        Value::Array(tags) => Ok(tags
-            .into_iter()
-            .filter_map(|tag| match tag {
-                Value::String(tag) => Some(tag.trim().to_string()),
-                _ => None,
-            })
-            .filter(|tag| !tag.is_empty())
-            .collect()),
+        Value::Array(tags) => {
+            if tags.iter().any(|tag| !matches!(tag, Value::String(_))) {
+                return Err("tags must be a string, string array, or null");
+            }
+
+            Ok(tags
+                .into_iter()
+                .filter_map(|tag| match tag {
+                    Value::String(tag) => Some(tag.trim().to_string()),
+                    _ => None,
+                })
+                .filter(|tag| !tag.is_empty())
+                .collect())
+        }
         _ => Err("tags must be a string, string array, or null"),
     }
 }
@@ -192,6 +198,9 @@ mod tests {
     #[test]
     fn remember_tags_rejects_invalid_payloads() {
         let err = parse_remember_tags(Some(json!(42))).unwrap_err();
+        assert_eq!(err, "tags must be a string, string array, or null");
+
+        let err = parse_remember_tags(Some(json!(["alpha", 42]))).unwrap_err();
         assert_eq!(err, "tags must be a string, string array, or null");
     }
 }
