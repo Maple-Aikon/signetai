@@ -150,6 +150,7 @@ export interface PipelineEscalationConfig {
 
 export interface PipelineExtractionConfig {
 	readonly provider:
+		| "none"
 		| "ollama"
 		| "claude-code"
 		| "opencode"
@@ -323,6 +324,7 @@ export interface PipelineEmbeddingTrackerConfig {
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
 	readonly provider:
+		| "none"
 		| "ollama"
 		| "claude-code"
 		| "opencode"
