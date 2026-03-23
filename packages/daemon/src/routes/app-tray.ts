@@ -14,6 +14,7 @@ import {
 	reprobeServer,
 	storeProbeResult,
 } from "../mcp-probe.js";
+import { startProbe, endProbe } from "../mcp-pool.js";
 import { logger } from "../logger.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
@@ -313,7 +314,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 			const server = installed.find((s) => s.id === installResult.serverId);
 
 			let manifest: SignetAppManifest | null = null;
-			if (server) {
+			if (server && startProbe(server.id)) {
 				try {
 					const probeResult = await probeServer(server);
 					storeProbeResult(probeResult);
@@ -324,6 +325,8 @@ export function mountAppTrayRoutes(app: Hono): void {
 						`Install probe failed for ${installResult.serverId}: ${err}`,
 					);
 					// Install still succeeds — auto-card will be used
+				} finally {
+					endProbe(server.id);
 				}
 			}
 

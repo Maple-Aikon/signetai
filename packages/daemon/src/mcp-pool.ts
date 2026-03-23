@@ -21,7 +21,7 @@ import type {
 } from "./routes/marketplace.js";
 
 interface PoolEntry {
-	client: Client;
+	client: Client | null;
 	server: InstalledMarketplaceMcpServer;
 	connected: boolean;
 	/** Prevent concurrent connect attempts for the same server */
@@ -44,7 +44,12 @@ async function resolveSecretReferences(
 		if (typeof value === "string" && value.startsWith("secret://")) {
 			const name = value.slice("secret://".length);
 			const secret = await getSecret(name);
-			if (secret) resolved[key] = secret;
+			if (secret) {
+				resolved[key] = secret;
+			} else {
+				logger.warn("mcp-pool", `Secret not found for env ${key}, keeping reference`, { secret: name });
+				resolved[key] = value;
+			}
 		} else {
 			resolved[key] = value;
 		}
@@ -114,7 +119,7 @@ export async function getPooledClient(
 
 	// Create new connection
 	const entry: PoolEntry = {
-		client: null as unknown as Client,
+		client: null,
 		server,
 		connected: false,
 		connecting: null,
@@ -123,18 +128,26 @@ export async function getPooledClient(
 	};
 
 	const connectPromise = (async () => {
-		const client = await createClient(server);
-		entry.client = client;
-		entry.connected = true;
-		entry.connecting = null;
-		entry.useCount = 1;
-		logger.info("mcp-pool", "Connection established", { server: server.id });
+		try {
+			const client = await createClient(server);
+			entry.client = client;
+			entry.connected = true;
+			entry.useCount = 1;
+			logger.info("mcp-pool", "Connection established", { server: server.id });
+		} catch (err) {
+			// Remove poisoned entry so next caller retries fresh
+			pool.delete(server.id);
+			throw err;
+		} finally {
+			entry.connecting = null;
+		}
 	})();
 
 	entry.connecting = connectPromise;
 	pool.set(server.id, entry);
 
 	await connectPromise;
+	if (!entry.client) throw new Error(`Failed to connect to ${server.id}`);
 	return entry.client;
 }
 
@@ -170,7 +183,11 @@ export async function releaseServer(serverId: string): Promise<void> {
 	const entry = pool.get(serverId);
 	if (!entry) return;
 	pool.delete(serverId);
-	if (entry.connected) {
+	// Wait for in-flight connect to finish before closing
+	if (entry.connecting) {
+		try { await entry.connecting; } catch { /* connect failed — nothing to close */ }
+	}
+	if (entry.connected && entry.client) {
 		try {
 			await entry.client.close();
 		} catch {

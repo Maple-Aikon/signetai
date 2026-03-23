@@ -1193,8 +1193,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			return c.json({ success: false, error: "config must include command/url" }, 400);
 		}
 
+		const testId = `test-${crypto.randomUUID().slice(0, 8)}`;
 		const testServer: InstalledMarketplaceMcpServer = {
-			id: "test-server",
+			id: testId,
 			source: "manual",
 			name: "Test Server",
 			description: "Temporary config test",
@@ -1227,6 +1228,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			return c.json({ success: false, error: message, latencyMs: Date.now() - startedAt }, 400);
+		} finally {
+			// Release ephemeral test connection so it doesn't stay in the pool
+			void releaseServer(testId);
 		}
 	});
 
