@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { onMount } from "svelte";
 	import type { Agent } from "$lib/stores/agents.svelte";
+	import WidgetSandbox from "$lib/components/os/WidgetSandbox.svelte";
+	import { fetchWidgetHtml } from "$lib/stores/os.svelte";
 
 	interface Props {
 		agent: Agent;
@@ -8,13 +11,24 @@
 	const { agent }: Props = $props();
 
 	type TabId = "terminal" | "tools" | "browser";
-	let active = $state<TabId>("terminal");
 
-	const tabs: { id: TabId; label: string; enabled: boolean }[] = [
+	const isMcp = $derived(agent.source.type === "mcp");
+	let active = $state<TabId>(isMcp ? "browser" : "terminal");
+
+	const tabs = $derived<{ id: TabId; label: string; enabled: boolean }[]>([
 		{ id: "terminal", label: "TERMINAL", enabled: true },
 		{ id: "tools", label: "TOOLS", enabled: false },
-		{ id: "browser", label: "BROWSER", enabled: false },
-	];
+		{ id: "browser", label: "BROWSER", enabled: isMcp },
+	]);
+
+	let widgetHtml = $state<string | null>(null);
+
+	onMount(async () => {
+		if (agent.source.type === "mcp") {
+			const html = await fetchWidgetHtml(agent.source.serverId);
+			if (html) widgetHtml = html;
+		}
+	});
 
 	function formatTime(date: Date): string {
 		return date.toLocaleTimeString([], {
@@ -99,9 +113,19 @@
 			<div class="placeholder">
 				<span class="placeholder-text">Tool call history — coming in Phase 3</span>
 			</div>
+		{:else if active === "browser" && isMcp}
+			{#if widgetHtml && agent.source.type === "mcp"}
+				<div class="widget-container">
+					<WidgetSandbox html={widgetHtml} serverId={agent.source.serverId} />
+				</div>
+			{:else}
+				<div class="placeholder">
+					<span class="placeholder-text placeholder-text--loading">Loading widget…</span>
+				</div>
+			{/if}
 		{:else}
 			<div class="placeholder">
-				<span class="placeholder-text">Browser view — coming in Phase 3</span>
+				<span class="placeholder-text">Browser view — not available</span>
 			</div>
 		{/if}
 	</div>
@@ -214,5 +238,20 @@
 		color: rgba(255, 255, 255, 0.25);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
+	}
+
+	.placeholder-text--loading {
+		animation: loading-pulse 1.5s ease-in-out infinite;
+	}
+
+	@keyframes loading-pulse {
+		0%, 100% { opacity: 0.25; }
+		50% { opacity: 0.6; }
+	}
+
+	.widget-container {
+		width: 100%;
+		height: 100%;
+		background: #0c0c0c;
 	}
 </style>

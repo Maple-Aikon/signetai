@@ -1,7 +1,10 @@
 <script lang="ts">
+	import { tick } from "svelte";
 	import type { Agent } from "$lib/stores/agents.svelte";
+	import { API_BASE } from "$lib/api";
 	import ArrowLeft from "@lucide/svelte/icons/arrow-left";
 	import Send from "@lucide/svelte/icons/send";
+	import Wrench from "@lucide/svelte/icons/wrench";
 	import CRTEffect from "./CRTEffect.svelte";
 	import ActivityPanel from "./ActivityPanel.svelte";
 
@@ -48,6 +51,81 @@
 				return "manual";
 		}
 	}
+
+	/* ── Chat state ─────────────────────────────────────── */
+
+	interface ToolCall {
+		tool: string;
+		server: string;
+		result?: unknown;
+		error?: string;
+	}
+
+	interface ChatMessage {
+		id: number;
+		role: "user" | "agent";
+		content: string;
+		ts: number;
+		toolCalls?: ToolCall[];
+	}
+
+	let messages = $state<ChatMessage[]>([]);
+	let input = $state("");
+	let loading = $state(false);
+	let msgId = 0;
+	let chatEl: HTMLDivElement | null = $state(null);
+
+	async function scrollToBottom(): Promise<void> {
+		await tick();
+		if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+	}
+
+	async function send(): Promise<void> {
+		const text = input.trim();
+		if (!text || loading) return;
+
+		messages.push({ id: ++msgId, role: "user", content: text, ts: Date.now() });
+		input = "";
+		loading = true;
+		scrollToBottom();
+
+		try {
+			const res = await fetch(`${API_BASE}/api/os/chat`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ message: text }),
+			});
+			const data = await res.json();
+			messages.push({
+				id: ++msgId,
+				role: "agent",
+				content: data.response ?? "No response",
+				ts: Date.now(),
+				toolCalls: data.toolCalls,
+			});
+		} catch (err) {
+			messages.push({
+				id: ++msgId,
+				role: "agent",
+				content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+				ts: Date.now(),
+			});
+		} finally {
+			loading = false;
+			scrollToBottom();
+		}
+	}
+
+	function handleKeydown(e: KeyboardEvent): void {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			send();
+		}
+	}
+
+	function formatTime(ts: number): string {
+		return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+	}
 </script>
 
 <div class="zoom" data-color={agent.color}>
@@ -80,21 +158,64 @@
 	<div class="split">
 		<!-- Chat panel -->
 		<section class="chat-panel">
-			<div class="chat-messages">
-				<div class="chat-empty">
-					<span class="empty-text">
-						Chat with {agent.name} — coming in Phase 3
-					</span>
-				</div>
+			<div class="chat-messages" bind:this={chatEl}>
+				{#if messages.length === 0 && !loading}
+					<div class="chat-empty">
+						<span class="empty-text">Message {agent.name}...</span>
+					</div>
+				{/if}
+
+				{#each messages as msg (msg.id)}
+					<div class="chat-msg chat-msg--{msg.role}">
+						<div class="chat-bubble chat-bubble--{msg.role}">
+							<span class="chat-text">{msg.content}</span>
+							{#if msg.toolCalls && msg.toolCalls.length > 0}
+								<div class="chat-tools">
+									{#each msg.toolCalls as tc}
+										<span class="tool-badge">
+											<Wrench class="tool-icon" />
+											<span class="tool-name">{tc.server}/{tc.tool}</span>
+											{#if tc.error}
+												<span class="tool-status tool-status--fail">failed</span>
+											{:else}
+												<span class="tool-status tool-status--ok">done</span>
+											{/if}
+										</span>
+									{/each}
+								</div>
+							{/if}
+						</div>
+						<span class="chat-ts">{formatTime(msg.ts)}</span>
+					</div>
+				{/each}
+
+				{#if loading}
+					<div class="chat-msg chat-msg--agent">
+						<div class="chat-bubble chat-bubble--agent">
+							<span class="thinking-dots">
+								<span class="tdot"></span>
+								<span class="tdot"></span>
+								<span class="tdot"></span>
+							</span>
+						</div>
+					</div>
+				{/if}
 			</div>
 			<div class="chat-input-bar">
 				<input
 					type="text"
 					class="chat-input"
 					placeholder="Message {agent.name}..."
-					disabled
+					bind:value={input}
+					onkeydown={handleKeydown}
+					disabled={loading}
 				/>
-				<button class="send-btn" disabled aria-label="Send message">
+				<button
+					class="send-btn"
+					aria-label="Send message"
+					onclick={send}
+					disabled={loading || !input.trim()}
+				>
 					<Send class="send-icon" />
 				</button>
 			</div>
@@ -276,13 +397,18 @@
 	.chat-messages {
 		flex: 1;
 		overflow-y: auto;
-		padding: 16px;
+		padding: 12px;
 		display: flex;
-		align-items: center;
-		justify-content: center;
+		flex-direction: column;
+		gap: 8px;
+		scroll-behavior: smooth;
 	}
 
 	.chat-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex: 1;
 		text-align: center;
 	}
 
@@ -293,6 +419,133 @@
 		letter-spacing: 0.04em;
 	}
 
+	/* ── Chat messages ────────────────────────────────────── */
+	.chat-msg {
+		display: flex;
+		flex-direction: column;
+		max-width: 85%;
+		animation: msg-in 0.15s ease-out;
+	}
+
+	.chat-msg--user {
+		align-self: flex-end;
+	}
+
+	.chat-msg--agent {
+		align-self: flex-start;
+	}
+
+	.chat-bubble {
+		font-family: var(--font-mono, monospace);
+		font-size: 12px;
+		line-height: 1.5;
+		padding: 6px 10px;
+		border-radius: 6px;
+		word-break: break-word;
+	}
+
+	.chat-bubble--user {
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		color: rgba(255, 255, 255, 0.85);
+	}
+
+	.chat-bubble--agent {
+		background: rgba(0, 255, 65, 0.06);
+		border: 1px solid rgba(0, 255, 65, 0.15);
+		color: #00ff41;
+	}
+
+	.chat-text {
+		white-space: pre-wrap;
+	}
+
+	.chat-ts {
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		color: rgba(255, 255, 255, 0.2);
+		padding: 2px 4px 0;
+	}
+
+	.chat-msg--user .chat-ts {
+		text-align: right;
+	}
+
+	/* ── Tool call badges ─────────────────────────────────── */
+	.chat-tools {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		margin-top: 6px;
+	}
+
+	.tool-badge {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		padding: 2px 6px;
+		background: rgba(0, 255, 65, 0.04);
+		border: 1px solid rgba(0, 255, 65, 0.1);
+		border-radius: 3px;
+		color: rgba(255, 255, 255, 0.5);
+	}
+
+	:global(.tool-icon) {
+		width: 10px;
+		height: 10px;
+		flex-shrink: 0;
+	}
+
+	.tool-name {
+		font-weight: 600;
+		color: #00ff41;
+	}
+
+	.tool-status {
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.tool-status--ok {
+		color: #22c55e;
+	}
+
+	.tool-status--fail {
+		color: #ef4444;
+	}
+
+	/* ── Thinking dots ────────────────────────────────────── */
+	.thinking-dots {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.tdot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: #00ff41;
+		animation: dot-pulse 1.2s ease-in-out infinite;
+	}
+
+	.tdot:nth-child(2) { animation-delay: 0.2s; }
+	.tdot:nth-child(3) { animation-delay: 0.4s; }
+
+	@keyframes dot-pulse {
+		0%, 60%, 100% { opacity: 0.2; transform: scale(0.8); }
+		30% { opacity: 1; transform: scale(1); }
+	}
+
+	@keyframes msg-in {
+		from { opacity: 0; transform: translateY(4px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+
+	/* ── Input bar ────────────────────────────────────────── */
 	.chat-input-bar {
 		display: flex;
 		align-items: center;
@@ -313,6 +566,11 @@
 		border-radius: 6px;
 		padding: 6px 10px;
 		outline: none;
+		transition: border-color 0.15s ease;
+	}
+
+	.chat-input:focus {
+		border-color: rgba(0, 255, 65, 0.4);
 	}
 
 	.chat-input::placeholder {
@@ -334,12 +592,20 @@
 		border-radius: 6px;
 		background: rgba(255, 255, 255, 0.04);
 		color: rgba(255, 255, 255, 0.3);
-		cursor: default;
+		cursor: pointer;
 		flex-shrink: 0;
+		transition: all 0.15s ease;
+	}
+
+	.send-btn:hover:not(:disabled) {
+		border-color: rgba(0, 255, 65, 0.4);
+		color: #00ff41;
+		background: rgba(0, 255, 65, 0.06);
 	}
 
 	.send-btn:disabled {
 		opacity: 0.3;
+		cursor: default;
 	}
 
 	:global(.send-icon) {
