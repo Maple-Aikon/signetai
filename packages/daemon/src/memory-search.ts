@@ -253,7 +253,6 @@ export async function hybridRecall(
         FROM memories_fts
         JOIN memories m ON memories_fts.rowid = m.rowid
         WHERE memories_fts MATCH ?${filter.sql}
-          AND (m.is_warm_start IS NULL OR m.is_warm_start = 0)
         ORDER BY raw_score
         LIMIT ?
       `) as any
@@ -818,8 +817,7 @@ export async function hybridRecall(
 				.prepare(
 					`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
         FROM memories
-        WHERE id IN (${placeholders})${scopeClause}
-          AND (is_warm_start IS NULL OR is_warm_start = 0)`,
+        WHERE id IN (${placeholders})${scopeClause}`,
 				)
 				.all(...topIds, ...scopeArgs) as Array<{
 				id: string;

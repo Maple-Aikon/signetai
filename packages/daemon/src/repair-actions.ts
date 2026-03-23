@@ -1952,7 +1952,6 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
 			`SELECT id, content, confidence, last_accessed, importance
 			 FROM memories
 			 WHERE is_deleted = 0
-			   AND (is_warm_start IS NULL OR is_warm_start = 0)
 			   AND importance <= 0.8
 			   AND (
 			     confidence < ?

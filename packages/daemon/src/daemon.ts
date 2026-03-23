@@ -94,7 +94,6 @@ import {
 	getDiagnostics,
 	getPredictorHealth,
 } from "./diagnostics";
-import { runWarmStart } from "./predictor-warmstart";
 import {
 	fetchEmbedding,
 	resolveEmbeddingApiKey,
@@ -509,7 +508,7 @@ function invalidateDiagnosticsCache(): void {
 
 function buildOpenClawHealth(): import("./diagnostics").OpenClawHealth {
 	if (!openClawHeartbeat) {
-		return { status: "never-seen", lastHeartbeat: null, pluginVersion: null, hooksRegistered: [], hooksSucceeded: 0, hooksFailed: 0, avgLatencyMs: 0, lastError: null };
+		return { status: "never-seen", lastHeartbeat: null, pluginVersion: null, hooksRegistered: [], hooksSucceeded: 0, hooksFailed: 0, lastLatencyMs: 0, lastError: null };
 	}
 	const age = Date.now() - new Date(openClawHeartbeat.timestamp).getTime();
 	const status = age < OPENCLAW_STALE_MS ? "connected" : "stale";
@@ -7289,7 +7288,7 @@ app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 		timestamp: new Date().toISOString(),
 		data: {
 			pluginVersion: b.pluginVersion,
-			hooksRegistered: Array.isArray(b.hooksRegistered) ? (b.hooksRegistered as string[]) : [],
+			hooksRegistered: Array.isArray(b.hooksRegistered) ? (b.hooksRegistered as string[]).slice(0, 50) : [],
 			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall : null,
 			lastError: typeof b.lastError === "string" ? b.lastError : null,
 			latencyMs: typeof b.latencyMs === "number" ? b.latencyMs : 0,
@@ -8850,47 +8849,6 @@ app.post("/api/predictor/train", async (c) => {
 	});
 });
 
-// Force-run predictor warm-start (ignores "already trained" guard)
-app.post("/api/predictor/warm-start", async (c) => {
-	const cfg = loadMemoryConfig(AGENTS_DIR);
-	const predictorCfg = cfg.pipelineV2.predictor;
-	if (!predictorCfg?.enabled) {
-		return c.json({ error: "Predictor is not enabled" }, 400);
-	}
-	const client = getPredictorClient();
-	if (!client || !client.isAlive()) {
-		return c.json({ error: "Predictor sidecar is not running" }, 503);
-	}
-	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
-	let agentName = "Agent";
-	let agentDesc = "";
-	for (const p of paths) {
-		if (existsSync(p)) {
-			try {
-				const y = parseSimpleYaml(readFileSync(p, "utf-8"));
-				if (y.agent && typeof y.agent === "object") {
-					const a = y.agent as Record<string, unknown>;
-					if (typeof a.name === "string") agentName = a.name;
-					if (typeof a.description === "string") agentDesc = a.description;
-				}
-			} catch { /* ignore */ }
-			break;
-		}
-	}
-	const result = await runWarmStart(
-		getDbAccessor(),
-		client,
-		agentName,
-		agentDesc,
-		{
-			dbPath: MEMORY_DB,
-			checkpointPath: resolvePredictorCheckpointPath(predictorCfg),
-			agentId: "default",
-			force: true,
-		},
-	);
-	return c.json(result);
-});
 
 // ---------------------------------------------------------------------------
 // Telemetry endpoints
@@ -11344,40 +11302,6 @@ async function main() {
 			predictorClientRef = client;
 			logger.info("predictor", "Predictor sidecar started");
 
-			// Warm-start: seed the predictor for new installations (async, fail-open)
-			const agentYamlPaths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
-			let warmName = "Agent";
-			let warmDesc = "";
-			for (const p of agentYamlPaths) {
-				if (existsSync(p)) {
-					try {
-						const y = parseSimpleYaml(readFileSync(p, "utf-8"));
-						if (y.agent && typeof y.agent === "object") {
-							const a = y.agent as Record<string, unknown>;
-							if (typeof a.name === "string") warmName = a.name;
-							if (typeof a.description === "string") warmDesc = a.description;
-						}
-					} catch { /* ignore */ }
-					break;
-				}
-			}
-			runWarmStart(getDbAccessor(), client, warmName, warmDesc, {
-				dbPath: MEMORY_DB,
-				checkpointPath: resolvePredictorCheckpointPath(predictorCfg),
-				agentId: "default",
-			}).then((r) => {
-				if (!r.skipped) {
-					logger.info("predictor", "Warm-start complete", {
-						memoriesInserted: r.memoriesInserted,
-						pairsInserted: r.pairsInserted,
-						trained: r.trained,
-					});
-				}
-			}).catch((err: unknown) => {
-				logger.warn("predictor", "Warm-start failed (non-fatal)", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			});
 		} catch (err) {
 			// Fail open: predictor is optional
 			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
