@@ -197,6 +197,7 @@ function computeNovelty(transcript: string, db: ReadDb): number {
  * we sample head + mid + tail within the same 2000-char total budget.
  */
 function sampleTranscript(t: string): string {
+	if (t.length <= 2000) return t;
 	const mid = Math.floor(t.length * 0.4);
 	return `${t.slice(0, 400)} ${t.slice(mid, mid + 1200)} ${t.slice(-400)}`;
 }

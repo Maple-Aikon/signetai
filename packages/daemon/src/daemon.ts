@@ -1971,10 +1971,10 @@ app.get("/api/memory/review-queue", (c) => {
 				)
 				.all();
 		});
-		return c.json({ items: rows, total: Array.isArray(rows) ? rows.length : 0 });
+		return c.json({ items: rows });
 	} catch (e) {
 		logger.error("memory", "Error fetching review queue", e as Error);
-		return c.json({ error: "Failed to fetch review queue", items: [], total: 0 }, 500);
+		return c.json({ error: "Failed to fetch review queue", items: [] }, 500);
 	}
 });
 
@@ -5578,6 +5578,8 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 
 		// Capture before any claim refresh — false means the daemon restarted
 		// mid-session (claimedSessions lost in memory) so the adapter can re-init.
+		// Note: hasSession evicts expired entries as a side effect; calling it
+		// before checkSessionClaim is intentional — an expired claim == no claim.
 		const sessionKey = parseOptionalString(body.sessionKey);
 		const known = sessionKey ? hasSession(sessionKey) : false;
 

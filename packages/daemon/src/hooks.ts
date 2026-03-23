@@ -1902,14 +1902,15 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		}
 
 		const budget = cfg.pipelineV2.guardrails.contextBudgetChars;
-		const budgetSelected = selectWithBudget(
-			recall.results.map((result) => ({
-				...result,
-				pinned: result.pinned ? 1 : 0,
-			})),
-			budget,
-		).slice(0, 5);
-		const omitted = recall.results.length - budgetSelected.length;
+		const mapped = recall.results.map((result) => ({
+			...result,
+			pinned: result.pinned ? 1 : 0,
+		}));
+		const budgetFiltered = selectWithBudget(mapped, budget);
+		const budgetSelected = budgetFiltered.slice(0, 5);
+		// omitted reflects only budget truncation, not the 5-item display cap,
+		// so the hint correctly directs users to raise contextBudgetChars.
+		const omitted = recall.results.length - budgetFiltered.length;
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
