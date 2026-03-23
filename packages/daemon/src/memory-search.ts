@@ -306,11 +306,13 @@ export async function hybridRecall(
 				for (const row of rows) {
 					const hint = Math.abs(row.raw_score) / normalizer;
 					const content = bm25Map.get(row.id) ?? 0;
-					// Blend content (70%) and hint (30%) when both exist;
-					// content-only or hint-only memories keep their score.
+					// Blend content (70%) and hint (30%) when both exist.
+					// Hint-only memories score on their own merit (0-1) — capping
+					// at 0.3 placed them exactly at the min_score cliff, filtering
+					// out the memories hints were designed to rescue.
 					const blended = content > 0
 						? content * 0.7 + hint * 0.3
-						: hint * 0.3;
+						: hint;
 					bm25Map.set(row.id, Math.max(content, blended));
 				}
 			});
