@@ -209,6 +209,13 @@ export function getExpiryWarning(sessionKey: string): string | null {
 export function renewSession(sessionKey: string): string | null {
 	const claim = sessions.get(sessionKey);
 	if (!claim) return null;
+	// Reject renewal of already-expired sessions — caller should re-claim
+	if (claim.expiresAt <= Date.now()) {
+		sessions.delete(sessionKey);
+		bypassedSessions.delete(sessionKey);
+		warnedSessions.delete(sessionKey);
+		return null;
+	}
 	claim.expiresAt = Date.now() + STALE_SESSION_MS;
 	warnedSessions.delete(sessionKey);
 	logger.info("session-tracker", "Session renewed", { sessionKey });

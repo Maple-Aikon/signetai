@@ -1006,12 +1006,12 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		});
 		const warnings = req.sessionKey
 			? [getExpiryWarning(req.sessionKey)].filter((w): w is string => w !== null)
-			: [];
+			: undefined;
 		return {
 			identity: { name: "Agent" },
 			memories: [],
 			inject: `[memory active | /remember | /recall]\n# Current Date & Time\n${now} (${tz})`,
-			...(warnings.length > 0 ? { warnings } : {}),
+			warnings: warnings?.length ? warnings : undefined,
 		};
 	}
 
