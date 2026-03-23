@@ -371,7 +371,8 @@ bun run uninstall:service # Uninstall system service
 ```
 SIGNET_PATH    # Override ~/.agents/ data directory
 SIGNET_PORT    # Override daemon port (default: 3850)
-SIGNET_HOST    # Override daemon host (default: localhost)
+SIGNET_HOST    # Override daemon client connection address (default: 127.0.0.1)
+SIGNET_BIND    # Override daemon listen/bind address (default: 127.0.0.1, use 0.0.0.0 for containers)
 SIGNET_BYPASS  # Set to 1 to bypass all hooks (CLI exits immediately, daemon never contacted)
 OPENAI_API_KEY # Used when embedding provider is openai
 ```
