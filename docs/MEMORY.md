@@ -9,7 +9,7 @@ Memory System
 =============
 
 The memory system is the core persistence layer of Signet. Memories are
-stored in a SQLite database at `~/.agents/memory/memories.db`. Every
+stored in a SQLite database at `$SIGNET_WORKSPACE/memory/memories.db`. Every
 memory has a full-text search index (FTS5), a vector embedding, a
 SHA-256 content hash for deduplication, and a versioned audit trail.
 The [[daemon]] owns all writes. Direct database modification is unsupported.

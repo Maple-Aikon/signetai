@@ -12,6 +12,9 @@ The Signet [[daemon]] exposes a REST API on `http://localhost:3850` by default.
 All requests and responses use JSON unless otherwise noted. The base URL and
 port are configurable via environment variables (see [[configuration]]).
 
+> Path note: `$SIGNET_WORKSPACE` means your active Signet workspace path.
+> Default is `~/.agents`, configurable via `signet workspace set <path>`.
+
 ```
 Base URL: http://localhost:3850
 SIGNET_PORT  — override port (default: 3850)
@@ -200,7 +203,7 @@ Config
 
 ### GET /api/config
 
-Returns all `.md` and `.yaml` files from the agents directory (`~/.agents/`),
+Returns all `.md` and `.yaml` files from the agents directory (`$SIGNET_WORKSPACE/`),
 sorted by priority: `agent.yaml`, `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
 `USER.md`, then alphabetically.
 
@@ -1208,7 +1211,7 @@ Skills
 
 ### GET /api/skills
 
-List all installed skills from `~/.agents/skills/`. Each skill must have a
+List all installed skills from `$SIGNET_WORKSPACE/skills/`. Each skill must have a
 `SKILL.md` with YAML frontmatter.
 
 **Response**
@@ -1300,7 +1303,7 @@ Returns `500` with `{ "success": false, "error": "..." }` on failure.
 
 ### DELETE /api/skills/:name
 
-Uninstall a skill by removing its directory from `~/.agents/skills/`.
+Uninstall a skill by removing its directory from `$SIGNET_WORKSPACE/skills/`.
 
 **Response**
 
@@ -1332,7 +1335,7 @@ List known harness config file locations and whether each exists on disk.
 
 Run the `generate-harness-configs.py` script from the scripts directory to
 rebuild all harness config files from source. The script must exist at
-`~/.agents/scripts/generate-harness-configs.py`.
+`$SIGNET_WORKSPACE/scripts/generate-harness-configs.py`.
 
 **Response**
 
@@ -1346,7 +1349,7 @@ Returns `404` if the script is not found.
 Secrets
 -------
 
-Secrets are stored encrypted on disk at `~/.agents/.secrets/`. Values are
+Secrets are stored encrypted on disk at `$SIGNET_WORKSPACE/.secrets/`. Values are
 never returned in API responses — only names are exposed.
 
 ### POST /api/secrets/:name
@@ -1732,7 +1735,7 @@ Returns `404` if the session key is not found.
 Git
 ---
 
-The git API manages automatic commit and sync of the `~/.agents/` directory.
+The git API manages automatic commit and sync of the `$SIGNET_WORKSPACE/` directory.
 Config is loaded from `agent.yaml` under the `git` key. Defaults: `autoCommit:
 true`, `autoSync: true`, `syncInterval: 300s`, `remote: origin`,
 `branch: main`.

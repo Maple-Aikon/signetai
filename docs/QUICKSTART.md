@@ -173,7 +173,7 @@ search. 0.7 (70% semantic, 30% keyword) works well for most people.
 
 **6. Git & auto-commit**
 
-The wizard can initialize a git repo in `~/.agents/` so every change to
+The wizard can initialize a git repo in `$SIGNET_WORKSPACE/` so every change to
 your agent files is automatically versioned.
 
 After the wizard completes, the [[daemon]] starts automatically and the
@@ -185,7 +185,7 @@ What Gets Created
 ---
 
 ```
-~/.agents/
+$SIGNET_WORKSPACE/
 ├── agent.yaml           # Your config & manifest
 ├── AGENTS.md            # Agent identity & instructions
 ├── SOUL.md              # Personality & tone
@@ -338,7 +338,7 @@ never see secret values directly.
 Managing Skills
 ---
 
-Skills are packaged instructions in `~/.agents/skills/`. They extend
+Skills are packaged instructions in `$SIGNET_WORKSPACE/skills/`. They extend
 what your agent can do.
 
 ```bash
@@ -385,10 +385,10 @@ Editing Your Agent
 
 Your agent identity lives in two key files:
 
-**`~/.agents/AGENTS.md`** — What the agent knows and how it should
+**`$SIGNET_WORKSPACE/AGENTS.md`** — What the agent knows and how it should
 behave. This is the file that syncs to all your harnesses.
 
-**`~/.agents/SOUL.md`** — Personality, voice, values. Mostly for your
+**`$SIGNET_WORKSPACE/SOUL.md`** — Personality, voice, values. Mostly for your
 own reference or for harnesses that load it separately.
 
 Edit them directly in your editor or via the dashboard's config editor.
@@ -420,7 +420,7 @@ lsof -i :3850
 
 Remove a stale PID file if needed:
 ```bash
-rm ~/.agents/.daemon/pid
+rm $SIGNET_WORKSPACE/.daemon/pid
 signet daemon start
 ```
 

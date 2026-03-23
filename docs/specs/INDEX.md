@@ -94,7 +94,7 @@ table for the same reason: so multiple agents sharing the same SQLite
 file don't step on each other's data.
 
 Skills are scoped to `agent_id` in the graph. The filesystem pool
-(`~/.agents/skills/`) is shared, but graph nodes (entity + skill_meta +
+(`$SIGNET_WORKSPACE/skills/`) is shared, but graph nodes (entity + skill_meta +
 embeddings) are per-agent. Each agent gets its own skill entity with its
 own usage stats, decay, and relation edges.
 

@@ -135,8 +135,11 @@ bun add -g signetai        # or: npm install -g signetai
 signet setup               # interactive setup wizard
 ```
 
-The wizard initializes `~/.agents/`, configures your harnesses, sets up
+The wizard initializes `$SIGNET_WORKSPACE/`, configures your harnesses, sets up
 an embedding provider, creates the database, and starts the daemon.
+
+> Path note: `$SIGNET_WORKSPACE` means your active Signet workspace path.
+> Default is `~/.agents`, configurable via `signet workspace set <path>`.
 
 ### Tell your agent to install it
 

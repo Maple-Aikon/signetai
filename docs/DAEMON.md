@@ -68,24 +68,24 @@ Configuration
 | `SIGNET_PORT` | `3850` | HTTP server port |
 | `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls and default bind address |
 | `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (for example `0.0.0.0`) |
-| `SIGNET_PATH` | `~/.agents` | Base agents directory |
+| `SIGNET_PATH` | `$SIGNET_WORKSPACE` | Base agents directory |
 | `SIGNET_LOG_FILE` | — | Optional explicit log file path |
-| `SIGNET_LOG_DIR` | `~/.agents/.daemon/logs` | Optional log directory override |
+| `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional log directory override |
 
 ### Files
 
 When log path overrides are set:
 - `SIGNET_LOG_FILE` takes highest precedence and points to the exact file.
 - Else `SIGNET_LOG_DIR` overrides the default log directory.
-- Else the default `~/.agents/.daemon/logs/` paths below apply.
+- Else the default `$SIGNET_WORKSPACE/.daemon/logs/` paths below apply.
 
 | File | Description |
 |------|-------------|
-| `~/.agents/.daemon/pid` | Process ID file |
-| `~/.agents/.daemon/logs/` | Log directory |
-| `~/.agents/.daemon/logs/daemon-YYYY-MM-DD.log` | Daily log file |
-| `~/.agents/.daemon/logs/daemon.out.log` | stdout capture |
-| `~/.agents/.daemon/logs/daemon.err.log` | stderr capture |
+| `$SIGNET_WORKSPACE/.daemon/pid` | Process ID file |
+| `$SIGNET_WORKSPACE/.daemon/logs/` | Log directory |
+| `$SIGNET_WORKSPACE/.daemon/logs/daemon-YYYY-MM-DD.log` | Daily log file |
+| `$SIGNET_WORKSPACE/.daemon/logs/daemon.out.log` | stdout capture |
+| `$SIGNET_WORKSPACE/.daemon/logs/daemon.err.log` | stderr capture |
 
 
 Subsystems
@@ -281,13 +281,13 @@ File Watcher
 
 The daemon watches these paths with chokidar:
 
-- `~/.agents/agent.yaml`
-- `~/.agents/AGENTS.md`
-- `~/.agents/SOUL.md`
-- `~/.agents/MEMORY.md`
-- `~/.agents/IDENTITY.md`
-- `~/.agents/USER.md`
-- `~/.agents/memory/` (entire directory)
+- `$SIGNET_WORKSPACE/agent.yaml`
+- `$SIGNET_WORKSPACE/AGENTS.md`
+- `$SIGNET_WORKSPACE/SOUL.md`
+- `$SIGNET_WORKSPACE/MEMORY.md`
+- `$SIGNET_WORKSPACE/IDENTITY.md`
+- `$SIGNET_WORKSPACE/USER.md`
+- `$SIGNET_WORKSPACE/memory/` (entire directory)
 - `~/.claude/projects/*/memory/MEMORY.md` (Claude Code project memories)
 
 ### Auto-Ingestion
@@ -300,13 +300,13 @@ on startup and on file change.
 
 | File pattern | Who | Tags |
 |--------------|-----|------|
-| `~/.agents/memory/*.md` (not MEMORY.md) | `openclaw-memory` | `openclaw`, `memory-log`, date |
+| `$SIGNET_WORKSPACE/memory/*.md` (not MEMORY.md) | `openclaw-memory` | `openclaw`, `memory-log`, date |
 | `~/.claude/projects/*/memory/MEMORY.md` | `claude-code` | `claude-code`, `claude-project-memory`, project ID |
 
 ### Auto Git Commit
 
 When a watched file changes, the daemon waits 5 seconds (debounce),
-checks whether `~/.agents/` is a git repository, stages all changes
+checks whether `$SIGNET_WORKSPACE/` is a git repository, stages all changes
 with `git add -A`, and commits with a message in the form
 `YYYY-MM-DDTHH-MM-SS_auto_<filename>`.
 
@@ -348,7 +348,7 @@ Logging
 -------
 
 Logs are written to the console and to a daily file at
-`~/.agents/.daemon/logs/daemon-YYYY-MM-DD.log` by default. When
+`$SIGNET_WORKSPACE/.daemon/logs/daemon-YYYY-MM-DD.log` by default. When
 `SIGNET_LOG_FILE` is set, logs are written to that exact file.
 When `SIGNET_LOG_DIR` is set (and `SIGNET_LOG_FILE` is unset), daily
 logs are written under `$SIGNET_LOG_DIR/`.
@@ -375,7 +375,7 @@ lsof -i :3850
 
 Remove a stale PID file if present:
 ```bash
-rm ~/.agents/.daemon/pid
+rm $SIGNET_WORKSPACE/.daemon/pid
 signet daemon start
 ```
 
@@ -388,12 +388,12 @@ cat "${SIGNET_LOG_FILE:-$HOME/.agents/.daemon/logs/daemon.err.log}"
 
 Check for syntax errors in config:
 ```bash
-cat ~/.agents/agent.yaml
+cat $SIGNET_WORKSPACE/agent.yaml
 ```
 
 Verify database integrity:
 ```bash
-sqlite3 ~/.agents/memory/memories.db "PRAGMA integrity_check;"
+sqlite3 $SIGNET_WORKSPACE/memory/memories.db "PRAGMA integrity_check;"
 ```
 
 ### Dashboard not loading
@@ -410,7 +410,7 @@ ls packages/cli/dashboard/build/
 Check the watcher logs, confirm the git repository exists, and verify
 file permissions:
 ```bash
-ls ~/.agents/.git
+ls $SIGNET_WORKSPACE/.git
 ```
 
 ### Pipeline jobs stuck

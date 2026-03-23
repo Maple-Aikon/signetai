@@ -117,7 +117,7 @@ React Grid Layout (same engine as Grafana). Battle-tested for this exact use cas
 
 Each widget = sandboxed iframe served by the MCP server's `ui` URL.
 
-Layout serializes to `~/.agents/dashboard.json`:
+Layout serializes to `$SIGNET_WORKSPACE/dashboard.json`:
 
 ```json
 {
@@ -242,12 +242,12 @@ interface SignetOSEvent {
 
 ### Single-User First
 
-Formalize the existing `~/.agents/agent.yaml` identity. Add WebAuthn/passkey local auth.
+Formalize the existing `$SIGNET_WORKSPACE/agent.yaml` identity. Add WebAuthn/passkey local auth.
 
 ### Orgs
 
 ```yaml
-# ~/.agents/orgs/localbosses.yaml
+# $SIGNET_WORKSPACE/orgs/localbosses.yaml
 name: LocalBosses
 members:
   - id: usr_jake_shore
