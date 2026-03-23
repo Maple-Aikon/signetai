@@ -197,18 +197,14 @@ async function upsertReviews(
 			),
 	);
 
-	try {
-		const results = await db.batch(stmts);
-		let accepted = 0;
-		let rejected = 0;
-		for (const res of results) {
-			if (res.success) accepted++;
-			else rejected++;
-		}
-		return { accepted, rejected };
-	} catch {
-		return { accepted: 0, rejected: reviews.length };
+	const results = await db.batch(stmts);
+	let accepted = 0;
+	let rejected = 0;
+	for (const res of results) {
+		if (res.success) accepted++;
+		else rejected++;
 	}
+	return { accepted, rejected };
 }
 
 // ---------------------------------------------------------------------------
@@ -350,9 +346,12 @@ async function handleSync(
 	}
 
 	const receivedAt = new Date().toISOString();
-	const { accepted, rejected } = await upsertReviews(env.DB, valid, receivedAt);
-
-	return json({ success: true, accepted, rejected, skipped, receivedAt }, 200, cors);
+	try {
+		const { accepted, rejected } = await upsertReviews(env.DB, valid, receivedAt);
+		return json({ success: true, accepted, rejected, skipped, receivedAt }, 200, cors);
+	} catch {
+		return json({ error: "storage error" }, 500, cors);
+	}
 }
 
 // ---------------------------------------------------------------------------
