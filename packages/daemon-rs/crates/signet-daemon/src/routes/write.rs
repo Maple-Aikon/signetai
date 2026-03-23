@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::warn;
 
 use signet_core::db::Priority;
@@ -52,12 +53,37 @@ pub struct RememberBody {
     pub who: Option<String>,
     pub project: Option<String>,
     pub importance: Option<f64>,
-    pub tags: Option<String>,
+    pub tags: Option<Value>,
     pub pinned: Option<bool>,
     pub source_type: Option<String>,
     pub source_id: Option<String>,
     #[serde(rename = "type")]
     pub memory_type: Option<String>,
+}
+
+fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(tags) => Ok(tags
+            .split(',')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .collect()),
+        Value::Array(tags) => Ok(tags
+            .into_iter()
+            .filter_map(|tag| match tag {
+                Value::String(tag) => Some(tag.trim().to_string()),
+                _ => None,
+            })
+            .filter(|tag| !tag.is_empty())
+            .collect()),
+        _ => Err("tags must be a string, string array, or null"),
+    }
 }
 
 pub async fn remember(
@@ -78,11 +104,16 @@ pub async fn remember(
             .into_response();
     }
 
-    let tags: Vec<String> = body
-        .tags
-        .as_deref()
-        .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
-        .unwrap_or_default();
+    let tags = match parse_remember_tags(body.tags) {
+        Ok(tags) => tags,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
 
     let who = body.who;
     let project = body.project;
@@ -138,6 +169,30 @@ pub async fn remember(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remember_tags;
+    use serde_json::json;
+
+    #[test]
+    fn remember_tags_accepts_comma_separated_strings() {
+        let tags = parse_remember_tags(Some(json!("alpha, beta"))).unwrap();
+        assert_eq!(tags, vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn remember_tags_accepts_string_arrays() {
+        let tags = parse_remember_tags(Some(json!(["alpha", "beta"]))).unwrap();
+        assert_eq!(tags, vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn remember_tags_rejects_invalid_payloads() {
+        let err = parse_remember_tags(Some(json!(42))).unwrap_err();
+        assert_eq!(err, "tags must be a string, string array, or null");
     }
 }
 

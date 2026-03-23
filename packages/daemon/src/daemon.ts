@@ -2577,7 +2577,7 @@ app.post("/api/memory/remember", async (c) => {
 		who?: string;
 		project?: string;
 		importance?: number;
-		tags?: string;
+		tags?: unknown;
 		pinned?: boolean;
 		sourceType?: string;
 		sourceId?: string;
@@ -2615,6 +2615,11 @@ app.post("/api/memory/remember", async (c) => {
 	const raw = body.content?.trim();
 	if (!raw) return c.json({ error: "content is required" }, 400);
 	const scope = body.scope ?? null;
+	const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
+	const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
+	if (hasBodyTags && bodyTags === undefined) {
+		return c.json({ error: "tags must be a string, string array, or null" }, 400);
+	}
 
 	// Pipeline v2 kill switch: refuse writes when mutations are frozen
 	const fullCfg = loadMemoryConfig(AGENTS_DIR);
@@ -2640,7 +2645,7 @@ app.post("/api/memory/remember", async (c) => {
 		const parsedPrefixes = parsePrefixes(raw);
 		const importance = body.importance ?? parsedPrefixes.importance;
 		const pinned = (body.pinned ?? parsedPrefixes.pinned) ? 1 : 0;
-		const tags = body.tags ?? parsedPrefixes.tags;
+		const tags = hasBodyTags ? bodyTags : parsedPrefixes.tags;
 		const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
 		const groupId = crypto.randomUUID();
@@ -2818,7 +2823,7 @@ app.post("/api/memory/remember", async (c) => {
 	// Body-level overrides for importance/tags/pinned
 	const importance = body.importance ?? parsed.importance;
 	const pinned = (body.pinned ?? parsed.pinned) ? 1 : 0;
-	const tags = body.tags ?? parsed.tags;
+	const tags = hasBodyTags ? bodyTags : parsed.tags;
 	const memType = inferType(parsed.content);
 
 	const id = crypto.randomUUID();

@@ -533,7 +533,7 @@ export async function memoryStore(
 		daemonUrl?: string;
 		type?: string;
 		importance?: number;
-		tags?: string[];
+		tags?: string | readonly string[];
 		who?: string;
 	} = {},
 ): Promise<string | null> {
@@ -544,7 +544,10 @@ export async function memoryStore(
 			content,
 			type: options.type,
 			importance: options.importance,
-			tags: options.tags,
+			tags:
+				typeof options.tags === "string"
+					? options.tags
+					: options.tags?.map((tag) => tag.trim()).filter((tag) => tag.length > 0).join(","),
 			who: options.who || "openclaw",
 		},
 		timeout: WRITE_TIMEOUT,
@@ -690,7 +693,7 @@ export async function remember(
 		daemonUrl?: string;
 		type?: string;
 		importance?: number;
-		tags?: string[];
+		tags?: string | readonly string[];
 		who?: string;
 	} = {},
 ): Promise<string | null> {
@@ -1003,7 +1006,7 @@ const signetPlugin = {
 							...opts,
 							type,
 							importance,
-							tags: tags ? tags.split(",").map((t) => t.trim()) : undefined,
+							tags,
 						});
 						if (id) {
 							return textResult(`Memory saved successfully (id: ${id})`, { id });

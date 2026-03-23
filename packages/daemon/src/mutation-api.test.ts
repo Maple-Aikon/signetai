@@ -106,6 +106,51 @@ describe("mutation API routes", () => {
 		rmSync(agentsDir, { recursive: true, force: true });
 	});
 
+	it("POST /api/memory/remember accepts comma-separated tags", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Memory with string tags",
+				tags: "alpha, beta",
+			}),
+		});
+		const json = (await res.json()) as { tags?: string | null };
+
+		expect(res.status).toBe(200);
+		expect(json.tags).toBe("alpha,beta");
+	});
+
+	it("POST /api/memory/remember accepts string-array tags", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Memory with array tags",
+				tags: ["alpha", "beta"],
+			}),
+		});
+		const json = (await res.json()) as { tags?: string | null };
+
+		expect(res.status).toBe(200);
+		expect(json.tags).toBe("alpha,beta");
+	});
+
+	it("POST /api/memory/remember rejects invalid tag payloads", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Memory with invalid tags",
+				tags: 42,
+			}),
+		});
+		const json = (await res.json()) as { error?: string };
+
+		expect(res.status).toBe(400);
+		expect(json.error).toBe("tags must be a string, string array, or null");
+	});
+
 	it("PATCH /api/memory/:id requires reason", async () => {
 		seedMemory({
 			id: "mem-1",

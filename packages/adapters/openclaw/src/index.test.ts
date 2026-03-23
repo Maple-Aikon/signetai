@@ -8,7 +8,9 @@ mock.module("@signet/core", () => ({
 }));
 
 // Import after mock so the module picks up the stub.
-const signetPlugin = (await import("./index")).default;
+const signet = await import("./index");
+const signetPlugin = signet.default;
+const { memoryStore } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -25,6 +27,7 @@ let failSessionStartCount = 0;
 let failPromptSubmitCount = 0;
 let delaySessionStartMs = 0;
 let delayPromptSubmitMs = 0;
+let lastRememberBody: unknown = null;
 
 function hit(path: string): void {
 	pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
@@ -120,9 +123,10 @@ beforeEach(() => {
 	failPromptSubmitCount = 0;
 	delaySessionStartMs = 0;
 	delayPromptSubmitMs = 0;
+	lastRememberBody = null;
 
 	const mockFetch = Object.assign(
-		async (input: RequestInfo | URL): Promise<Response> => {
+		async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			const path = new URL(url).pathname;
 			hit(path);
@@ -154,6 +158,9 @@ beforeEach(() => {
 					});
 				case "/api/hooks/session-end":
 					return jsonResponse({ memoriesSaved: 0 });
+				case "/api/memory/remember":
+					lastRememberBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({ id: "mem-1" });
 				case "/api/marketplace/mcp/tools":
 					return jsonResponse({
 						count: 2,
@@ -257,6 +264,22 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getPrependContext(result)).toContain("turn-memory");
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
 		expect(getHits("/api/hooks/session-start")).toBe(1);
+	});
+
+	it("normalizes memory_store tags to a comma string", async () => {
+		const id = await memoryStore("save this", {
+			daemonUrl: "http://daemon.test",
+			tags: ["alpha", " beta ", ""],
+		});
+
+		expect(id).toBe("mem-1");
+		expect(lastRememberBody).toEqual({
+			content: "save this",
+			type: undefined,
+			importance: undefined,
+			tags: "alpha,beta",
+			who: "openclaw",
+		});
 	});
 
 	it("deduplicates session-start for sessionless turns when both hooks fire", async () => {
