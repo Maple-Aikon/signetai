@@ -17,6 +17,7 @@ export interface Agent {
 	uptime?: number;
 	tokens?: { input: number; output: number; cost: number };
 	model?: string;
+	toolCount?: number;
 }
 
 export type AgentSource =
@@ -89,6 +90,7 @@ export async function fetchAgents(): Promise<void> {
 			lastActivity: a.lastActivity ? String(a.lastActivity) : undefined,
 			lastMessage: a.lastMessage ? String(a.lastMessage) : undefined,
 			model: a.model ? String(a.model) : undefined,
+			toolCount: typeof a.toolCount === "number" ? a.toolCount : undefined,
 		}));
 	} catch (err) {
 		room.error = err instanceof Error ? err.message : String(err);

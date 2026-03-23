@@ -14,15 +14,23 @@
 
 	onMount(() => {
 		startPolling();
+		window.addEventListener("keydown", handleKeydown);
 	});
 
 	onDestroy(() => {
 		stopPolling();
+		window.removeEventListener("keydown", handleKeydown);
 	});
 
 	const slots = $derived(getGridSlots());
 	const activeCount = $derived(
 		room.agents.filter((a) => a.status === "active").length,
+	);
+	const idleCount = $derived(
+		room.agents.filter((a) => a.status === "idle").length,
+	);
+	const errorCount = $derived(
+		room.agents.filter((a) => a.status === "error").length,
 	);
 	const selected = $derived(
 		room.selectedId
@@ -31,6 +39,110 @@
 	);
 
 	let dialogOpen = $state(false);
+
+	/* ── Keyboard navigation ─────────────────────────────── */
+	let focusedIndex = $state(-1);
+
+	const COLS = 4;
+	const ROWS = 3;
+
+	function handleKeydown(e: KeyboardEvent): void {
+		// Ignore if typing in an input
+		if (
+			e.target instanceof HTMLInputElement ||
+			e.target instanceof HTMLTextAreaElement
+		) {
+			return;
+		}
+
+		// Escape from zoom view
+		if (e.key === "Escape") {
+			if (room.selectedId) {
+				e.preventDefault();
+				selectAgent(null);
+				return;
+			}
+			// Reset focus
+			focusedIndex = -1;
+			return;
+		}
+
+		// Number keys 1-9 to select monitor (grid mode only)
+		if (!room.selectedId && e.key >= "1" && e.key <= "9") {
+			const idx = parseInt(e.key) - 1;
+			const slot = slots[idx];
+			if (slot) {
+				e.preventDefault();
+				selectAgent(slot.id);
+			}
+			return;
+		}
+
+		// Arrow key navigation (grid mode only)
+		if (!room.selectedId && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+			e.preventDefault();
+
+			if (focusedIndex < 0) {
+				focusedIndex = 0;
+				return;
+			}
+
+			let row = Math.floor(focusedIndex / COLS);
+			let col = focusedIndex % COLS;
+
+			switch (e.key) {
+				case "ArrowUp":    row = (row - 1 + ROWS) % ROWS; break;
+				case "ArrowDown":  row = (row + 1) % ROWS; break;
+				case "ArrowLeft":  col = (col - 1 + COLS) % COLS; break;
+				case "ArrowRight": col = (col + 1) % COLS; break;
+			}
+
+			focusedIndex = row * COLS + col;
+			return;
+		}
+
+		// Enter to select focused monitor
+		if (!room.selectedId && e.key === "Enter" && focusedIndex >= 0) {
+			const slot = slots[focusedIndex];
+			if (slot) {
+				e.preventDefault();
+				selectAgent(slot.id);
+			}
+			return;
+		}
+	}
+
+	/* ── Last scan timer ─────────────────────────────────── */
+	let lastScanAgo = $state("0s");
+	let scanTimer: ReturnType<typeof setInterval> | null = null;
+	let lastScanTime = $state(Date.now());
+
+	// Update lastScanTime when agents refresh
+	$effect(() => {
+		// Reading room.agents triggers re-run on agent data changes
+		if (room.agents) {
+			lastScanTime = Date.now();
+		}
+	});
+
+	onMount(() => {
+		scanTimer = setInterval(() => {
+			const diff = Math.floor((Date.now() - lastScanTime) / 1000);
+			lastScanAgo = `${diff}s`;
+		}, 1000);
+	});
+
+	onDestroy(() => {
+		if (scanTimer) clearInterval(scanTimer);
+	});
+
+	/* ── Room status derivation ──────────────────────────── */
+	const roomStatus = $derived(
+		errorCount > 0 ? "DEGRADED" : activeCount > 0 ? "OPERATIONAL" : "STANDBY"
+	);
+
+	/* ── Ambient glow intensity based on active agents ──── */
+	const glowIntensity = $derived(Math.min(activeCount * 0.04, 0.3));
 </script>
 
 <AddAgentDialog open={dialogOpen} onclose={() => { dialogOpen = false; }} />
@@ -38,7 +150,12 @@
 {#if selected}
 	<ZoomView agent={selected} onback={() => selectAgent(null)} />
 {:else}
-	<div class="control-room">
+	<div class="control-room" style="--glow-intensity: {glowIntensity};">
+		<!-- Atmospheric overlays -->
+		<div class="atmosphere-fog" aria-hidden="true"></div>
+		<div class="atmosphere-ambient" aria-hidden="true"></div>
+		<div class="atmosphere-desk-glow" aria-hidden="true"></div>
+
 		<header class="room-header">
 			<div class="room-title">
 				<span class="title-text">Agent Control Room</span>
@@ -54,11 +171,12 @@
 							<G3Monitor
 								agent={slot}
 								selected={false}
+								focused={focusedIndex === i}
 								onclick={() => selectAgent(slot.id)}
 							/>
 						</div>
 					{:else}
-						<div class="grid-cell grid-cell--empty">
+						<div class="grid-cell grid-cell--empty" class:grid-cell--nav-focused={focusedIndex === i}>
 							<button class="empty-slot" aria-label="Add agent" onclick={() => { dialogOpen = true; }}>
 								<Plus class="empty-icon" />
 							</button>
@@ -67,6 +185,34 @@
 				{/each}
 			</div>
 		</div>
+
+		<!-- Status bar -->
+		<footer class="room-status-bar">
+			<div class="status-bar-inner">
+				<div class="status-group">
+					<span class="sb-item sb-item--active">
+						<span class="sb-dot sb-dot--active"></span>
+						{activeCount} ACTIVE
+					</span>
+					<span class="sb-item sb-item--idle">
+						<span class="sb-dot sb-dot--idle"></span>
+						{idleCount} IDLE
+					</span>
+					<span class="sb-item sb-item--error">
+						<span class="sb-dot sb-dot--error"></span>
+						{errorCount} ERROR
+					</span>
+				</div>
+				<span class="sb-sep">│</span>
+				<span class="sb-item sb-label">
+					ROOM STATUS: <span class="sb-value" class:sb-value--ok={roomStatus === "OPERATIONAL"} class:sb-value--warn={roomStatus === "DEGRADED"} class:sb-value--standby={roomStatus === "STANDBY"}>{roomStatus}</span>
+				</span>
+				<span class="sb-sep">│</span>
+				<span class="sb-item sb-label">
+					LAST SCAN: <span class="sb-value">{lastScanAgo} AGO</span>
+				</span>
+			</div>
+		</footer>
 
 		<!-- Floor grid reflection -->
 		<div class="floor-grid" aria-hidden="true"></div>
@@ -89,12 +235,71 @@
 		background-size: 256px 256px;
 	}
 
+	/* ── Atmospheric overlays ─────────────────────────────── */
+
+	/* Top fog/haze */
+	.atmosphere-fog {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 120px;
+		background: linear-gradient(
+			180deg,
+			rgba(8, 8, 12, 0.7) 0%,
+			rgba(8, 8, 12, 0.3) 40%,
+			transparent 100%
+		);
+		pointer-events: none;
+		z-index: 1;
+	}
+
+	/* Ambient glow that pulses with active agent count */
+	.atmosphere-ambient {
+		position: absolute;
+		inset: 0;
+		background: radial-gradient(
+			ellipse 80% 60% at 50% 50%,
+			rgba(0, 255, 65, var(--glow-intensity, 0.05)),
+			transparent 70%
+		);
+		pointer-events: none;
+		z-index: 0;
+		animation: ambient-pulse 6s ease-in-out infinite;
+	}
+
+	@keyframes ambient-pulse {
+		0%, 100% { opacity: 0.6; }
+		50% { opacity: 1; }
+	}
+
+	/* Desk reflection glow at bottom center */
+	.atmosphere-desk-glow {
+		position: absolute;
+		bottom: 0;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 70%;
+		height: 100px;
+		background: radial-gradient(
+			ellipse 100% 100% at 50% 100%,
+			rgba(100, 180, 255, 0.04) 0%,
+			rgba(0, 255, 65, 0.02) 40%,
+			transparent 80%
+		);
+		pointer-events: none;
+		z-index: 0;
+	}
+
+	/* ── Header ───────────────────────────────────────────── */
 	.room-header {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		padding: 12px 16px;
 		flex-shrink: 0;
+		z-index: 2;
+		position: relative;
 	}
 
 	.room-title {
@@ -111,6 +316,9 @@
 		text-transform: uppercase;
 		letter-spacing: 0.18em;
 		color: rgba(255, 255, 255, 0.5);
+		text-shadow:
+			0 0 10px rgba(0, 255, 65, 0.15),
+			0 0 30px rgba(0, 255, 65, 0.05);
 	}
 
 	.agent-count {
@@ -120,13 +328,16 @@
 		letter-spacing: 0.06em;
 	}
 
+	/* ── Grid ─────────────────────────────────────────────── */
 	.grid-container {
 		flex: 1;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 8px 16px 32px;
+		padding: 8px 16px 12px;
 		min-height: 0;
+		z-index: 2;
+		position: relative;
 	}
 
 	.monitor-grid {
@@ -157,6 +368,15 @@
 		opacity: 0.7;
 	}
 
+	.grid-cell--nav-focused {
+		opacity: 0.8;
+	}
+
+	.grid-cell--nav-focused .empty-slot {
+		border-color: rgba(0, 255, 65, 0.3);
+		background: rgba(0, 255, 65, 0.02);
+	}
+
 	.empty-slot {
 		display: flex;
 		align-items: center;
@@ -182,7 +402,88 @@
 		height: 18px;
 	}
 
-	/* Floor grid lines */
+	/* ── Status bar ───────────────────────────────────────── */
+	.room-status-bar {
+		flex-shrink: 0;
+		border-top: 1px solid rgba(255, 255, 255, 0.06);
+		padding: 5px 16px;
+		z-index: 2;
+		position: relative;
+	}
+
+	.status-bar-inner {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0;
+		font-family: var(--font-mono), monospace;
+		font-size: 9px;
+		letter-spacing: 0.04em;
+	}
+
+	.status-group {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.sb-item {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		color: rgba(255, 255, 255, 0.35);
+	}
+
+	.sb-dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.sb-dot--active {
+		background: #22c55e;
+		box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+	}
+
+	.sb-dot--idle {
+		background: #eab308;
+		box-shadow: 0 0 4px rgba(234, 179, 8, 0.3);
+	}
+
+	.sb-dot--error {
+		background: #ef4444;
+		box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);
+	}
+
+	.sb-sep {
+		margin: 0 10px;
+		color: rgba(255, 255, 255, 0.12);
+		font-size: 10px;
+	}
+
+	.sb-label {
+		color: rgba(255, 255, 255, 0.25);
+	}
+
+	.sb-value {
+		color: rgba(255, 255, 255, 0.45);
+		font-weight: 600;
+	}
+
+	.sb-value--ok {
+		color: #22c55e;
+	}
+
+	.sb-value--warn {
+		color: #ef4444;
+	}
+
+	.sb-value--standby {
+		color: #eab308;
+	}
+
+	/* ── Floor grid lines ─────────────────────────────────── */
 	.floor-grid {
 		position: absolute;
 		bottom: 0;
@@ -215,6 +516,9 @@
 		}
 		.empty-slot {
 			transition: none;
+		}
+		.atmosphere-ambient {
+			animation: none;
 		}
 	}
 </style>
