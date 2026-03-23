@@ -94,14 +94,22 @@
 		<div class="monitor-screen">
 			<CRTEffect flicker={agent.status === "active"} scanlines vignette />
 
-			<div class="monitor-content">
-				<!-- Top bar: name + status -->
-				<div class="screen-topbar">
+			{#if isMcp && widgetHtml}
+				<!-- MCP Widget preview — scaled-down iframe -->
+				<div class="screen-widget-wrap">
+					<iframe
+						class="screen-widget-iframe"
+						srcdoc={widgetHtml}
+						sandbox="allow-scripts"
+						tabindex="-1"
+						title="{agent.name} widget preview"
+					></iframe>
+				</div>
+				<!-- Floating name badge over the widget preview -->
+				<div class="widget-name-badge">
 					<span class="monitor-name">{agent.name}</span>
 					<span
 						class="status-indicator"
-						class:status-indicator--active={agent.status === "active"}
-						class:status-indicator--error={agent.status === "error"}
 						style="color: {statusColor[agent.status]};"
 					>
 						<span
@@ -109,60 +117,103 @@
 							class:status-dot--blink={agent.status === "active"}
 							style="background: {statusColor[agent.status]}; box-shadow: 0 0 4px {statusColor[agent.status]};"
 						></span>
-						{statusLabel[agent.status]}
 					</span>
 				</div>
+			{:else if isMcp && widgetLoading}
+				<!-- Loading state while fetching widget HTML -->
+				<div class="monitor-content">
+					<div class="screen-topbar">
+						<span class="monitor-name">{agent.name}</span>
+						<span class="status-indicator" style="color: {statusColor[agent.status]};">
+							<span
+								class="status-dot"
+								class:status-dot--blink={agent.status === "active"}
+								style="background: {statusColor[agent.status]}; box-shadow: 0 0 4px {statusColor[agent.status]};"
+							></span>
+							{statusLabel[agent.status]}
+						</span>
+					</div>
+					<div class="screen-loading">
+						<div class="loading-static"></div>
+						<span class="loading-dots">
+							<span class="loading-dot"></span>
+							<span class="loading-dot"></span>
+							<span class="loading-dot"></span>
+						</span>
+					</div>
+				</div>
+			{:else}
+				<!-- Terminal-style content for processes / non-MCP / fallback -->
+				<div class="monitor-content">
+					<!-- Top bar: name + status -->
+					<div class="screen-topbar">
+						<span class="monitor-name">{agent.name}</span>
+						<span
+							class="status-indicator"
+							class:status-indicator--active={agent.status === "active"}
+							class:status-indicator--error={agent.status === "error"}
+							style="color: {statusColor[agent.status]};"
+						>
+							<span
+								class="status-dot"
+								class:status-dot--blink={agent.status === "active"}
+								style="background: {statusColor[agent.status]}; box-shadow: 0 0 4px {statusColor[agent.status]};"
+							></span>
+							{statusLabel[agent.status]}
+						</span>
+					</div>
 
-				<!-- Source-specific info -->
-				<div class="screen-info">
-					{#if isMcp && mcpServerId}
-						<div class="info-line info-line--server">
-							<span class="info-label">SRV</span>
-							<span class="info-value info-value--green">{mcpServerId}</span>
-						</div>
-						{#if agent.toolCount != null}
+					<!-- Source-specific info -->
+					<div class="screen-info">
+						{#if isMcp && mcpServerId}
+							<div class="info-line info-line--server">
+								<span class="info-label">SRV</span>
+								<span class="info-value info-value--green">{mcpServerId}</span>
+							</div>
+							{#if agent.toolCount != null}
+								<div class="info-line">
+									<span class="info-label">TOOLS</span>
+									<span class="info-value info-value--cyan">{agent.toolCount}</span>
+								</div>
+							{/if}
+						{:else if isProcess && processInfo}
 							<div class="info-line">
-								<span class="info-label">TOOLS</span>
-								<span class="info-value info-value--cyan">{agent.toolCount}</span>
+								<span class="info-label">PROC</span>
+								<span class="info-value info-value--green">{processInfo.name}</span>
+							</div>
+							<div class="info-line">
+								<span class="info-label">PID</span>
+								<span class="info-value info-value--cyan">{processInfo.pid}</span>
+								{#if agent.status === "active"}
+									<span class="running-badge">
+										<span class="running-dot"></span>
+										RUNNING
+									</span>
+								{/if}
+							</div>
+						{:else}
+							<div class="info-line">
+								<span class="info-label">TYPE</span>
+								<span class="info-value">{agent.source.type}</span>
 							</div>
 						{/if}
-					{:else if isProcess && processInfo}
-						<div class="info-line">
-							<span class="info-label">PROC</span>
-							<span class="info-value info-value--green">{processInfo.name}</span>
-						</div>
-						<div class="info-line">
-							<span class="info-label">PID</span>
-							<span class="info-value info-value--cyan">{processInfo.pid}</span>
-							{#if agent.status === "active"}
-								<span class="running-badge">
-									<span class="running-dot"></span>
-									RUNNING
-								</span>
-							{/if}
-						</div>
-					{:else}
-						<div class="info-line">
-							<span class="info-label">TYPE</span>
-							<span class="info-value">{agent.source.type}</span>
-						</div>
-					{/if}
 
-					{#if agent.model}
-						<div class="info-line">
-							<span class="info-label">MDL</span>
-							<span class="info-value info-value--dim">{agent.model}</span>
-						</div>
-					{/if}
-				</div>
+						{#if agent.model}
+							<div class="info-line">
+								<span class="info-label">MDL</span>
+								<span class="info-value info-value--dim">{agent.model}</span>
+							</div>
+						{/if}
+					</div>
 
-				<!-- Activity output area -->
-				<div class="screen-output">
-					<span class="prompt-char">›</span>
-					<span class="output-text">{displayedActivity}</span>
-					<span class="cursor-blink" class:cursor-blink--hidden={!cursorVisible}>▌</span>
+					<!-- Activity output area -->
+					<div class="screen-output">
+						<span class="prompt-char">›</span>
+						<span class="output-text">{displayedActivity}</span>
+						<span class="cursor-blink" class:cursor-blink--hidden={!cursorVisible}>▌</span>
+					</div>
 				</div>
-			</div>
+			{/if}
 		</div>
 	</div>
 
@@ -247,6 +298,99 @@
 	.monitor--offline .monitor-screen {
 		background: #050508;
 		opacity: 0.5;
+	}
+
+	/* ── Widget iframe preview (MCP agents) ───────────────── */
+	.screen-widget-wrap {
+		position: absolute;
+		inset: 0;
+		overflow: hidden;
+		border-radius: inherit;
+		z-index: 4;
+	}
+
+	.screen-widget-iframe {
+		width: 800px;
+		height: 600px;
+		border: none;
+		transform: scale(var(--monitor-scale, 0.22));
+		transform-origin: top left;
+		pointer-events: none;
+		display: block;
+	}
+
+	/* Floating name badge over widget preview */
+	.widget-name-badge {
+		position: absolute;
+		top: 3px;
+		left: 4px;
+		right: 4px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		z-index: 5;
+		padding: 1px 4px;
+		background: rgba(5, 5, 8, 0.75);
+		border-radius: 2px;
+		backdrop-filter: blur(4px);
+	}
+
+	.widget-name-badge .monitor-name {
+		font-size: 8px;
+	}
+
+	/* ── Loading state ────────────────────────────────────── */
+	.screen-loading {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		position: relative;
+	}
+
+	.loading-static {
+		position: absolute;
+		inset: 0;
+		opacity: 0.04;
+		background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+		background-size: 128px 128px;
+		animation: static-flicker 0.15s steps(3) infinite;
+	}
+
+	@keyframes static-flicker {
+		0% { transform: translate(0, 0); }
+		33% { transform: translate(-2px, 1px); }
+		66% { transform: translate(1px, -1px); }
+		100% { transform: translate(0, 0); }
+	}
+
+	.loading-dots {
+		display: flex;
+		gap: 4px;
+		z-index: 1;
+	}
+
+	.loading-dot {
+		width: 4px;
+		height: 4px;
+		border-radius: 50%;
+		background: rgba(0, 255, 65, 0.5);
+		animation: loading-pulse 1.2s ease-in-out infinite;
+	}
+
+	.loading-dot:nth-child(2) {
+		animation-delay: 0.2s;
+	}
+
+	.loading-dot:nth-child(3) {
+		animation-delay: 0.4s;
+	}
+
+	@keyframes loading-pulse {
+		0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+		40% { opacity: 1; transform: scale(1.2); }
 	}
 
 	/* ── Screen content layout ────────────────────────────── */
@@ -463,6 +607,12 @@
 			animation: none;
 		}
 		.running-dot {
+			animation: none;
+		}
+		.loading-dot {
+			animation: none;
+		}
+		.loading-static {
 			animation: none;
 		}
 	}

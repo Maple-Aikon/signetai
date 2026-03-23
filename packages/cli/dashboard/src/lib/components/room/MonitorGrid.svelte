@@ -7,19 +7,61 @@
 		selectAgent,
 		getGridSlots,
 	} from "$lib/stores/agents.svelte";
+	import { fetchWidgetHtml } from "$lib/stores/os.svelte";
+	import { buildSrcdoc } from "$lib/components/os/widget-theme";
 	import G3Monitor from "./G3Monitor.svelte";
 	import ZoomView from "./ZoomView.svelte";
 	import AddAgentDialog from "./AddAgentDialog.svelte";
 	import Plus from "@lucide/svelte/icons/plus";
 
+	/* ── Widget HTML cache for MCP monitor previews ──────── */
+	let widgetHtmlMap = $state(new Map<string, string>());
+	let widgetLoadingSet = $state(new Set<string>());
+
+	/** Fetch widget HTML for all MCP agents */
+	async function loadWidgetPreviews(): Promise<void> {
+		const mcpAgents = room.agents.filter(
+			(a) => a.source.type === "mcp",
+		);
+		for (const agent of mcpAgents) {
+			const serverId = (agent.source as { type: "mcp"; serverId: string }).serverId;
+			// Skip if already loaded
+			if (widgetHtmlMap.has(serverId)) continue;
+			// Mark as loading
+			widgetLoadingSet = new Set([...widgetLoadingSet, serverId]);
+			// Fetch in background (don't await in sequence — fire them all)
+			fetchWidgetHtml(serverId).then((html) => {
+				if (html) {
+					const srcdoc = buildSrcdoc(html, serverId);
+					widgetHtmlMap = new Map([...widgetHtmlMap, [serverId, srcdoc]]);
+				}
+				// Remove from loading set
+				const next = new Set(widgetLoadingSet);
+				next.delete(serverId);
+				widgetLoadingSet = next;
+			});
+		}
+	}
+
 	onMount(() => {
 		startPolling();
 		window.addEventListener("keydown", handleKeydown);
+		// Initial load of widget previews (after first agent fetch settles)
+		setTimeout(loadWidgetPreviews, 1500);
 	});
 
 	onDestroy(() => {
 		stopPolling();
 		window.removeEventListener("keydown", handleKeydown);
+	});
+
+	// Re-load widget previews when agents change (new MCP agent discovered)
+	$effect(() => {
+		// Depend on agent list length and source types
+		const mcpCount = room.agents.filter((a) => a.source.type === "mcp").length;
+		if (mcpCount > 0) {
+			loadWidgetPreviews();
+		}
 	});
 
 	const slots = $derived(getGridSlots());
@@ -167,11 +209,14 @@
 			<div class="monitor-grid">
 				{#each slots as slot, i (slot?.id ?? `empty-${i}`)}
 					{#if slot}
+						{@const sid = slot.source.type === "mcp" ? (slot.source as { type: "mcp"; serverId: string }).serverId : null}
 						<div class="grid-cell">
 							<G3Monitor
 								agent={slot}
 								selected={false}
 								focused={focusedIndex === i}
+								widgetHtml={sid ? widgetHtmlMap.get(sid) ?? null : null}
+								widgetLoading={sid ? widgetLoadingSet.has(sid) : false}
 								onclick={() => selectAgent(slot.id)}
 							/>
 						</div>
