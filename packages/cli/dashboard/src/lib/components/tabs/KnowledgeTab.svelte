@@ -297,13 +297,19 @@ function queueEntitySearch(): void {
 	}, 200);
 }
 
+let lastTraversalLoad = 0;
+
+function refreshTraversal(): void {
+	lastTraversalLoad = Date.now();
+	void loadTraversal();
+}
+
 onMount(() => {
-	void Promise.all([loadEntities(), loadStats(), loadPredictor(), loadTraversal()]);
-	let lastTraversalLoad = Date.now();
+	void Promise.all([loadEntities(), loadStats(), loadPredictor()]);
+	refreshTraversal();
 	const onFocus = () => {
 		if (Date.now() - lastTraversalLoad >= 60_000) {
-			lastTraversalLoad = Date.now();
-			void loadTraversal();
+			refreshTraversal();
 		}
 	};
 	window.addEventListener("focus", onFocus);
@@ -614,7 +620,7 @@ onMount(() => {
 								Latest structural walk emitted by session-start or recall.
 							</Card.Description>
 						</div>
-						<Button variant="outline" size="sm" class="h-8 px-2" onclick={() => void loadTraversal()}>
+						<Button variant="outline" size="sm" class="h-8 px-2" onclick={() => refreshTraversal()}>
 							<RefreshCw class="size-3.5" />
 						</Button>
 					</div>

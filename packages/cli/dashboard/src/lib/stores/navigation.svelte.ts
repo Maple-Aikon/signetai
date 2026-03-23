@@ -75,6 +75,7 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["engine/connectors", "connectors"],
 	["engine/logs", "logs"],
 	["config", "settings"],
+	["review-queue", "pipeline"],
 ]);
 
 function readTabFromHash(): TabId | null {
