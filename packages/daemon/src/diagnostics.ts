@@ -121,7 +121,7 @@ export interface OpenClawHealth {
 	readonly hooksRegistered: readonly string[];
 	readonly hooksSucceeded: number;
 	readonly hooksFailed: number;
-	readonly avgLatencyMs: number;
+	readonly lastLatencyMs: number;
 	readonly lastError: string | null;
 }
 
@@ -751,7 +751,7 @@ export function getDiagnostics(
 		hooksRegistered: [],
 		hooksSucceeded: 0,
 		hooksFailed: 0,
-		avgLatencyMs: 0,
+		lastLatencyMs: 0,
 		lastError: null,
 	};
 
