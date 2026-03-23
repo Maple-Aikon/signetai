@@ -1358,6 +1358,10 @@ const signetPlugin = {
 			sessionKey: string | undefined,
 			agentId: string | undefined,
 		): Promise<unknown> => {
+			// Skip immediately if daemon is known-unreachable — avoids a 5-second
+			// ECONNREFUSED hang on every message turn when the daemon is down.
+			if (!daemonReachable) return undefined;
+
 			const rawPrompt = typeof event.prompt === "string" ? event.prompt : undefined;
 			const prompt = rawPrompt ? extractUserMessage(rawPrompt) : undefined;
 			if (!prompt || prompt.length <= 3) {
