@@ -1561,7 +1561,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		})),
 		recentContext: memoryMdContent,
 		inject,
-		warnings: req.sessionKey ? [getExpiryWarning(req.sessionKey)].filter((w): w is string => w !== null) : undefined,
+		warnings: (() => {
+			if (!req.sessionKey) return undefined;
+			const w = [getExpiryWarning(req.sessionKey)].filter((v): v is string => v !== null);
+			return w.length > 0 ? w : undefined;
+		})(),
 	};
 }
 
