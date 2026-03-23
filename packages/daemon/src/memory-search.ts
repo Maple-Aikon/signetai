@@ -40,6 +40,8 @@ export interface RecallParams {
 	until?: string;
 	scope?: string | null;
 	expand?: boolean;
+	/** When set, restricts results to memories belonging to this project (auth scope enforcement). */
+	project?: string;
 }
 
 export interface RecallResult {
@@ -133,6 +135,11 @@ function buildFilterClause(params: RecallParams): FilterClause {
 	if (params.until) {
 		parts.push("m.created_at <= ?");
 		args.push(params.until);
+	}
+	// Auth scope enforcement: restrict to token's project when present.
+	if (params.project) {
+		parts.push("m.project = ?");
+		args.push(params.project);
 	}
 
 	return {

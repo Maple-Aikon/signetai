@@ -1490,12 +1490,7 @@ app.use("/api/hook/remember", async (c, next) => {
 	return requirePermission("remember", authConfig)(c, next);
 });
 
-// Recall / search
-// TODO(Phase J follow-up): Scoped tokens should have their project/agent
-// scope injected as a mandatory filter into the search query itself, so
-// recall results are restricted to the token's scope. Currently, scope
-// enforcement only applies to mutations, not reads. This is acceptable
-// for v1 single-tenant local, but must be addressed before team mode GA.
+// Recall / search — scope.project is enforced at the handler level.
 app.use("/api/memory/recall", async (c, next) => {
 	return requirePermission("recall", authConfig)(c, next);
 });
@@ -4033,7 +4028,13 @@ app.post("/api/memory/recall", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
 		const agentId = body.agentId ?? c.req.header("x-signet-agent-id") ?? "default";
-		const result = await hybridRecall({ ...body, query, agentId }, cfg, fetchEmbedding);
+		// Enforce auth scope: scoped tokens may only read their own project.
+		const scopeProject = c.get("auth")?.claims?.scope?.project;
+		const result = await hybridRecall(
+			{ ...body, query, agentId, ...(scopeProject ? { project: scopeProject } : {}) },
+			cfg,
+			fetchEmbedding,
+		);
 		return c.json(result);
 	} catch (e) {
 		logger.error("memory", "Recall failed", e as Error);
@@ -4058,6 +4059,8 @@ app.get("/api/memory/search", async (c) => {
 	const expand = c.req.query("expand");
 
 	const cfg = loadMemoryConfig(AGENTS_DIR);
+	// Enforce auth scope: scoped tokens may only read their own project.
+	const scopeProject = c.get("auth")?.claims?.scope?.project;
 	try {
 		const result = await hybridRecall(
 			{
@@ -4070,6 +4073,7 @@ app.get("/api/memory/search", async (c) => {
 				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
 				since,
 				expand: expand === "1" || expand === "true",
+				...(scopeProject ? { project: scopeProject } : {}),
 			},
 			cfg,
 			fetchEmbedding,
@@ -5424,6 +5428,7 @@ import {
 	isSessionBypassed,
 	releaseSession,
 	startSessionCleanup,
+	stopSessionCleanup,
 	unbypassSession,
 } from "./session-tracker.js";
 
@@ -10388,6 +10393,9 @@ async function cleanup() {
 	closeWidgetProvider();
 	stopOpenCodeServer();
 	stopModelRegistry();
+
+	// Stop session cleanup timer before closing DB (in-flight cleanup may query DB)
+	stopSessionCleanup();
 
 	// Stop git sync timer
 	stopGitSyncTimer();
