@@ -9,6 +9,7 @@ import { confirmDiscardChanges } from "$lib/stores/unsaved-changes.svelte";
 
 export type TabId =
 	| "home"
+	| "room"
 	| "settings"
 	| "memory"
 	| "timeline"
@@ -31,6 +32,7 @@ export type TabId =
 
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"home",
+	"room",
 	"settings",
 	"memory",
 	"timeline",

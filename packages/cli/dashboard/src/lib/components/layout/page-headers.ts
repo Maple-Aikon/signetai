@@ -10,6 +10,10 @@ export const PAGE_HEADERS = {
 		title: "Home",
 		eyebrow: "Agent overview",
 	},
+	room: {
+		title: "Room",
+		eyebrow: "Agent control room",
+	},
 	settings: {
 		title: "Settings",
 		eyebrow: "Configuration and identity",
@@ -123,6 +127,7 @@ export interface PageFooterStatic {
  */
 export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
 	home: { left: "Agent overview", right: "dashboard home" },
+	room: { left: "Agent control room", right: "monitor grid" },
 	pipeline: { left: "Pipeline", right: "memory loop v2" },
 	"review-queue": { left: "Review Queue", right: "dedup decisions · pipeline events" },
 	embeddings: { left: "Constellation", right: "UMAP" },

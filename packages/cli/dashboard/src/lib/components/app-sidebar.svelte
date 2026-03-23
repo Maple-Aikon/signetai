@@ -25,6 +25,7 @@ import Cog from "@lucide/svelte/icons/cog";
 import ExternalLink from "@lucide/svelte/icons/external-link";
 import Github from "@lucide/svelte/icons/github";
 import House from "@lucide/svelte/icons/house";
+import MonitorIcon from "@lucide/svelte/icons/monitor";
 import Moon from "@lucide/svelte/icons/moon";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Store from "@lucide/svelte/icons/store";
@@ -66,6 +67,7 @@ type NavItem =
 
 const navItems: NavItem[] = [
 	{ id: "home", label: "Home", icon: House },
+	{ id: "room", label: "Room", icon: MonitorIcon },
 	{ id: "cortex-group", label: "Cortex", icon: Brain, group: "cortex" },
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },

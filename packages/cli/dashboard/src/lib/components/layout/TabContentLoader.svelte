@@ -83,7 +83,15 @@ const {
 
 {#key activeTab}
 <div class="tab-transition" in:fade={{ duration: 80 }}>
-{#if activeTab === "home"}
+{#if activeTab === "room"}
+	{#await import("$lib/components/tabs/RoomTab.svelte")}
+		{@render skeletonCards()}
+	{:then module}
+		<module.default />
+	{:catch error}
+		{@render skeletonError(error)}
+	{/await}
+{:else if activeTab === "home"}
 	{#await import("$lib/components/tabs/HomeTab.svelte")}
 		{@render skeletonCards()}
 	{:then module}
