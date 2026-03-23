@@ -779,7 +779,18 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 
 /** Remove all presence entries (for graceful shutdown). Returns count cleared. */
 export function clearAllPresence(): number {
-	const count = presenceByKey.size;
+	const now = new Date().toISOString();
+	let count = 0;
+	for (const [, presence] of presenceByKey) {
+		emit({
+			type: "presence",
+			action: "remove",
+			presence: clonePresence(presence),
+			activeCount: presenceByKey.size - count - 1,
+			timestamp: now,
+		});
+		count++;
+	}
 	presenceByKey.clear();
 	return count;
 }

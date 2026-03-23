@@ -9499,7 +9499,9 @@ function startGitSyncTimer() {
 			if (!result.success) {
 				logger.warn("git", `Periodic sync failed: ${result.message}`);
 			}
-		})();
+		})().catch((e) => {
+			logger.warn("git", "Periodic sync error", { error: String(e) });
+		});
 		gitSyncPromise = work;
 		work.finally(() => {
 			if (gitSyncPromise === work) gitSyncPromise = null;
