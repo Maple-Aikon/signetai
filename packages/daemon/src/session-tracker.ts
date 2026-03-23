@@ -194,6 +194,7 @@ export function getExpiryWarning(sessionKey: string): string | null {
 	const claim = sessions.get(sessionKey);
 	if (!claim) return null;
 	const remaining = claim.expiresAt - Date.now();
+	if (remaining <= 0) return "session has expired — reconnect to start a new session";
 	if (remaining > WARN_BEFORE_MS) return null;
 	if (warnedSessions.has(sessionKey)) return null;
 	warnedSessions.add(sessionKey);

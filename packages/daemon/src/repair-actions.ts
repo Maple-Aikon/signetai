@@ -1991,12 +1991,19 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
  */
 export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[]): number {
 	if (ids.length === 0) return 0;
+	const now = new Date().toISOString();
 	return accessor.withWriteTx((db) => {
-		const stmt = db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = datetime('now') WHERE id = ? AND is_deleted = 0");
+		const stmt = db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE id = ? AND is_deleted = 0");
 		let total = 0;
 		for (const id of ids) {
-			total += countChanges(stmt.run(id));
+			total += countChanges(stmt.run(now, id));
 		}
+		writeRepairAudit(db, "forget-dead-memories", {
+			actor: "api",
+			reason: "dead-memory hygiene",
+			actorType: "system",
+			requestId: null,
+		}, total, `soft-deleted ${total} dead memories`);
 		return total;
 	});
 }

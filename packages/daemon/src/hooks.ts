@@ -779,12 +779,18 @@ function loadHooksConfig(): HooksConfig {
 			return getDefaultConfig();
 		}
 		// Warn on unrecognized keys so users catch typos early
-		for (const key of Object.keys(hooks as Record<string, unknown>)) {
-			if (!KNOWN_HOOKS_KEYS.has(key)) {
+		const record = hooks as Record<string, unknown>;
+		for (const key of Object.keys(record)) {
+			if (!KNOWN_HOOKS_KEYS.has(key as keyof HooksConfig)) {
 				logger.warn("hooks", `Unknown hooks config key: ${key} — check agent.yaml`);
 			}
 		}
-		return hooks as HooksConfig;
+		const cfg: HooksConfig = {
+			sessionStart: typeof record.sessionStart === "object" && record.sessionStart !== null ? record.sessionStart as HooksConfig["sessionStart"] : undefined,
+			userPromptSubmit: typeof record.userPromptSubmit === "object" && record.userPromptSubmit !== null ? record.userPromptSubmit as HooksConfig["userPromptSubmit"] : undefined,
+			preCompaction: typeof record.preCompaction === "object" && record.preCompaction !== null ? record.preCompaction as HooksConfig["preCompaction"] : undefined,
+		};
+		return cfg;
 	} catch (e) {
 		logger.warn("hooks", "Failed to load hooks config, using defaults");
 		return getDefaultConfig();
