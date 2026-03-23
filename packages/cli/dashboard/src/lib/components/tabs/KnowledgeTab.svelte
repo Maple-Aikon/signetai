@@ -138,13 +138,8 @@ function healthToneClass(entityId: string): string {
 	return "bg-[var(--sig-text-muted)]";
 }
 
-function entityDensityOpacity(item: KnowledgeEntityListItem): number {
-	const score =
-		item.aspectCount +
-		item.attributeCount +
-		item.constraintCount * 2 +
-		item.dependencyCount;
-	const maxScore = Math.max(
+const maxDensityScore = $derived(
+	Math.max(
 		1,
 		...entities.map(
 			(e) =>
@@ -153,8 +148,16 @@ function entityDensityOpacity(item: KnowledgeEntityListItem): number {
 				e.constraintCount * 2 +
 				e.dependencyCount,
 		),
-	);
-	return 0.08 + (score / maxScore) * 0.92;
+	),
+);
+
+function entityDensityOpacity(item: KnowledgeEntityListItem): number {
+	const score =
+		item.aspectCount +
+		item.attributeCount +
+		item.constraintCount * 2 +
+		item.dependencyCount;
+	return 0.08 + (score / maxDensityScore) * 0.92;
 }
 
 function toCalendarDate(value: string): DateValue | undefined {
@@ -296,8 +299,12 @@ function queueEntitySearch(): void {
 
 onMount(() => {
 	void Promise.all([loadEntities(), loadStats(), loadPredictor(), loadTraversal()]);
+	let lastTraversalLoad = Date.now();
 	const onFocus = () => {
-		void loadTraversal();
+		if (Date.now() - lastTraversalLoad >= 60_000) {
+			lastTraversalLoad = Date.now();
+			void loadTraversal();
+		}
 	};
 	window.addEventListener("focus", onFocus);
 	return () => {
