@@ -3,6 +3,8 @@
  * for the Agent Control Room.
  */
 
+import { API_BASE } from "$lib/api";
+
 export interface Agent {
 	id: string;
 	name: string;
@@ -40,6 +42,17 @@ const G3_COLORS = [
 
 export type G3Color = (typeof G3_COLORS)[number];
 
+/** Stable color assignment by agent id */
+const colorMap = new Map<string, string>();
+
+function assignColor(id: string): string {
+	const existing = colorMap.get(id);
+	if (existing) return existing;
+	const color = G3_COLORS[colorMap.size % G3_COLORS.length];
+	colorMap.set(id, color);
+	return color;
+}
+
 /** Reactive room state */
 export const room = $state({
 	agents: [] as Agent[],
@@ -48,7 +61,7 @@ export const room = $state({
 	error: null as string | null,
 });
 
-/** Assign colors round-robin */
+/** Assign colors round-robin (legacy compat) */
 let colorIdx = 0;
 export function nextColor(): G3Color {
 	const c = G3_COLORS[colorIdx % G3_COLORS.length];
@@ -56,70 +69,51 @@ export function nextColor(): G3Color {
 	return c;
 }
 
-/** Fetch agents from daemon — demo data for Phase 1 */
+/** Fetch agents from daemon — real discovery via /api/room/agents */
 export async function fetchAgents(): Promise<void> {
 	room.loading = true;
+	room.error = null;
 	try {
-		room.agents = [
-			{
-				id: "oogie",
-				name: "Oogie",
-				role: "assistant",
-				color: "bondi",
-				status: "active",
-				source: { type: "clawdbot", sessionKey: "agent:main:main" },
-				lastActivity: "chatting in #sig",
-				model: "claude-opus-4-6",
-			},
-			{
-				id: "coder",
-				name: "Code Agent",
-				role: "developer",
-				color: "tangerine",
-				status: "active",
-				source: { type: "process", pid: 1234, name: "claude" },
-				lastActivity: "editing os-chat.ts",
-				model: "claude-sonnet-4-6",
-			},
-			{
-				id: "research",
-				name: "Research",
-				role: "researcher",
-				color: "grape",
-				status: "idle",
-				source: { type: "clawdbot", sessionKey: "agent:main:subagent:abc" },
-				lastActivity: "waiting for task",
-			},
-			{
-				id: "scraper",
-				name: "Web Scraper",
-				role: "scraper",
-				color: "lime",
-				status: "active",
-				source: { type: "process", pid: 5678, name: "agent-browser" },
-				lastActivity: "scanning upwork.com",
-			},
-			{
-				id: "ghl",
-				name: "GHL Hub",
-				role: "crm",
-				color: "strawberry",
-				status: "active",
-				source: { type: "mcp", serverId: "ghl-contacts-hub" },
-				lastActivity: "16 tools available",
-			},
-			{
-				id: "poly",
-				name: "Polymarket",
-				role: "trading",
-				color: "blueberry",
-				status: "error",
-				source: { type: "clawdbot", sessionKey: "agent:main:subagent:poly" },
-				lastActivity: "API timeout",
-			},
-		];
+		const res = await fetch(`${API_BASE}/api/room/agents`);
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		const data = await res.json();
+		if (!Array.isArray(data.agents)) throw new Error("Invalid response");
+
+		room.agents = data.agents.map((a: Record<string, unknown>) => ({
+			id: String(a.id || ""),
+			name: String(a.name || "Unknown"),
+			role: String(a.role || "agent"),
+			color: assignColor(String(a.id || "")),
+			status: String(a.status || "offline") as Agent["status"],
+			source: a.source as AgentSource,
+			lastActivity: a.lastActivity ? String(a.lastActivity) : undefined,
+			lastMessage: a.lastMessage ? String(a.lastMessage) : undefined,
+			model: a.model ? String(a.model) : undefined,
+		}));
+	} catch (err) {
+		room.error = err instanceof Error ? err.message : String(err);
+		// Keep existing agents on error; only clear if we never had any
+		if (room.agents.length === 0) {
+			room.agents = [];
+		}
 	} finally {
 		room.loading = false;
+	}
+}
+
+/** Auto-refresh polling */
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startPolling(): void {
+	if (refreshTimer) return;
+	fetchAgents();
+	refreshTimer = setInterval(fetchAgents, 10_000);
+}
+
+export function stopPolling(): void {
+	if (refreshTimer) {
+		clearInterval(refreshTimer);
+		refreshTimer = null;
 	}
 }
 

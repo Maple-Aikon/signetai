@@ -5093,6 +5093,10 @@ mountOsChatRoutes(app);
 import { mountOsAgentRoutes } from "./routes/os-agent.js";
 mountOsAgentRoutes(app);
 
+// Agent Control Room — live agent discovery (MCP servers + process scanning)
+import { mountAgentRegistryRoutes } from "./routes/agent-registry.js";
+mountAgentRegistryRoutes(app);
+
 // ============================================================================
 // Harnesses API
 // ============================================================================

@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import {
 		room,
-		fetchAgents,
+		startPolling,
+		stopPolling,
 		selectAgent,
 		getGridSlots,
 	} from "$lib/stores/agents.svelte";
@@ -10,7 +11,11 @@
 	import Plus from "@lucide/svelte/icons/plus";
 
 	onMount(() => {
-		fetchAgents();
+		startPolling();
+	});
+
+	onDestroy(() => {
+		stopPolling();
 	});
 
 	const slots = $derived(getGridSlots());
