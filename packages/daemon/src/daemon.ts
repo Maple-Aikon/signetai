@@ -440,6 +440,7 @@ let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 let httpServer: ReturnType<typeof serve> | null = null;
+let shuttingDown = false;
 let diagnosticsCache: {
 	readonly report: DiagnosticsReport;
 	readonly expiresAt: number;
@@ -1307,6 +1308,16 @@ app.use(
 	}),
 );
 
+// Reject non-health requests during shutdown so keep-alive connections
+// get a clean 503 instead of a socket reset.
+app.use("*", async (c, next) => {
+	if (shuttingDown && c.req.path !== "/health") {
+		c.status(503);
+		return c.json({ error: "shutting down" });
+	}
+	return next();
+});
+
 // Auth middleware — reads from module-level authConfig/authSecret
 // which are initialized properly in main(). In local mode this is a no-op.
 // Guard: reject requests if auth is required but secret isn't initialized yet
@@ -1397,13 +1408,14 @@ app.get("/health", (c) => {
 		Date.now() - extraction.stats.lastProgressAt > 60_000;
 
 	return c.json({
-		status: "healthy",
+		status: shuttingDown ? "shutting_down" : "healthy",
 		uptime: process.uptime(),
 		pid: process.pid,
 		version: CURRENT_VERSION,
 		port: PORT,
 		agentsDir: AGENTS_DIR,
 		db: dbOk,
+		shuttingDown,
 		updateAvailable: us.lastCheck?.updateAvailable ?? false,
 		pendingRestart: us.pendingRestartVersion !== null,
 		pipeline: {
@@ -10364,12 +10376,15 @@ async function importExistingMemoryFiles(): Promise<number> {
 // ============================================================================
 
 async function cleanup() {
+	shuttingDown = true;
 	logger.info("daemon", "Shutting down");
 
 	// ------------------------------------------------------------------
 	// Phase 0: Stop accepting new requests — close HTTP server first so
 	// in-flight session-end hooks can still complete before we tear down
-	// state, but no new requests arrive during shutdown.
+	// state, but no new requests arrive during shutdown. The 15s timeout
+	// exceeds OpenClaw's WRITE_TIMEOUT (10s) so session-end hooks can
+	// finish and respond before we force-close.
 	// ------------------------------------------------------------------
 	if (httpServer) {
 		const srv = httpServer;
@@ -10380,7 +10395,7 @@ async function cleanup() {
 					srv.closeAllConnections();
 				}
 				resolve();
-			}, 5_000);
+			}, 15_000);
 			srv.close(() => {
 				clearTimeout(timeout);
 				resolve();
