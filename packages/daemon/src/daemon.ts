@@ -93,6 +93,7 @@ import {
 	getDiagnostics,
 	getPredictorHealth,
 } from "./diagnostics";
+import { runWarmStart } from "./predictor-warmstart";
 import {
 	fetchEmbedding,
 	resolveEmbeddingApiKey,
@@ -194,6 +195,8 @@ import {
 	resyncVectorIndex,
 	structuralBackfill,
 	triggerRetentionSweep,
+	findDeadMemories,
+	forgetDeadMemories,
 } from "./repair-actions";
 import {
 	CRON_PRESETS,
@@ -444,6 +447,19 @@ let diagnosticsCache: {
 } | null = null;
 const DIAGNOSTICS_CACHE_TTL_MS = 2000;
 
+// OpenClaw plugin health — updated by POST /api/diagnostics/openclaw/heartbeat
+interface OpenClawHeartbeatData {
+	readonly pluginVersion: string;
+	readonly hooksRegistered: string[];
+	readonly lastHookCall: string | null;
+	readonly latencyMs: number;
+	readonly errorCount: number;
+	totalSucceeded: number;
+	totalFailed: number;
+}
+let openClawHeartbeat: { timestamp: string; data: OpenClawHeartbeatData } | null = null;
+const OPENCLAW_STALE_MS = 10 * 60 * 1000; // 10 minutes
+
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
 const projectionErrors = new Map<number, { message: string; expires: number }>();
@@ -486,6 +502,25 @@ function invalidateDiagnosticsCache(): void {
 	diagnosticsCache = null;
 }
 
+function buildOpenClawHealth(): import("./diagnostics").OpenClawHealth {
+	if (!openClawHeartbeat) {
+		return { status: "never-seen", lastHeartbeat: null, pluginVersion: null, hooksRegistered: [], hooksSucceeded: 0, hooksFailed: 0, avgLatencyMs: 0, lastError: null };
+	}
+	const age = Date.now() - new Date(openClawHeartbeat.timestamp).getTime();
+	const status = age < OPENCLAW_STALE_MS ? "connected" : "stale";
+	const d = openClawHeartbeat.data;
+	return {
+		status,
+		lastHeartbeat: openClawHeartbeat.timestamp,
+		pluginVersion: d.pluginVersion,
+		hooksRegistered: d.hooksRegistered,
+		hooksSucceeded: d.totalSucceeded,
+		hooksFailed: d.totalFailed,
+		avgLatencyMs: d.latencyMs,
+		lastError: null,
+	};
+}
+
 function getCachedDiagnosticsReport(): DiagnosticsReport {
 	const now = Date.now();
 	if (diagnosticsCache !== null && diagnosticsCache.expiresAt > now) {
@@ -493,7 +528,7 @@ function getCachedDiagnosticsReport(): DiagnosticsReport {
 	}
 
 	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()),
+		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams(), buildOpenClawHealth()),
 	);
 	diagnosticsCache = {
 		report,
@@ -5457,6 +5492,7 @@ import {
 	hasSession,
 	isSessionBypassed,
 	releaseSession,
+	renewSession,
 	startSessionCleanup,
 	stopSessionCleanup,
 	unbypassSession,
@@ -6345,6 +6381,16 @@ app.post("/api/sessions/:key/bypass", async (c) => {
 	return c.json({ key, bypassed: enabled });
 });
 
+// Renew a session — reset TTL to prevent silent eviction
+app.post("/api/sessions/:key/renew", (c) => {
+	const key = c.req.param("key");
+	const expiresAt = renewSession(key);
+	if (!expiresAt) {
+		return c.json({ error: "Session not found" }, 404);
+	}
+	return c.json({ key, renewed: true, expiresAt });
+});
+
 // Session summaries DAG
 app.get("/api/sessions/summaries", (c) => {
 	const accessor = getDbAccessor();
@@ -7177,6 +7223,46 @@ app.get("/api/diagnostics/:domain", (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// OpenClaw plugin health diagnostics
+// ---------------------------------------------------------------------------
+
+// Unauthenticated — daemon is local-only, plugin may not carry auth token
+app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "Invalid JSON" }, 400);
+	}
+	if (!body || typeof body !== "object") {
+		return c.json({ error: "Body must be an object" }, 400);
+	}
+	const b = body as Record<string, unknown>;
+	if (typeof b.pluginVersion !== "string") {
+		return c.json({ error: "pluginVersion (string) is required" }, 400);
+	}
+	const prev = openClawHeartbeat?.data;
+	openClawHeartbeat = {
+		timestamp: new Date().toISOString(),
+		data: {
+			pluginVersion: b.pluginVersion,
+			hooksRegistered: Array.isArray(b.hooksRegistered) ? (b.hooksRegistered as string[]) : [],
+			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall : null,
+			latencyMs: typeof b.latencyMs === "number" ? b.latencyMs : 0,
+			errorCount: typeof b.errorCount === "number" ? b.errorCount : 0,
+			totalSucceeded: (prev?.totalSucceeded ?? 0) + (typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
+			totalFailed: (prev?.totalFailed ?? 0) + (typeof b.errorCount === "number" ? b.errorCount : 0),
+		},
+	};
+	invalidateDiagnosticsCache();
+	return c.json({ ok: true });
+});
+
+app.get("/api/diagnostics/openclaw", (c) => {
+	return c.json(buildOpenClawHealth());
+});
+
+// ---------------------------------------------------------------------------
 // Pipeline status (composite snapshot for dashboard visualization)
 // ---------------------------------------------------------------------------
 
@@ -7766,6 +7852,45 @@ app.post("/api/repair/backfill-hints", async (c) => {
 		remaining,
 		message: remaining > 0 ? `${remaining} unscoped memories still need hints — call again` : "all unscoped memories have hints",
 	});
+});
+
+// ---------------------------------------------------------------------------
+// Dead memory hygiene
+// ---------------------------------------------------------------------------
+
+app.get("/api/repair/dead-memories", (c) => {
+	const maxConfidence = Number(c.req.query("maxConfidence") ?? "0.1");
+	const maxAccessDays = Number(c.req.query("maxAccessDays") ?? "90");
+	const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
+	if (Number.isNaN(maxConfidence) || Number.isNaN(maxAccessDays) || Number.isNaN(limit)) {
+		return c.json({ error: "maxConfidence, maxAccessDays, and limit must be numbers" }, 400);
+	}
+	const dead = getDbAccessor().withReadDb((db) =>
+		findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
+	);
+	return c.json({ count: dead.length, memories: dead });
+});
+
+app.post("/api/repair/dead-memories/forget", async (c) => {
+	let ids: unknown;
+	try {
+		const body = await c.req.json();
+		ids = body?.ids;
+	} catch {
+		return c.json({ error: "Request body must be JSON with an ids array" }, 400);
+	}
+	if (!Array.isArray(ids) || ids.length === 0) {
+		return c.json({ error: "ids must be a non-empty array" }, 400);
+	}
+	if (ids.length > 500) {
+		return c.json({ error: "Maximum 500 ids per batch" }, 400);
+	}
+	const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+	if (validIds.length !== ids.length) {
+		return c.json({ error: "All ids must be non-empty strings" }, 400);
+	}
+	const forgotten = forgetDeadMemories(getDbAccessor(), validIds);
+	return c.json({ forgotten });
 });
 
 // ============================================================================
@@ -8679,6 +8804,48 @@ app.post("/api/predictor/train", async (c) => {
 		checkpoint_path: checkpointPath,
 		checkpoint_saved: checkpointSaved,
 	});
+});
+
+// Force-run predictor warm-start (ignores "already trained" guard)
+app.post("/api/predictor/warm-start", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const predictorCfg = cfg.pipelineV2.predictor;
+	if (!predictorCfg?.enabled) {
+		return c.json({ error: "Predictor is not enabled" }, 400);
+	}
+	const client = getPredictorClient();
+	if (!client || !client.isAlive()) {
+		return c.json({ error: "Predictor sidecar is not running" }, 503);
+	}
+	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
+	let agentName = "Agent";
+	let agentDesc = "";
+	for (const p of paths) {
+		if (existsSync(p)) {
+			try {
+				const y = parseSimpleYaml(readFileSync(p, "utf-8"));
+				if (y.agent && typeof y.agent === "object") {
+					const a = y.agent as Record<string, unknown>;
+					if (typeof a.name === "string") agentName = a.name;
+					if (typeof a.description === "string") agentDesc = a.description;
+				}
+			} catch { /* ignore */ }
+			break;
+		}
+	}
+	const result = await runWarmStart(
+		getDbAccessor(),
+		client,
+		agentName,
+		agentDesc,
+		{
+			dbPath: MEMORY_DB,
+			checkpointPath: resolvePredictorCheckpointPath(predictorCfg),
+			agentId: "default",
+			force: true,
+		},
+	);
+	return c.json(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -11060,6 +11227,41 @@ async function main() {
 			await client.start();
 			predictorClientRef = client;
 			logger.info("predictor", "Predictor sidecar started");
+
+			// Warm-start: seed the predictor for new installations (async, fail-open)
+			const agentYamlPaths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
+			let warmName = "Agent";
+			let warmDesc = "";
+			for (const p of agentYamlPaths) {
+				if (existsSync(p)) {
+					try {
+						const y = parseSimpleYaml(readFileSync(p, "utf-8"));
+						if (y.agent && typeof y.agent === "object") {
+							const a = y.agent as Record<string, unknown>;
+							if (typeof a.name === "string") warmName = a.name;
+							if (typeof a.description === "string") warmDesc = a.description;
+						}
+					} catch { /* ignore */ }
+					break;
+				}
+			}
+			runWarmStart(getDbAccessor(), client, warmName, warmDesc, {
+				dbPath: MEMORY_DB,
+				checkpointPath: resolvePredictorCheckpointPath(predictorCfg),
+				agentId: "default",
+			}).then((r) => {
+				if (!r.skipped) {
+					logger.info("predictor", "Warm-start complete", {
+						memoriesInserted: r.memoriesInserted,
+						pairsInserted: r.pairsInserted,
+						trained: r.trained,
+					});
+				}
+			}).catch((err: unknown) => {
+				logger.warn("predictor", "Warm-start failed (non-fatal)", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
 		} catch (err) {
 			// Fail open: predictor is optional
 			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
