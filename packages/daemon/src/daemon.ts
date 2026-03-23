@@ -456,6 +456,7 @@ interface OpenClawHeartbeatData {
 	readonly pluginVersion: string;
 	readonly hooksRegistered: string[];
 	readonly lastHookCall: string | null;
+	readonly lastError: string | null;
 	readonly latencyMs: number;
 	readonly errorCount: number;
 	totalSucceeded: number;
@@ -521,7 +522,7 @@ function buildOpenClawHealth(): import("./diagnostics").OpenClawHealth {
 		hooksSucceeded: d.totalSucceeded,
 		hooksFailed: d.totalFailed,
 		avgLatencyMs: d.latencyMs,
-		lastError: null,
+		lastError: d.lastError,
 	};
 }
 
@@ -7290,6 +7291,7 @@ app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 			pluginVersion: b.pluginVersion,
 			hooksRegistered: Array.isArray(b.hooksRegistered) ? (b.hooksRegistered as string[]) : [],
 			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall : null,
+			lastError: typeof b.lastError === "string" ? b.lastError : null,
 			latencyMs: typeof b.latencyMs === "number" ? b.latencyMs : 0,
 			errorCount: typeof b.errorCount === "number" ? b.errorCount : 0,
 			totalSucceeded: (prev?.totalSucceeded ?? 0) + (typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
