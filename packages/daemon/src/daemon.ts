@@ -129,6 +129,7 @@ import {
 	enqueueExtractionJob,
 	getPipelineWorkerStatus,
 	getSynthesisWorker,
+	nudgeDocumentWorker,
 	nudgeExtractionWorker,
 	readLastSynthesisTime,
 	startPipeline,
@@ -1378,21 +1379,36 @@ app.use("*", async (c, next) => {
 app.get("/health", (c) => {
 	const us = getUpdateState();
 	let dbOk = false;
+	let ingestPending = 0;
 	try {
 		getDbAccessor().withReadDb((db) => {
 			db.prepare("SELECT 1").get();
 			dbOk = true;
+			const row = db
+				.prepare(
+					`SELECT COUNT(*) AS n FROM memory_jobs
+					 WHERE job_type = 'document_ingest' AND status = 'pending'`,
+				)
+				.get() as { n: number } | undefined;
+			ingestPending = row?.n ?? 0;
 		});
 	} catch {
 		// DB unreachable
 	}
 	const workers = getPipelineWorkerStatus();
 	const extraction = workers.extraction;
+	const doc = workers.document;
 	const stalled =
 		extraction.running &&
 		extraction.stats !== undefined &&
 		extraction.stats.pending > 0 &&
 		Date.now() - extraction.stats.lastProgressAt > 60_000;
+	const ingestLastProgress = doc.lastProgressAt ?? 0;
+	const ingestStalled =
+		doc.running &&
+		ingestPending > 0 &&
+		ingestLastProgress > 0 &&
+		Date.now() - ingestLastProgress > 60_000;
 
 	return c.json({
 		status: "healthy",
@@ -1409,6 +1425,8 @@ app.get("/health", (c) => {
 			extractionStalled: stalled,
 			extractionPending: extraction.stats?.pending ?? 0,
 			extractionBackoffMs: extraction.stats?.backoffMs ?? 0,
+			ingestPending,
+			ingestStalled,
 		},
 	});
 });
@@ -7254,10 +7272,12 @@ app.use("/api/pipeline/nudge", async (c, next) => {
 });
 
 app.post("/api/pipeline/nudge", (c) => {
-	if (!nudgeExtractionWorker()) {
-		return c.json({ error: "Extraction worker not running" }, 503);
+	const extraction = nudgeExtractionWorker();
+	const ingest = nudgeDocumentWorker();
+	if (!extraction && !ingest) {
+		return c.json({ error: "No pipeline workers running" }, 503);
 	}
-	return c.json({ nudged: true });
+	return c.json({ nudged: true, extraction, ingest });
 });
 
 // ---------------------------------------------------------------------------

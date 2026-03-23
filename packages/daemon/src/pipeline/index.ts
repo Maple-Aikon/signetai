@@ -62,7 +62,7 @@ let hintsWorkerHandle: HintsWorkerHandle | null = null;
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): Record<
 	string,
-	{ running: boolean; stats?: WorkerStats }
+	{ running: boolean; stats?: WorkerStats; lastProgressAt?: number }
 > {
 	return {
 		extraction: {
@@ -70,7 +70,10 @@ export function getPipelineWorkerStatus(): Record<
 			stats: workerHandle?.stats,
 		},
 		summary: { running: summaryWorkerHandle !== null },
-		document: { running: documentWorkerHandle !== null },
+		document: {
+			running: documentWorkerHandle !== null,
+			lastProgressAt: documentWorkerHandle?.lastProgressAt,
+		},
 		retention: { running: retentionHandle !== null },
 		maintenance: { running: maintenanceHandle !== null },
 		synthesis: { running: synthesisWorkerHandle !== null },
@@ -85,6 +88,13 @@ export function getPipelineWorkerStatus(): Record<
 export function nudgeExtractionWorker(): boolean {
 	if (!workerHandle) return false;
 	workerHandle.nudge();
+	return true;
+}
+
+/** Force the document-ingest worker to repoll immediately. */
+export function nudgeDocumentWorker(): boolean {
+	if (!documentWorkerHandle) return false;
+	documentWorkerHandle.nudge();
 	return true;
 }
 

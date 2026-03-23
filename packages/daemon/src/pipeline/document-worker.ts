@@ -23,7 +23,9 @@ import { logger } from "../logger";
 
 export interface DocumentWorkerHandle {
 	stop(): Promise<void>;
+	nudge(): void;
 	readonly running: boolean;
+	readonly lastProgressAt: number;
 }
 
 export interface DocumentWorkerDeps {
@@ -101,7 +103,7 @@ function leaseDocumentJob(
 			 WHERE job_type = 'document_ingest'
 			   AND status = 'pending'
 			   AND attempts < ?
-			 ORDER BY created_at ASC
+			 ORDER BY updated_at ASC
 			 LIMIT 1`,
 		)
 		.get(maxAttempts) as DocumentJobRow | undefined;
@@ -315,17 +317,34 @@ async function processDocument(
 		accessor.withWriteTx((db) => {
 			const normalized = normalizeAndHashContent(chunkText);
 
-			// Dedup: skip if exact content already linked to this document
-			const existingLink = db
+			// Dedup pass 1: skip if already linked to this document
+			const linked = db
 				.prepare(
-					`SELECT dm.memory_id FROM document_memories dm
+					`SELECT 1 FROM document_memories dm
 					 JOIN memories m ON m.id = dm.memory_id
 					 WHERE dm.document_id = ? AND m.content_hash = ?
 					   AND m.is_deleted = 0
 					 LIMIT 1`,
 				)
 				.get(docId, normalized.contentHash);
-			if (existingLink) return;
+			if (linked) return;
+
+			// Dedup pass 2: if content hash exists globally, link rather than
+			// insert — avoids UNIQUE constraint failure and unnecessary duplication
+			const global = db
+				.prepare(
+					`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+				)
+				.get(normalized.contentHash) as { id: string } | undefined;
+			if (global) {
+				db.prepare(
+					`INSERT OR IGNORE INTO document_memories
+					 (document_id, memory_id, chunk_index)
+					 VALUES (?, ?, ?)`,
+				).run(docId, global.id, i);
+				memoriesCreated++;
+				return;
+			}
 
 			const memId = crypto.randomUUID();
 			const now = new Date().toISOString();
@@ -427,6 +446,8 @@ export function startDocumentWorker(
 	deps: DocumentWorkerDeps,
 ): DocumentWorkerHandle {
 	let running = true;
+	let tickPending = false;
+	let lastProgressAt = Date.now();
 	let timer: ReturnType<typeof setInterval> | null = null;
 
 	async function tick(): Promise<void> {
@@ -440,6 +461,7 @@ export function startDocumentWorker(
 
 		try {
 			await processDocument(deps, job);
+			lastProgressAt = Date.now();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.warn("document-worker", "Job failed", {
@@ -457,13 +479,17 @@ export function startDocumentWorker(
 		}
 	}
 
-	timer = setInterval(() => {
-		if (!running) return;
+	function runTick(): void {
 		tick().catch((e) => {
 			logger.warn("document-worker", "Tick error", {
 				error: String(e),
 			});
 		});
+	}
+
+	timer = setInterval(() => {
+		if (!running) return;
+		runTick();
 	}, deps.pipelineCfg.documents.workerIntervalMs);
 
 	logger.info("document-worker", "Worker started", {
@@ -477,8 +503,20 @@ export function startDocumentWorker(
 			if (timer) clearInterval(timer);
 			logger.info("document-worker", "Worker stopped");
 		},
+		nudge() {
+			if (!running || tickPending) return;
+			tickPending = true;
+			setImmediate(() => {
+				tickPending = false;
+				if (!running) return;
+				runTick();
+			});
+		},
 		get running() {
 			return running;
+		},
+		get lastProgressAt() {
+			return lastProgressAt;
 		},
 	};
 }

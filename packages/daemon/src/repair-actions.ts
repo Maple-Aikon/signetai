@@ -200,9 +200,20 @@ export function requeueDeadJobs(
 	const { memoryCount, summaryCount } = accessor.withWriteTx((db) => {
 		// --- memory_jobs ---
 		let memoryCount = 0;
-		const dead = db.prepare("SELECT id FROM memory_jobs WHERE status = 'dead' LIMIT ?").all(maxBatch) as Array<{
-			id: string;
-		}>;
+		// Exclude document_ingest jobs that failed with a content-hash collision —
+		// those are permanent failures (not transient); resurrecting them causes
+		// infinite starvation of the document-ingest queue (issue #303).
+		const dead = db
+			.prepare(
+				`SELECT id FROM memory_jobs
+				 WHERE status = 'dead'
+				   AND NOT (
+				     job_type = 'document_ingest'
+				     AND error LIKE '%UNIQUE constraint failed: index ''idx_memories_content_hash_unique''%'
+				   )
+				 LIMIT ?`,
+			)
+			.all(maxBatch) as Array<{ id: string }>;
 
 		if (dead.length > 0) {
 			const placeholders = dead.map(() => "?").join(", ");
