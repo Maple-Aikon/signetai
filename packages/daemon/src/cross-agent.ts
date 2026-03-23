@@ -777,6 +777,13 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 	}
 }
 
+/** Remove all presence entries (for graceful shutdown). Returns count cleared. */
+export function clearAllPresence(): number {
+	const count = presenceByKey.size;
+	presenceByKey.clear();
+	return count;
+}
+
 export function resetCrossAgentStateForTest(): void {
 	presenceByKey.clear();
 	messages.length = 0;

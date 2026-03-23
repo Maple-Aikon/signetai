@@ -218,6 +218,17 @@ export function stopSessionCleanup(): void {
 	}
 }
 
+/** Release all active sessions (for graceful shutdown). */
+export function releaseAllSessions(): number {
+	const count = sessions.size;
+	sessions.clear();
+	bypassedSessions.clear();
+	if (count > 0) {
+		logger.info("session-tracker", "Released all sessions for shutdown", { count });
+	}
+	return count;
+}
+
 /** Number of active sessions (for diagnostics). */
 export function activeSessionCount(): number {
 	return sessions.size;

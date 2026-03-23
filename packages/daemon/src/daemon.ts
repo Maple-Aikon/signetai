@@ -75,6 +75,7 @@ import {
 	type AgentMessageType,
 	createAgentMessage,
 	getAgentPresenceForSession,
+	clearAllPresence,
 	isMessageVisibleToAgent,
 	listAgentMessages,
 	listAgentPresence,
@@ -438,6 +439,7 @@ let shadowProcess: ChildProcess | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
+let httpServer: ReturnType<typeof serve> | null = null;
 let diagnosticsCache: {
 	readonly report: DiagnosticsReport;
 	readonly expiresAt: number;
@@ -5456,6 +5458,7 @@ import {
 	getSessionPath,
 	hasSession,
 	isSessionBypassed,
+	releaseAllSessions,
 	releaseSession,
 	startSessionCleanup,
 	stopSessionCleanup,
@@ -9027,6 +9030,7 @@ const gitConfig = loadGitConfig();
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
 let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
+let gitSyncPromise: Promise<unknown> | null = null;
 
 function isGitRepo(dir: string): boolean {
 	return existsSync(join(dir, ".git"));
@@ -9469,26 +9473,41 @@ function startGitSyncTimer() {
 	const intervalMs = gitConfig.syncInterval * 1000;
 	logger.info("git", `Auto-sync enabled: every ${gitConfig.syncInterval}s`);
 
-	gitSyncTimer = setInterval(async () => {
-		// Check if any credentials are available (gh, ssh, credential helper, or stored token)
-		const hasCreds = await hasAnyGitCredentials();
-		if (!hasCreds) {
-			// Silently skip if no credentials configured
-			return;
-		}
+	gitSyncTimer = setInterval(() => {
+		const work = (async () => {
+			// Check if any credentials are available (gh, ssh, credential helper, or stored token)
+			const hasCreds = await hasAnyGitCredentials();
+			if (!hasCreds) {
+				// Silently skip if no credentials configured
+				return;
+			}
 
-		logger.debug("git", "Running periodic sync...");
-		const result = await gitSync();
-		if (!result.success) {
-			logger.warn("git", `Periodic sync failed: ${result.message}`);
-		}
+			logger.debug("git", "Running periodic sync...");
+			const result = await gitSync();
+			if (!result.success) {
+				logger.warn("git", `Periodic sync failed: ${result.message}`);
+			}
+		})();
+		gitSyncPromise = work;
+		work.finally(() => {
+			if (gitSyncPromise === work) gitSyncPromise = null;
+		});
 	}, intervalMs);
 }
 
-function stopGitSyncTimer() {
+async function stopGitSyncTimer(): Promise<void> {
 	if (gitSyncTimer) {
 		clearInterval(gitSyncTimer);
 		gitSyncTimer = null;
+	}
+	// Await in-flight sync so git operations finish before DB closes
+	if (gitSyncPromise) {
+		try {
+			await gitSyncPromise;
+		} catch {
+			// best-effort — sync failure shouldn't block shutdown
+		}
+		gitSyncPromise = null;
 	}
 }
 
@@ -10347,6 +10366,46 @@ async function importExistingMemoryFiles(): Promise<number> {
 async function cleanup() {
 	logger.info("daemon", "Shutting down");
 
+	// ------------------------------------------------------------------
+	// Phase 0: Stop accepting new requests — close HTTP server first so
+	// in-flight session-end hooks can still complete before we tear down
+	// state, but no new requests arrive during shutdown.
+	// ------------------------------------------------------------------
+	if (httpServer) {
+		const srv = httpServer;
+		await new Promise<void>((resolve) => {
+			const timeout = setTimeout(() => {
+				logger.warn("daemon", "HTTP server drain timed out, forcing close");
+				if ("closeAllConnections" in srv && typeof srv.closeAllConnections === "function") {
+					srv.closeAllConnections();
+				}
+				resolve();
+			}, 5_000);
+			srv.close(() => {
+				clearTimeout(timeout);
+				resolve();
+			});
+		});
+		httpServer = null;
+	}
+
+	// ------------------------------------------------------------------
+	// Phase 1: Cancel debounce timers — prevents callbacks from firing
+	// after DB is closed. Must happen before any async awaits that could
+	// let the event loop drain pending timeouts.
+	// ------------------------------------------------------------------
+	if (commitTimer) {
+		clearTimeout(commitTimer);
+		commitTimer = null;
+	}
+	commitPending = false;
+
+	if (syncTimer) {
+		clearTimeout(syncTimer);
+		syncTimer = null;
+	}
+	syncPending = false;
+
 	// Flush telemetry before closing DB
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
@@ -10429,11 +10488,22 @@ async function cleanup() {
 	stopOpenCodeServer();
 	stopModelRegistry();
 
+	// ------------------------------------------------------------------
+	// Phase 2: Release all session claims and presence so other daemons
+	// and connectors see clean state immediately rather than waiting for
+	// stale-session expiry (4h).
+	// ------------------------------------------------------------------
+	const released = releaseAllSessions();
+	const cleared = clearAllPresence();
+	if (released > 0 || cleared > 0) {
+		logger.info("daemon", "Cleaned cross-agent state", { sessions: released, presence: cleared });
+	}
+
 	// Stop session cleanup timer before closing DB (in-flight cleanup may query DB)
 	stopSessionCleanup();
 
-	// Stop git sync timer
-	stopGitSyncTimer();
+	// Stop git sync timer and await in-flight sync
+	await stopGitSyncTimer();
 	stopUpdateTimer();
 
 	closeDbAccessor();
@@ -11199,7 +11269,7 @@ async function main() {
 		return server;
 	};
 
-	serve(
+	httpServer = serve(
 		{
 			fetch: app.fetch,
 			port: PORT,
