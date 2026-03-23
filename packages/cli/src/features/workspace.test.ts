@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { setWorkspacePath } from "./workspace.js";
 
 function makeEnv(root: string): NodeJS.ProcessEnv {
-	return {
+	const env = {
 		...process.env,
 		XDG_CONFIG_HOME: root,
+		SIGNET_PATH: undefined,
 	};
+	return env;
 }
 
 describe("setWorkspacePath", () => {
@@ -78,5 +80,25 @@ describe("setWorkspacePath", () => {
 				env: makeEnv(root),
 			}),
 		).rejects.toThrow("workspace migration has conflicts");
+	});
+
+	it("skips daemon pid and log files during migration", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-workspace-daemon-skip-"));
+		const src = join(root, "src");
+		const dst = join(root, "dst");
+		mkdirSync(join(src, ".daemon", "logs"), { recursive: true });
+		writeFileSync(join(src, ".daemon", "pid"), "12345\n");
+		writeFileSync(join(src, ".daemon", "auth-secret"), "secret");
+		writeFileSync(join(src, ".daemon", "logs", "runtime.log"), "log data");
+
+		await setWorkspacePath(dst, {
+			currentPath: src,
+			patchOpenClaw: false,
+			env: makeEnv(root),
+		});
+
+		expect(existsSync(join(dst, ".daemon", "auth-secret"))).toBe(true);
+		expect(existsSync(join(dst, ".daemon", "pid"))).toBe(false);
+		expect(existsSync(join(dst, ".daemon", "logs", "runtime.log"))).toBe(false);
 	});
 });

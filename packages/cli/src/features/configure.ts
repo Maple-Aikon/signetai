@@ -15,6 +15,12 @@ interface Deps {
 	readonly signetLogo: () => string;
 }
 
+interface Cfg {
+	readonly dir: string;
+	readonly file: string;
+	readonly yaml: string;
+}
+
 const sections = [
 	{ value: "agent", name: "👤 Agent identity (name, description)" },
 	{ value: "workspace", name: "📁 Workspace path" },
@@ -30,14 +36,17 @@ const sections = [
 export async function configureAgent(deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 
-	let dir = deps.agentsDir;
-	let path = join(dir, "agent.yaml");
-	if (!existsSync(path)) {
+	const file = join(deps.agentsDir, "agent.yaml");
+	if (!existsSync(file)) {
 		console.log(chalk.yellow("  No agent.yaml found. Run `signet setup` first."));
 		return;
 	}
 
-	let yaml = readFileSync(path, "utf-8");
+	let cfg: Cfg = {
+		dir: deps.agentsDir,
+		file,
+		yaml: readFileSync(file, "utf-8"),
+	};
 
 	console.log(chalk.bold("  Configure your agent\n"));
 
@@ -54,49 +63,27 @@ export async function configureAgent(deps: Deps): Promise<void> {
 		console.log();
 
 		if (section === "view") {
-			showCurrent(yaml);
+			showCurrent(cfg.yaml);
 			continue;
 		}
 
 		if (section === "workspace") {
-			const target = await configureWorkspacePath(dir);
-			try {
-				const result = await setWorkspaceDefaultPath(target, {
-					currentPath: dir,
-					patchOpenClaw: true,
-				});
-				dir = result.nextPath;
-				path = join(dir, "agent.yaml");
-				if (existsSync(path)) {
-					yaml = readFileSync(path, "utf-8");
-				}
-				console.log(chalk.green("  ✓ Workspace updated"));
-				console.log(chalk.dim(`    active: ${dir}`));
-				if (result.migrated) {
-					console.log(chalk.dim(`    migrated: ${result.copiedFiles} copied, ${result.overwrittenFiles} overwritten`));
-				}
-				if (result.patchedConfigs.length > 0) {
-					console.log(chalk.dim(`    openclaw configs patched: ${result.patchedConfigs.length}`));
-				}
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.log(chalk.red(`  Workspace update failed: ${msg}`));
-			}
+			cfg = await configureWorkspace(cfg);
 			console.log();
 			continue;
 		}
 
 		if (section === "agent") {
-			yaml = await configureIdentity(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureIdentity(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Agent identity updated"));
 			console.log();
 			continue;
 		}
 
 		if (section === "network") {
-			yaml = await configureNetwork(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureNetwork(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Network settings updated"));
 			console.log(chalk.dim("    Restart the daemon to apply the new bind mode."));
 			console.log();
@@ -104,37 +91,77 @@ export async function configureAgent(deps: Deps): Promise<void> {
 		}
 
 		if (section === "harnesses") {
-			yaml = await configureHarnesses(yaml, deps, dir);
-			writeFileSync(path, yaml);
+			const yaml = await configureHarnesses(cfg.yaml, deps, cfg.dir);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Harnesses updated"));
 			console.log();
 			continue;
 		}
 
 		if (section === "embedding") {
-			yaml = await configureEmbedding(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureEmbedding(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Embedding settings updated"));
 			console.log();
 			continue;
 		}
 
 		if (section === "search") {
-			yaml = await configureSearch(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureSearch(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Search settings updated"));
 			console.log();
 			continue;
 		}
 
-		yaml = await configureMemory(yaml);
-		writeFileSync(path, yaml);
+		const yaml = await configureMemory(cfg.yaml);
+		cfg = writeConfig(cfg, yaml);
 		console.log(chalk.green("  ✓ Memory settings updated"));
 		console.log();
 	}
 
 	console.log(chalk.dim("  Configuration saved to agent.yaml"));
 	console.log();
+}
+
+function writeConfig(cfg: Cfg, yaml: string): Cfg {
+	writeFileSync(cfg.file, yaml);
+	return {
+		...cfg,
+		yaml,
+	};
+}
+
+async function configureWorkspace(cfg: Cfg): Promise<Cfg> {
+	const target = await configureWorkspacePath(cfg.dir);
+	try {
+		const result = await setWorkspaceDefaultPath(target, {
+			currentPath: cfg.dir,
+			patchOpenClaw: true,
+		});
+		const file = join(result.nextPath, "agent.yaml");
+		const yaml = existsSync(file) ? readFileSync(file, "utf-8") : cfg.yaml;
+		console.log(chalk.green("  ✓ Workspace updated"));
+		console.log(chalk.dim(`    active: ${result.nextPath}`));
+		if (result.migrated) {
+			console.log(chalk.dim(`    migrated: ${result.copiedFiles} copied, ${result.overwrittenFiles} overwritten`));
+		}
+		if (result.patchedConfigs.length > 0) {
+			console.log(chalk.dim(`    openclaw configs patched: ${result.patchedConfigs.length}`));
+		}
+		if (result.changed) {
+			console.log(chalk.dim("    restart the daemon to apply workspace changes to active runtime processes"));
+		}
+		return {
+			dir: result.nextPath,
+			file,
+			yaml,
+		};
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.log(chalk.red(`  Workspace update failed: ${msg}`));
+		return cfg;
+	}
 }
 
 async function configureWorkspacePath(currentPath: string): Promise<string> {

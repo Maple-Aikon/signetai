@@ -41,10 +41,10 @@ export function registerWorkspaceCommands(program: Command, deps: WorkspaceDeps)
 		.action(async (path: string | undefined, options: { force?: boolean; patchOpenclaw?: boolean }) => {
 			console.log(deps.signetLogo());
 			const status = getWorkspaceStatus();
-			const target = path ? normalizeWorkspacePath(path) : await pickWorkspace(status.path);
-
-			const spinner = ora("Updating workspace...").start();
+			let spinner: ReturnType<typeof ora> | null = null;
 			try {
+				const target = path ? normalizeWorkspacePath(path) : await pickWorkspace(status.path);
+				spinner = ora("Updating workspace...").start();
 				const result = await setWorkspacePath(target, {
 					currentPath: status.path,
 					force: options.force === true,
@@ -60,11 +60,16 @@ export function registerWorkspaceCommands(program: Command, deps: WorkspaceDeps)
 				if (options.patchOpenclaw !== false) {
 					console.log(chalk.dim(`  OpenClaw configs patched: ${result.patchedConfigs.length}`));
 				}
+				if (result.changed) {
+					console.log(chalk.dim("  Restart the daemon to apply this workspace to active runtime processes."));
+				}
 				console.log();
 			} catch (err) {
-				spinner.fail("Workspace update failed");
+				if (spinner) {
+					spinner.fail("Workspace update failed");
+				}
 				const msg = err instanceof Error ? err.message : String(err);
-				console.error(chalk.red(`  ${msg}`));
+				console.error(chalk.red(`  Workspace update failed: ${msg}`));
 				process.exit(1);
 			}
 		});
@@ -73,7 +78,7 @@ export function registerWorkspaceCommands(program: Command, deps: WorkspaceDeps)
 async function pickWorkspace(currentPath: string): Promise<string> {
 	const fallback = chooseWorkspaceCandidate(currentPath);
 	if (!process.stdout.isTTY) {
-		return fallback;
+		throw new Error("workspace path is required in non-interactive mode");
 	}
 
 	const ranked = listWorkspaceCandidates(currentPath).slice(0, 8);

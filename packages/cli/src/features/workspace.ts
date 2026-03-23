@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { detectExistingSetup } from "@signet/core";
@@ -59,6 +58,9 @@ const WORKSPACE_PRESETS = [
 	join("~", ".moltbot", "workspace"),
 ] as const;
 
+const SKIP_PATHS = new Set([".daemon/pid"]);
+const SKIP_DIRS = new Set([".daemon/logs"]);
+
 export function getWorkspaceStatus(env: NodeJS.ProcessEnv = process.env): WorkspaceResolution {
 	return resolveAgentsDir(env);
 }
@@ -101,7 +103,7 @@ export function listWorkspaceCandidates(currentPath: string): WorkspaceCandidate
 export function chooseWorkspaceCandidate(currentPath: string): string {
 	const ranked = listWorkspaceCandidates(currentPath);
 	if (ranked.length === 0) {
-		return normalizeWorkspacePath(join(homedir(), ".openclaw", "workspace"));
+		return normalizeWorkspacePath(currentPath);
 	}
 
 	return ranked[0].path;
@@ -128,8 +130,8 @@ export async function setWorkspacePath(pathValue: string, opts: WorkspaceSetOpti
 		verifyCoreFiles(prev, next);
 	}
 
-	const cfgPath = writeConfiguredWorkspacePath(next, opts.env);
 	const patch = opts.patchOpenClaw === false ? [] : await new OpenClawConnector().configureWorkspace(next);
+	const cfgPath = writeConfiguredWorkspacePath(next, opts.env);
 
 	return {
 		previousPath: prev,
@@ -164,11 +166,11 @@ function scoreWorkspace(path: string): number {
 
 function buildCopyPlan(srcRoot: string, dstRoot: string, force: boolean): CopyPlan {
 	const plan = emptyPlan();
-	scanDir(srcRoot, dstRoot, plan, force);
+	scanDir(srcRoot, dstRoot, "", plan, force);
 	return plan;
 }
 
-function scanDir(srcDir: string, dstDir: string, plan: CopyPlan, force: boolean): void {
+function scanDir(srcDir: string, dstDir: string, rel: string, plan: CopyPlan, force: boolean): void {
 	const srcStat = lstatSync(srcDir);
 	if (!srcStat.isDirectory()) {
 		plan.conflicts.push(`${srcDir} is not a directory`);
@@ -191,8 +193,12 @@ function scanDir(srcDir: string, dstDir: string, plan: CopyPlan, force: boolean)
 	for (const entry of entries) {
 		const src = join(srcDir, entry.name);
 		const dst = join(dstDir, entry.name);
+		const nextRel = rel.length === 0 ? entry.name : join(rel, entry.name);
+		if (shouldSkip(nextRel, entry.isDirectory())) {
+			continue;
+		}
 		if (entry.isDirectory()) {
-			scanDir(src, dst, plan, force);
+			scanDir(src, dst, nextRel, plan, force);
 			continue;
 		}
 
@@ -281,7 +287,34 @@ function filesEqual(a: string, b: string): boolean {
 }
 
 function hashFile(path: string): string {
-	return createHash("sha256").update(readFileSync(path)).digest("hex");
+	const fd = openSync(path, "r");
+	const hash = createHash("sha256");
+	const chunk = Buffer.allocUnsafe(1024 * 1024);
+	try {
+		while (true) {
+			const n = readSync(fd, chunk, 0, chunk.length, null);
+			if (n === 0) {
+				break;
+			}
+			hash.update(chunk.subarray(0, n));
+		}
+		return hash.digest("hex");
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function shouldSkip(rel: string, isDir: boolean): boolean {
+	const key = rel.replace(/\\/g, "/");
+	if (SKIP_PATHS.has(key)) {
+		return true;
+	}
+
+	if (isDir && SKIP_DIRS.has(key)) {
+		return true;
+	}
+
+	return false;
 }
 
 function pathsOverlap(a: string, b: string): boolean {
