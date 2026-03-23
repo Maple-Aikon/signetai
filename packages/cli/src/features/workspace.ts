@@ -110,8 +110,7 @@ export function chooseWorkspaceCandidate(currentPath: string): string {
 }
 
 export async function setWorkspacePath(pathValue: string, opts: WorkspaceSetOptions = {}): Promise<WorkspaceSetResult> {
-	const res = resolveAgentsDir(opts.env);
-	const prev = opts.currentPath ? normalizeWorkspacePath(opts.currentPath) : res.path;
+	const prev = opts.currentPath ? normalizeWorkspacePath(opts.currentPath) : resolveAgentsDir(opts.env).path;
 	const next = normalizeWorkspacePath(pathValue);
 	if (prev !== next && pathsOverlap(prev, next)) {
 		throw new Error("workspace migration path overlap is not allowed");
@@ -136,7 +135,7 @@ export async function setWorkspacePath(pathValue: string, opts: WorkspaceSetOpti
 	return {
 		previousPath: prev,
 		nextPath: next,
-		changed: prev !== next || res.configuredPath !== next,
+		changed: prev !== next,
 		migrated: plan.adds.length + plan.overwrites.length > 0,
 		copiedFiles: plan.adds.length,
 		overwrittenFiles: plan.overwrites.length,
@@ -194,6 +193,9 @@ function scanDir(srcDir: string, dstDir: string, rel: string, plan: CopyPlan, fo
 		const src = join(srcDir, entry.name);
 		const dst = join(dstDir, entry.name);
 		const nextRel = rel.length === 0 ? entry.name : join(rel, entry.name);
+		if (entry.isSymbolicLink()) {
+			continue;
+		}
 		if (shouldSkip(nextRel, entry.isDirectory())) {
 			continue;
 		}

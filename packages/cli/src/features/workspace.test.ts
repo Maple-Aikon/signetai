@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setWorkspacePath } from "./workspace.js";
@@ -51,7 +51,7 @@ describe("setWorkspacePath", () => {
 			patchOpenClaw: false,
 			env: makeEnv(root),
 		});
-		expect(first.changed).toBe(true);
+		expect(first.changed).toBe(false);
 
 		const second = await setWorkspacePath(dst, {
 			currentPath: dst,
@@ -100,5 +100,25 @@ describe("setWorkspacePath", () => {
 		expect(existsSync(join(dst, ".daemon", "auth-secret"))).toBe(true);
 		expect(existsSync(join(dst, ".daemon", "pid"))).toBe(false);
 		expect(existsSync(join(dst, ".daemon", "logs", "runtime.log"))).toBe(false);
+	});
+
+	it("skips symbolic links during migration", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-workspace-symlink-skip-"));
+		const src = join(root, "src");
+		const dst = join(root, "dst");
+		const target = join(root, "target.txt");
+		mkdirSync(src, { recursive: true });
+		writeFileSync(target, "external");
+		symlinkSync(target, join(src, "link.txt"));
+		writeFileSync(join(src, "AGENTS.md"), "# Agent\n");
+
+		await setWorkspacePath(dst, {
+			currentPath: src,
+			patchOpenClaw: false,
+			env: makeEnv(root),
+		});
+
+		expect(existsSync(join(dst, "AGENTS.md"))).toBe(true);
+		expect(existsSync(join(dst, "link.txt"))).toBe(false);
 	});
 });
