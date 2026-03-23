@@ -12,14 +12,14 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSimpleYaml } from "@signet/core";
 import chalk from "chalk";
 import { resolveDaemonNetwork } from "./network.js";
+import { resolveAgentsDir } from "./workspace.js";
 
-export const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+export const AGENTS_DIR = resolveAgentsDir().path;
 export const DEFAULT_PORT = 3850;
 const DAEMON_BASE_URLS = [`http://127.0.0.1:${DEFAULT_PORT}`, `http://[::1]:${DEFAULT_PORT}`] as const;
 

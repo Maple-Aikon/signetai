@@ -138,13 +138,8 @@ function healthToneClass(entityId: string): string {
 	return "bg-[var(--sig-text-muted)]";
 }
 
-function entityDensityOpacity(item: KnowledgeEntityListItem): number {
-	const score =
-		item.aspectCount +
-		item.attributeCount +
-		item.constraintCount * 2 +
-		item.dependencyCount;
-	const maxScore = Math.max(
+const maxDensityScore = $derived(
+	Math.max(
 		1,
 		...entities.map(
 			(e) =>
@@ -153,8 +148,16 @@ function entityDensityOpacity(item: KnowledgeEntityListItem): number {
 				e.constraintCount * 2 +
 				e.dependencyCount,
 		),
-	);
-	return 0.08 + (score / maxScore) * 0.92;
+	),
+);
+
+function entityDensityOpacity(item: KnowledgeEntityListItem): number {
+	const score =
+		item.aspectCount +
+		item.attributeCount +
+		item.constraintCount * 2 +
+		item.dependencyCount;
+	return 0.08 + (score / maxDensityScore) * 0.92;
 }
 
 function toCalendarDate(value: string): DateValue | undefined {
@@ -294,10 +297,20 @@ function queueEntitySearch(): void {
 	}, 200);
 }
 
+let lastTraversalLoad = 0;
+
+function refreshTraversal(): void {
+	lastTraversalLoad = Date.now();
+	void loadTraversal();
+}
+
 onMount(() => {
-	void Promise.all([loadEntities(), loadStats(), loadPredictor(), loadTraversal()]);
+	void Promise.all([loadEntities(), loadStats(), loadPredictor()]);
+	refreshTraversal();
 	const onFocus = () => {
-		void loadTraversal();
+		if (Date.now() - lastTraversalLoad >= 60_000) {
+			refreshTraversal();
+		}
 	};
 	window.addEventListener("focus", onFocus);
 	return () => {
@@ -607,7 +620,7 @@ onMount(() => {
 								Latest structural walk emitted by session-start or recall.
 							</Card.Description>
 						</div>
-						<Button variant="outline" size="sm" class="h-8 px-2" onclick={() => void loadTraversal()}>
+						<Button variant="outline" size="sm" class="h-8 px-2" onclick={() => refreshTraversal()}>
 							<RefreshCw class="size-3.5" />
 						</Button>
 					</div>

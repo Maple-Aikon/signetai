@@ -15,7 +15,11 @@ see [[quickstart]]. For the [[daemon]] runtime, see [[architecture]].
 Configuration Files
 -------------------
 
-All files live in `~/.agents/` (or your custom `SIGNET_PATH`).
+All files live in your active Signet workspace.
+
+- Default workspace: `~/.agents/`
+- Persisted workspace setting: `~/.config/signet/workspace.json`
+- Override for a single process: `SIGNET_PATH=/some/path`
 
 | File | Purpose |
 |------|---------|
@@ -29,6 +33,28 @@ All files live in `~/.agents/` (or your custom `SIGNET_PATH`).
 The loader checks `agent.yaml`, `AGENT.yaml`, and `config.yaml` in that
 order, using the first file it finds. All sections are optional; omitting
 a section falls back to the documented defaults.
+
+
+Workspace selection and persistence
+-----------------------------------
+
+Use the CLI to inspect or change the default workspace path:
+
+```bash
+signet workspace status
+signet workspace set ~/.openclaw/workspace
+```
+
+`signet workspace set` is idempotent. It safely migrates files, stores the
+new default workspace in `~/.config/signet/workspace.json`, and updates
+detected OpenClaw-family configs to keep `agents.defaults.workspace` aligned.
+
+Resolution order for the effective workspace is:
+
+1. `--path` CLI option
+2. `SIGNET_PATH` environment variable
+3. Stored CLI workspace setting (`~/.config/signet/workspace.json`)
+4. Default `~/.agents/`
 
 
 agent.yaml
@@ -198,7 +224,7 @@ Memory system settings.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `database` | string | `"memory/memories.db"` | SQLite path (relative to `~/.agents/`) |
+| `database` | string | `"memory/memories.db"` | SQLite path (relative to the active workspace) |
 | `session_budget` | number | `2000` | Character limit for session context injection |
 | `decay_rate` | number | `0.95` | Daily importance decay factor for non-pinned memories |
 
@@ -551,7 +577,7 @@ auth:
 | `sessionTokenTtlSeconds` | `86400` | Session token lifetime (24 hours) |
 
 In `"local"` mode the token secret is generated automatically and stored
-at `~/.agents/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
+at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
 wallet-based ERC-8128 signatures are used alongside or instead of local
 tokens.
 
@@ -654,17 +680,17 @@ editing the config file is impractical.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SIGNET_PATH` | `~/.agents` | Base agents directory |
+| `SIGNET_PATH` | — | Runtime override for agents directory |
 | `SIGNET_PORT` | `3850` | Daemon HTTP port |
 | `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls and default bind address |
 | `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (`0.0.0.0`, etc.) |
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
-| `SIGNET_LOG_DIR` | `~/.agents/.daemon/logs` | Optional daemon log directory override |
+| `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 
-`SIGNET_PATH` changes where Signet reads and writes all agent data,
-including the config file itself. This is useful for testing with an
-isolated environment or for running multiple agent identities.
+`SIGNET_PATH` changes where Signet reads and writes all agent data for
+that process, including the config file itself. Use this for temporary
+overrides in CI or isolated local testing.
 
 
 AGENTS.md
@@ -796,21 +822,21 @@ Location: `~/.claude/`
     "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py load --mode session-start",
+        "command": "python3 $SIGNET_WORKSPACE/memory/scripts/memory.py load --mode session-start",
         "timeout": 3000
       }]
     }],
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py load --mode prompt",
+        "command": "python3 $SIGNET_WORKSPACE/memory/scripts/memory.py load --mode prompt",
         "timeout": 2000
       }]
     }],
     "SessionEnd": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py save --mode auto",
+        "command": "python3 $SIGNET_WORKSPACE/memory/scripts/memory.py save --mode auto",
         "timeout": 10000
       }]
     }]
@@ -831,15 +857,16 @@ as native tools within the harness.
 
 ### OpenClaw
 
-Location: `~/.agents/hooks/agent-memory/` (hook directory)
+Location: `$SIGNET_WORKSPACE/hooks/agent-memory/` (hook directory)
 
-Also configures the OpenClaw workspace in `~/.openclaw/openclaw.json`:
+Also configures the OpenClaw workspace in `~/.openclaw/openclaw.json`
+(and compatible `clawdbot` / `moltbot` config locations):
 
 ```json
 {
   "agents": {
     "defaults": {
-      "workspace": "~/.agents"
+      "workspace": "$SIGNET_WORKSPACE"
     }
   }
 }
@@ -851,13 +878,13 @@ See [HARNESSES.md](./HARNESSES.md) for the full OpenClaw adapter docs.
 Git Integration
 ---------------
 
-If `~/.agents/` is a git repository, the daemon auto-commits file changes
+If your Signet workspace is a git repository, the daemon auto-commits file changes
 with a 5-second debounce after the last detected change. Commit messages
 use the format `YYYY-MM-DDTHH-MM-SS_auto_<filename>`. The setup wizard
 offers to initialize git on first run and creates a backup commit before
 making any changes.
 
-Recommended `.gitignore` for `~/.agents/`:
+Recommended `.gitignore` for your workspace:
 
 ```gitignore
 .daemon/

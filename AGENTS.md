@@ -159,7 +159,7 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 > **Rust parity rule**: `packages/daemon-rs/` is a shadow rewrite of this package.
 > Any behavioral change made to `@signet/daemon` must also be reflected in `packages/daemon-rs/`.
 > The shadow proxy (`shadowEnabled: true` in agent.yaml) runs both in parallel and logs divergences
-> to `~/.agents/.daemon/logs/shadow-divergences.jsonl`.
+> to `$SIGNET_WORKSPACE/.daemon/logs/shadow-divergences.jsonl` (default workspace: `~/.agents`).
 
 - Hono HTTP server on port 3850
 - File watching with debounced sync
@@ -212,7 +212,7 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 ### Data Flow
 
 ```
-User edits ~/.agents/AGENTS.md
+User edits $SIGNET_WORKSPACE/AGENTS.md
     → File watcher detects change
     → Debounced git commit (5s)
     → Harness sync to ~/.claude/CLAUDE.md, etc. (2s)
@@ -239,7 +239,7 @@ Notable pipeline files beyond the main worker:
 
 ### Git Sync
 
-The daemon auto-commits changes in `~/.agents/` and syncs with a
+The daemon auto-commits changes in `$SIGNET_WORKSPACE/` and syncs with a
 configured git remote. Credential resolution order matters:
 
 1. **SSH** (`git@...`) — used as-is, no URL modification
@@ -270,10 +270,10 @@ Routes under `/api/*` can be protected via token-based middleware
 
 ### User Data Location
 
-All user data lives at `~/.agents/`:
+All user data lives at `$SIGNET_WORKSPACE/` (default: `~/.agents/`):
 
 ```
-~/.agents/
+$SIGNET_WORKSPACE/
 ├── agent.yaml       # Configuration manifest
 ├── AGENTS.md        # Agent identity/instructions
 ├── SOUL.md          # Personality & tone
@@ -369,7 +369,7 @@ bun run uninstall:service # Uninstall system service
 ### Environment Variables
 
 ```
-SIGNET_PATH    # Override ~/.agents/ data directory
+SIGNET_PATH    # Override workspace data directory (default: ~/.agents)
 SIGNET_PORT    # Override daemon port (default: 3850)
 SIGNET_HOST    # Override daemon client connection address (default: 127.0.0.1)
 SIGNET_BIND    # Override daemon listen/bind address (default: 127.0.0.1, use 0.0.0.0 for containers)

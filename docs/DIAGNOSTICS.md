@@ -359,7 +359,7 @@ unavailable LLM provider.
 
 ### Configuration
 
-These settings live under the `pipelineV2` block in `~/.agents/agent.yaml`:
+These settings live under the `pipelineV2` block in `$SIGNET_WORKSPACE/agent.yaml`:
 
 | Key | Default | Description |
 |-----|---------|-------------|

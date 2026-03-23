@@ -126,11 +126,11 @@ This is a hard delete; skill nodes do not use soft-delete.
 
 Source: `packages/daemon/src/pipeline/skill-reconciler.ts`
 
-The reconciler keeps `skill_meta` in sync with the `~/.agents/skills/` directory.
+The reconciler keeps `skill_meta` in sync with the `$SIGNET_WORKSPACE/skills/` directory.
 It runs in three modes:
 
 1. **Startup backfill** — `reconcileOnce` is called immediately on daemon start
-   (async, non-blocking). Scans `~/.agents/skills/*/SKILL.md`, installs any skill
+   (async, non-blocking). Scans `$SIGNET_WORKSPACE/skills/*/SKILL.md`, installs any skill
    whose entity ID is missing from `entities`, and updates skills whose embedding
    text has changed (detected by comparing stored `chunk_text` in the `embeddings`
    table against the freshly computed embedding text from current frontmatter)
@@ -139,7 +139,7 @@ It runs in three modes:
    `procCfg.reconcileIntervalMs`. Guarded against overlapping runs with a
    `reconciling` flag
 
-3. **Chokidar file watcher** — watches `~/.agents/skills/*/SKILL.md` for add,
+3. **Chokidar file watcher** — watches `$SIGNET_WORKSPACE/skills/*/SKILL.md` for add,
    change, and unlink events. On add/change, calls `reconcileSkill` (single-skill
    reconciliation with the same fingerprint check). On unlink, calls
    `uninstallSkillNode` immediately

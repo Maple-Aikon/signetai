@@ -55,7 +55,7 @@ signet remember <content> -t tag1,tag2
 ```bash
 signet remember "nicholai prefers tabs over spaces"
 signet remember "never push directly to main branch" --critical
-signet remember "agent profile lives at ~/.agents/" -t signet,architecture
+signet remember "agent profile lives at $SIGNET_WORKSPACE/" -t signet,architecture
 ```
 
 ### Implementation
@@ -141,7 +141,7 @@ curl -X POST http://localhost:3850/api/memory/recall \
 ### Response Format
 
 ```
-[0.92|hybrid] Agent profile lives at ~/.agents/ [signet,architecture] [pinned]
+[0.92|hybrid] Agent profile lives at $SIGNET_WORKSPACE/ [signet,architecture] [pinned]
        type: fact | who: claude-code | Feb 15
 
 [0.78|hybrid] Signet uses SQLite for memory storage
@@ -160,7 +160,7 @@ Score breakdown:
 
 ### Embedding Provider
 
-In `~/.agents/agent.yaml`:
+In `$SIGNET_WORKSPACE/agent.yaml`:
 
 ```yaml
 embedding:
@@ -223,7 +223,7 @@ This is faster and more reliable than spawning Python subprocesses.
 
 ## SKILL.md Files
 
-The skills ship as standard SKILL.md files in `~/.agents/skills/`:
+The skills ship as standard SKILL.md files in `$SIGNET_WORKSPACE/skills/`:
 
 ### remember/SKILL.md
 

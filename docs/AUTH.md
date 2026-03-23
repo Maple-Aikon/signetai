@@ -49,7 +49,7 @@ HMAC-SHA256 over the encoded payload, also base64url-encoded. There are
 no external dependencies — only Node's built-in `crypto` module.
 
 The signing secret is 32 random bytes, auto-generated on first use and
-stored at `~/.agents/.daemon/auth-secret` (mode 0600). If you rotate
+stored at `$SIGNET_WORKSPACE/.daemon/auth-secret` (mode 0600). If you rotate
 the secret, all existing tokens are immediately invalidated.
 
 Token claims:
@@ -189,7 +189,7 @@ auth:
       max: 10
 ```
 
-The secret path is always `~/.agents/.daemon/auth-secret` and is not
+The secret path is always `$SIGNET_WORKSPACE/.daemon/auth-secret` and is not
 configurable. The daemon creates it automatically on first start in any
 non-local mode.
 
@@ -249,4 +249,4 @@ each one a scoped `agent` token to prevent cross-agent memory access:
 
 Rotating the secret invalidates all outstanding tokens immediately. Do
 this if a token is leaked. The daemon will regenerate a new secret at
-`~/.agents/.daemon/auth-secret` if the file is deleted, then restart.
+`$SIGNET_WORKSPACE/.daemon/auth-secret` if the file is deleted, then restart.

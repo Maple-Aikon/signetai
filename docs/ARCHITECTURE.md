@@ -105,7 +105,7 @@ files (CLAUDE.md, AGENTS.md). That flow is independent from the
 memory pipeline:
 
 ```
-User edits ~/.agents/AGENTS.md
+User edits $SIGNET_WORKSPACE/AGENTS.md
     → chokidar detects change
     → 2s debounced sync: regenerate ~/.claude/CLAUDE.md etc.
     → 5s debounced git commit: auto-commit with timestamp
@@ -628,7 +628,7 @@ state), `status` (`idle`, `syncing`, `error`), `last_sync_at`,
 Session summary queue. Fields: `session_id`, `harness`, `status`
 (`pending`, `processing`, `done`, `failed`), `result_path`, `error`,
 `created_at`. The summary worker polls this table and writes dated
-Markdown files to `~/.agents/`.
+Markdown files to `$SIGNET_WORKSPACE/`.
 
 **session_transcripts** (migration 040)
 
@@ -812,10 +812,10 @@ Default retention windows:
 User Data Layout
 ----------------
 
-All agent data lives at `~/.agents/`:
+All agent data lives at `$SIGNET_WORKSPACE/`:
 
 ```
-~/.agents/
+$SIGNET_WORKSPACE/
 ├── agent.yaml           # Config manifest
 ├── AGENTS.md            # Agent identity and instructions
 ├── SOUL.md              # Personality and tone

@@ -11,6 +11,9 @@ Signet CLI Reference
 Complete reference for all Signet CLI commands. For the [[daemon]]
 HTTP API, see [[api]]. For initial setup walkthrough, see [[quickstart]].
 
+> Path note: `$SIGNET_WORKSPACE` means your active Signet workspace path.
+> Default is `~/.agents`, configurable via `signet workspace set <path>`.
+
 ---
 
 Installation
@@ -58,7 +61,7 @@ Commands Overview
 | `signet sync` | Sync built-in templates and skills |
 | `signet secret` | Manage encrypted secrets |
 | `signet skill` | Manage agent skills from registry |
-| `signet git` | Git sync management for ~/.agents |
+| `signet git` | Git sync management for $SIGNET_WORKSPACE |
 | `signet hook` | Lifecycle hook commands |
 | `signet update` | Check, install, and manage auto-updates |
 | `signet bypass` | Per-session hook bypass toggle |
@@ -99,7 +102,7 @@ Use explicit commands for interactive flows:
 ---
 
 Interactive first-time setup wizard (with optional non-interactive mode).
-Creates the `~/.agents/` directory and all necessary files.
+Creates the `$SIGNET_WORKSPACE/` directory and all necessary files.
 
 ```bash
 signet setup
@@ -115,7 +118,7 @@ Options:
 
 | Option | Description |
 |--------|-------------|
-| `-p, --path <path>` | Custom base path (default: `~/.agents`) |
+| `-p, --path <path>` | Custom base path (default: `$SIGNET_WORKSPACE`) |
 | `--non-interactive` | Run setup without prompts |
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
@@ -126,7 +129,7 @@ Options:
 | `--extraction-model <model>` | Non-interactive extraction model |
 | `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
 | `--openclaw-runtime-path <mode>` | Non-interactive OpenClaw mode (`plugin`, `legacy`) |
-| `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `~/.agents` |
+| `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `$SIGNET_WORKSPACE` |
 | `--open-dashboard` | Open dashboard after non-interactive setup |
 | `--skip-git` | Skip git initialization/commits in non-interactive mode |
 
@@ -174,7 +177,7 @@ Wizard steps:
 What gets created:
 
 ```
-~/.agents/
+$SIGNET_WORKSPACE/
 ├── agent.yaml           # Configuration
 ├── AGENTS.md            # Agent identity
 ├── MEMORY.md            # Working memory
@@ -192,7 +195,7 @@ If harnesses are selected, their configs are also created:
 
 - **Claude Code**: `~/.claude/settings.json` with hooks, `~/.claude/CLAUDE.md`
 - **OpenCode**: `~/.config/opencode/plugins/signet.mjs` plugin, `~/.config/opencode/AGENTS.md`
-- **OpenClaw**: `~/.agents/hooks/agent-memory/` hook directory
+- **OpenClaw**: `$SIGNET_WORKSPACE/hooks/agent-memory/` hook directory
 - **Codex**: wrapper installed at `~/.config/signet/bin/codex` with session hooks
 
 ---
@@ -200,7 +203,7 @@ If harnesses are selected, their configs are also created:
 `signet configure`
 ---
 
-Interactive configuration editor for modifying `~/.agents/agent.yaml`.
+Interactive configuration editor for modifying `$SIGNET_WORKSPACE/agent.yaml`.
 
 ```bash
 signet configure
@@ -444,7 +447,7 @@ signet import ./signet-export-2026-03-22.json --json --conflict merge
 - relations
 - installed skills
 
-`signet import` restores those files into `~/.agents/`. Conflict
+`signet import` restores those files into `$SIGNET_WORKSPACE/`. Conflict
 handling for memories is controlled with `--conflict`:
 
 - `skip` — keep existing memories and skip duplicates
@@ -457,7 +460,7 @@ handling for memories is controlled with `--conflict`:
 ---
 
 Migrate an existing memory database to Signet's unified schema. Useful
-when upgrading from an older version or copying `~/.agents/` between
+when upgrading from an older version or copying `$SIGNET_WORKSPACE/` between
 machines.
 
 ```bash
@@ -514,7 +517,7 @@ Options:
 `signet sync`
 ---
 
-Sync built-in template files and skills to your `~/.agents/` directory,
+Sync built-in template files and skills to your `$SIGNET_WORKSPACE/` directory,
 and re-register hooks for any detected harnesses. Run this after an
 upgrade if built-in skills appear stale.
 
@@ -568,7 +571,7 @@ a remote repository.
 ---
 
 Manage agent [[skills]] from the GitHub-based registry. Skills are installed
-to `~/.agents/skills/` and symlinked into [[harnesses|harness]] config directories.
+to `$SIGNET_WORKSPACE/skills/` and symlinked into [[harnesses|harness]] config directories.
 
 ```bash
 signet skill list
@@ -597,7 +600,7 @@ containing a `SKILL.md` file. Unauthenticated searches are limited to
 `signet git`
 ---
 
-Git sync management for the `~/.agents` directory. A `GITHUB_TOKEN`
+Git sync management for the `$SIGNET_WORKSPACE` directory. A `GITHUB_TOKEN`
 secret must be set for push operations.
 
 ```bash
@@ -777,11 +780,11 @@ Environment Variables
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SIGNET_PORT` | Daemon HTTP port | `3850` |
-| `SIGNET_PATH` | Base agents directory | `~/.agents` |
+| `SIGNET_PATH` | Base agents directory | `$SIGNET_WORKSPACE` |
 | `SIGNET_HOST` | Daemon host for local calls and default bind address | `127.0.0.1` |
 | `SIGNET_BIND` | Explicit daemon bind address override | `SIGNET_HOST` |
 | `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
-| `SIGNET_LOG_DIR` | Daemon log directory override | `~/.agents/.daemon/logs` |
+| `SIGNET_LOG_DIR` | Daemon log directory override | `$SIGNET_WORKSPACE/.daemon/logs` |
 | `SIGNET_BYPASS` | Skip all hook processing (exit immediately) | unset |
 
 ---

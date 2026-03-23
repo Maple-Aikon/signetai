@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
 	collectExportData,
@@ -15,7 +14,11 @@ import type { Command } from "commander";
 import ora from "ora";
 import Database from "../sqlite.js";
 
-export function registerPortableCommands(program: Command): void {
+interface PortableDeps {
+	readonly AGENTS_DIR: string;
+}
+
+export function registerPortableCommands(program: Command, deps: PortableDeps): void {
 	program
 		.command("export")
 		.description("Export agent identity, memories, and skills to a portable bundle")
@@ -23,7 +26,7 @@ export function registerPortableCommands(program: Command): void {
 		.option("--include-embeddings", "Include embedding vectors (can be regenerated)")
 		.option("--json", "Output as JSON instead of ZIP")
 		.action(async (options) => {
-			const agentsDir = join(homedir(), ".agents");
+			const agentsDir = deps.AGENTS_DIR;
 			const dbPath = join(agentsDir, "memory", "memories.db");
 
 			if (!existsSync(dbPath)) {
@@ -83,7 +86,7 @@ export function registerPortableCommands(program: Command): void {
 		.option("--conflict <strategy>", "Conflict resolution: skip, overwrite, merge", "skip")
 		.option("--json", "Input is a JSON file instead of a directory")
 		.action(async (importPath: string, options) => {
-			const agentsDir = join(homedir(), ".agents");
+			const agentsDir = deps.AGENTS_DIR;
 			const dbPath = join(agentsDir, "memory", "memories.db");
 
 			if (!existsSync(importPath)) {

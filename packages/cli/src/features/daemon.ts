@@ -408,7 +408,7 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 	if (!cmd) {
 		console.log();
 		console.log(chalk.yellow("  No OpenClaw restart command configured."));
-		console.log(chalk.dim("  Add to ~/.agents/agent.yaml:"));
+		console.log(chalk.dim(`  Add to ${yamlPath}:`));
 		console.log(chalk.dim("    services:"));
 		console.log(chalk.dim("      openclaw:"));
 		console.log(chalk.dim('        restart_command: "systemctl --user restart openclaw"'));

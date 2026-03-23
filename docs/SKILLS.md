@@ -13,10 +13,10 @@ Install, manage, and discover agent skills. Skills are packaged instructions tha
 
 ## What Are Skills?
 
-A skill is a directory inside `~/.agents/skills/` containing at minimum a `SKILL.md` file. That file describes what the skill does and how the agent should use it. Skills are markdown — they contain *instructions*, not executable code.
+A skill is a directory inside `$SIGNET_WORKSPACE/skills/` containing at minimum a `SKILL.md` file. That file describes what the skill does and how the agent should use it. Skills are markdown — they contain *instructions*, not executable code.
 
 ```
-~/.agents/skills/
+$SIGNET_WORKSPACE/skills/
 ├── remember/
 │   └── SKILL.md          # /remember command
 ├── recall/
@@ -172,7 +172,7 @@ The `user_invocable: true` flag means users can trigger the skill with `/skill-n
 ### How install works
 
 1. `signet skill install <name>` calls `npx skills add <name> --global --yes`
-2. The skill is installed to `~/.agents/skills/<name>/`
+2. The skill is installed to `$SIGNET_WORKSPACE/skills/<name>/`
 3. The SKILL.md file is parsed for metadata
 4. The harness config is updated to include the new skill
 
@@ -200,7 +200,7 @@ The [[dashboard]]'s **Skills** panel provides a UI for everything the CLI does:
 signet skill create my-tool
 ```
 
-This creates `~/.agents/skills/my-tool/SKILL.md` with a starter template. Edit it to describe what the skill does.
+This creates `$SIGNET_WORKSPACE/skills/my-tool/SKILL.md` with a starter template. Edit it to describe what the skill does.
 
 ### Example: a custom deployment skill
 
@@ -245,7 +245,7 @@ An `<available_skills>` section is generated in the AGENTS.md copy for each harn
 
 ### OpenClaw
 
-Skills are referenced in the `skills.entries` section of the OpenClaw workspace config, pointing to the `~/.agents/skills/` directory.
+Skills are referenced in the `skills.entries` section of the OpenClaw workspace config, pointing to the `$SIGNET_WORKSPACE/skills/` directory.
 
 ---
 
@@ -264,7 +264,7 @@ Skills are markdown files — they're instructions, not code. A skill only does 
 To share a skill on skills.sh:
 
 ```bash
-cd ~/.agents/skills/my-skill
+cd $SIGNET_WORKSPACE/skills/my-skill
 signet skill publish
 ```
 
