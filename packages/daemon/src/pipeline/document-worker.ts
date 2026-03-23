@@ -449,7 +449,9 @@ export function startDocumentWorker(
 ): DocumentWorkerHandle {
 	let running = true;
 	let tickPending = false;
-	let lastProgressAt = Date.now();
+	// Starts at 0 — only set on first successful processDocument, so stall
+	// detection distinguishes "never made progress" from "stalled after progress".
+	let lastProgressAt = 0;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
 	async function tick(): Promise<void> {

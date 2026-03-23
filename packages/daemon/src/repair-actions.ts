@@ -209,7 +209,8 @@ export function requeueDeadJobs(
 				 WHERE status = 'dead'
 				   AND NOT (
 				     job_type = 'document_ingest'
-				     AND error LIKE '%UNIQUE constraint failed%content_hash%'
+				     AND (error LIKE '%UNIQUE constraint failed%content_hash%'
+				       OR error LIKE '%SQLITE_CONSTRAINT_UNIQUE%content_hash%')
 				   )
 				 LIMIT ?`,
 			)

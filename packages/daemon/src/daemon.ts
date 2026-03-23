@@ -7271,6 +7271,8 @@ app.use("/api/pipeline/nudge", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
 });
 
+// Response shape changed: now includes { extraction, ingest } booleans
+// and covers both workers. Old shape was extraction-only.
 app.post("/api/pipeline/nudge", (c) => {
 	const extraction = nudgeExtractionWorker();
 	const ingest = nudgeDocumentWorker();
