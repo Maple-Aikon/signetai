@@ -27,9 +27,14 @@ interface ReviewsSyncConfig {
 	readonly lastSyncError: string | null;
 }
 
+// Production sync endpoint — set by Nicholai after deploying the Cloudflare Worker.
+// Until then, users can override via PATCH /api/marketplace/reviews/config.
+// TODO: replace placeholder with live Worker URL once deployed.
+const REVIEWS_SYNC_URL = "https://reviews.signetai.sh/api/reviews/sync";
+
 const DEFAULT_CONFIG: ReviewsSyncConfig = {
 	enabled: false,
-	endpointUrl: "",
+	endpointUrl: REVIEWS_SYNC_URL,
 	lastSyncAt: null,
 	lastSyncError: null,
 };
@@ -344,7 +349,7 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 		try {
 			const response = await fetch(config.endpointUrl, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: { "Content-Type": "application/json", "X-Signet-Sync": "1" },
 				body: JSON.stringify({
 					source: "signet-marketplace",
 					type: "reviews-sync",
