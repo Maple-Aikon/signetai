@@ -290,9 +290,10 @@ export async function hybridRecall(
 					   WHERE memory_hints_fts MATCH ? AND h.agent_id = ?
 					   ORDER BY raw_score LIMIT ?`;
 
-				const args = scoped
-					? [keywordQuery, "default", params.scope, cfg.search.top_k]
-					: [keywordQuery, "default", cfg.search.top_k];
+				const agentId = params.agentId ?? "default";
+			const args = scoped
+					? [keywordQuery, agentId, params.scope, cfg.search.top_k]
+					: [keywordQuery, agentId, cfg.search.top_k];
 
 				const rows = (db.prepare(sql) as any).all(...args) as Array<{
 					id: string;
