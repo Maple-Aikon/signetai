@@ -997,10 +997,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			dateStyle: "full",
 			timeStyle: "short",
 		});
+		const warnings = req.sessionKey
+			? [getExpiryWarning(req.sessionKey)].filter((w): w is string => w !== null)
+			: [];
 		return {
 			identity: { name: "Agent" },
 			memories: [],
 			inject: `[memory active | /remember | /recall]\n# Current Date & Time\n${now} (${tz})`,
+			...(warnings.length > 0 ? { warnings } : {}),
 		};
 	}
 

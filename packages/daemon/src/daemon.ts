@@ -7287,10 +7287,12 @@ app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 	openClawHeartbeat = {
 		timestamp: new Date().toISOString(),
 		data: {
-			pluginVersion: b.pluginVersion,
-			hooksRegistered: Array.isArray(b.hooksRegistered) ? (b.hooksRegistered as string[]).slice(0, 50) : [],
-			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall : null,
-			lastError: typeof b.lastError === "string" ? b.lastError : null,
+			pluginVersion: b.pluginVersion.slice(0, 128),
+			hooksRegistered: Array.isArray(b.hooksRegistered)
+				? (b.hooksRegistered as unknown[]).filter((x): x is string => typeof x === "string").map((s) => s.slice(0, 128)).slice(0, 50)
+				: [],
+			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
+			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
 			latencyMs: typeof b.latencyMs === "number" ? b.latencyMs : 0,
 			errorCount: typeof b.errorCount === "number" ? b.errorCount : 0,
 			totalSucceeded: (prev?.totalSucceeded ?? 0) + (typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
@@ -7905,8 +7907,11 @@ app.get("/api/repair/dead-memories", (c) => {
 	const maxConfidence = Number(c.req.query("maxConfidence") ?? "0.1");
 	const maxAccessDays = Number(c.req.query("maxAccessDays") ?? "90");
 	const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
-	if (Number.isNaN(maxConfidence) || Number.isNaN(maxAccessDays) || Number.isNaN(limit)) {
-		return c.json({ error: "maxConfidence, maxAccessDays, and limit must be numbers" }, 400);
+	if (
+		!Number.isFinite(maxConfidence) || !Number.isFinite(maxAccessDays) || !Number.isFinite(limit)
+		|| maxConfidence < 0 || maxAccessDays < 0 || limit < 0
+	) {
+		return c.json({ error: "maxConfidence, maxAccessDays, and limit must be finite non-negative numbers" }, 400);
 	}
 	const dead = getDbAccessor().withReadDb((db) =>
 		findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
