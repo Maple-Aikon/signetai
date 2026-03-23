@@ -359,7 +359,10 @@ export class OpenClawConnector extends BaseConnector {
 					internal: {
 						entries: {
 							"signet-memory": {
-								enabled: true,
+								// Disable the legacy hook when using the plugin path to
+								// prevent dual-system operation (duplicate memories, 2x
+								// token burn, session-tracker 409 conflicts).
+								enabled: runtimePath !== "plugin",
 							},
 						},
 					},
