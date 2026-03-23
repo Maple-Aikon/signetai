@@ -132,7 +132,8 @@ function corsHeaders(origin: string): Record<string, string> {
 
 function isOriginAllowed(origin: string | null, allowed: string): boolean {
 	if (allowed === "*") return true;
-	if (!origin) return false;
+	// No Origin header = server-to-server (daemon sync). Allow.
+	if (!origin) return true;
 	if (origin === allowed) return true;
 	try {
 		const u = new URL(origin);
@@ -186,7 +187,8 @@ async function upsertReviews(
 				   title        = excluded.title,
 				   body         = excluded.body,
 				   updated_at   = excluded.updated_at,
-				   received_at  = excluded.received_at`,
+				   received_at  = excluded.received_at
+				 WHERE excluded.updated_at >= reviews.updated_at`,
 			)
 			.bind(
 				r.id, r.targetType, r.targetId, r.displayName,
@@ -195,14 +197,18 @@ async function upsertReviews(
 			),
 	);
 
-	const results = await db.batch(stmts);
-	let accepted = 0;
-	let rejected = 0;
-	for (const res of results) {
-		if (res.success) accepted++;
-		else rejected++;
+	try {
+		const results = await db.batch(stmts);
+		let accepted = 0;
+		let rejected = 0;
+		for (const res of results) {
+			if (res.success) accepted++;
+			else rejected++;
+		}
+		return { accepted, rejected };
+	} catch {
+		return { accepted: 0, rejected: reviews.length };
 	}
-	return { accepted, rejected };
 }
 
 // ---------------------------------------------------------------------------
