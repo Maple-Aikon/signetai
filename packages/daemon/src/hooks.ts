@@ -1901,13 +1901,15 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			return { inject: metadataHeader, memoryCount: 0 };
 		}
 
+		const budget = cfg.pipelineV2.guardrails.contextBudgetChars;
 		const budgetSelected = selectWithBudget(
 			recall.results.map((result) => ({
 				...result,
 				pinned: result.pinned ? 1 : 0,
 			})),
-			500,
+			budget,
 		).slice(0, 5);
+		const omitted = recall.results.length - budgetSelected.length;
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
@@ -1935,6 +1937,9 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			const dateStr = formatMemoryDate(s.created_at);
 			return `- ${s.content} (${dateStr})`;
 		});
+		if (omitted > 0) {
+			lines.push(`(+${omitted} more not shown — raise memory.guardrails.contextBudgetChars to include)`);
+		}
 		let inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
 
 		// Append agent feedback request if enabled and there are injected memories

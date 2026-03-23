@@ -121,6 +121,10 @@ export interface UserPromptSubmitResult {
 	memoryCount: number;
 	queryTerms?: string;
 	engine?: string;
+	// False when the daemon had no record of this session — indicates a daemon
+	// restart mid-session. The adapter evicts the local claim so the next turn
+	// re-inits the session and re-injects the identity block.
+	sessionKnown?: boolean;
 }
 
 function firstNonEmptyString(...values: readonly unknown[]): string | undefined {
@@ -1389,6 +1393,12 @@ const signetPlugin = {
 			if (!result) {
 				// daemonFetch already logged the specific error (ECONNREFUSED or HTTP status).
 				return undefined;
+			}
+			// If the daemon had no record of this session it restarted mid-session.
+			// Evict the local claim so ensureSessionStarted re-inits on the next
+			// turn, transparently restoring the identity block and context.
+			if (result.sessionKnown === false && sessionKey) {
+				claimedSessions.delete(sessionKey);
 			}
 			recentPromptTurns.set(promptTurnKey, Date.now());
 			return buildInjectionResult(result);
