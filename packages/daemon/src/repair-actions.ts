@@ -209,7 +209,7 @@ export function requeueDeadJobs(
 				 WHERE status = 'dead'
 				   AND NOT (
 				     job_type = 'document_ingest'
-				     AND error LIKE '%UNIQUE constraint failed: index ''idx_memories_content_hash_unique''%'
+				     AND error LIKE '%UNIQUE constraint failed%content_hash%'
 				   )
 				 LIMIT ?`,
 			)

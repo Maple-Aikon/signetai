@@ -305,6 +305,7 @@ async function processDocument(
 	);
 
 	let memoriesCreated = 0;
+	let memoriesLinked = 0;
 
 	for (let i = 0; i < chunks.length; i++) {
 		const chunkText = chunks[i];
@@ -342,7 +343,7 @@ async function processDocument(
 					 (document_id, memory_id, chunk_index)
 					 VALUES (?, ?, ?)`,
 				).run(docId, global.id, i);
-				memoriesCreated++;
+				memoriesLinked++;
 				return;
 			}
 
@@ -426,14 +427,15 @@ async function processDocument(
 	});
 
 	accessor.withWriteTx((db) => {
-		completeDocument(db, docId, chunks.length, memoriesCreated);
+		completeDocument(db, docId, chunks.length, memoriesCreated + memoriesLinked);
 		completeJob(db, job.id);
 	});
 
 	logger.info("document-worker", "Document processed", {
 		documentId: docId,
 		chunks: chunks.length,
-		memories: memoriesCreated,
+		created: memoriesCreated,
+		linked: memoriesLinked,
 		title: title ?? "(untitled)",
 	});
 }
