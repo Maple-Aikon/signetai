@@ -9,7 +9,7 @@ import type { MigrationDb } from "./index";
  */
 
 function hasColumn(db: MigrationDb, table: string, col: string): boolean {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<{ name?: unknown }>;
+	const rows = db.prepare(`PRAGMA table_info("${table}")`).all() as ReadonlyArray<{ name?: unknown }>;
 	return rows.some((r) => r.name === col);
 }
 

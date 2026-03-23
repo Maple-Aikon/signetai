@@ -1989,12 +1989,10 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
 export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[]): number {
 	if (ids.length === 0) return 0;
 	return accessor.withWriteTx((db) => {
+		const stmt = db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = datetime('now') WHERE id = ? AND is_deleted = 0");
 		let total = 0;
 		for (const id of ids) {
-			const result = db
-				.prepare("UPDATE memories SET is_deleted = 1, deleted_at = datetime('now') WHERE id = ? AND is_deleted = 0")
-				.run(id);
-			total += countChanges(result);
+			total += countChanges(stmt.run(id));
 		}
 		return total;
 	});
