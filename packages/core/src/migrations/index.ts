@@ -46,7 +46,6 @@ import { up as entityCommunities } from "./037-entity-communities";
 import { up as memoryHints } from "./038-memory-hints";
 import { up as dedupEntityDependencies } from "./039-dedup-entity-dependencies";
 import { up as sessionTranscripts } from "./040-session-transcripts";
-import { up as warmStartFlag } from "./041-warm-start-flag";
 
 // -- Public interface consumed by Database.init() --
 
@@ -378,12 +377,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "session-transcripts",
 		up: sessionTranscripts,
 		artifacts: { tables: ["session_transcripts"] },
-	},
-	{
-		version: 41,
-		name: "warm-start-flag",
-		up: warmStartFlag,
-		artifacts: { columns: [{ table: "memories", column: "is_warm_start" }] },
 	},
 ];
 
