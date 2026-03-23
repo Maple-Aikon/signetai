@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.73.7] - 2026-03-23
+
+### Bug Fixes
+
+- March 2026 codebase review (#294)
+
+
 ## [0.73.6] - 2026-03-23
 
 ### Bug Fixes
