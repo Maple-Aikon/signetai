@@ -521,7 +521,7 @@ function buildOpenClawHealth(): import("./diagnostics").OpenClawHealth {
 		hooksRegistered: d.hooksRegistered,
 		hooksSucceeded: d.totalSucceeded,
 		hooksFailed: d.totalFailed,
-		avgLatencyMs: d.latencyMs,
+		lastLatencyMs: d.latencyMs,
 		lastError: d.lastError,
 	};
 }

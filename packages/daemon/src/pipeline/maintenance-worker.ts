@@ -389,10 +389,12 @@ export function startMaintenanceWorker(
 						db
 							.prepare(
 								`SELECT COUNT(*) as n FROM memories
-								 WHERE is_deleted = 0 AND importance <= 0.8
-								 AND (confidence < 0.1
-								   OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > 90)
-								   OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > 90))`,
+								 WHERE is_deleted = 0
+								   AND (is_warm_start IS NULL OR is_warm_start = 0)
+								   AND importance <= 0.8
+								   AND (confidence < 0.1
+								     OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > 90)
+								     OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > 90))`,
 							)
 							.get() as { n: number }
 					).n,
