@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.73.8] - 2026-03-23
+
+### Features
+
+- add reviews sync Cloudflare Worker (#296)
+
+### Bug Fixes
+
+- support provider: none for extraction and synthesis (#301)
+
+
 ## [0.73.7] - 2026-03-23
 
 ### Bug Fixes

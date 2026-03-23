@@ -149,7 +149,7 @@ export function startPipeline(
 	}
 
 	// Synthesis worker — session-activity-based MEMORY.md regeneration
-	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled) {
+	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
 		synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 	}
 

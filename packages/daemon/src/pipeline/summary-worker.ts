@@ -1011,6 +1011,8 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 	const ollamaFallbackMaxContextTokens =
 		resolveDefaultOllamaFallbackMaxContextTokens();
 	switch (p) {
+		case "none":
+			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
 		case "anthropic": {
 			let apiKey = process.env.ANTHROPIC_API_KEY;
 			if (!apiKey) {

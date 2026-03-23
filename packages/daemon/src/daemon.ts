@@ -10533,8 +10533,8 @@ async function main() {
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
-	const validExtractionProviders = new Set(["ollama", "claude-code", "opencode", "codex", "anthropic", "openrouter"]);
-	const validSynthesisProviders = new Set(["ollama", "claude-code", "opencode", "anthropic", "openrouter"]);
+	const validExtractionProviders = new Set(["none", "ollama", "claude-code", "opencode", "codex", "anthropic", "openrouter"]);
+	const validSynthesisProviders = new Set(["none", "ollama", "claude-code", "opencode", "anthropic", "openrouter"]);
 
 	providerRuntimeResolution.extraction = {
 		configured: providerHints.extraction,
@@ -10582,7 +10582,9 @@ async function main() {
 	);
 	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
 	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
-	if (effectiveExtractionProvider === "opencode") {
+	if (effectiveExtractionProvider === "none") {
+		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
+	} else if (effectiveExtractionProvider === "opencode") {
 		if (extractionOpenCodeShouldManage) {
 			const serverReady = await ensureOpenCodeServer(4096);
 			if (!serverReady) {
@@ -10729,8 +10731,9 @@ async function main() {
 	});
 
 	// Create LLM provider once, register as daemon-wide singleton
-	const llmProvider =
-		effectiveExtractionProvider === "anthropic" && anthropicApiKey
+	const llmProvider = effectiveExtractionProvider === "none"
+		? null
+		: effectiveExtractionProvider === "anthropic" && anthropicApiKey
 			? createAnthropicProvider({
 					model: effectiveExtractionModel || "haiku",
 					apiKey: anthropicApiKey,
@@ -10773,7 +10776,9 @@ async function main() {
 											}
 										: {}),
 								});
-	initLlmProvider(llmProvider);
+	if (llmProvider) {
+		initLlmProvider(llmProvider);
+	}
 
 	// Initialize model registry for dynamic model discovery
 	if (memoryCfg.pipelineV2.modelRegistry.enabled) {
@@ -10790,7 +10795,9 @@ async function main() {
 
 	// Create synthesis provider — separate from extraction because synthesis
 	// needs a smarter model that can reason across long context
-	if (memoryCfg.pipelineV2.synthesis.enabled) {
+	if (memoryCfg.pipelineV2.synthesis.provider === "none") {
+		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
+	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
 		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
 		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
 			memoryCfg.pipelineV2.synthesis.endpoint,
@@ -10987,9 +10994,9 @@ async function main() {
 		);
 	}
 
-	// Start extraction pipeline only when explicitly enabled.
+	// Start extraction pipeline only when explicitly enabled and an LLM is available.
 	// shadowMode controls behavior inside the enabled pipeline.
-	if (memoryCfg.pipelineV2.enabled) {
+	if (memoryCfg.pipelineV2.enabled && effectiveExtractionProvider !== "none") {
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
