@@ -8,6 +8,7 @@
 		getGridSlots,
 	} from "$lib/stores/agents.svelte";
 	import G3Monitor from "./G3Monitor.svelte";
+	import ZoomView from "./ZoomView.svelte";
 	import Plus from "@lucide/svelte/icons/plus";
 
 	onMount(() => {
@@ -22,41 +23,50 @@
 	const activeCount = $derived(
 		room.agents.filter((a) => a.status === "active").length,
 	);
+	const selected = $derived(
+		room.selectedId
+			? room.agents.find((a) => a.id === room.selectedId) ?? null
+			: null,
+	);
 </script>
 
-<div class="control-room">
-	<header class="room-header">
-		<div class="room-title">
-			<span class="title-text">Agent Control Room</span>
-			<span class="agent-count">{room.agents.length} agents · {activeCount} active</span>
-		</div>
-	</header>
+{#if selected}
+	<ZoomView agent={selected} onback={() => selectAgent(null)} />
+{:else}
+	<div class="control-room">
+		<header class="room-header">
+			<div class="room-title">
+				<span class="title-text">Agent Control Room</span>
+				<span class="agent-count">{room.agents.length} agents · {activeCount} active</span>
+			</div>
+		</header>
 
-	<div class="grid-container">
-		<div class="monitor-grid">
-			{#each slots as slot, i (slot?.id ?? `empty-${i}`)}
-				{#if slot}
-					<div class="grid-cell">
-						<G3Monitor
-							agent={slot}
-							selected={room.selectedId === slot.id}
-							onclick={() => selectAgent(room.selectedId === slot.id ? null : slot.id)}
-						/>
-					</div>
-				{:else}
-					<div class="grid-cell grid-cell--empty">
-						<button class="empty-slot" aria-label="Add agent">
-							<Plus class="empty-icon" />
-						</button>
-					</div>
-				{/if}
-			{/each}
+		<div class="grid-container">
+			<div class="monitor-grid">
+				{#each slots as slot, i (slot?.id ?? `empty-${i}`)}
+					{#if slot}
+						<div class="grid-cell">
+							<G3Monitor
+								agent={slot}
+								selected={false}
+								onclick={() => selectAgent(slot.id)}
+							/>
+						</div>
+					{:else}
+						<div class="grid-cell grid-cell--empty">
+							<button class="empty-slot" aria-label="Add agent">
+								<Plus class="empty-icon" />
+							</button>
+						</div>
+					{/if}
+				{/each}
+			</div>
 		</div>
+
+		<!-- Floor grid reflection -->
+		<div class="floor-grid" aria-hidden="true"></div>
 	</div>
-
-	<!-- Floor grid reflection -->
-	<div class="floor-grid" aria-hidden="true"></div>
-</div>
+{/if}
 
 <style>
 	.control-room {
