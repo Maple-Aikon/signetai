@@ -1289,8 +1289,11 @@ const signetPlugin = {
 
 		const claimedSessions = new Set<string>();
 		const sessionlessSessionStarts = new Map<string, number>();
-		// Maps sessionKey → last injected messageCount for per-turn idempotency.
-		const injectedTurns = new Map<string, number>();
+		// Maps sessionKey → {count, at} for per-turn idempotency. Entries are
+		// evicted on agent_end or lazily after SESSION_TURN_TTL_MS so crash/
+		// SIGKILL sessions don't accumulate indefinitely.
+		const SESSION_TURN_TTL_MS = 4 * 60 * 60 * 1000;
+		const injectedTurns = new Map<string, { count: number; at: number }>();
 		// Tracks turn signatures currently in-flight — provides a synchronous
 		// guard so concurrent before_prompt_build / before_agent_start calls on
 		// the same event-loop tick don't both pass the guard before either await
@@ -1376,7 +1379,14 @@ const signetPlugin = {
 			// sig is only defined when we have both a stable session identity and
 			// a message count — the two values that make dedup meaningful.
 			const sig = sessionKey && typeof count === "number" ? `${sessionKey}|${count}` : undefined;
-			if (sig && (inFlightTurns.has(sig) || (sessionKey !== undefined && injectedTurns.get(sessionKey) === count))) {
+			// Lazy TTL sweep: evict entries from sessions that ended without agent_end.
+			if (sig) {
+				const now = Date.now();
+				for (const [k, v] of injectedTurns) {
+					if (now - v.at > SESSION_TURN_TTL_MS) injectedTurns.delete(k);
+				}
+			}
+			if (sig && (inFlightTurns.has(sig) || (sessionKey !== undefined && injectedTurns.get(sessionKey)?.count === count))) {
 				return undefined;
 			}
 			// Mark in-flight synchronously before any await so concurrent
@@ -1400,7 +1410,7 @@ const signetPlugin = {
 			}
 			// Record the completed turn so the other hook sees it on arrival.
 			if (sessionKey && typeof count === "number") {
-				injectedTurns.set(sessionKey, count);
+				injectedTurns.set(sessionKey, { count, at: Date.now() });
 			}
 			return buildInjectionResult(result);
 		};
