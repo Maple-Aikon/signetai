@@ -7294,9 +7294,11 @@ app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
 			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
 			latencyMs: typeof b.latencyMs === "number" ? b.latencyMs : 0,
+			// Plugin sends per-heartbeat deltas, not cumulative totals.
+			// errorCount = failures since last heartbeat; hooksSucceeded = successes since last heartbeat.
 			errorCount: typeof b.errorCount === "number" ? b.errorCount : 0,
 			totalSucceeded: (prev?.totalSucceeded ?? 0) + (typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
-			totalFailed: (prev?.totalFailed ?? 0) + (typeof b.errorCount === "number" ? b.errorCount : 0),
+			totalFailed: (prev?.totalFailed ?? 0) + (typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
 		},
 	};
 	invalidateDiagnosticsCache();
