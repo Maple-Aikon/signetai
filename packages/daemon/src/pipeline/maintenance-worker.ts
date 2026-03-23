@@ -12,7 +12,6 @@ import type { DbAccessor } from "../db-accessor";
 import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
 import { propagateMemoryStatus } from "../knowledge-graph";
-import { invalidateTraversalCache } from "./graph-traversal";
 import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
@@ -28,6 +27,7 @@ import {
 	triggerRetentionSweep,
 } from "../repair-actions";
 import { decayAspectWeights, recordFeedbackTelemetry } from "./aspect-feedback";
+import { invalidateTraversalCache } from "./graph-traversal";
 import { checkAndCondense } from "./summary-condensation";
 
 // ---------------------------------------------------------------------------
@@ -378,6 +378,33 @@ export function startMaintenanceWorker(
 
 		if (feedbackDecayedAspects > 0 || feedbackPropagatedAttributes > 0) {
 			invalidateTraversalCache();
+		}
+
+		// Dead memory hygiene: warn when stale/low-confidence memories accumulate.
+		// No auto-deletion — use GET /api/repair/dead-memories to review and act.
+		try {
+			const count = accessor.withReadDb(
+				(db) =>
+					(
+						db
+							.prepare(
+								`SELECT COUNT(*) as n FROM memories
+								 WHERE is_deleted = 0 AND importance <= 0.8
+								 AND (confidence < 0.1
+								   OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > 90)
+								   OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > 90))`,
+							)
+							.get() as { n: number }
+					).n,
+			);
+			if (count > 100) {
+				logger.warn("maintenance", "Dead memory count exceeds threshold", {
+					count,
+					hint: "Review with GET /api/repair/dead-memories and clean up with POST /api/repair/dead-memories/forget",
+				});
+			}
+		} catch {
+			// Non-fatal — dead memory scan should never interrupt the maintenance cycle
 		}
 
 		return {

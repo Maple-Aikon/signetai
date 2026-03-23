@@ -90,13 +90,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "pipeline-v2",
 		up: pipelineV2,
 		artifacts: {
-			tables: [
-				"memory_history",
-				"memory_jobs",
-				"entities",
-				"relations",
-				"memory_entity_mentions",
-			],
+			tables: ["memory_history", "memory_jobs", "entities", "relations", "memory_entity_mentions"],
 		},
 	},
 	{
@@ -221,12 +215,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "knowledge-structure",
 		up: knowledgeStructure,
 		artifacts: {
-			tables: [
-				"entity_aspects",
-				"entity_attributes",
-				"entity_dependencies",
-				"task_meta",
-			],
+			tables: ["entity_aspects", "entity_attributes", "entity_dependencies", "task_meta"],
 			columns: [{ table: "entities", column: "agent_id" }],
 		},
 	},
@@ -249,9 +238,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "checkpoint-structural",
 		up: checkpointStructural,
 		artifacts: {
-			columns: [
-				{ table: "session_checkpoints", column: "focal_entity_ids" },
-			],
+			columns: [{ table: "session_checkpoints", column: "focal_entity_ids" }],
 		},
 	},
 	{
@@ -293,9 +280,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "agent-feedback",
 		up: agentFeedback,
 		artifacts: {
-			columns: [
-				{ table: "session_memories", column: "agent_relevance_score" },
-			],
+			columns: [{ table: "session_memories", column: "agent_relevance_score" }],
 		},
 	},
 	{
@@ -366,9 +351,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dependency-confidence",
 		up: dependencyConfidence,
 		artifacts: {
-			columns: [
-				{ table: "entity_dependencies", column: "confidence" },
-			],
+			columns: [{ table: "entity_dependencies", column: "confidence" }],
 		},
 	},
 	{
@@ -489,26 +472,18 @@ function hasStringName(row: Record<string, unknown>): row is { name: string } {
 }
 
 /** Type guard: narrows a query row to one with a numeric `version` field. */
-function hasNumericVersion(
-	row: Record<string, unknown>,
-): row is { version: number } {
+function hasNumericVersion(row: Record<string, unknown>): row is { version: number } {
 	return typeof row.version === "number";
 }
 
 /** Get the set of table names in the database (single query). */
 function existingTables(db: MigrationDb): Set<string> {
-	const rows = db
-		.prepare("SELECT name FROM sqlite_master WHERE type='table'")
-		.all();
+	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
 	return new Set(rows.filter(hasStringName).map((r) => r.name));
 }
 
 /** Get column names for a table, with per-call caching. */
-function tableColumns(
-	db: MigrationDb,
-	table: string,
-	cache: Map<string, Set<string>>,
-): Set<string> {
+function tableColumns(db: MigrationDb, table: string, cache: Map<string, Set<string>>): Set<string> {
 	let cols = cache.get(table);
 	if (cols) return cols;
 	const rows = db.prepare(`PRAGMA table_info("${table}")`).all();
@@ -683,8 +658,7 @@ export function hasPendingMigrations(db: MigrationDb): boolean {
 }
 
 /** The highest migration version defined. */
-export const LATEST_SCHEMA_VERSION =
-	MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 
 /**
  * Assert that MIGRATIONS versions are strictly contiguous (each version
@@ -752,12 +726,7 @@ export function runMigrations(db: MigrationDb): void {
 				`INSERT INTO schema_migrations_audit
 				 (version, applied_at, duration_ms, checksum)
 				 VALUES (?, ?, ?, ?)`,
-			).run(
-				migration.version,
-				new Date().toISOString(),
-				Date.now() - start,
-				cs,
-			);
+			).run(migration.version, new Date().toISOString(), Date.now() - start, cs);
 
 			db.exec(`RELEASE migration_${migration.version}`);
 		} catch (err) {

@@ -10,17 +10,13 @@ import { vectorSearch } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
-import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
-import { FTS_STOP } from "./pipeline/stop-words";
-import {
-	resolveFocalEntities,
-	setTraversalStatus,
-	traverseKnowledgeGraph,
-} from "./pipeline/graph-traversal";
 import { constructContextBlocks } from "./pipeline/context-construction";
+import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
+import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
+import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
-import { applyDampening, DEFAULT_DAMPENING, type ScoredRow } from "./pipeline/dampening";
+import { FTS_STOP } from "./pipeline/stop-words";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -164,7 +160,10 @@ function sanitizeFtsQuery(raw: string): string {
 		.replace(/'/g, " ")
 		.split(/\s+/)
 		.map((token) => {
-			const cleaned = token.replace(/[":()^*?]/g, "").trim().toLowerCase();
+			const cleaned = token
+				.replace(/[":()^*?]/g, "")
+				.trim()
+				.toLowerCase();
 			if (!cleaned || cleaned.length < 2) return null;
 			if (FTS_STOP.has(cleaned)) return null;
 			return `"${cleaned}"`;
@@ -254,6 +253,7 @@ export async function hybridRecall(
         FROM memories_fts
         JOIN memories m ON memories_fts.rowid = m.rowid
         WHERE memories_fts MATCH ?${filter.sql}
+          AND (m.is_warm_start IS NULL OR m.is_warm_start = 0)
         ORDER BY raw_score
         LIMIT ?
       `) as any
@@ -264,8 +264,7 @@ export async function hybridRecall(
 
 			// Min-max normalize BM25 scores to [0,1] within the batch
 			const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
-			const maxRaw =
-				rawScores.length > 0 ? Math.max(...rawScores) : 1;
+			const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
 			const normalizer = maxRaw > 0 ? maxRaw : 1;
 			for (const row of ftsRows) {
 				const normalised = Math.abs(row.raw_score) / normalizer;
@@ -393,9 +392,8 @@ export async function hybridRecall(
 	flatScored.sort((a, b) => b.score - a.score);
 
 	// --- Score pipeline: traversal-primary vs legacy boost ---
-	const traversalPrimary = cfg.pipelineV2.graph.enabled
-		&& cfg.pipelineV2.traversal?.enabled
-		&& cfg.pipelineV2.traversal?.primary !== false;
+	const traversalPrimary =
+		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
 
 	let scored: Array<{ id: string; score: number; source: string }>;
 
@@ -409,9 +407,7 @@ export async function hybridRecall(
 				const queryTokens = tokenizeGraphQuery(query);
 				if (queryTokens.length > 0) {
 					const agentId = params.agentId ?? "default";
-					const focal = getDbAccessor().withReadDb((db) =>
-						resolveFocalEntities(db, agentId, { queryTokens }),
-					);
+					const focal = getDbAccessor().withReadDb((db) => resolveFocalEntities(db, agentId, { queryTokens }));
 
 					if (focal.entityIds.length > 0) {
 						const traversal = getDbAccessor().withReadDb((db) =>
@@ -437,24 +433,21 @@ export async function hybridRecall(
 						if (queryVecF32 && traversal.memoryScores.size > 0) {
 							const ids = [...traversal.memoryScores.keys()];
 							const ph = ids.map(() => "?").join(", ");
-							const embRows = getDbAccessor().withReadDb((db) =>
-								db
-									.prepare(
-										`SELECT source_id, vector FROM embeddings
+							const embRows = getDbAccessor().withReadDb(
+								(db) =>
+									db
+										.prepare(
+											`SELECT source_id, vector FROM embeddings
 										 WHERE source_id IN (${ph})`,
-									)
-									.all(...ids) as Array<{
-									source_id: string;
-									vector: Buffer;
-								}>,
+										)
+										.all(...ids) as Array<{
+										source_id: string;
+										vector: Buffer;
+									}>,
 							);
 							const qv = queryVecF32;
 							for (const row of embRows) {
-								const mv = new Float32Array(
-									row.vector.buffer,
-									row.vector.byteOffset,
-									row.vector.byteLength / 4,
-								);
+								const mv = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
 								// Cosine similarity (vectors are normalized by embedding model)
 								let dot = 0;
 								const len = Math.min(qv.length, mv.length);
@@ -467,9 +460,7 @@ export async function hybridRecall(
 						for (const [memoryId, importance] of traversal.memoryScores) {
 							const cosine = cosineMap.get(memoryId) ?? 0;
 							const imp = Math.max(minScore, Math.min(1, importance));
-							const score = cosine > 0
-								? cosineWeight * cosine + (1 - cosineWeight) * imp
-								: imp;
+							const score = cosine > 0 ? cosineWeight * cosine + (1 - cosineWeight) * imp : imp;
 							traversalScored.push({
 								id: memoryId,
 								score,
@@ -549,9 +540,7 @@ export async function hybridRecall(
 				const queryTokens = tokenizeGraphQuery(query);
 				if (queryTokens.length > 0) {
 					const agentId = params.agentId ?? "default";
-					const focal = getDbAccessor().withReadDb((db) =>
-						resolveFocalEntities(db, agentId, { queryTokens }),
-					);
+					const focal = getDbAccessor().withReadDb((db) => resolveFocalEntities(db, agentId, { queryTokens }));
 
 					if (focal.entityIds.length > 0) {
 						const traversal = getDbAccessor().withReadDb((db) =>
@@ -820,8 +809,7 @@ export async function hybridRecall(
 				? " AND scope IS NULL"
 				: " AND scope = ?"
 			: " AND scope IS NULL";
-	const scopeArgs: unknown[] =
-		params.scope !== undefined && params.scope !== null ? [params.scope] : [];
+	const scopeArgs: unknown[] = params.scope !== undefined && params.scope !== null ? [params.scope] : [];
 	const placeholders = topIds.map(() => "?").join(", ");
 
 	const rows = getDbAccessor().withReadDb(
@@ -830,7 +818,8 @@ export async function hybridRecall(
 				.prepare(
 					`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
         FROM memories
-        WHERE id IN (${placeholders})${scopeClause}`,
+        WHERE id IN (${placeholders})${scopeClause}
+          AND (is_warm_start IS NULL OR is_warm_start = 0)`,
 				)
 				.all(...topIds, ...scopeArgs) as Array<{
 				id: string;
@@ -1005,34 +994,38 @@ export async function hybridRecall(
 						entity_type: string;
 					}>;
 
-					const structured = entities.map((ent) => {
-						const aspects = db
-							.prepare(
-								`SELECT id, name FROM entity_aspects
+					const structured = entities
+						.map((ent) => {
+							const aspects = db
+								.prepare(
+									`SELECT id, name FROM entity_aspects
 								 WHERE entity_id = ? AND agent_id = ?
 								 ORDER BY weight DESC LIMIT 10`,
-							)
-							.all(ent.id, agentId) as Array<{ id: string; name: string }>;
+								)
+								.all(ent.id, agentId) as Array<{ id: string; name: string }>;
 
-						return {
-							name: ent.name,
-							type: ent.entity_type,
-							aspects: aspects.map((asp) => {
-								const attrs = db
-									.prepare(
-										`SELECT content, status, importance FROM entity_attributes
+							return {
+								name: ent.name,
+								type: ent.entity_type,
+								aspects: aspects
+									.map((asp) => {
+										const attrs = db
+											.prepare(
+												`SELECT content, status, importance FROM entity_attributes
 										 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
 										 ORDER BY importance DESC LIMIT 5`,
-									)
-									.all(asp.id, agentId) as Array<{
-									content: string;
-									status: string;
-									importance: number;
-								}>;
-								return { name: asp.name, attributes: attrs };
-							}).filter((a) => a.attributes.length > 0),
-						};
-					}).filter((e) => e.aspects.length > 0);
+											)
+											.all(asp.id, agentId) as Array<{
+											content: string;
+											status: string;
+											importance: number;
+										}>;
+										return { name: asp.name, attributes: attrs };
+									})
+									.filter((a) => a.attributes.length > 0),
+							};
+						})
+						.filter((e) => e.aspects.length > 0);
 
 					return { eids, structured };
 				});
@@ -1058,13 +1051,9 @@ export async function hybridRecall(
 		try {
 			const agentId = params.agentId ?? "default";
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
-			const blocks = getDbAccessor().withReadDb((db) =>
-				constructContextBlocks(db, agentId, focalEids, cap),
-			);
+			const blocks = getDbAccessor().withReadDb((db) => constructContextBlocks(db, agentId, focalEids, cap));
 			const now = new Date().toISOString();
-			const minReal = results.length > 0
-				? Math.min(...results.map((r) => r.score))
-				: 0.5;
+			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);
 			let added = 0;
 			for (const block of blocks) {
@@ -1103,11 +1092,7 @@ export async function hybridRecall(
 	if (params.expand) {
 		try {
 			const keys = [
-				...new Set(
-					[...rowMap.values()]
-						.map((r) => r.source_id)
-						.filter((s): s is string => s !== null && s !== ""),
-				),
+				...new Set([...rowMap.values()].map((r) => r.source_id).filter((s): s is string => s !== null && s !== "")),
 			];
 			if (keys.length > 0) {
 				const ph = keys.map(() => "?").join(", ");
