@@ -2,6 +2,43 @@ import type { Hono } from "hono";
 import { logger } from "../logger.js";
 
 export function mountAgentRegistryRoutes(app: Hono): void {
+	// POST /api/room/agents/spawn — spawn a new coding agent
+	app.post("/api/room/agents/spawn", async (c) => {
+		let body: Record<string, unknown>;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON" }, 400);
+		}
+
+		const task = typeof body.task === "string" ? body.task.trim() : "";
+		const model = typeof body.model === "string" ? body.model : "sonnet";
+
+		if (!task) return c.json({ error: "Task is required" }, 400);
+
+		try {
+			const { spawn } = await import("node:child_process");
+			const proc = spawn("claude", ["-p", task, "--model", model, "--no-session-persistence"], {
+				detached: true,
+				stdio: "ignore",
+				env: { ...process.env, SIGNET_NO_HOOKS: "1" },
+			});
+			proc.unref();
+
+			logger.info(`[agent-registry] spawned claude PID=${proc.pid} model=${model}`);
+
+			return c.json({
+				ok: true,
+				pid: proc.pid,
+				model,
+				task: task.slice(0, 100),
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return c.json({ error: msg }, 500);
+		}
+	});
+
 	// GET /api/room/agents — list all discovered agents
 	app.get("/api/room/agents", async (c) => {
 		const agents: Array<{

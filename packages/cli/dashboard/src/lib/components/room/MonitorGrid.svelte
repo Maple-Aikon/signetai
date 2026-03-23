@@ -9,6 +9,7 @@
 	} from "$lib/stores/agents.svelte";
 	import G3Monitor from "./G3Monitor.svelte";
 	import ZoomView from "./ZoomView.svelte";
+	import AddAgentDialog from "./AddAgentDialog.svelte";
 	import Plus from "@lucide/svelte/icons/plus";
 
 	onMount(() => {
@@ -28,7 +29,11 @@
 			? room.agents.find((a) => a.id === room.selectedId) ?? null
 			: null,
 	);
+
+	let dialogOpen = $state(false);
 </script>
+
+<AddAgentDialog open={dialogOpen} onclose={() => { dialogOpen = false; }} />
 
 {#if selected}
 	<ZoomView agent={selected} onback={() => selectAgent(null)} />
@@ -54,7 +59,7 @@
 						</div>
 					{:else}
 						<div class="grid-cell grid-cell--empty">
-							<button class="empty-slot" aria-label="Add agent">
+							<button class="empty-slot" aria-label="Add agent" onclick={() => { dialogOpen = true; }}>
 								<Plus class="empty-icon" />
 							</button>
 						</div>
