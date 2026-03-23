@@ -20,7 +20,7 @@ Overview
 
 The daemon process is a single Bun-targeted binary at
 `packages/daemon/dist/daemon.js`. It owns two things: the SQLite database
-at `~/.agents/memory/memories.db` and the config directory at `~/.agents/`.
+at `$SIGNET_WORKSPACE/memory/memories.db` and the config directory at `$SIGNET_WORKSPACE/`.
 Everything else — file watching, the memory pipeline, the dashboard —
 runs inside that one process.
 
@@ -29,7 +29,7 @@ Environment variables control the network address:
 - `SIGNET_HOST` — daemon host for local calls and default bind address (default: `127.0.0.1`)
 - `SIGNET_BIND` — explicit bind address override (default: `SIGNET_HOST`)
 - `SIGNET_PORT` — port to listen on (default: `3850`)
-- `SIGNET_PATH` — override the data directory (default: `~/.agents/`)
+- `SIGNET_PATH` — override the data directory (default: `$SIGNET_WORKSPACE/`)
 - `SIGNET_LOG_FILE` — optional explicit daemon log file path
 
 Bun is a hard requirement. The daemon uses `bun:sqlite` directly and will
@@ -97,7 +97,7 @@ loginctl enable-linger $USER
 The CLI writes a plist to
 `~/Library/LaunchAgents/ai.signet.daemon.plist` with `KeepAlive` and
 `RunAtLoad` set to true, so it starts at login and restarts on crash.
-Stdout and stderr go to `~/.agents/.daemon/logs/`.
+Stdout and stderr go to `$SIGNET_WORKSPACE/.daemon/logs/`.
 
 ```bash
 launchctl list ai.signet.daemon   # check status
@@ -117,7 +117,7 @@ By default the daemon runs in `local` mode: no authentication, no rate
 limiting, localhost only. For shared deployments you switch to `team` mode,
 which requires a bearer token on every request.
 
-Add an `auth` block to `~/.agents/agent.yaml`:
+Add an `auth` block to `$SIGNET_WORKSPACE/agent.yaml`:
 
 ```yaml
 auth:
@@ -125,7 +125,7 @@ auth:
 ```
 
 Then restart the daemon. On first start with a non-local mode, the daemon
-generates a 32-byte HMAC secret at `~/.agents/.daemon/auth-secret` with
+generates a 32-byte HMAC secret at `$SIGNET_WORKSPACE/.daemon/auth-secret` with
 permissions `0600`. All tokens are signed against this secret. Rotating the
 secret invalidates all existing tokens.
 
@@ -320,23 +320,23 @@ Backup and Restore
 
 All persistent state lives in two places:
 
-- `~/.agents/memory/memories.db` — the SQLite database
-- `~/.agents/` — config files, secrets, skills
+- `$SIGNET_WORKSPACE/memory/memories.db` — the SQLite database
+- `$SIGNET_WORKSPACE/` — config files, secrets, skills
 
 The database runs in WAL mode, which makes it safe to copy while the
 daemon is running. A simple backup:
 
 ```bash
-cp ~/.agents/memory/memories.db /backup/memories-$(date +%Y%m%d).db
+cp $SIGNET_WORKSPACE/memory/memories.db /backup/memories-$(date +%Y%m%d).db
 ```
 
 For a full backup including config and the auth secret:
 
 ```bash
-rsync -a ~/.agents/ /backup/agents-$(date +%Y%m%d)/
+rsync -a $SIGNET_WORKSPACE/ /backup/agents-$(date +%Y%m%d)/
 ```
 
-The auth secret lives at `~/.agents/.daemon/auth-secret` (binary, 32
+The auth secret lives at `$SIGNET_WORKSPACE/.daemon/auth-secret` (binary, 32
 bytes, mode `0600`). Back it up with your config. Losing it invalidates all
 issued tokens.
 
@@ -344,7 +344,7 @@ To restore, stop the daemon, copy the files back, and restart:
 
 ```bash
 systemctl --user stop signet.service
-rsync -a /backup/agents-20260101/ ~/.agents/
+rsync -a /backup/agents-20260101/ $SIGNET_WORKSPACE/
 systemctl --user start signet.service
 ```
 
@@ -414,8 +414,8 @@ If another process holds the port, either stop it or change `SIGNET_PORT`.
 If the daemon starts then immediately exits, check the log file:
 
 ```bash
-tail -50 ~/.agents/.daemon/logs/daemon.out.log
-tail -50 ~/.agents/.daemon/logs/daemon.err.log
+tail -50 $SIGNET_WORKSPACE/.daemon/logs/daemon.out.log
+tail -50 $SIGNET_WORKSPACE/.daemon/logs/daemon.err.log
 ```
 
 The most common cause is Bun not being found. The systemd unit and launchd

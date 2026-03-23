@@ -41,8 +41,8 @@ production:
 ```bash
 # Create isolated environment
 mkdir -p /tmp/signet-bench/memory
-cp ~/.agents/agent.yaml /tmp/signet-bench/
-ln -sf ~/.agents/.models /tmp/signet-bench/.models
+cp $SIGNET_WORKSPACE/agent.yaml /tmp/signet-bench/
+ln -sf $SIGNET_WORKSPACE/.models /tmp/signet-bench/.models
 
 # Start isolated daemon
 SIGNET_PATH=/tmp/signet-bench SIGNET_PORT=3851 bun packages/daemon/src/daemon.ts &
@@ -332,12 +332,12 @@ Use separate isolated environments on different ports:
 ```bash
 # Local stack (port 3851)
 mkdir -p /tmp/signet-bench/memory
-cp ~/.agents/agent.yaml /tmp/signet-bench/   # local models config
+cp $SIGNET_WORKSPACE/agent.yaml /tmp/signet-bench/   # local models config
 SIGNET_PATH=/tmp/signet-bench SIGNET_PORT=3851 bun packages/daemon/src/daemon.ts &
 
 # Cloud stack (port 3852)
 mkdir -p /tmp/signet-bench-cloud/memory
-cp ~/.agents/agent.yaml /tmp/signet-bench-cloud/
+cp $SIGNET_WORKSPACE/agent.yaml /tmp/signet-bench-cloud/
 # Edit agent.yaml: provider: openai, model: gpt-4o, embedding: text-embedding-3-large
 SIGNET_PATH=/tmp/signet-bench-cloud SIGNET_PORT=3852 bun packages/daemon/src/daemon.ts &
 

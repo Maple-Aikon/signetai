@@ -15,7 +15,6 @@ export type TabId =
 	| "knowledge"
 	| "embeddings"
 	| "pipeline"
-	| "review-queue"
 	| "logs"
 	| "secrets"
 	| "skills"
@@ -37,7 +36,6 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"knowledge",
 	"embeddings",
 	"pipeline",
-	"review-queue",
 	"logs",
 	"secrets",
 	"skills",
@@ -77,6 +75,7 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["engine/connectors", "connectors"],
 	["engine/logs", "logs"],
 	["config", "settings"],
+	["review-queue", "pipeline"],
 ]);
 
 function readTabFromHash(): TabId | null {
@@ -101,7 +100,6 @@ const MEMORY_TABS: ReadonlySet<TabId> = new Set([
 const ENGINE_TABS: ReadonlySet<TabId> = new Set([
 	"settings",
 	"pipeline",
-	"review-queue",
 	"predictor",
 	"connectors",
 	"logs",

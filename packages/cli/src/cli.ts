@@ -85,6 +85,7 @@ import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
+import { registerWorkspaceCommands } from "./commands/workspace.js";
 import { configureAgent } from "./features/configure.js";
 import { doRestart, doStart, doStop, launchDashboard, migrateSchema, showLogs } from "./features/daemon.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
@@ -1316,7 +1317,13 @@ registerMemoryCommands(program, {
 	secretApiCall,
 });
 
-registerPortableCommands(program);
+registerPortableCommands(program, {
+	AGENTS_DIR,
+});
+
+registerWorkspaceCommands(program, {
+	signetLogo,
+});
 
 // ============================================================================
 // signet hook - Lifecycle hooks for harness integration
@@ -1342,6 +1349,7 @@ registerUpdateCommands(program, {
 });
 
 registerGitCommands(program, {
+	agentsDir: AGENTS_DIR,
 	fetchFromDaemon,
 });
 

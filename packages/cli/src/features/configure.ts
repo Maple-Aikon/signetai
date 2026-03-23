@@ -3,6 +3,11 @@ import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
+import {
+	chooseWorkspaceCandidate,
+	listWorkspaceCandidates,
+	setWorkspacePath as setWorkspaceDefaultPath,
+} from "./workspace.js";
 
 interface Deps {
 	readonly agentsDir: string;
@@ -10,8 +15,15 @@ interface Deps {
 	readonly signetLogo: () => string;
 }
 
+interface Cfg {
+	readonly dir: string;
+	readonly file: string;
+	readonly yaml: string;
+}
+
 const sections = [
 	{ value: "agent", name: "👤 Agent identity (name, description)" },
+	{ value: "workspace", name: "📁 Workspace path" },
 	{ value: "network", name: "🌐 Network access" },
 	{ value: "harnesses", name: "[link] Harnesses (AI platforms)" },
 	{ value: "embedding", name: "🧠 Embedding provider" },
@@ -24,13 +36,17 @@ const sections = [
 export async function configureAgent(deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 
-	const path = join(deps.agentsDir, "agent.yaml");
-	if (!existsSync(path)) {
+	const file = join(deps.agentsDir, "agent.yaml");
+	if (!existsSync(file)) {
 		console.log(chalk.yellow("  No agent.yaml found. Run `signet setup` first."));
 		return;
 	}
 
-	let yaml = readFileSync(path, "utf-8");
+	let cfg: Cfg = {
+		dir: deps.agentsDir,
+		file,
+		yaml: readFileSync(file, "utf-8"),
+	};
 
 	console.log(chalk.bold("  Configure your agent\n"));
 
@@ -47,21 +63,27 @@ export async function configureAgent(deps: Deps): Promise<void> {
 		console.log();
 
 		if (section === "view") {
-			showCurrent(yaml);
+			showCurrent(cfg.yaml);
+			continue;
+		}
+
+		if (section === "workspace") {
+			cfg = await configureWorkspace(cfg);
+			console.log();
 			continue;
 		}
 
 		if (section === "agent") {
-			yaml = await configureIdentity(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureIdentity(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Agent identity updated"));
 			console.log();
 			continue;
 		}
 
 		if (section === "network") {
-			yaml = await configureNetwork(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureNetwork(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Network settings updated"));
 			console.log(chalk.dim("    Restart the daemon to apply the new bind mode."));
 			console.log();
@@ -69,37 +91,103 @@ export async function configureAgent(deps: Deps): Promise<void> {
 		}
 
 		if (section === "harnesses") {
-			yaml = await configureHarnesses(yaml, deps);
-			writeFileSync(path, yaml);
+			const yaml = await configureHarnesses(cfg.yaml, deps, cfg.dir);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Harnesses updated"));
 			console.log();
 			continue;
 		}
 
 		if (section === "embedding") {
-			yaml = await configureEmbedding(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureEmbedding(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Embedding settings updated"));
 			console.log();
 			continue;
 		}
 
 		if (section === "search") {
-			yaml = await configureSearch(yaml);
-			writeFileSync(path, yaml);
+			const yaml = await configureSearch(cfg.yaml);
+			cfg = writeConfig(cfg, yaml);
 			console.log(chalk.green("  ✓ Search settings updated"));
 			console.log();
 			continue;
 		}
 
-		yaml = await configureMemory(yaml);
-		writeFileSync(path, yaml);
+		const yaml = await configureMemory(cfg.yaml);
+		cfg = writeConfig(cfg, yaml);
 		console.log(chalk.green("  ✓ Memory settings updated"));
 		console.log();
 	}
 
 	console.log(chalk.dim("  Configuration saved to agent.yaml"));
 	console.log();
+}
+
+function writeConfig(cfg: Cfg, yaml: string): Cfg {
+	writeFileSync(cfg.file, yaml);
+	return {
+		...cfg,
+		yaml,
+	};
+}
+
+async function configureWorkspace(cfg: Cfg): Promise<Cfg> {
+	const target = await configureWorkspacePath(cfg.dir);
+	try {
+		const result = await setWorkspaceDefaultPath(target, {
+			currentPath: cfg.dir,
+			patchOpenClaw: true,
+		});
+		const file = join(result.nextPath, "agent.yaml");
+		const yaml = existsSync(file) ? readFileSync(file, "utf-8") : cfg.yaml;
+		console.log(chalk.green("  ✓ Workspace updated"));
+		console.log(chalk.dim(`    active: ${result.nextPath}`));
+		if (result.migrated) {
+			console.log(chalk.dim(`    migrated: ${result.copiedFiles} copied, ${result.overwrittenFiles} overwritten`));
+		}
+		if (result.patchedConfigs.length > 0) {
+			console.log(chalk.dim(`    openclaw configs patched: ${result.patchedConfigs.length}`));
+		}
+		if (result.changed) {
+			console.log(chalk.dim("    restart the daemon to apply workspace changes to active runtime processes"));
+		}
+		return {
+			dir: result.nextPath,
+			file,
+			yaml,
+		};
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.log(chalk.red(`  Workspace update failed: ${msg}`));
+		return cfg;
+	}
+}
+
+async function configureWorkspacePath(currentPath: string): Promise<string> {
+	const ranked = listWorkspaceCandidates(currentPath).slice(0, 8);
+	const fallback = chooseWorkspaceCandidate(currentPath);
+	const choices = ranked.map((candidate) => ({
+		value: candidate.path,
+		name: candidate.source === "detected" ? `${candidate.path} (detected)` : `${candidate.path} (preset)`,
+	}));
+	choices.push({ value: "__custom__", name: "Custom path..." });
+
+	const picked = await select({
+		message: "Select workspace path:",
+		choices,
+		default: fallback,
+	});
+	if (picked !== "__custom__") {
+		return picked;
+	}
+
+	const typed = await input({
+		message: "Workspace path:",
+		default: fallback,
+	});
+	const trimmed = typed.trim();
+	return trimmed.length > 0 ? trimmed : fallback;
 }
 
 function showCurrent(yaml: string): void {
@@ -156,7 +244,7 @@ async function configureNetwork(yaml: string): Promise<string> {
 	return writeNetworkSection(yaml, mode);
 }
 
-async function configureHarnesses(yaml: string, deps: Deps): Promise<string> {
+async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promise<string> {
 	const harnesses = await checkbox({
 		message: "Select AI platforms:",
 		choices: [
@@ -183,7 +271,7 @@ async function configureHarnesses(yaml: string, deps: Deps): Promise<string> {
 
 	for (const harness of harnesses) {
 		try {
-			await deps.configureHarnessHooks(harness, deps.agentsDir);
+			await deps.configureHarnessHooks(harness, dir);
 			console.log(chalk.dim(`    ✓ ${harness}`));
 		} catch {
 			console.log(chalk.yellow(`    ⚠ ${harness} failed`));

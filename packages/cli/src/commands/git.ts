@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import ora from "ora";
 
 interface GitDeps {
+	readonly agentsDir: string;
 	readonly fetchFromDaemon: <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 }
 
@@ -34,7 +35,7 @@ export function registerGitCommands(program: Command, deps: GitDeps): void {
 			console.log(chalk.bold("Git Status\n"));
 			if (!data.isRepo) {
 				console.log(chalk.yellow("  Not a git repository"));
-				console.log(chalk.dim("  Run: cd ~/.agents && git init"));
+				console.log(chalk.dim(`  Run: cd ${deps.agentsDir} && git init`));
 				return;
 			}
 
@@ -59,7 +60,7 @@ export function registerGitCommands(program: Command, deps: GitDeps): void {
 				console.log(`  ${chalk.dim("Unpulled:")}   ${chalk.cyan(`${data.unpulledCommits} commits`)}`);
 			}
 			if (data.authMethod === "no-remote") {
-				console.log(chalk.dim("\n  To enable sync: git -C ~/.agents remote add origin <url>"));
+				console.log(chalk.dim(`\n  To enable sync: git -C ${deps.agentsDir} remote add origin <url>`));
 			} else if (!data.hasCredentials) {
 				console.log(chalk.dim("\n  To enable sync: gh auth login, or signet secret put GITHUB_TOKEN"));
 			}

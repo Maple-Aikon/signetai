@@ -63,7 +63,7 @@ green indicator means the file is present and the harness is synced. If
 a connector shows `OFF`, run `signet sync` or save `AGENTS.md` to
 trigger a re-sync.
 
-**Config Files** lists all `.md` and `.yaml` files found in `~/.agents/`.
+**Config Files** lists all `.md` and `.yaml` files found in `$SIGNET_WORKSPACE/`.
 Clicking a file opens it in the Config editor.
 
 
@@ -71,7 +71,7 @@ Tabs
 ----
 
 **Config** — A CodeMirror 6 editor for your agent's identity files.
-Files are loaded from `~/.agents/`. The editor provides syntax
+Files are loaded from `$SIGNET_WORKSPACE/`. The editor provides syntax
 highlighting (markdown for `.md` files, YAML for `.yaml`), line
 numbers, bracket matching, fold gutters, search (`Ctrl+F`), and undo
 history. Use `Cmd+S` / `Ctrl+S` to save. Saving `AGENTS.md` triggers
@@ -82,7 +82,7 @@ activated by the `data-theme="light"` attribute.
 **Settings** — A YAML editor (also CodeMirror 6) for `agent.yaml`.
 Modify embedding provider, pipeline V2 flags, search settings, memory
 retention windows, and auth configuration without leaving the browser.
-Changes are saved directly to `~/.agents/agent.yaml`.
+Changes are saved directly to `$SIGNET_WORKSPACE/agent.yaml`.
 
 **Memory** — Browse and search your memory database. Search runs hybrid
 (semantic + keyword) lookup. You can filter by type, tags, source

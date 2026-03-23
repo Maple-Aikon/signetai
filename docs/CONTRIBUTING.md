@@ -292,7 +292,7 @@ All scripts live in `scripts/` and are written in TypeScript (run via
 Identity Files
 ---
 
-Signet recognizes these standard identity files at `~/.agents/`:
+Signet recognizes these standard identity files at `$SIGNET_WORKSPACE/`:
 
 | File | Required | Description |
 |------|----------|-------------|

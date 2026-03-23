@@ -22,7 +22,7 @@ Signet's solution: secrets are encrypted at rest, and agents never receive decry
 ## Storage
 
 ```
-~/.agents/
+$SIGNET_WORKSPACE/
 └── .secrets/
     └── secrets.enc     # Encrypted secret store (JSON, mode 0600)
 ```
@@ -182,7 +182,7 @@ If a secret value appears anywhere in stdout or stderr, it is replaced with `[RE
 - Reads the machine ID from `/etc/machine-id` or equivalent
 - Derives a 32-byte master key using BLAKE2b
 - Encrypts each secret value with a random nonce
-- Stores ciphertext in `~/.agents/.secrets/secrets.enc` at `0600`
+- Stores ciphertext in `$SIGNET_WORKSPACE/.secrets/secrets.enc` at `0600`
 
 **What agents can't do:**
 - Read secret values from config files or environment
@@ -193,7 +193,7 @@ If a secret value appears anywhere in stdout or stderr, it is replaced with `[RE
 **What you should know:**
 - The master key is machine-bound, not passphrase-protected by default. If someone has shell access as your user, they can derive the key.
 - Passphrase-protected keys are planned for a future version.
-- Don't commit `~/.agents/.secrets/` to version control. Add it to `.gitignore`.
+- Don't commit `$SIGNET_WORKSPACE/.secrets/` to version control. Add it to `.gitignore`.
 - Secrets are zeroed from memory (best-effort in JavaScript) after use.
 
 ---
