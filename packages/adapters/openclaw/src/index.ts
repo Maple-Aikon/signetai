@@ -251,7 +251,6 @@ interface MarketplaceExposurePolicy {
 	readonly updatedAt: string;
 }
 
-const PROMPT_DEDUPE_WINDOW_MS = 1_000;
 
 function sanitizeToolSegment(value: string): string {
 	const normalized = value
@@ -740,22 +739,16 @@ function textResult(text: string, details?: Record<string, unknown>): OpenClawTo
 	};
 }
 
-function cleanupRecentPromptTurns(recentTurns: Map<string, number>, now: number): void {
-	for (const [key, ts] of recentTurns) {
-		if (now - ts > PROMPT_DEDUPE_WINDOW_MS) {
-			recentTurns.delete(key);
+// Dedup window for sessionless session-start calls (time-based; these don't
+// have a stable messageCount to key on).
+const SESSIONLESS_DEDUPE_MS = 1_000;
+
+function cleanupTimedMap(map: Map<string, number>, now: number): void {
+	for (const [key, ts] of map) {
+		if (now - ts > SESSIONLESS_DEDUPE_MS) {
+			map.delete(key);
 		}
 	}
-}
-
-function buildPromptTurnKey(params: {
-	sessionKey?: string;
-	agentId?: string;
-	prompt: string;
-	messageCount?: number;
-}): string {
-	const normalizedPrompt = params.prompt.trim().replace(/\s+/g, " ").slice(0, 240);
-	return `${params.sessionKey ?? "-"}|${params.agentId ?? "-"}|${params.messageCount ?? -1}|${normalizedPrompt}`;
 }
 
 function buildInjectionResult(result: UserPromptSubmitResult): { prependContext: string } | undefined {
@@ -1296,7 +1289,8 @@ const signetPlugin = {
 
 		const claimedSessions = new Set<string>();
 		const sessionlessSessionStarts = new Map<string, number>();
-		const recentPromptTurns = new Map<string, number>();
+		// Maps sessionKey → last injected messageCount for per-turn idempotency.
+		const injectedTurns = new Map<string, number>();
 
 		const resolveHookContext = (
 			ctx: unknown,
@@ -1321,10 +1315,10 @@ const signetPlugin = {
 		): Promise<void> => {
 			if (!sessionKey) {
 				const now = Date.now();
-				cleanupRecentPromptTurns(sessionlessSessionStarts, now);
+				cleanupTimedMap(sessionlessSessionStarts, now);
 				const sessionlessKey = buildSessionlessTurnKey(event, agentId);
 				const recentStartAt = sessionlessSessionStarts.get(sessionlessKey);
-				if (typeof recentStartAt === "number" && now - recentStartAt <= PROMPT_DEDUPE_WINDOW_MS) {
+				if (typeof recentStartAt === "number" && now - recentStartAt <= SESSIONLESS_DEDUPE_MS) {
 					return;
 				}
 
@@ -1368,17 +1362,13 @@ const signetPlugin = {
 				return undefined;
 			}
 
-			const now = Date.now();
-			cleanupRecentPromptTurns(recentPromptTurns, now);
-			const messageCount = Array.isArray(event.messages) ? event.messages.length : undefined;
-			const promptTurnKey = buildPromptTurnKey({
-				sessionKey,
-				agentId,
-				prompt,
-				messageCount,
-			});
-			const recentTs = recentPromptTurns.get(promptTurnKey);
-			if (typeof recentTs === "number" && now - recentTs <= PROMPT_DEDUPE_WINDOW_MS) {
+			// Deduplicate by (sessionKey, messageCount): both before_prompt_build
+			// and before_agent_start fire on the same turn; only the first should
+			// call the daemon. When messageCount is unavailable we fall through
+			// rather than risk suppressing a valid injection.
+			const count = Array.isArray(event.messages) ? event.messages.length : undefined;
+			const key = sessionKey ?? "";
+			if (typeof count === "number" && injectedTurns.get(key) === count) {
 				return undefined;
 			}
 
@@ -1394,7 +1384,9 @@ const signetPlugin = {
 				// daemonFetch already logged the specific error (ECONNREFUSED or HTTP status).
 				return undefined;
 			}
-			recentPromptTurns.set(promptTurnKey, Date.now());
+			if (typeof count === "number") {
+				injectedTurns.set(key, count);
+			}
 			return buildInjectionResult(result);
 		};
 
