@@ -10429,6 +10429,14 @@ async function cleanup() {
 	stopOpenCodeServer();
 	stopModelRegistry();
 
+	// Shut down pooled MCP server connections
+	try {
+		const { shutdownPool } = await import("./mcp-pool.js");
+		await shutdownPool();
+	} catch {
+		// best-effort — module may not have been loaded
+	}
+
 	// Stop session cleanup timer before closing DB (in-flight cleanup may query DB)
 	stopSessionCleanup();
 

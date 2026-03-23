@@ -7,13 +7,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { getSecret } from "../secrets.js";
 import { probeServer, storeProbeResult, removeProbeResult } from "../mcp-probe.js";
+import { withPooledClient, releaseServer, startProbe, endProbe } from "../mcp-pool.js";
 
 const CATALOG_PAGE_SIZE = 30;
 const CATALOG_MAX_PAGES = 10;
@@ -908,52 +906,13 @@ function fetchDetailBySource(source: MarketplaceMcpCatalogSource, catalogId: str
 	return fetchMcpServersOrgDetail(catalogId);
 }
 
+/** Pooled connection wrapper — reuses persistent connections instead of
+ * spawning a new subprocess on every call. */
 async function withConnectedClient<T>(
 	server: InstalledMarketplaceMcpServer,
 	fn: (client: Client) => Promise<T>,
 ): Promise<T> {
-	const run = async (): Promise<T> => {
-		const client = new Client({
-			name: "signet-marketplace-router",
-			version: "0.1.0",
-		});
-
-		if (server.config.transport === "stdio") {
-			const runtimeEnv: Record<string, string> = {};
-			for (const [k, v] of Object.entries(process.env)) {
-				if (typeof v === "string") runtimeEnv[k] = v;
-			}
-			const resolvedEnv = await resolveSecretReferences(server.config.env);
-			const transport = new StdioClientTransport({
-				command: server.config.command,
-				args: [...server.config.args],
-				env: { ...runtimeEnv, ...resolvedEnv },
-				cwd: server.config.cwd,
-			});
-
-			await client.connect(transport);
-			try {
-				return await fn(client);
-			} finally {
-				await client.close().catch(() => undefined);
-			}
-		}
-
-		const resolvedHeaders = await resolveSecretReferences(server.config.headers);
-		const transport = new StreamableHTTPClientTransport(new URL(server.config.url), {
-			requestInit: {
-				headers: resolvedHeaders,
-			},
-		});
-		await client.connect(transport);
-		try {
-			return await fn(client);
-		} finally {
-			await client.close().catch(() => undefined);
-		}
-	};
-
-	return withTimeout(run(), server.config.timeoutMs, `MCP server ${server.id}`);
+	return withPooledClient(server, fn, server.config.timeoutMs);
 }
 
 function sanitizeToolName(name: string): string {
@@ -1332,10 +1291,12 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			const next = installed.map((s) => (s.id === existing.id ? updated : s));
 			writeInstalledServers(next);
 			invalidateMarketplaceToolsCache();
-			// Fire-and-forget probe on install/update
-			void probeServer(updated).then(storeProbeResult).catch((err) => {
-				logger.warn("probe", `Post-install probe failed for ${updated.id}: ${err}`);
-			});
+			// Fire-and-forget probe on install/update (deduped via pool)
+			if (startProbe(updated.id)) {
+				void probeServer(updated).then(storeProbeResult).catch((err) => {
+					logger.warn("probe", `Post-install probe failed for ${updated.id}: ${err}`);
+				}).finally(() => endProbe(updated.id));
+			}
 			return c.json({ success: true, server: updated, updated: true });
 		}
 
@@ -1367,10 +1328,12 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
-		// Fire-and-forget probe on new install
-		void probeServer(server).then(storeProbeResult).catch((err) => {
-			logger.warn("probe", `Post-install probe failed for ${server.id}: ${err}`);
-		});
+		// Fire-and-forget probe on new install (deduped via pool)
+		if (startProbe(server.id)) {
+			void probeServer(server).then(storeProbeResult).catch((err) => {
+				logger.warn("probe", `Post-install probe failed for ${server.id}: ${err}`);
+			}).finally(() => endProbe(server.id));
+		}
 		return c.json({ success: true, server, updated: false });
 	});
 
@@ -1411,10 +1374,12 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
-		// Fire-and-forget probe on manual register
-		void probeServer(server).then(storeProbeResult).catch((err) => {
-			logger.warn("probe", `Post-register probe failed for ${server.id}: ${err}`);
-		});
+		// Fire-and-forget probe on manual register (deduped via pool)
+		if (startProbe(server.id)) {
+			void probeServer(server).then(storeProbeResult).catch((err) => {
+				logger.warn("probe", `Post-register probe failed for ${server.id}: ${err}`);
+			}).finally(() => endProbe(server.id));
+		}
 		return c.json({ success: true, server });
 	});
 
@@ -1604,8 +1569,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 		writeInstalledServers(installed.filter((s) => s.id !== id));
 		invalidateMarketplaceToolsCache();
-		// Clean up probe result and app tray entry on uninstall
+		// Clean up probe result, pooled connection, and app tray entry on uninstall
 		removeProbeResult(id);
+		void releaseServer(id);
 		return c.json({ success: true, id });
 	});
 }
