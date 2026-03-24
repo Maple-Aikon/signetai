@@ -39,6 +39,99 @@ interface ToolCallResult {
 	readonly error?: string;
 }
 
+interface CursorStep {
+	action: "move" | "type" | "wait";
+	target?: string;
+	click?: boolean;
+	text?: string;
+	ms?: number;
+}
+
+/**
+ * Generate visual cursor automation steps for mutation tool calls.
+ * These steps drive an animated cursor inside the widget iframe,
+ * showing the user what the agent "did" visually.
+ */
+function generateCursorSteps(
+	results: readonly ToolResult[],
+	toolCalls: ReadonlyArray<{ serverId: string; toolName: string; args: Record<string, unknown> }>,
+): CursorStep[] {
+	const steps: CursorStep[] = [];
+
+	for (let i = 0; i < results.length; i++) {
+		const r = results[i];
+		const call = toolCalls[i];
+		if (!call || r.error) continue;
+		const args = call.args || {};
+
+		if (r.tool.startsWith("create_")) {
+			// e.g. create_contact → "+ New Contact" button, fill fields, submit
+			const entityType = r.tool.replace("create_", "");
+			const firstName = String(args.firstName || args.first_name || args.name || "");
+			const lastName = String(args.lastName || args.last_name || "");
+			const email = String(args.email || "");
+			const companyName = String(args.companyName || args.company_name || args.company || "");
+			const title = String(args.title || args.dealName || args.deal_name || args.name || "");
+
+			steps.push({ action: "move", target: `new ${entityType}`, click: true });
+			steps.push({ action: "wait", ms: 800 });
+
+			if (firstName) {
+				steps.push({ action: "move", target: "first name", click: true });
+				steps.push({ action: "type", text: firstName });
+			}
+			if (lastName) {
+				steps.push({ action: "move", target: "last name", click: true });
+				steps.push({ action: "type", text: lastName });
+			}
+			if (email) {
+				steps.push({ action: "move", target: "email", click: true });
+				steps.push({ action: "type", text: email });
+			}
+			if (companyName) {
+				steps.push({ action: "move", target: "company", click: true });
+				steps.push({ action: "type", text: companyName });
+			}
+			if (title) {
+				steps.push({ action: "move", target: "title", click: true });
+				steps.push({ action: "type", text: title });
+			}
+
+			steps.push({ action: "wait", ms: 300 });
+			steps.push({ action: "move", target: `create ${entityType}`, click: true });
+		} else if (r.tool.startsWith("update_")) {
+			const entityType = r.tool.replace("update_", "");
+			// Navigate to the row, click it, then update fields
+			const name = String(args.firstName || args.name || args.dealName || args.title || "");
+			if (name) {
+				steps.push({ action: "move", target: name, click: true });
+				steps.push({ action: "wait", ms: 600 });
+			}
+
+			// For each arg that looks like a field update, move + type
+			for (const [key, val] of Object.entries(args)) {
+				if (["id", "contactId", "dealId"].includes(key)) continue;
+				if (val === undefined || val === null) continue;
+				steps.push({ action: "move", target: key.replace(/([A-Z])/g, " $1").toLowerCase(), click: true });
+				steps.push({ action: "type", text: String(val) });
+			}
+
+			steps.push({ action: "wait", ms: 300 });
+			steps.push({ action: "move", target: "save", click: true });
+		} else if (r.tool.startsWith("delete_")) {
+			const name = String(args.name || args.firstName || args.title || "");
+			if (name) {
+				steps.push({ action: "move", target: name, click: true });
+				steps.push({ action: "wait", ms: 400 });
+			}
+			steps.push({ action: "move", target: "delete", click: true });
+			steps.push({ action: "wait", ms: 300 });
+		}
+	}
+
+	return steps;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -259,6 +352,9 @@ export function mountOsChatRoutes(app: Hono): void {
 				results.push(result);
 			}
 
+			// Generate cursor automation steps for mutations
+			const cursorSteps = generateCursorSteps(results, parsed.toolCalls);
+
 			// Summarize results through the provider
 			if (results.some((r) => r.result)) {
 				const text = results
@@ -274,13 +370,13 @@ export function mountOsChatRoutes(app: Hono): void {
 						maxTokens: 1024,
 						timeoutMs: 20000,
 					});
-					return c.json({ response: summary.text.trim(), toolCalls: results });
+					return c.json({ response: summary.text.trim(), toolCalls: results, cursorSteps });
 				} catch {
-					return c.json({ response: parsed.response, toolCalls: results });
+					return c.json({ response: parsed.response, toolCalls: results, cursorSteps });
 				}
 			}
 
-			return c.json({ response: parsed.response, toolCalls: results });
+			return c.json({ response: parsed.response, toolCalls: results, cursorSteps });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.warn("os-chat", `Chat error: ${msg}`);

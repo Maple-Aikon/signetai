@@ -2,6 +2,7 @@
 	import { tick } from "svelte";
 	import type { Agent } from "$lib/stores/agents.svelte";
 	import { API_BASE } from "$lib/api";
+	import { sendWidgetAction } from "$lib/stores/os.svelte";
 	import ArrowLeft from "@lucide/svelte/icons/arrow-left";
 	import Send from "@lucide/svelte/icons/send";
 	import Wrench from "@lucide/svelte/icons/wrench";
@@ -103,6 +104,11 @@
 				ts: Date.now(),
 				toolCalls: data.toolCalls,
 			});
+
+			// Play cursor automation sequence in the widget iframe
+			if (data.cursorSteps && data.cursorSteps.length > 0 && agent.source.type === "mcp") {
+				sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
+			}
 		} catch (err) {
 			messages.push({
 				id: ++msgId,

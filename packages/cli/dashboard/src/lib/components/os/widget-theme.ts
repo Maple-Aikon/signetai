@@ -228,6 +228,10 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
         // Dispatch navigate event with target info (e.g., {view: "contact", id: "xxx"})
         window.dispatchEvent(new CustomEvent('signet:navigate', { detail: d.data }));
       }
+      if (d.action === 'cursor') {
+        var cursorData = d.data || {};
+        runCursorSequence(cursorData.steps || d.steps || []);
+      }
       if (d.action === 'highlight') {
         // Highlight a specific element by text content match
         var target = d.data && d.data.text;
@@ -290,6 +294,107 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
       }
     }
   });
+
+  // ── Visual cursor for agent automation ──────────────────────────────
+  var cursor = document.createElement('div');
+  cursor.id = 'signet-cursor';
+  cursor.style.cssText = 'position:fixed;width:20px;height:20px;pointer-events:none;z-index:99999;opacity:0;transition:left 0.4s cubic-bezier(0.23,1,0.32,1),top 0.4s cubic-bezier(0.23,1,0.32,1),opacity 0.2s;';
+  cursor.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M5.65 2.3l12.6 10.1-5.9 1.3-3.4 5.4L5.65 2.3z" fill="rgba(0,188,212,0.9)" stroke="rgba(255,255,255,0.8)" stroke-width="1.5"/></svg>';
+  document.body.appendChild(cursor);
+
+  var ripple = document.createElement('div');
+  ripple.style.cssText = 'position:fixed;pointer-events:none;z-index:99998;width:30px;height:30px;border-radius:50%;border:2px solid rgba(0,188,212,0.8);opacity:0;transform:scale(0);';
+  document.body.appendChild(ripple);
+
+  function showCursor() { cursor.style.opacity = '1'; }
+  function hideCursor() { cursor.style.opacity = '0'; }
+
+  function moveCursorTo(x, y) {
+    return new Promise(function(resolve) {
+      showCursor();
+      cursor.style.left = x + 'px';
+      cursor.style.top = y + 'px';
+      setTimeout(resolve, 450);
+    });
+  }
+
+  function clickAt(x, y) {
+    ripple.style.left = (x - 15) + 'px';
+    ripple.style.top = (y - 15) + 'px';
+    ripple.style.opacity = '1';
+    ripple.style.transform = 'scale(0)';
+    ripple.offsetHeight;
+    ripple.style.transition = 'transform 0.3s ease-out, opacity 0.3s ease-out';
+    ripple.style.transform = 'scale(2)';
+    ripple.style.opacity = '0';
+
+    var el = document.elementFromPoint(x, y);
+    if (el) {
+      el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, clientX:x, clientY:y}));
+      el.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, clientX:x, clientY:y}));
+      el.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:x, clientY:y}));
+      if (el.focus) el.focus();
+    }
+  }
+
+  function typeText(text) {
+    return new Promise(function(resolve) {
+      var active = document.activeElement;
+      if (!active || (!active.tagName.match(/INPUT|TEXTAREA/) && !active.isContentEditable)) {
+        resolve();
+        return;
+      }
+      var i = 0;
+      function next() {
+        if (i >= text.length) { resolve(); return; }
+        var ch = text[i++];
+        var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (nativeSetter && nativeSetter.set) {
+          nativeSetter.set.call(active, (active.value || '') + ch);
+        } else {
+          active.value = (active.value || '') + ch;
+        }
+        active.dispatchEvent(new Event('input', {bubbles:true}));
+        active.dispatchEvent(new Event('change', {bubbles:true}));
+        setTimeout(next, 50 + Math.random() * 30);
+      }
+      next();
+    });
+  }
+
+  function findByText(text) {
+    var all = document.querySelectorAll('button, a, td, th, span, label, div, input, [role="button"]');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      var t = (el.textContent || el.placeholder || el.value || '').trim().toLowerCase();
+      if (t.includes(text.toLowerCase())) {
+        var r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, el: el };
+      }
+    }
+    return null;
+  }
+
+  async function runCursorSequence(steps) {
+    showCursor();
+    for (var s = 0; s < steps.length; s++) {
+      var step = steps[s];
+      if (step.action === 'move' && step.target) {
+        var found = findByText(step.target);
+        if (found) {
+          await moveCursorTo(found.x, found.y);
+          if (step.click) { clickAt(found.x, found.y); await new Promise(function(r){setTimeout(r,300)}); }
+        }
+      }
+      if (step.action === 'type' && step.text) {
+        await typeText(step.text);
+      }
+      if (step.action === 'wait') {
+        await new Promise(function(r){setTimeout(r, step.ms || 500)});
+      }
+    }
+    setTimeout(hideCursor, 1000);
+  }
 
   parent.postMessage({ type: 'signet:ready' }, '*');
 })();`;
