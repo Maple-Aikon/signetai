@@ -1,10 +1,18 @@
 import type { ReadDb } from "../db-accessor";
 
+export interface TraversalPath {
+	readonly entityIds: ReadonlyArray<string>;
+	readonly aspectIds: ReadonlyArray<string>;
+	readonly dependencyIds: ReadonlyArray<string>;
+}
+
 export interface TraversalResult {
 	/** Memory IDs collected from entity_attributes.memory_id */
 	readonly memoryIds: Set<string>;
 	/** Structural importance score per memory (max importance across aspects) */
 	readonly memoryScores: ReadonlyMap<string, number>;
+	/** Provenance path per memory (for DP-9 feedback propagation). */
+	readonly memoryPaths: ReadonlyMap<string, TraversalPath>;
 	/** Constraint content that must always be surfaced */
 	readonly constraints: ReadonlyArray<{
 		readonly entityName: string;
@@ -306,6 +314,7 @@ export function traverseKnowledgeGraph(
 	const empty: TraversalResult = {
 		memoryIds: new Set<string>(),
 		memoryScores: new Map<string, number>(),
+		memoryPaths: new Map<string, TraversalPath>(),
 		constraints: [],
 		entityCount: 0,
 		timedOut: false,
@@ -321,6 +330,7 @@ export function traverseKnowledgeGraph(
 
 		const memoryIds = new Set<string>();
 		const memoryScores = new Map<string, number>();
+		const memoryPaths = new Map<string, TraversalPath>();
 		const constraints: Array<{
 			entityName: string;
 			content: string;
@@ -342,7 +352,48 @@ export function traverseKnowledgeGraph(
 
 		const budget = config.maxTraversalPaths;
 
-		const collectForEntity = (entityId: string): void => {
+		const toPath = (
+			entityId: string,
+			sourceEntityId?: string,
+			aspectId?: string,
+			dependencyId?: string,
+		): TraversalPath => {
+			const entityIds =
+				typeof sourceEntityId === "string" &&
+				sourceEntityId.length > 0 &&
+				sourceEntityId !== entityId
+					? [sourceEntityId, entityId]
+					: [entityId];
+			const aspectIds = typeof aspectId === "string" && aspectId.length > 0 ? [aspectId] : [];
+			const dependencyIds =
+				typeof dependencyId === "string" && dependencyId.length > 0
+					? [dependencyId]
+					: [];
+			return { entityIds, aspectIds, dependencyIds };
+		};
+
+		const pathSize = (path: TraversalPath): number =>
+			path.entityIds.length + path.aspectIds.length + path.dependencyIds.length;
+
+		const recordPath = (
+			memoryId: string,
+			entityId: string,
+			sourceEntityId?: string,
+			aspectId?: string,
+			dependencyId?: string,
+		): void => {
+			const next = toPath(entityId, sourceEntityId, aspectId, dependencyId);
+			const prev = memoryPaths.get(memoryId);
+			if (!prev || pathSize(next) > pathSize(prev)) {
+				memoryPaths.set(memoryId, next);
+			}
+		};
+
+		const collectForEntity = (
+			entityId: string,
+			sourceEntityId?: string,
+			dependencyId?: string,
+		): void => {
 			if (timedOut || visitedEntities.has(entityId)) return;
 			if (memoryIds.size >= budget) return;
 			visitedEntities.add(entityId);
@@ -437,6 +488,7 @@ export function traverseKnowledgeGraph(
 				for (const row of attributeRows) {
 					if (!row.memory_id) continue;
 					memoryIds.add(row.memory_id);
+					recordPath(row.memory_id, entityId, sourceEntityId, aspect.id, dependencyId);
 					const current = memoryScores.get(row.memory_id);
 					if (current === undefined || row.importance > current) {
 						memoryScores.set(row.memory_id, row.importance);
@@ -484,6 +536,7 @@ export function traverseKnowledgeGraph(
 
 			for (const row of mentionRows) {
 				memoryIds.add(row.memory_id);
+				recordPath(row.memory_id, entityId, sourceEntityId, undefined, dependencyId);
 				const current = memoryScores.get(row.memory_id);
 				if (current === undefined || row.importance > current) {
 					memoryScores.set(row.memory_id, row.importance);
@@ -500,7 +553,7 @@ export function traverseKnowledgeGraph(
 			const dependencyPlaceholders = focalIds.map(() => "?").join(", ");
 			const dependencyRows = db
 				.prepare(
-					`SELECT target_entity_id FROM entity_dependencies
+					`SELECT id, source_entity_id, target_entity_id FROM entity_dependencies
 					 WHERE agent_id = ?
 					   AND source_entity_id IN (${dependencyPlaceholders})
 					   AND (COALESCE(confidence, 0.7) * strength) >= ?
@@ -514,11 +567,11 @@ export function traverseKnowledgeGraph(
 					config.minDependencyStrength,
 					config.minConfidence,
 					config.maxBranching * focalIds.length,
-				) as Array<{ target_entity_id: string }>;
+				) as Array<{ id: string; source_entity_id: string; target_entity_id: string }>;
 
 			for (const row of dependencyRows) {
 				if (checkDeadline() || memoryIds.size >= budget) break;
-				collectForEntity(row.target_entity_id);
+				collectForEntity(row.target_entity_id, row.source_entity_id, row.id);
 			}
 		}
 
@@ -527,6 +580,7 @@ export function traverseKnowledgeGraph(
 		return {
 			memoryIds,
 			memoryScores,
+			memoryPaths,
 			constraints,
 			entityCount: visitedEntities.size,
 			timedOut,

@@ -29,6 +29,7 @@ flowchart TD
   PMS[Predictive Memory Scorer]
   SR[Signet Runtime]
   DP[Desire Paths Epic]
+  SACC[Sub-Agent Context Continuity]
 
   MP --> SCP
   MP --> PM
@@ -45,6 +46,9 @@ flowchart TD
   MA -.-> KA
   SR -.-> PM
   SR -.-> KA
+  SCP --> SACC
+  MA --> SACC
+  KA -.-> SACC
 ```
 
 Solid arrows = hard dependency. Dashed = integration contract (can build
@@ -293,12 +297,21 @@ cannot suppress them. This is a hard retrieval invariant.
 ### Multi-Agent <-> All Specs
 
 - `agent_id` column appears on every data table (see invariant 1).
-- Agent roster in `agent.yaml` defines which agents exist.
-- Identity inheritance: agent subdirs override root-level files.
+- Agent roster in `agent.yaml` under `agents.roster` defines which agents exist.
+- Identity inheritance: agent subdirs (`~/.agents/agents/{name}/`) override
+  root-level files. Only `SOUL.md` and `IDENTITY.md` are per-agent by default;
+  `AGENTS.md`, `USER.md`, `TOOLS.md` inherit from root.
 - Skills: shared filesystem pool, per-agent graph nodes and usage stats.
-- Memory queries always include agent scope filter.
+- Memory queries include agent scope filter based on per-agent read policy:
+  - `isolated`: only own memories
+  - `shared`: all `visibility=global` memories + own private
+  - `group`: `visibility=global` from group members + own private
+- `visibility` column on `memories` (`global`/`private`/`archived`) is the
+  per-memory access flag. Separate from `scope` (benchmark namespacing).
+- OpenClaw session key format `agent:{id}:{rest}` is auto-parsed by
+  `resolveAgentId()` — no extra config needed for OpenClaw users.
 - The daemon serves both single-agent and multi-agent installs. All new
-  API params are optional with sensible defaults (no `agent_id` =
+  API params are optional with sensible defaults (no `agentId` =
   `"default"` agent = current single-agent behavior).
 
 ---
@@ -309,17 +322,38 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 1 (parallel, no cross-dependencies)
 
+- **Sub-Agent Context Continuity Phase 1**: live transcript persistence
+  - Change `session_transcripts` write from session-end-only to
+    upsert on every `UserPromptSubmit`. No migration needed.
+  - Add `GET /api/sessions/{key}/transcript` endpoint and
+    `session_search` MCP tool.
+  - Unblocks Phase 2 and the session summary DAG (LCM Pattern 4).
 - **Procedural Memory P1**: schema + enrichment + node creation
   - Creates `skill_meta` table, skill entities, frontmatter enrichment
   - Unblocks KA structural assignment
 - **Signet Runtime Phase 1**: scaffold + CLI channel
   - Independent of cognition stack, talks to daemon API only
-- **Multi-Agent Phase 1-3**: core types + agent registry + DB schema
-  - Adds `agent_id` columns across existing tables
-  - Should land early so other specs build on scoped tables
+- **Multi-Agent Phase 1-8**: IN PROGRESS (2026-03-24)
+  - Phase 1: `AgentDefinition` type + `agents.roster` in `AgentManifest` — DONE
+  - Phase 2: `packages/core/src/agents.ts` — discovery, scaffold, identity inheritance — DONE
+  - Phase 3: Migration 043 — `agents` table + `memories.agent_id` + `memories.visibility` — DONE
+  - Phase 4: Daemon — scope clause, `/api/agents` endpoints, `agent-id.ts` — DONE
+  - Phase 5: File watcher — watches `~/.agents/agents/` subdirectories — DONE
+  - Phase 6: Harness sync — per-agent workspace dirs for OpenClaw — DONE
+  - Phase 7: CLI — `signet agent` subcommand + `--agent`/`--private` flags — DONE
+  - Phase 8: OpenClaw connector — `syncMultipleAgents()` + session key auto-parse — DONE
+  - Extended: per-agent read policy (isolated/shared/group) with `visibility` column
+  - Deferred: Phase 9 (dashboard), Phase 10 (setup wizard)
 
 ### Wave 2 (depends on Wave 1)
 
+- **Sub-Agent Context Continuity Phase 2**: sub-agent context inheritance
+  - Harness-native detection: CC `agent_id` field + recency query on
+    `session_transcripts` (no SubagentStart hook needed), OpenClaw
+    session key parsing (already done in MA-8), OpenCode `parentID`.
+  - Deterministic inherit block: latest checkpoint + 3000 char
+    transcript tail + active constraints. No LLM call.
+  - Requires: Phase 1 complete, MA Phases 1-8 complete.
 - **Knowledge Architecture KA-1 + KA-2**: schema + structural assignment — COMPLETE
   - Requires skill entities from procedural memory P1
   - Adds `entity_aspects`, `entity_attributes`, `entity_dependencies`,
@@ -392,7 +426,7 @@ Phase ordering based on hard dependencies and integration contracts.
   single-hop 66.7% (2/3). Precision 26.3%, recall 100%, NDCG 0.639.
 - **Desire Paths Phase 4**: path learning
   - DP-8: Predictor bug fixes (cache invalidation) — COMPLETE
-  - DP-9: Path feedback propagation + co-occurrence growth + Q-value rewards — NOT STARTED
+  - DP-9: Path feedback propagation + co-occurrence growth + Q-value rewards — COMPLETE
   - DP-10: Path scoring (predictor evolution) — NOT STARTED
   - DP-11: Temporal reinforcement + intent-aware routing — NOT STARTED
 - **Desire Paths Phase 5**: emergence
@@ -436,6 +470,7 @@ Legend:
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |
 | `predictor-agent-feedback` | approved | `docs/specs/approved/predictor-agent-feedback.md` | `predictive-memory-scorer` | - | |
 | `retroactive-supersession` | planning | `docs/specs/planning/retroactive-supersession.md` | `knowledge-architecture-schema` | - | Informed by MSAM-COMPARISON, RESEARCH-COMPETITIVE-SYSTEMS |
+| `sub-agent-context-continuity` | planning | `docs/specs/planning/sub-agent-context-continuity.md` | `session-continuity-protocol`, `multi-agent-support` | - | Phase 1: live transcript upsert (no migration). Phase 2: harness-native sub-agent detection + inherit block. Informed by issue #315 and LCM patterns. |
 | `competitive-systems-research` | reference | `docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md` | - | - | Informs desire-paths-epic, retroactive-supersession |
 
 ---
@@ -474,6 +509,12 @@ independent of harness-specific connectors.
 
 **multi-agent-support**: Multiple agents share one SQLite database
 without data collision via agent_id scoping.
+
+**sub-agent-context-continuity**: Parent session transcript is
+queryable while the session is active. Sub-agents receive a
+deterministic context block from the parent at session-start with
+no LLM call. Sub-agents can search parent session content via
+`session_search`.
 
 ---
 

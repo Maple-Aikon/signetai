@@ -63,6 +63,7 @@ function insertSessionMemory(
 	sessionKey: string,
 	memoryId: string,
 	opts: {
+		agentId?: string;
 		wasInjected?: number;
 		rank?: number;
 		effectiveScore?: number;
@@ -72,12 +73,13 @@ function insertSessionMemory(
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO session_memories
-		 (id, session_key, memory_id, source, effective_score,
+		 (id, session_key, agent_id, memory_id, source, effective_score,
 		  final_score, rank, was_injected, fts_hit_count, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
 	).run(
 		crypto.randomUUID(),
 		sessionKey,
+		opts.agentId ?? "default",
 		memoryId,
 		opts.source ?? "effective",
 		opts.effectiveScore ?? 0.8,
@@ -135,13 +137,27 @@ describe("session_memories table", () => {
 		expect(colNames).toContain("structural_density");
 	});
 
-	it("enforces UNIQUE(session_key, memory_id)", () => {
+	it("enforces UNIQUE(session_key, agent_id, memory_id)", () => {
 		insertMemory(db, "mem-1", "Test memory");
 		insertSessionMemory(db, "session-1", "mem-1");
 
 		expect(() => {
 			insertSessionMemory(db, "session-1", "mem-1");
 		}).toThrow();
+	});
+
+	it("allows same session+memory for different agents", () => {
+		insertMemory(db, "mem-1", "Test memory");
+		insertSessionMemory(db, "session-1", "mem-1", { agentId: "agent-a" });
+		insertSessionMemory(db, "session-1", "mem-1", { agentId: "agent-b" });
+
+		const count = db
+			.prepare(
+				"SELECT COUNT(*) as cnt FROM session_memories WHERE session_key = ? AND memory_id = ?",
+			)
+			.get("session-1", "mem-1") as { cnt: number };
+
+		expect(count.cnt).toBe(2);
 	});
 
 	it("allows same memory in different sessions", () => {

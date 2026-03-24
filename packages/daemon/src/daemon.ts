@@ -26,6 +26,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
 	CONNECTOR_PROVIDERS,
+	type AgentDefinition,
 	type ConnectorConfig,
 	SIGNET_GIT_PROTECTED_PATHS,
 	type SyncCursor,
@@ -75,6 +76,7 @@ import {
 	type AgentMessageType,
 	createAgentMessage,
 	getAgentPresenceForSession,
+	clearAllPresence,
 	isMessageVisibleToAgent,
 	listAgentMessages,
 	listAgentPresence,
@@ -122,6 +124,7 @@ import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
+import { resolveAgentId } from "./agent-id";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import {
 	DEFAULT_RETENTION,
@@ -194,6 +197,8 @@ import {
 	resyncVectorIndex,
 	structuralBackfill,
 	triggerRetentionSweep,
+	findDeadMemories,
+	forgetDeadMemories,
 } from "./repair-actions";
 import {
 	CRON_PRESETS,
@@ -214,6 +219,7 @@ import {
 	redactCheckpointRow,
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
+import { recordPathFeedback } from "./path-feedback";
 import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { type TimelineSources, buildTimeline } from "./timeline";
@@ -438,11 +444,28 @@ let shadowProcess: ChildProcess | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
+let httpServer: ReturnType<typeof serve> | null = null;
+let shuttingDown = false;
 let diagnosticsCache: {
 	readonly report: DiagnosticsReport;
 	readonly expiresAt: number;
 } | null = null;
 const DIAGNOSTICS_CACHE_TTL_MS = 2000;
+
+// OpenClaw plugin health — updated by POST /api/diagnostics/openclaw/heartbeat
+interface OpenClawHeartbeatData {
+	readonly pluginVersion: string;
+	readonly hooksRegistered: string[];
+	readonly lastHookCall: string | null;
+	readonly lastError: string | null;
+	readonly latencyMs: number;
+	/** Failures reported in the most recent heartbeat (delta, not cumulative). */
+	readonly lastFailedDelta: number;
+	readonly totalSucceeded: number;
+	readonly totalFailed: number;
+}
+let openClawHeartbeat: { timestamp: string; data: OpenClawHeartbeatData } | null = null;
+const OPENCLAW_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
@@ -486,6 +509,25 @@ function invalidateDiagnosticsCache(): void {
 	diagnosticsCache = null;
 }
 
+function buildOpenClawHealth(): import("./diagnostics").OpenClawHealth {
+	if (!openClawHeartbeat) {
+		return { status: "never-seen", lastHeartbeat: null, pluginVersion: null, hooksRegistered: [], hooksSucceeded: 0, hooksFailed: 0, lastLatencyMs: 0, lastError: null };
+	}
+	const age = Date.now() - new Date(openClawHeartbeat.timestamp).getTime();
+	const status = age < OPENCLAW_STALE_MS ? "connected" : "stale";
+	const d = openClawHeartbeat.data;
+	return {
+		status,
+		lastHeartbeat: openClawHeartbeat.timestamp,
+		pluginVersion: d.pluginVersion,
+		hooksRegistered: d.hooksRegistered,
+		hooksSucceeded: d.totalSucceeded,
+		hooksFailed: d.totalFailed,
+		lastLatencyMs: d.latencyMs,
+		lastError: d.lastError,
+	};
+}
+
 function getCachedDiagnosticsReport(): DiagnosticsReport {
 	const now = Date.now();
 	if (diagnosticsCache !== null && diagnosticsCache.expiresAt > now) {
@@ -493,7 +535,7 @@ function getCachedDiagnosticsReport(): DiagnosticsReport {
 	}
 
 	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()),
+		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams(), buildOpenClawHealth()),
 	);
 	diagnosticsCache = {
 		report,
@@ -1305,6 +1347,16 @@ app.use(
 	}),
 );
 
+// Reject non-health requests during shutdown so keep-alive connections
+// get a clean 503 instead of a socket reset.
+app.use("*", async (c, next) => {
+	if (shuttingDown && c.req.path !== "/health") {
+		c.status(503);
+		return c.json({ error: "shutting down" });
+	}
+	return next();
+});
+
 // Auth middleware — reads from module-level authConfig/authSecret
 // which are initialized properly in main(). In local mode this is a no-op.
 // Guard: reject requests if auth is required but secret isn't initialized yet
@@ -1395,13 +1447,14 @@ app.get("/health", (c) => {
 		Date.now() - extraction.stats.lastProgressAt > 60_000;
 
 	return c.json({
-		status: "healthy",
+		status: shuttingDown ? "shutting_down" : "healthy",
 		uptime: process.uptime(),
 		pid: process.pid,
 		version: CURRENT_VERSION,
 		port: PORT,
 		agentsDir: AGENTS_DIR,
 		db: dbOk,
+		shuttingDown,
 		updateAvailable: us.lastCheck?.updateAvailable ?? false,
 		pendingRestart: us.pendingRestartVersion !== null,
 		pipeline: {
@@ -1884,6 +1937,81 @@ app.get("/api/identity", (c) => {
 	}
 
 	return c.json(identity);
+});
+
+// ============================================================================
+// Agents API
+// ============================================================================
+
+interface AgentRow {
+	id: string;
+	name: string;
+	read_policy: string;
+	policy_group: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+app.get("/api/agents", (c) => {
+	const agents = getDbAccessor().withReadDb(
+		(db) => db.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name").all() as AgentRow[],
+	);
+	return c.json({ agents });
+});
+
+app.get("/api/agents/:name", (c) => {
+	const name = c.req.param("name");
+	const agent = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE name = ?")
+				.get(name) as AgentRow | undefined,
+	);
+	if (!agent) return c.json({ error: "Agent not found" }, 404);
+	return c.json(agent);
+});
+
+app.post("/api/agents", async (c) => {
+	const body = toRecord(await c.req.json().catch(() => null));
+	if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+	const name = parseOptionalString(body.name);
+	if (!name) return c.json({ error: "name is required" }, 400);
+	const readPolicy = parseOptionalString(body.read_policy) ?? "isolated";
+	const group = parseOptionalString(body.policy_group) ?? null;
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).run(name, name, readPolicy, group, now, now);
+	});
+	const created = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?")
+				.get(name) as AgentRow,
+	);
+	return c.json(created, 201);
+});
+
+app.delete("/api/agents/:name", (c) => {
+	const name = c.req.param("name");
+	if (name === "default") return c.json({ error: "Cannot remove the default agent" }, 400);
+	const purge = c.req.query("purge") === "true";
+	const agent = getDbAccessor().withReadDb(
+		(db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined,
+	);
+	if (!agent) return c.json({ error: "Agent not found" }, 404);
+	getDbAccessor().withWriteTx((db) => {
+		if (purge) {
+			db.prepare("DELETE FROM memories WHERE agent_id = ?").run(name);
+		} else {
+			// Archive: mark memories as visibility='archived' so they're excluded from search
+			db.prepare("UPDATE memories SET visibility = 'archived' WHERE agent_id = ?").run(name);
+		}
+		db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
+	});
+	return c.json({ success: true, purged: purge });
 });
 
 // ============================================================================
@@ -3792,8 +3920,34 @@ app.post("/api/memory/feedback", async (c) => {
 		return c.json({ error: "Invalid feedback format — expected map of ID to number (-1 to 1)" }, 400);
 	}
 
-	recordAgentFeedback(sessionKey, parsed);
-	return c.json({ ok: true, recorded: Object.keys(parsed).length });
+	const agentId = parseOptionalString(payload.agentId) ?? "default";
+	const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
+	try {
+		const result = recordPathFeedback(getDbAccessor(), {
+			sessionKey,
+			agentId,
+			ratings: parsed,
+			paths: payload.paths,
+			rewards: payload.rewards,
+			maxAspectWeight: cfg?.maxAspectWeight,
+			minAspectWeight: cfg?.minAspectWeight,
+		});
+		return c.json({
+			ok: true,
+			recorded: Object.keys(parsed).length,
+			accepted: result.accepted,
+			propagated: result.propagated,
+			cooccurrenceUpdated: result.cooccurrenceUpdated,
+			dependenciesUpdated: result.dependenciesUpdated,
+		});
+	} catch (error) {
+		recordAgentFeedback(sessionKey, parsed, agentId);
+		logger.warn("daemon", "Path feedback failed; fell back to legacy feedback", {
+			error: error instanceof Error ? error.message : String(error),
+			sessionKey,
+		});
+		return c.json({ ok: true, recorded: Object.keys(parsed).length, fallback: true });
+	}
 });
 
 app.post("/api/memory/forget", async (c) => {
@@ -4097,11 +4251,26 @@ app.post("/api/memory/recall", async (c) => {
 
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
-		const agentId = body.agentId ?? c.req.header("x-signet-agent-id") ?? "default";
+		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
+		// Look up read_policy for this agent to pass to hybridRecall.
+		const agentRow = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
+					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
+		);
+		const readPolicy = agentRow?.read_policy;
+		const policyGroup = agentRow?.policy_group ?? null;
 		// Enforce auth scope: scoped tokens may only read their own project.
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const result = await hybridRecall(
-			{ ...body, query, agentId, ...(scopeProject ? { project: scopeProject } : {}) },
+			{
+				...body,
+				query,
+				agentId,
+				...(readPolicy ? { readPolicy, policyGroup } : {}),
+				...(scopeProject ? { project: scopeProject } : {}),
+			},
 			cfg,
 			fetchEmbedding,
 		);
@@ -5497,7 +5666,9 @@ import {
 	getSessionPath,
 	hasSession,
 	isSessionBypassed,
+	releaseAllSessions,
 	releaseSession,
+	renewSession,
 	startSessionCleanup,
 	stopSessionCleanup,
 	unbypassSession,
@@ -5771,9 +5942,26 @@ app.post("/api/hooks/recall", async (c) => {
 			return c.json({ memories: [], count: 0, bypassed: true });
 		}
 
-		const agentId = c.req.header("x-signet-agent-id") ?? "default";
+		const agentId = resolveAgentId({
+			agentId: c.req.header("x-signet-agent-id"),
+			sessionKey: body.sessionKey,
+		});
+		const agentRow = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
+					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
+		);
+		const readPolicy = agentRow?.read_policy;
+		const policyGroup = agentRow?.policy_group ?? null;
 		const result = await hybridRecall(
-			{ query: body.query, limit: body.limit, scope: body.project, agentId },
+			{
+				query: body.query,
+				limit: body.limit,
+				scope: body.project,
+				agentId,
+				...(readPolicy ? { readPolicy, policyGroup } : {}),
+			},
 			cfg,
 			fetchEmbedding,
 		);
@@ -6384,6 +6572,16 @@ app.post("/api/sessions/:key/bypass", async (c) => {
 		unbypassSession(key);
 	}
 	return c.json({ key, bypassed: enabled });
+});
+
+// Renew a session — reset TTL to prevent silent eviction
+app.post("/api/sessions/:key/renew", (c) => {
+	const key = c.req.param("key");
+	const expiresAt = renewSession(key);
+	if (!expiresAt) {
+		return c.json({ error: "Session not found" }, 404);
+	}
+	return c.json({ key, renewed: true, expiresAt });
 });
 
 // Session summaries DAG
@@ -7218,6 +7416,51 @@ app.get("/api/diagnostics/:domain", (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// OpenClaw plugin health diagnostics
+// ---------------------------------------------------------------------------
+
+// Unauthenticated — daemon is local-only, plugin may not carry auth token
+app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "Invalid JSON" }, 400);
+	}
+	if (!body || typeof body !== "object") {
+		return c.json({ error: "Body must be an object" }, 400);
+	}
+	const b = body as Record<string, unknown>;
+	if (typeof b.pluginVersion !== "string") {
+		return c.json({ error: "pluginVersion (string) is required" }, 400);
+	}
+	const prev = openClawHeartbeat?.data;
+	openClawHeartbeat = {
+		timestamp: new Date().toISOString(),
+		data: {
+			pluginVersion: b.pluginVersion.slice(0, 128),
+			hooksRegistered: Array.isArray(b.hooksRegistered)
+				? (b.hooksRegistered as unknown[]).filter((x): x is string => typeof x === "string").map((s) => s.slice(0, 128)).slice(0, 50)
+				: [],
+			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
+			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
+			latencyMs: typeof b.latencyMs === "number" && Number.isFinite(b.latencyMs) ? b.latencyMs : 0,
+			// Plugin sends per-heartbeat deltas, not cumulative totals. Clamp to
+			// non-negative to guard against malformed or negative inputs corrupting counters.
+			lastFailedDelta: Math.max(0, typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
+			totalSucceeded: (prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
+			totalFailed: (prev?.totalFailed ?? 0) + Math.max(0, typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
+		},
+	};
+	invalidateDiagnosticsCache();
+	return c.json({ ok: true });
+});
+
+app.get("/api/diagnostics/openclaw", (c) => {
+	return c.json(buildOpenClawHealth());
+});
+
+// ---------------------------------------------------------------------------
 // Pipeline status (composite snapshot for dashboard visualization)
 // ---------------------------------------------------------------------------
 
@@ -7807,6 +8050,48 @@ app.post("/api/repair/backfill-hints", async (c) => {
 		remaining,
 		message: remaining > 0 ? `${remaining} unscoped memories still need hints — call again` : "all unscoped memories have hints",
 	});
+});
+
+// ---------------------------------------------------------------------------
+// Dead memory hygiene
+// ---------------------------------------------------------------------------
+
+app.get("/api/repair/dead-memories", (c) => {
+	const maxConfidence = Number(c.req.query("maxConfidence") ?? "0.1");
+	const maxAccessDays = Number(c.req.query("maxAccessDays") ?? "90");
+	const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
+	if (
+		!Number.isFinite(maxConfidence) || !Number.isFinite(maxAccessDays) || !Number.isFinite(limit)
+		|| maxConfidence < 0 || maxConfidence > 1 || maxAccessDays < 0 || limit < 0
+	) {
+		return c.json({ error: "maxConfidence must be 0–1, maxAccessDays and limit must be non-negative" }, 400);
+	}
+	const dead = getDbAccessor().withReadDb((db) =>
+		findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
+	);
+	return c.json({ count: dead.length, memories: dead });
+});
+
+app.post("/api/repair/dead-memories/forget", async (c) => {
+	let ids: unknown;
+	try {
+		const body = await c.req.json();
+		ids = body?.ids;
+	} catch {
+		return c.json({ error: "Request body must be JSON with an ids array" }, 400);
+	}
+	if (!Array.isArray(ids) || ids.length === 0) {
+		return c.json({ error: "ids must be a non-empty array" }, 400);
+	}
+	if (ids.length > 500) {
+		return c.json({ error: "Maximum 500 ids per batch" }, 400);
+	}
+	const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+	if (validIds.length !== ids.length) {
+		return c.json({ error: "All ids must be non-empty strings" }, 400);
+	}
+	const forgotten = forgetDeadMemories(getDbAccessor(), validIds);
+	return c.json({ forgotten });
 });
 
 // ============================================================================
@@ -8722,6 +9007,7 @@ app.post("/api/predictor/train", async (c) => {
 	});
 });
 
+
 // ---------------------------------------------------------------------------
 // Telemetry endpoints
 // ---------------------------------------------------------------------------
@@ -9068,6 +9354,7 @@ const gitConfig = loadGitConfig();
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
 let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
+let gitSyncPromise: Promise<unknown> | null = null;
 
 function isGitRepo(dir: string): boolean {
 	return existsSync(join(dir, ".git"));
@@ -9510,26 +9797,43 @@ function startGitSyncTimer() {
 	const intervalMs = gitConfig.syncInterval * 1000;
 	logger.info("git", `Auto-sync enabled: every ${gitConfig.syncInterval}s`);
 
-	gitSyncTimer = setInterval(async () => {
-		// Check if any credentials are available (gh, ssh, credential helper, or stored token)
-		const hasCreds = await hasAnyGitCredentials();
-		if (!hasCreds) {
-			// Silently skip if no credentials configured
-			return;
-		}
+	gitSyncTimer = setInterval(() => {
+		const work = (async () => {
+			// Check if any credentials are available (gh, ssh, credential helper, or stored token)
+			const hasCreds = await hasAnyGitCredentials();
+			if (!hasCreds) {
+				// Silently skip if no credentials configured
+				return;
+			}
 
-		logger.debug("git", "Running periodic sync...");
-		const result = await gitSync();
-		if (!result.success) {
-			logger.warn("git", `Periodic sync failed: ${result.message}`);
-		}
+			logger.debug("git", "Running periodic sync...");
+			const result = await gitSync();
+			if (!result.success) {
+				logger.warn("git", `Periodic sync failed: ${result.message}`);
+			}
+		})().catch((e) => {
+			logger.warn("git", "Periodic sync error", { error: String(e) });
+		});
+		gitSyncPromise = work;
+		work.finally(() => {
+			if (gitSyncPromise === work) gitSyncPromise = null;
+		});
 	}, intervalMs);
 }
 
-function stopGitSyncTimer() {
+async function stopGitSyncTimer(): Promise<void> {
 	if (gitSyncTimer) {
 		clearInterval(gitSyncTimer);
 		gitSyncTimer = null;
+	}
+	// Await in-flight sync so git operations finish before DB closes
+	if (gitSyncPromise) {
+		try {
+			await gitSyncPromise;
+		} catch {
+			// best-effort — sync failure shouldn't block shutdown
+		}
+		gitSyncPromise = null;
 	}
 }
 
@@ -9806,7 +10110,73 @@ ${fileList}
 		}
 	}
 
+	// Sync per-agent workspace dirs for OpenClaw multi-agent support
+	syncAgentWorkspaces(AGENTS_DIR);
 	ensureArchitectureDoc();
+}
+
+/**
+ * For each agent subdirectory in ~/.agents/agents/,
+ * assemble and write a workspace AGENTS.md with inherited + overridden
+ * identity files. OpenClaw uses workspace: ~/.agents/agents/{name}/workspace.
+ */
+function syncAgentWorkspaces(agentsDir: string): void {
+	const agentsRoot = join(agentsDir, "agents");
+	if (!existsSync(agentsRoot)) return;
+
+	let entries: string[];
+	try {
+		entries = readdirSync(agentsRoot, { withFileTypes: true })
+			.filter((d) => d.isDirectory())
+			.map((d) => d.name);
+	} catch {
+		return;
+	}
+
+	for (const name of entries) {
+		const agentDir = join(agentsRoot, name);
+		const workspaceDir = join(agentDir, "workspace");
+
+		// Base AGENTS.md: root AGENTS.md content
+		const agentsMdPath = join(agentsDir, "AGENTS.md");
+		if (!existsSync(agentsMdPath)) continue;
+
+		try {
+			const base = readFileSync(agentsMdPath, "utf-8");
+
+			// Agent-specific overrides for SOUL.md and IDENTITY.md
+			const agentIdentity = ["SOUL.md", "IDENTITY.md"]
+				.map((f) => {
+					const override = join(agentDir, f);
+					const root = join(agentsDir, f);
+					const p = existsSync(override) ? override : existsSync(root) ? root : null;
+					if (!p) return "";
+					const c = readFileSync(p, "utf-8").trim();
+					return c ? `\n## ${f.replace(".md", "")}\n\n${c}` : "";
+				})
+				.filter(Boolean)
+				.join("\n");
+
+			// USER.md and MEMORY.md always from root
+			const sharedIdentity = ["USER.md", "MEMORY.md"]
+				.map((f) => {
+					const p = join(agentsDir, f);
+					if (!existsSync(p)) return "";
+					const c = readFileSync(p, "utf-8").trim();
+					return c ? `\n## ${f.replace(".md", "")}\n\n${c}` : "";
+				})
+				.filter(Boolean)
+				.join("\n");
+
+			const composed = base + agentIdentity + sharedIdentity;
+
+			mkdirSync(workspaceDir, { recursive: true });
+			writeFileSync(join(workspaceDir, "AGENTS.md"), composed);
+			logger.sync.harness(`openclaw:${name}`, join(workspaceDir, "AGENTS.md"));
+		} catch (e) {
+			logger.error("sync", `Failed to sync agent workspace: ${name}`, e as Error);
+		}
+	}
 }
 
 /** Write SIGNET-ARCHITECTURE.md if missing or outdated. */
@@ -9852,6 +10222,7 @@ function startFileWatcher() {
 			join(AGENTS_DIR, "USER.md"),
 			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
 			join(AGENTS_DIR, "memory"), // Watch entire memory directory for new/changed .md files
+			join(AGENTS_DIR, "agents"), // Watch agent subdirectories for multi-agent identity changes
 		],
 		{
 			persistent: true,
@@ -9893,7 +10264,9 @@ function startFileWatcher() {
 
 		// If any identity file changed, sync to harness configs
 		const SYNC_TRIGGER_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
-		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f))) {
+		const normalizedForSync = path.replace(/\\/g, "/");
+		const isAgentSubdir = normalizedForSync.includes(`${AGENTS_DIR.replace(/\\/g, "/")}/agents/`);
+		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f)) || isAgentSubdir) {
 			scheduleSyncHarnessConfigs();
 		}
 
@@ -10386,7 +10759,50 @@ async function importExistingMemoryFiles(): Promise<number> {
 // ============================================================================
 
 async function cleanup() {
+	shuttingDown = true;
 	logger.info("daemon", "Shutting down");
+
+	// ------------------------------------------------------------------
+	// Phase 0: Stop accepting new requests — close HTTP server first so
+	// in-flight session-end hooks can still complete before we tear down
+	// state, but no new requests arrive during shutdown. The 15s timeout
+	// exceeds OpenClaw's WRITE_TIMEOUT (10s) so session-end hooks can
+	// finish and respond before we force-close.
+	// ------------------------------------------------------------------
+	if (httpServer) {
+		const srv = httpServer;
+		await new Promise<void>((resolve) => {
+			const timeout = setTimeout(() => {
+				logger.warn("daemon", "HTTP server drain timed out, forcing close");
+				if ("closeAllConnections" in srv && typeof srv.closeAllConnections === "function") {
+					srv.closeAllConnections();
+				}
+				resolve();
+			}, 15_000);
+			srv.close(() => {
+				clearTimeout(timeout);
+				resolve();
+			});
+		});
+		httpServer = null;
+	}
+
+	// ------------------------------------------------------------------
+	// Phase 1: Cancel debounce timers — prevents callbacks from firing
+	// after DB is closed. Must happen before any async awaits that could
+	// let the event loop drain pending timeouts.
+	// ------------------------------------------------------------------
+	if (commitTimer) {
+		clearTimeout(commitTimer);
+		commitTimer = null;
+	}
+	commitPending = false;
+
+	if (syncTimer) {
+		clearTimeout(syncTimer);
+		syncTimer = null;
+	}
+	syncPending = false;
 
 	// Flush telemetry before closing DB
 	if (heartbeatTimer) {
@@ -10470,11 +10886,22 @@ async function cleanup() {
 	stopOpenCodeServer();
 	stopModelRegistry();
 
+	// ------------------------------------------------------------------
+	// Phase 2: Release all session claims and presence so other daemons
+	// and connectors see clean state immediately rather than waiting for
+	// stale-session expiry (4h).
+	// ------------------------------------------------------------------
+	const released = releaseAllSessions();
+	const cleared = clearAllPresence();
+	if (released > 0 || cleared > 0) {
+		logger.info("daemon", "Cleaned cross-agent state", { sessions: released, presence: cleared });
+	}
+
 	// Stop session cleanup timer before closing DB (in-flight cleanup may query DB)
 	stopSessionCleanup();
 
-	// Stop git sync timer
-	stopGitSyncTimer();
+	// Stop git sync timer and await in-flight sync
+	await stopGitSyncTimer();
 	stopUpdateTimer();
 
 	closeDbAccessor();
@@ -10512,6 +10939,59 @@ process.on("uncaughtException", (err) => {
 // initMemorySchema is no longer needed — the migration runner in
 // db-accessor.ts is the sole schema authority. See migrations/ in @signet/core.
 
+/**
+ * Sync the agent roster from the manifest into the agents table.
+ * Upserts each entry; preserves rows not in the roster.
+ */
+function syncAgentRoster(agentsDir: string): void {
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
+	let roster: readonly AgentDefinition[] = [];
+	for (const p of paths) {
+		if (!existsSync(p)) continue;
+		try {
+			const yaml = parseSimpleYaml(readFileSync(p, "utf-8")) as Record<string, unknown>;
+			const agents = yaml.agents as Record<string, unknown> | undefined;
+			const raw = agents?.roster;
+			if (Array.isArray(raw)) {
+				roster = raw as AgentDefinition[];
+			}
+		} catch {
+			// malformed yaml — skip
+		}
+		break;
+	}
+	if (roster.length === 0) return;
+
+	const db = getDbAccessor();
+	const now = new Date().toISOString();
+	db.withWriteTx((w) => {
+		const stmt = w.prepare(
+			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   name = excluded.name,
+			   read_policy = excluded.read_policy,
+			   policy_group = excluded.policy_group,
+			   updated_at = excluded.updated_at`,
+		);
+		for (const entry of roster) {
+			const policy = entry.memory?.read_policy;
+			let readPolicy: string;
+			let group: string | null = null;
+			if (typeof policy === "string") {
+				readPolicy = policy;
+			} else if (policy && typeof policy === "object" && policy.type === "group") {
+				readPolicy = "group";
+				group = typeof policy.group === "string" ? policy.group : null;
+			} else {
+				readPolicy = "isolated";
+			}
+			stmt.run(entry.name, entry.name, readPolicy, group, now, now);
+		}
+	});
+	logger.info("daemon", "Agent roster synced", { count: roster.length });
+}
+
 async function main() {
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
@@ -10524,6 +11004,9 @@ async function main() {
 	// Initialise singleton DB accessor (opens write connection, sets pragmas,
 	// runs migrations). This is the sole schema authority.
 	initDbAccessor(MEMORY_DB);
+
+	// Sync agent roster from manifest into the agents table.
+	syncAgentRoster(AGENTS_DIR);
 
 	// Migrations may have created traversal tables — clear the cache
 	invalidateTraversalCache();
@@ -11101,6 +11584,7 @@ async function main() {
 			await client.start();
 			predictorClientRef = client;
 			logger.info("predictor", "Predictor sidecar started");
+
 		} catch (err) {
 			// Fail open: predictor is optional
 			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
@@ -11240,7 +11724,7 @@ async function main() {
 		return server;
 	};
 
-	serve(
+	httpServer = serve(
 		{
 			fetch: app.fetch,
 			port: PORT,

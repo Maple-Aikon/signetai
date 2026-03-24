@@ -185,7 +185,7 @@ export function collectTrainingPairs(
 function collectTrainingPairsFromDb(
 	db: ReadDb,
 	sessionKey: string,
-	_agentId: string,
+	agentId: string,
 ): ReadonlyArray<TrainingPair> {
 	// Load session memories for this session
 	const sessionMemories = db
@@ -195,9 +195,10 @@ function collectTrainingPairsFromDb(
 			        agent_relevance_score
 			 FROM session_memories
 			 WHERE session_key = ?
+			   AND agent_id = ?
 			 ORDER BY rank ASC`,
 		)
-		.all(sessionKey) as ReadonlyArray<SessionMemoryRow>;
+		.all(sessionKey, agentId) as ReadonlyArray<SessionMemoryRow>;
 
 	if (sessionMemories.length === 0) return [];
 

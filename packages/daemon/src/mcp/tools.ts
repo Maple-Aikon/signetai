@@ -750,14 +750,44 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				"Scores from -1 (harmful) to 1 (directly helpful). 0 = unused.",
 			inputSchema: z.object({
 				session_key: z.string().describe("Current session key"),
+				agent_id: z.string().optional().describe("Agent id scope (default: default)"),
 				ratings: z.record(z.string(), z.number()).describe("Map of memory ID to relevance score (-1 to 1)"),
+				paths: z
+					.record(
+						z.string(),
+						z.object({
+							entity_ids: z.array(z.string()).optional(),
+							aspect_ids: z.array(z.string()).optional(),
+							dependency_ids: z.array(z.string()).optional(),
+						}),
+					)
+					.optional()
+					.describe("Optional path provenance keyed by memory id"),
+				rewards: z
+					.record(
+						z.string(),
+						z.object({
+							forward_citation: z.number().optional(),
+							update_after_retrieval: z.number().optional(),
+							downstream_creation: z.number().optional(),
+							dead_end: z.number().optional(),
+						}),
+					)
+					.optional()
+					.describe("Optional reward signals keyed by memory id"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ session_key, ratings }) => {
+		async ({ session_key, agent_id, ratings, paths, rewards }) => {
 			const result = await daemonFetch<{ ok: boolean; recorded: number }>(baseUrl, "/api/memory/feedback", {
 				method: "POST",
-				body: { sessionKey: session_key, feedback: ratings },
+				body: {
+					sessionKey: session_key,
+					agentId: agent_id,
+					feedback: ratings,
+					paths,
+					rewards,
+				},
 			});
 			if (!result.ok) {
 				return errorResult(`Feedback failed: ${result.error}`);
