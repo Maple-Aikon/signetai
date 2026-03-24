@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.75.0] - 2026-03-24
+
+### Bug Fixes
+
+- complete DP-9 path feedback propagation pipeline (#310)
+
+### Docs
+
+- competitive systems research — 3-repo analysis with integration contracts (#309)
+
+
 ## [0.74.1] - 2026-03-23
 
 ### Features
