@@ -1850,32 +1850,32 @@ app.get("/api/identity", (c) => {
 		/* agent.yaml parse error — fall through to IDENTITY.md */
 	}
 
-	// Secondary source: IDENTITY.md (supports both legacy `- key:` and
-	// markdown bold `**key:**` formats)
-	if (!identity.name) {
+	// Secondary source: IDENTITY.md — fill any field not already set by agent.yaml
+	// (supports both legacy `- key:` and markdown bold `**key:**` formats)
+	if (!identity.name || !identity.creature || !identity.vibe) {
 		try {
 			const content = readFileSync(join(AGENTS_DIR, "IDENTITY.md"), "utf-8");
 			for (const line of content.split("\n")) {
 				const trimmed = line.trim();
 				// Legacy format: `- name: Boogy`
-				if (trimmed.startsWith("- name:")) {
-					identity.name = identity.name || trimmed.replace("- name:", "").trim();
+				if (!identity.name && trimmed.startsWith("- name:")) {
+					identity.name = trimmed.replace("- name:", "").trim();
 				}
-				if (trimmed.startsWith("- creature:")) {
-					identity.creature = identity.creature || trimmed.replace("- creature:", "").trim();
+				if (!identity.creature && trimmed.startsWith("- creature:")) {
+					identity.creature = trimmed.replace("- creature:", "").trim();
 				}
-				if (trimmed.startsWith("- vibe:")) {
-					identity.vibe = identity.vibe || trimmed.replace("- vibe:", "").trim();
+				if (!identity.vibe && trimmed.startsWith("- vibe:")) {
+					identity.vibe = trimmed.replace("- vibe:", "").trim();
 				}
 				// Markdown bold format: `**name:** Boogy`
-				if (trimmed.startsWith("**name:**")) {
-					identity.name = identity.name || trimmed.replace("**name:**", "").trim();
+				if (!identity.name && trimmed.startsWith("**name:**")) {
+					identity.name = trimmed.replace("**name:**", "").trim();
 				}
-				if (trimmed.startsWith("**creature:**")) {
-					identity.creature = identity.creature || trimmed.replace("**creature:**", "").trim();
+				if (!identity.creature && trimmed.startsWith("**creature:**")) {
+					identity.creature = trimmed.replace("**creature:**", "").trim();
 				}
-				if (trimmed.startsWith("**vibe:**")) {
-					identity.vibe = identity.vibe || trimmed.replace("**vibe:**", "").trim();
+				if (!identity.vibe && trimmed.startsWith("**vibe:**")) {
+					identity.vibe = trimmed.replace("**vibe:**", "").trim();
 				}
 			}
 		} catch {

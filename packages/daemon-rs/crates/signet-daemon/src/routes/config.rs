@@ -135,8 +135,12 @@ pub async fn identity(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
     let mut creature = String::new();
     let mut vibe = String::new();
 
-    // Secondary source: IDENTITY.md (supports both `- key:` and `**key:**`)
-    if name.is_empty() {
+    // Secondary source: IDENTITY.md — fill any field not already set by agent.yaml
+    // (supports both `- key:` and `**key:**`)
+    if name.is_empty() || creature.is_empty() || vibe.is_empty() {
+        let need_name = name.is_empty();
+        let need_creature = creature.is_empty();
+        let need_vibe = vibe.is_empty();
         let path = state.config.base_path.join("IDENTITY.md");
         let result = tokio::task::spawn_blocking(move || {
             let content = match std::fs::read_to_string(&path) {
@@ -152,20 +156,36 @@ pub async fn identity(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
                 let trimmed = line.trim();
                 // Legacy: `- name: Boogy`
                 let stripped = trimmed.trim_start_matches('-').trim();
-                if let Some(val) = stripped.strip_prefix("name:") {
-                    if n.is_empty() { n = val.trim().to_string(); }
-                } else if let Some(val) = stripped.strip_prefix("creature:") {
-                    if c.is_empty() { c = val.trim().to_string(); }
-                } else if let Some(val) = stripped.strip_prefix("vibe:") {
-                    if v.is_empty() { v = val.trim().to_string(); }
+                if need_name {
+                    if let Some(val) = stripped.strip_prefix("name:") {
+                        if n.is_empty() { n = val.trim().to_string(); }
+                    }
+                }
+                if need_creature {
+                    if let Some(val) = stripped.strip_prefix("creature:") {
+                        if c.is_empty() { c = val.trim().to_string(); }
+                    }
+                }
+                if need_vibe {
+                    if let Some(val) = stripped.strip_prefix("vibe:") {
+                        if v.is_empty() { v = val.trim().to_string(); }
+                    }
                 }
                 // Markdown bold: `**name:** Boogy`
-                if let Some(val) = trimmed.strip_prefix("**name:**") {
-                    if n.is_empty() { n = val.trim().to_string(); }
-                } else if let Some(val) = trimmed.strip_prefix("**creature:**") {
-                    if c.is_empty() { c = val.trim().to_string(); }
-                } else if let Some(val) = trimmed.strip_prefix("**vibe:**") {
-                    if v.is_empty() { v = val.trim().to_string(); }
+                if need_name {
+                    if let Some(val) = trimmed.strip_prefix("**name:**") {
+                        if n.is_empty() { n = val.trim().to_string(); }
+                    }
+                }
+                if need_creature {
+                    if let Some(val) = trimmed.strip_prefix("**creature:**") {
+                        if c.is_empty() { c = val.trim().to_string(); }
+                    }
+                }
+                if need_vibe {
+                    if let Some(val) = trimmed.strip_prefix("**vibe:**") {
+                        if v.is_empty() { v = val.trim().to_string(); }
+                    }
                 }
             }
 
@@ -177,10 +197,6 @@ pub async fn identity(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
         if name.is_empty() { name = result.0; }
         if creature.is_empty() { creature = result.1; }
         if vibe.is_empty() { vibe = result.2; }
-    }
-
-    if name.is_empty() {
-        name = "Unknown".to_string();
     }
 
     Json(serde_json::json!({

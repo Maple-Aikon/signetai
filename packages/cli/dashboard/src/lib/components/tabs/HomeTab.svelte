@@ -8,13 +8,11 @@
 		DiagnosticsReport,
 		ContinuityEntry,
 		PipelineStatus,
-		DocumentConnector,
 	} from "$lib/api";
 	import {
 		getDiagnostics,
 		getContinuityLatest,
 		getPipelineStatus,
-		getConnectors,
 	} from "$lib/api";
 	import AgentHeader from "$lib/components/home/AgentHeader.svelte";
 	import SuggestedInsights from "$lib/components/home/SuggestedInsights.svelte";
@@ -37,7 +35,6 @@
 	let diagnostics = $state<DiagnosticsReport | null>(null);
 	let continuity = $state<ContinuityEntry[]>([]);
 	let pipelineStatus = $state<PipelineStatus | null>(null);
-	let connectors = $state<DocumentConnector[]>([]);
 	let loaded = $state(false);
 
 	onMount(async () => {
@@ -45,7 +42,6 @@
 			getDiagnostics(),
 			getContinuityLatest(),
 			getPipelineStatus(),
-			getConnectors(),
 		]);
 
 		if (results[0].status === "fulfilled" && results[0].value)
@@ -54,8 +50,6 @@
 			continuity = results[1].value;
 		if (results[2].status === "fulfilled")
 			pipelineStatus = results[2].value;
-		if (results[3].status === "fulfilled")
-			connectors = results[3].value;
 		loaded = true;
 	});
 </script>
