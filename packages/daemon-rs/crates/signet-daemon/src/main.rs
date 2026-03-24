@@ -10,6 +10,7 @@ use tracing::info;
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
+mod feedback;
 mod mcp;
 mod routes;
 mod service;

@@ -168,8 +168,20 @@ function inferPath(db: WriteDb, memoryId: string, agentId: string): FeedbackPath
 	};
 }
 
-function loadStoredPaths(db: WriteDb, sessionKey: string, memoryIds: ReadonlyArray<string>): Map<string, FeedbackPath> {
-	if (memoryIds.length === 0) return new Map();
+function loadSessionData(
+	db: WriteDb,
+	sessionKey: string,
+	memoryIds: ReadonlyArray<string>,
+): {
+	readonly sessionIds: Set<string>;
+	readonly storedById: Map<string, FeedbackPath>;
+} {
+	if (memoryIds.length === 0) {
+		return {
+			sessionIds: new Set(),
+			storedById: new Map(),
+		};
+	}
 	const ph = memoryIds.map(() => "?").join(", ");
 	const rows = db
 		.prepare(
@@ -179,8 +191,10 @@ function loadStoredPaths(db: WriteDb, sessionKey: string, memoryIds: ReadonlyArr
 			   AND memory_id IN (${ph})`,
 		)
 		.all(sessionKey, ...memoryIds) as Array<{ memory_id: string; path_json: string | null }>;
-	const map = new Map<string, FeedbackPath>();
+	const sessionIds = new Set<string>();
+	const storedById = new Map<string, FeedbackPath>();
 	for (const row of rows) {
+		sessionIds.add(row.memory_id);
 		if (typeof row.path_json !== "string" || row.path_json.length === 0) continue;
 		let raw: unknown = null;
 		try {
@@ -190,9 +204,9 @@ function loadStoredPaths(db: WriteDb, sessionKey: string, memoryIds: ReadonlyArr
 		}
 		const parsed = normalizePath(raw);
 		if (!parsed) continue;
-		map.set(row.memory_id, parsed);
+		storedById.set(row.memory_id, parsed);
 	}
-	return map;
+	return { sessionIds, storedById };
 }
 
 function parsePathMap(raw: unknown): Map<string, FeedbackPath> {
@@ -206,20 +220,6 @@ function parsePathMap(raw: unknown): Map<string, FeedbackPath> {
 		map.set(id, path);
 	}
 	return map;
-}
-
-function loadSessionMembership(db: WriteDb, sessionKey: string, memoryIds: ReadonlyArray<string>): Set<string> {
-	if (memoryIds.length === 0) return new Set();
-	const ph = memoryIds.map(() => "?").join(", ");
-	const rows = db
-		.prepare(
-			`SELECT memory_id
-			 FROM session_memories
-			 WHERE session_key = ?
-			   AND memory_id IN (${ph})`,
-		)
-		.all(sessionKey, ...memoryIds) as Array<{ memory_id: string }>;
-	return new Set(rows.map((row) => row.memory_id));
 }
 
 function parseRewardMap(raw: unknown): Map<string, FeedbackReward> {
@@ -552,8 +552,9 @@ export function recordPathFeedback(
 		recordAgentFeedbackInner(db, input.sessionKey, input.ratings);
 		const ts = new Date().toISOString();
 		const ids = Object.keys(input.ratings);
-		const sessionIds = loadSessionMembership(db, input.sessionKey, ids);
-		const storedById = loadStoredPaths(db, input.sessionKey, ids);
+		const sessionData = loadSessionData(db, input.sessionKey, ids);
+		const sessionIds = sessionData.sessionIds;
+		const storedById = sessionData.storedById;
 		db.prepare(
 			`INSERT OR IGNORE INTO path_feedback_sessions (agent_id, session_key, created_at)
 			 VALUES (?, ?, ?)`,

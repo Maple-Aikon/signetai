@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use signet_core::db::Priority;
 
+use crate::feedback::parse_scores;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -240,24 +241,6 @@ pub async fn history(
 // POST /api/memory/feedback
 // ---------------------------------------------------------------------------
 
-fn parse_feedback(raw: &Value) -> Option<Vec<(String, f64)>> {
-    let obj = raw.as_object()?;
-    let mut out = Vec::new();
-    for (id, score) in obj {
-        if id.is_empty() {
-            continue;
-        }
-        let Some(v) = score.as_f64() else {
-            continue;
-        };
-        if !v.is_finite() {
-            continue;
-        }
-        out.push((id.clone(), v.clamp(-1.0, 1.0)));
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
 pub async fn feedback(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<Value>,
@@ -279,19 +262,19 @@ pub async fn feedback(
     let Some(session) = session else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "sessionKey and feedback required"})),
+            Json(serde_json::json!({"error": "sessionKey required"})),
         )
             .into_response();
     };
     let Some(raw) = raw else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "sessionKey and feedback required"})),
+            Json(serde_json::json!({"error": "feedback required"})),
         )
             .into_response();
     };
 
-    let Some(feedback) = parse_feedback(raw) else {
+    let Some(feedback) = parse_scores(Some(raw)) else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Invalid feedback format — expected map of ID to number (-1 to 1)"})),
@@ -331,7 +314,7 @@ pub async fn feedback(
                     "ok": true,
                     "recorded": recorded,
                     "accepted": accepted,
-                    "propagated": accepted,
+                    "propagated": 0,
                     "cooccurrenceUpdated": 0,
                     "dependenciesUpdated": 0
                 })),
@@ -343,27 +326,5 @@ pub async fn feedback(
             Json(serde_json::json!({"error": "Failed to record feedback"})),
         )
             .into_response(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_feedback;
-    use serde_json::json;
-
-    #[test]
-    fn parse_feedback_accepts_and_clamps_scores() {
-        let parsed = parse_feedback(&json!({"a": 2.5, "b": -3.0, "c": 0.5})).unwrap();
-        assert_eq!(parsed.len(), 3);
-        assert_eq!(parsed[0], ("a".to_string(), 1.0));
-        assert_eq!(parsed[1], ("b".to_string(), -1.0));
-        assert_eq!(parsed[2], ("c".to_string(), 0.5));
-    }
-
-    #[test]
-    fn parse_feedback_rejects_invalid_maps() {
-        assert!(parse_feedback(&json!(null)).is_none());
-        assert!(parse_feedback(&json!({"a": "bad"})).is_none());
-        assert!(parse_feedback(&json!({})).is_none());
     }
 }

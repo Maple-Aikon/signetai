@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use super::protocol::{ToolCallResult, ToolDefinition};
+use crate::feedback::parse_scores;
 use crate::state::AppState;
 use signet_core::db::Priority;
 
@@ -504,30 +505,12 @@ async fn exec_memory_forget(state: &Arc<AppState>, args: &serde_json::Value) -> 
     }
 }
 
-fn parse_ratings(raw: Option<&serde_json::Value>) -> Option<Vec<(String, f64)>> {
-    let obj = raw?.as_object()?;
-    let mut out = Vec::new();
-    for (id, score) in obj {
-        if id.is_empty() {
-            continue;
-        }
-        let Some(v) = score.as_f64() else {
-            continue;
-        };
-        if !v.is_finite() {
-            continue;
-        }
-        out.push((id.clone(), v.clamp(-1.0, 1.0)));
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
 async fn exec_memory_feedback(state: &Arc<AppState>, args: &serde_json::Value) -> ToolCallResult {
     let session_key = match args.get("session_key").and_then(|v| v.as_str()) {
         Some(v) if !v.is_empty() => v.to_string(),
         _ => return ToolCallResult::error("missing required parameter: session_key"),
     };
-    let Some(ratings) = parse_ratings(args.get("ratings")) else {
+    let Some(ratings) = parse_scores(args.get("ratings")) else {
         return ToolCallResult::error(
             "invalid ratings: expected map of memory ID to score (-1 to 1)",
         );
@@ -562,7 +545,7 @@ async fn exec_memory_feedback(state: &Arc<AppState>, args: &serde_json::Value) -
                 "ok": true,
                 "recorded": recorded,
                 "accepted": accepted,
-                "propagated": accepted,
+                "propagated": 0,
                 "cooccurrenceUpdated": 0,
                 "dependenciesUpdated": 0
             });
