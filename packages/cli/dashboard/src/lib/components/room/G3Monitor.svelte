@@ -7,12 +7,10 @@
 		agent: Agent;
 		selected?: boolean;
 		focused?: boolean;
-		widgetHtml?: string | null;
-		widgetLoading?: boolean;
 		onclick?: () => void;
 	}
 
-	const { agent, selected = false, focused = false, widgetHtml = null, widgetLoading = false, onclick }: Props = $props();
+	const { agent, selected = false, focused = false, onclick }: Props = $props();
 
 	const statusColor: Record<Agent["status"], string> = {
 		active: "#22c55e",
@@ -94,56 +92,8 @@
 		<div class="monitor-screen">
 			<CRTEffect flicker={agent.status === "active"} scanlines vignette />
 
-			{#if isMcp && widgetHtml}
-				<!-- MCP Widget preview — scaled-down iframe -->
-				<div class="screen-widget-wrap">
-					<iframe
-						class="screen-widget-iframe"
-						srcdoc={widgetHtml}
-						sandbox="allow-scripts"
-						tabindex="-1"
-						title="{agent.name} widget preview"
-					></iframe>
-				</div>
-				<!-- Floating name badge over the widget preview -->
-				<div class="widget-name-badge">
-					<span class="monitor-name">{agent.name}</span>
-					<span
-						class="status-indicator"
-						style="color: {statusColor[agent.status]};"
-					>
-						<span
-							class="status-dot"
-							class:status-dot--blink={agent.status === "active"}
-							style="background: {statusColor[agent.status]}; box-shadow: 0 0 4px {statusColor[agent.status]};"
-						></span>
-					</span>
-				</div>
-			{:else if isMcp && widgetLoading}
-				<!-- Loading state while fetching widget HTML -->
-				<div class="monitor-content">
-					<div class="screen-topbar">
-						<span class="monitor-name">{agent.name}</span>
-						<span class="status-indicator" style="color: {statusColor[agent.status]};">
-							<span
-								class="status-dot"
-								class:status-dot--blink={agent.status === "active"}
-								style="background: {statusColor[agent.status]}; box-shadow: 0 0 4px {statusColor[agent.status]};"
-							></span>
-							{statusLabel[agent.status]}
-						</span>
-					</div>
-					<div class="screen-loading">
-						<div class="loading-static"></div>
-						<span class="loading-dots">
-							<span class="loading-dot"></span>
-							<span class="loading-dot"></span>
-							<span class="loading-dot"></span>
-						</span>
-					</div>
-				</div>
-			{:else}
-				<!-- Terminal-style content for processes / non-MCP / fallback -->
+			{#if true}
+				<!-- Terminal-style content — widget preview loads in zoom view -->
 				<div class="monitor-content">
 					<!-- Top bar: name + status -->
 					<div class="screen-topbar">
@@ -310,10 +260,7 @@
 	}
 
 	.screen-widget-iframe {
-		width: 800px;
-		height: 600px;
 		border: none;
-		transform: scale(var(--monitor-scale, 0.22));
 		transform-origin: top left;
 		pointer-events: none;
 		display: block;

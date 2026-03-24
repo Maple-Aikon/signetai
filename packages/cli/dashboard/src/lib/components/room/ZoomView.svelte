@@ -382,8 +382,10 @@
 		flex: 1;
 		display: grid;
 		grid-template-columns: 1fr 1fr;
+		grid-template-rows: 1fr;
 		min-height: 0;
 		z-index: 5;
+		overflow: hidden;
 	}
 
 	/* ── Chat panel ───────────────────────────────────────── */
@@ -619,6 +621,7 @@
 		flex-direction: column;
 		min-height: 0;
 		background: #0c0c0c;
+		overflow: auto;
 	}
 
 	/* ── Status bar ───────────────────────────────────────── */

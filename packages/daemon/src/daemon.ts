@@ -296,16 +296,32 @@ function isTailscaleOriginHost(host: string): boolean {
 	return Number.isInteger(second) && second >= 64 && second <= 127;
 }
 
+function isPrivateNetworkHost(host: string): boolean {
+	if (host.startsWith("192.168.")) return true;
+	if (host.startsWith("10.")) return true;
+	if (host.startsWith("172.")) {
+		const second = Number.parseInt(host.split(".")[1], 10);
+		return Number.isInteger(second) && second >= 16 && second <= 31;
+	}
+	return false;
+}
+
 function isAllowedOrigin(origin: string | undefined): boolean {
 	if (!origin) return false;
 	if (ALLOWED_ORIGINS.has(origin)) return true;
-	if (NETWORK_MODE !== "tailscale") return false;
 
 	try {
 		const url = new URL(origin);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
 		if (parseOriginPort(url) !== PORT) return false;
 		const host = normalizeOriginHost(url.hostname);
+
+		// Allow private network IPs when bound to all interfaces
+		if (BIND_HOST === "0.0.0.0" || BIND_HOST === "::") {
+			if (isPrivateNetworkHost(host)) return true;
+		}
+
+		if (NETWORK_MODE !== "tailscale") return false;
 		if (isLoopbackOriginHost(host)) return false;
 		return isTailscaleOriginHost(host);
 	} catch {
@@ -1296,6 +1312,8 @@ const ALLOWED_ORIGINS = new Set([
 	"http://127.0.0.1:5173",
 	"tauri://localhost",
 	"http://tauri.localhost",
+	// LAN access — allow private network IPs on the daemon port
+	`http://192.168.0.18:${PORT}`,
 ]);
 app.use(
 	"*",

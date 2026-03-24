@@ -439,6 +439,7 @@ export function createClaudeCodeProvider(
 			for (const [k, v] of Object.entries(process.env)) {
 				if (v === undefined) continue;
 				if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
+				if (k === "ANTHROPIC_API_KEY" && v.startsWith("sk-ant-oat")) continue;
 				cleanEnv[k] = v;
 			}
 

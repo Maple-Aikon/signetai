@@ -49,6 +49,7 @@ export function mountAgentRegistryRoutes(app: Hono): void {
 			source: { type: string; [key: string]: unknown };
 			lastActivity: string;
 			model: string | null;
+			toolCount?: number;
 		}> = [];
 
 		// Source 1: Read installed MCP servers as tool agents
@@ -57,14 +58,24 @@ export function mountAgentRegistryRoutes(app: Hono): void {
 			const servers = readInstalledServersPublic();
 			for (const srv of servers) {
 				if (!srv.enabled) continue;
+				// Try to get tool count from server metadata
+				let toolCount: number | undefined;
+				try {
+					if (srv.tools && Array.isArray(srv.tools)) {
+						toolCount = srv.tools.length;
+					} else if (typeof srv.toolCount === "number") {
+						toolCount = srv.toolCount;
+					}
+				} catch { /* ignore */ }
 				agents.push({
 					id: `mcp-${srv.id}`,
 					name: srv.name,
 					role: "mcp server",
 					status: "active",
 					source: { type: "mcp", serverId: srv.id },
-					lastActivity: `${srv.id} — tools available`,
+					lastActivity: `${srv.id} — ${toolCount ? `${toolCount} tools` : "tools available"}`,
 					model: null,
+					toolCount,
 				});
 			}
 		} catch {

@@ -13,12 +13,19 @@
 	type TabId = "terminal" | "tools" | "browser";
 
 	const isMcp = $derived(agent.source.type === "mcp");
-	let active = $state<TabId>(isMcp ? "browser" : "terminal");
+	let active = $state<TabId>("browser");
+
+	// Default to browser for MCP, terminal for others
+	$effect(() => {
+		if (!isMcp && active === "browser") {
+			active = "terminal";
+		}
+	});
 
 	const tabs = $derived<{ id: TabId; label: string; enabled: boolean }[]>([
+		{ id: "browser", label: "BROWSER", enabled: isMcp },
 		{ id: "terminal", label: "TERMINAL", enabled: true },
 		{ id: "tools", label: "TOOLS", enabled: false },
-		{ id: "browser", label: "BROWSER", enabled: isMcp },
 	]);
 
 	let widgetHtml = $state<string | null>(null);
@@ -136,7 +143,7 @@
 		display: flex;
 		flex-direction: column;
 		height: 100%;
-		min-height: 0;
+		min-height: 400px;
 	}
 
 	.tab-bar {
@@ -176,8 +183,8 @@
 
 	.panel {
 		flex: 1;
-		min-height: 0;
-		overflow: hidden;
+		min-height: 200px;
+		overflow: auto;
 	}
 
 	.terminal {
@@ -252,6 +259,8 @@
 	.widget-container {
 		width: 100%;
 		height: 100%;
+		min-height: 300px;
 		background: #0c0c0c;
+		position: relative;
 	}
 </style>
