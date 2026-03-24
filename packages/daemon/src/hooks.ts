@@ -40,6 +40,7 @@ import {
 	shouldRunSessionDecay,
 } from "./pipeline/aspect-feedback";
 import {
+	type TraversalPath,
 	invalidateTraversalCache,
 	resolveFocalEntities,
 	setTraversalStatus,
@@ -55,14 +56,6 @@ import {
 	maybeExplore,
 	runPredictorScoring,
 } from "./predictor-scoring";
-import { propagateMemoryStatus } from "./knowledge-graph";
-import {
-	type TraversalPath,
-	invalidateTraversalCache,
-	resolveFocalEntities,
-	setTraversalStatus,
-	traverseKnowledgeGraph,
-} from "./pipeline/graph-traversal";
 import { getPredictorState, updatePredictorState } from "./predictor-state";
 import { listSecrets } from "./secrets";
 import {
