@@ -300,11 +300,21 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
   cursor.id = 'signet-cursor';
   cursor.style.cssText = 'position:fixed;width:20px;height:20px;pointer-events:none;z-index:99999;opacity:0;transition:left 0.4s cubic-bezier(0.23,1,0.32,1),top 0.4s cubic-bezier(0.23,1,0.32,1),opacity 0.2s;';
   cursor.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M5.65 2.3l12.6 10.1-5.9 1.3-3.4 5.4L5.65 2.3z" fill="rgba(0,188,212,0.9)" stroke="rgba(255,255,255,0.8)" stroke-width="1.5"/></svg>';
-  document.body.appendChild(cursor);
+  function appendCursorElements() {
+    if (document.body) {
+      document.body.appendChild(cursor);
+      document.body.appendChild(ripple);
+    } else {
+      document.addEventListener('DOMContentLoaded', function() {
+        document.body.appendChild(cursor);
+        document.body.appendChild(ripple);
+      });
+    }
+  }
 
   var ripple = document.createElement('div');
   ripple.style.cssText = 'position:fixed;pointer-events:none;z-index:99998;width:30px;height:30px;border-radius:50%;border:2px solid rgba(0,188,212,0.8);opacity:0;transform:scale(0);';
-  document.body.appendChild(ripple);
+  appendCursorElements();
 
   function showCursor() { cursor.style.opacity = '1'; }
   function hideCursor() { cursor.style.opacity = '0'; }
