@@ -58,24 +58,62 @@ function generateCursorSteps(
 ): CursorStep[] {
 	const steps: CursorStep[] = [];
 
-	for (let i = 0; i < results.length; i++) {
-		const r = results[i];
+	for (let i = 0; i < toolCalls.length; i++) {
 		const call = toolCalls[i];
-		if (!call || r.error) continue;
+		if (!call) continue;
 		const args = call.args || {};
 
-		if (r.tool.startsWith("create_") || r.tool.startsWith("update_")) {
-			// After API creates/updates, refresh widget then navigate to the item
-			const name = String(args.firstName || args.name || args.title || args.dealName || "");
+		if (call.toolName.startsWith("create_")) {
+			const entity = call.toolName.replace("create_", "");
+			const firstName = String(args.firstName || args.first_name || "");
+			const lastName = String(args.lastName || args.last_name || "");
+			const email = String(args.email || "");
+			const company = String(args.companyName || args.company || "");
+			const name = String(args.name || args.title || args.dealName || "");
 
-			// Wait for widget refresh to complete
-			steps.push({ action: "wait", ms: 2000 });
+			// Click the "+ New" button
+			steps.push({ action: "move", target: `new ${entity}`, click: true });
+			steps.push({ action: "wait", ms: 800 });
 
-			// Find and click the newly created/updated item in the list
-			if (name) {
-				steps.push({ action: "move", target: name, click: true });
-				steps.push({ action: "wait", ms: 500 });
+			// Fill in fields
+			if (firstName) {
+				steps.push({ action: "move", target: "first name", click: true });
+				steps.push({ action: "type", text: firstName });
 			}
+			if (lastName) {
+				steps.push({ action: "move", target: "last name", click: true });
+				steps.push({ action: "type", text: lastName });
+			}
+			if (email) {
+				steps.push({ action: "move", target: "email", click: true });
+				steps.push({ action: "type", text: email });
+			}
+			if (company) {
+				steps.push({ action: "move", target: "company", click: true });
+				steps.push({ action: "type", text: company });
+			}
+			if (name && !firstName) {
+				steps.push({ action: "move", target: "name", click: true });
+				steps.push({ action: "type", text: name });
+			}
+
+			// Click save/create button
+			steps.push({ action: "wait", ms: 300 });
+			steps.push({ action: "move", target: `create ${entity}`, click: true });
+		} else if (call.toolName.startsWith("update_")) {
+			const target = String(args.firstName || args.name || args.title || "");
+			if (target) {
+				steps.push({ action: "move", target, click: true });
+				steps.push({ action: "wait", ms: 600 });
+			}
+			steps.push({ action: "move", target: "edit", click: true });
+			steps.push({ action: "wait", ms: 500 });
+			for (const [key, val] of Object.entries(args)) {
+				if (["id", "contactId", "dealId"].includes(key) || val == null) continue;
+				steps.push({ action: "move", target: key.replace(/([A-Z])/g, " $1").toLowerCase(), click: true });
+				steps.push({ action: "type", text: String(val) });
+			}
+			steps.push({ action: "move", target: "save", click: true });
 		} else if (r.tool.startsWith("delete_")) {
 			const name = String(args.name || args.firstName || args.title || "");
 			if (name) {
@@ -303,15 +341,33 @@ export function mountOsChatRoutes(app: Hono): void {
 			// Build set of valid tool keys for validation
 			const validTools = new Set(tools.map((t) => `${t.server}/${t.name}`));
 
-			// Execute tool calls (max 5)
-			const port = process.env.SIGNET_PORT || 3850;
+			// Split tool calls: mutations go through visual cursor, reads go through API
+			const mutations: typeof parsed.toolCalls[number][] = [];
+			const reads: typeof parsed.toolCalls[number][] = [];
 			for (const call of parsed.toolCalls.slice(0, 5)) {
+				const t = call.toolName;
+				if (t.startsWith("create_") || t.startsWith("update_") || t.startsWith("delete_") || t.startsWith("add_") || t.startsWith("remove_") || t.startsWith("merge_")) {
+					mutations.push(call);
+				} else {
+					reads.push(call);
+				}
+			}
+
+			// Execute read-only calls via API
+			const port = process.env.SIGNET_PORT || 3850;
+			for (const call of reads) {
 				const result = await executeToolCall(call, validTools, port);
 				results.push(result);
 			}
 
-			// Generate cursor automation steps for mutations
-			const cursorSteps = generateCursorSteps(results, parsed.toolCalls);
+			// Mutations: don't call API — generate cursor steps for visual automation
+			// The cursor will drive the widget UI which handles the actual creation
+			for (const call of mutations) {
+				results.push({ tool: call.toolName, server: call.serverId, result: { visualCursor: true } });
+			}
+
+			// Generate cursor steps from the mutation calls
+			const cursorSteps = generateCursorSteps(results, [...reads, ...mutations]);
 
 			// Summarize results through the provider
 			if (results.some((r) => r.result)) {

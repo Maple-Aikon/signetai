@@ -105,21 +105,9 @@
 				toolCalls: data.toolCalls,
 			});
 
-			// Refresh widget first (so new data shows), then play cursor sequence
-			if (agent.source.type === "mcp") {
-				const hasMutation = data.toolCalls?.some((tc: Record<string, unknown>) => {
-					const tool = String(tc.tool || "");
-					return tool.startsWith("create_") || tool.startsWith("update_") || tool.startsWith("delete_");
-				});
-				if (hasMutation) {
-					sendWidgetAction(agent.source.serverId, "refresh");
-				}
-				if (data.cursorSteps && data.cursorSteps.length > 0) {
-					// Delay cursor to let refresh complete
-					setTimeout(() => {
-						sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
-					}, hasMutation ? 2500 : 100);
-				}
+			// Play cursor automation in widget — cursor drives the UI for mutations
+			if (agent.source.type === "mcp" && data.cursorSteps && data.cursorSteps.length > 0) {
+				sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
 			}
 		} catch (err) {
 			messages.push({
