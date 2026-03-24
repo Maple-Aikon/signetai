@@ -66,7 +66,7 @@
 		<AgentHeader
 			{identity}
 			{daemonStatus}
-			connectorCount={connectors.length}
+			connectorCount={harnesses.length}
 			{continuity}
 			memoryCount={memoryStats?.total ?? 0}
 			{diagnostics}

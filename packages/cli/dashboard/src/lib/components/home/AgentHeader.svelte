@@ -45,7 +45,9 @@
 		return `${ageDays} DAYS`;
 	});
 
-	const activeSessions = $derived(daemonStatus?.activeSessions ?? 0);
+	const activeSessions = $derived(
+		(daemonStatus?.activeSessions ?? 0) + (daemonStatus?.bypassedSessions ?? 0),
+	);
 	const version = $derived(daemonStatus?.version ?? "--");
 
 	const latestProject = $derived.by(() => {

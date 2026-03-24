@@ -111,6 +111,7 @@ export interface DaemonStatus {
 	agentsDir: string;
 	memoryDb: boolean;
 	activeSessions?: number;
+	bypassedSessions?: number;
 	agentCreatedAt?: string | null;
 	update?: {
 		currentVersion: string;
