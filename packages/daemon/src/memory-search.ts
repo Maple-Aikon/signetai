@@ -842,24 +842,30 @@ export async function hybridRecall(
 	// --- Fetch full memory rows ---
 	// Scope filter on hydration catches any results that bypassed
 	// the FTS filter clause (e.g. unscoped graph boost results).
+	// Agent scope filter also applied here to catch vector/traversal
+	// results that bypass FTS-level agent filtering.
 	const scopeClause =
 		params.scope !== undefined
 			? params.scope === null
-				? " AND scope IS NULL"
-				: " AND scope = ?"
-			: " AND scope IS NULL";
+				? " AND m.scope IS NULL"
+				: " AND m.scope = ?"
+			: " AND m.scope IS NULL";
 	const scopeArgs: unknown[] = params.scope !== undefined && params.scope !== null ? [params.scope] : [];
+	const agentScope =
+		params.agentId && params.readPolicy
+			? buildAgentScopeClause(params.agentId, params.readPolicy, params.policyGroup ?? null)
+			: { sql: "", args: [] };
 	const placeholders = topIds.map(() => "?").join(", ");
 
 	const rows = getDbAccessor().withReadDb(
 		(db) =>
 			db
 				.prepare(
-					`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
-        FROM memories
-        WHERE id IN (${placeholders})${scopeClause}`,
+					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at
+        FROM memories m
+        WHERE m.id IN (${placeholders})${scopeClause}${agentScope.sql}`,
 				)
-				.all(...topIds, ...scopeArgs) as Array<{
+				.all(...topIds, ...scopeArgs, ...agentScope.args) as Array<{
 				id: string;
 				content: string;
 				source_id: string | null;
@@ -942,10 +948,10 @@ export async function hybridRecall(
 							 WHERE mem.entity_id IN (${ePlaceholders})
 							   AND m.type = 'rationale'
 							   AND m.is_deleted = 0
-							   ${scopeClause}
+							   ${scopeClause}${agentScope.sql}
 							 LIMIT 10`,
 					)
-					.all(...eIds, ...scopeArgs) as Array<{
+					.all(...eIds, ...scopeArgs, ...agentScope.args) as Array<{
 					id: string;
 					content: string;
 					type: string;
