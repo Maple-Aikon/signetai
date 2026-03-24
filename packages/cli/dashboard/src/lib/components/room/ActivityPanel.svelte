@@ -34,19 +34,24 @@
 		if (agent.source.type !== "mcp") return;
 		const sid = agent.source.serverId;
 		try {
-			// Build absolute URL based on current window origin
-			// so it works whether accessed from localhost or LAN IP
 			const base = typeof window !== "undefined" ? window.location.origin : "";
 			const url = `${base}/api/os/widget/${encodeURIComponent(sid)}`;
+			console.log("[ActivityPanel] fetching widget:", url);
 			const res = await fetch(url);
+			console.log("[ActivityPanel] fetch status:", res.status);
 			if (!res.ok) { widgetError = true; return; }
-			const data: unknown = await res.json();
-			if (typeof data === "object" && data !== null && "html" in data && typeof (data as Record<string, unknown>).html === "string") {
-				widgetHtml = (data as Record<string, unknown>).html as string;
+			const raw = await res.text();
+			console.log("[ActivityPanel] response size:", raw.length);
+			const data = JSON.parse(raw);
+			if (data && typeof data.html === "string" && data.html.length > 0) {
+				console.log("[ActivityPanel] widget HTML loaded:", data.html.length, "chars");
+				widgetHtml = data.html;
 			} else {
+				console.log("[ActivityPanel] no html in response:", Object.keys(data));
 				widgetError = true;
 			}
-		} catch {
+		} catch (err) {
+			console.error("[ActivityPanel] widget fetch error:", err);
 			widgetError = true;
 		}
 	});
