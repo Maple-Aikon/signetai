@@ -2736,6 +2736,8 @@ app.post("/api/memory/remember", async (c) => {
 		sourceType?: string;
 		sourceId?: string;
 		scope?: string | null;
+		agentId?: string;
+		visibility?: string;
 		hints?: string[];
 		transcript?: string;
 		structured?: {
@@ -2769,6 +2771,8 @@ app.post("/api/memory/remember", async (c) => {
 	const raw = body.content?.trim();
 	if (!raw) return c.json({ error: "content is required" }, 400);
 	const scope = body.scope ?? null;
+	const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
+	const visibility = body.visibility === "private" ? "private" : "global";
 	const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
 	const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 	if (hasBodyTags && bodyTags === undefined) {
@@ -2812,8 +2816,8 @@ app.post("/api/memory/remember", async (c) => {
 				db.prepare(
 					`INSERT INTO entities
 					 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-					 VALUES (?, ?, ?, 'chunk_group', 'default', 0, ?, ?)`,
-				).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, now, now);
+					 VALUES (?, ?, ?, 'chunk_group', ?, 0, ?, ?)`,
+				).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, agentId, now, now);
 			});
 		} catch (e) {
 			logger.error("memory", "Failed to create chunk group entity", e as Error);
@@ -2859,6 +2863,8 @@ app.post("/api/memory/remember", async (c) => {
 						sourceType: "chunk",
 						sourceId: groupId,
 						scope,
+						agentId,
+						visibility,
 						createdAt: now,
 					});
 
@@ -3053,6 +3059,8 @@ app.post("/api/memory/remember", async (c) => {
 				sourceType,
 				sourceId,
 				scope,
+				agentId,
+				visibility,
 				createdAt: now,
 			});
 			return { deduped: false as const };
