@@ -2,7 +2,6 @@
 	import { onMount } from "svelte";
 	import type { Agent } from "$lib/stores/agents.svelte";
 	import WidgetSandbox from "$lib/components/os/WidgetSandbox.svelte";
-	import { buildSrcdoc } from "$lib/components/os/widget-theme";
 
 	interface Props {
 		agent: Agent;
@@ -138,12 +137,7 @@
 		{:else if active === "browser" && isMcp}
 			{#if widgetHtml && agent.source.type === "mcp"}
 				<div class="widget-wrap">
-					<iframe
-						class="widget-frame"
-						srcdoc={buildSrcdoc(widgetHtml, agent.source.serverId)}
-						sandbox="allow-scripts"
-						title="Widget: {agent.source.serverId}"
-					></iframe>
+					<WidgetSandbox html={widgetHtml} serverId={agent.source.serverId} />
 				</div>
 			{:else if widgetError}
 				<div class="placeholder">
@@ -294,11 +288,13 @@
 		flex-direction: column;
 	}
 
-	.widget-frame {
-		width: 100%;
+	.widget-wrap :global(.widget-sandbox) {
 		flex: 1;
 		min-height: 0;
-		border: none;
-		background: var(--sig-bg, #0c0c0c);
+	}
+
+	.widget-wrap :global(.widget-iframe) {
+		width: 100%;
+		height: 100%;
 	}
 </style>
