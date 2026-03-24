@@ -2,7 +2,6 @@
 	import { onMount } from "svelte";
 	import type { Agent } from "$lib/stores/agents.svelte";
 	import WidgetSandbox from "$lib/components/os/WidgetSandbox.svelte";
-	import { fetchWidgetHtml } from "$lib/stores/os.svelte";
 
 	interface Props {
 		agent: Agent;
@@ -32,27 +31,23 @@
 	let widgetError = $state(false);
 
 	onMount(async () => {
-		if (agent.source.type === "mcp") {
-			try {
-				// Try the os store cache first
-				const html = await fetchWidgetHtml(agent.source.serverId);
-				if (html) {
-					widgetHtml = html;
-					return;
-				}
-				// Direct fetch fallback
-				const res = await fetch(`/api/os/widget/${encodeURIComponent(agent.source.serverId)}`);
-				if (res.ok) {
-					const data = await res.json();
-					if (data.html) {
-						widgetHtml = data.html;
-						return;
-					}
-				}
-				widgetError = true;
-			} catch {
+		if (agent.source.type !== "mcp") return;
+		const sid = agent.source.serverId;
+		try {
+			// Build absolute URL based on current window origin
+			// so it works whether accessed from localhost or LAN IP
+			const base = typeof window !== "undefined" ? window.location.origin : "";
+			const url = `${base}/api/os/widget/${encodeURIComponent(sid)}`;
+			const res = await fetch(url);
+			if (!res.ok) { widgetError = true; return; }
+			const data: unknown = await res.json();
+			if (typeof data === "object" && data !== null && "html" in data && typeof (data as Record<string, unknown>).html === "string") {
+				widgetHtml = (data as Record<string, unknown>).html as string;
+			} else {
 				widgetError = true;
 			}
+		} catch {
+			widgetError = true;
 		}
 	});
 
