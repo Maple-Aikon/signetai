@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.75.1] - 2026-03-24
+
+### Bug Fixes
+
+- **daemon**: graceful SIGTERM shutdown (#307)
+
+
 ## [0.75.0] - 2026-03-24
 
 ### Bug Fixes
