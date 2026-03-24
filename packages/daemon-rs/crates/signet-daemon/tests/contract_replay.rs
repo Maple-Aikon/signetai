@@ -258,6 +258,32 @@ async fn search_endpoints() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn feedback_endpoint() {
+    let server = TestServer::start().await;
+
+    let bad = server
+        .post("/api/memory/feedback", json!({"sessionKey": "sess-1"}))
+        .await;
+    assert_eq!(bad.status(), 400);
+
+    let ok = server
+        .post(
+            "/api/memory/feedback",
+            json!({
+                "sessionKey": "sess-1",
+                "feedback": { "missing-memory": 1 }
+            }),
+        )
+        .await;
+    assert_eq!(ok.status(), 200);
+    let body = server.json(ok).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["recorded"], 1);
+    assert_eq!(body["accepted"], 0);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn knowledge_endpoints() {
     let server = TestServer::start().await;
 

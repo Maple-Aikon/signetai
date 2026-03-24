@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::protocol::{ToolCallResult, ToolDefinition};
 use crate::state::AppState;
+use signet_core::db::Priority;
 
 // ---------------------------------------------------------------------------
 // Tool registry
@@ -300,10 +301,10 @@ pub async fn execute(
         "memory_get" => exec_memory_get(state, args).await,
         "memory_list" => exec_memory_list(state, args).await,
         "memory_forget" => exec_memory_forget(state, args).await,
+        "memory_feedback" => exec_memory_feedback(state, args).await,
         "session_bypass" => exec_session_bypass(state, args).await,
         // Tools that need further service integration
         "memory_modify"
-        | "memory_feedback"
         | "knowledge_expand"
         | "agent_peers"
         | "agent_message_send"
@@ -500,6 +501,75 @@ async fn exec_memory_forget(state: &Arc<AppState>, args: &serde_json::Value) -> 
     match result {
         Ok(val) => ToolCallResult::success(val.to_string()),
         Err(e) => ToolCallResult::error(format!("forget failed: {e}")),
+    }
+}
+
+fn parse_ratings(raw: Option<&serde_json::Value>) -> Option<Vec<(String, f64)>> {
+    let obj = raw?.as_object()?;
+    let mut out = Vec::new();
+    for (id, score) in obj {
+        if id.is_empty() {
+            continue;
+        }
+        let Some(v) = score.as_f64() else {
+            continue;
+        };
+        if !v.is_finite() {
+            continue;
+        }
+        out.push((id.clone(), v.clamp(-1.0, 1.0)));
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+async fn exec_memory_feedback(state: &Arc<AppState>, args: &serde_json::Value) -> ToolCallResult {
+    let session_key = match args.get("session_key").and_then(|v| v.as_str()) {
+        Some(v) if !v.is_empty() => v.to_string(),
+        _ => return ToolCallResult::error("missing required parameter: session_key"),
+    };
+    let Some(ratings) = parse_ratings(args.get("ratings")) else {
+        return ToolCallResult::error(
+            "invalid ratings: expected map of memory ID to score (-1 to 1)",
+        );
+    };
+    let recorded = ratings.len() as i64;
+
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "UPDATE session_memories
+                 SET agent_relevance_score = CASE
+                         WHEN agent_relevance_score IS NULL THEN ?1
+                         ELSE (agent_relevance_score * agent_feedback_count + ?1) / (agent_feedback_count + 1)
+                     END,
+                     agent_feedback_count = COALESCE(agent_feedback_count, 0) + 1
+                 WHERE session_key = ?2 AND memory_id = ?3",
+            )?;
+            let mut accepted = 0_i64;
+            for (memory_id, score) in ratings {
+                let changed = stmt.execute(rusqlite::params![score, session_key, memory_id])?;
+                accepted += changed as i64;
+            }
+            Ok(serde_json::json!({ "accepted": accepted }))
+        })
+        .await;
+
+    match result {
+        Ok(val) => {
+            let accepted = val.get("accepted").and_then(|v| v.as_i64()).unwrap_or(0);
+            let body = serde_json::json!({
+                "ok": true,
+                "recorded": recorded,
+                "accepted": accepted,
+                "propagated": accepted,
+                "cooccurrenceUpdated": 0,
+                "dependenciesUpdated": 0
+            });
+            let text = serde_json::to_string_pretty(&body).unwrap_or_default();
+            ToolCallResult::success(text)
+        }
+        Err(e) => ToolCallResult::error(format!("feedback failed: {e}")),
     }
 }
 

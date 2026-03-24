@@ -7,6 +7,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use signet_core::db::Priority;
 
 use crate::state::AppState;
 
@@ -230,5 +233,137 @@ pub async fn history(
             Json(serde_json::json!({"error": "Not found"})),
         )
             .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/memory/feedback
+// ---------------------------------------------------------------------------
+
+fn parse_feedback(raw: &Value) -> Option<Vec<(String, f64)>> {
+    let obj = raw.as_object()?;
+    let mut out = Vec::new();
+    for (id, score) in obj {
+        if id.is_empty() {
+            continue;
+        }
+        let Some(v) = score.as_f64() else {
+            continue;
+        };
+        if !v.is_finite() {
+            continue;
+        }
+        out.push((id.clone(), v.clamp(-1.0, 1.0)));
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+pub async fn feedback(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let Some(obj) = payload.as_object() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid JSON body"})),
+        )
+            .into_response();
+    };
+
+    let session = obj
+        .get("sessionKey")
+        .and_then(Value::as_str)
+        .or_else(|| obj.get("session_key").and_then(Value::as_str));
+    let raw = obj.get("feedback").or_else(|| obj.get("ratings"));
+
+    let Some(session) = session else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "sessionKey and feedback required"})),
+        )
+            .into_response();
+    };
+    let Some(raw) = raw else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "sessionKey and feedback required"})),
+        )
+            .into_response();
+    };
+
+    let Some(feedback) = parse_feedback(raw) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid feedback format — expected map of ID to number (-1 to 1)"})),
+        )
+            .into_response();
+    };
+
+    let session = session.to_string();
+    let recorded = feedback.len() as i64;
+    let updated = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "UPDATE session_memories
+                 SET agent_relevance_score = CASE
+                         WHEN agent_relevance_score IS NULL THEN ?1
+                         ELSE (agent_relevance_score * agent_feedback_count + ?1) / (agent_feedback_count + 1)
+                     END,
+                     agent_feedback_count = COALESCE(agent_feedback_count, 0) + 1
+                 WHERE session_key = ?2 AND memory_id = ?3",
+            )?;
+            let mut accepted = 0_i64;
+            for (memory_id, score) in feedback {
+                let changed = stmt.execute(rusqlite::params![score, session, memory_id])?;
+                accepted += changed as i64;
+            }
+            Ok(serde_json::json!({ "accepted": accepted }))
+        })
+        .await;
+
+    match updated {
+        Ok(val) => {
+            let accepted = val.get("accepted").and_then(Value::as_i64).unwrap_or(0);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "recorded": recorded,
+                    "accepted": accepted,
+                    "propagated": accepted,
+                    "cooccurrenceUpdated": 0,
+                    "dependenciesUpdated": 0
+                })),
+            )
+                .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to record feedback"})),
+        )
+            .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_feedback;
+    use serde_json::json;
+
+    #[test]
+    fn parse_feedback_accepts_and_clamps_scores() {
+        let parsed = parse_feedback(&json!({"a": 2.5, "b": -3.0, "c": 0.5})).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0], ("a".to_string(), 1.0));
+        assert_eq!(parsed[1], ("b".to_string(), -1.0));
+        assert_eq!(parsed[2], ("c".to_string(), 0.5));
+    }
+
+    #[test]
+    fn parse_feedback_rejects_invalid_maps() {
+        assert!(parse_feedback(&json!(null)).is_none());
+        assert!(parse_feedback(&json!({"a": "bad"})).is_none());
+        assert!(parse_feedback(&json!({})).is_none());
     }
 }

@@ -132,6 +132,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/memory/modify",
             axum::routing::post(routes::write::modify_batch),
         )
+        .route(
+            "/api/memory/feedback",
+            axum::routing::post(routes::memory::feedback),
+        )
         // Config routes
         .route(
             "/api/config",
