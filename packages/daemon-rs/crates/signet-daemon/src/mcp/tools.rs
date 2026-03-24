@@ -412,6 +412,8 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "mcp-server",
+                agent_id: "default",
+                visibility: "global",
             };
             let result = signet_services::transactions::ingest(conn, &input)?;
             Ok(serde_json::json!({

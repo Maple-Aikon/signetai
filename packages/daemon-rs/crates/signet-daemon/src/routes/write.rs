@@ -59,6 +59,8 @@ pub struct RememberBody {
     pub source_id: Option<String>,
     #[serde(rename = "type")]
     pub memory_type: Option<String>,
+    pub agent_id: Option<String>,
+    pub visibility: Option<String>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -128,6 +130,12 @@ pub async fn remember(
     let source_type = body.source_type;
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
+    let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
+    let visibility = match body.visibility.as_deref() {
+        Some("private") => "private",
+        _ => "global",
+    }
+    .to_string();
 
     let result = state
         .pool
@@ -148,6 +156,8 @@ pub async fn remember(
                     idempotency_key: None,
                     runtime_path: None,
                     actor: "api",
+                    agent_id: &agent_id,
+                    visibility: &visibility,
                 },
             )?;
 

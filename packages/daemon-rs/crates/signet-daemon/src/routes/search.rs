@@ -25,7 +25,6 @@ pub struct RecallBody {
     pub query: String,
     pub keyword_query: Option<String>,
     pub limit: Option<usize>,
-    #[allow(dead_code)] // Used in Phase 3 for agent scoping
     pub agent_id: Option<String>,
     #[serde(rename = "type")]
     pub memory_type: Option<String>,
@@ -105,6 +104,7 @@ pub async fn recall(
     let importance_min = body.importance_min;
     let since = body.since.clone();
     let until = body.until.clone();
+    let agent_id = body.agent_id.clone();
     let query_for_response = query.clone();
 
     let result = state
@@ -141,27 +141,83 @@ pub async fn recall(
                 });
             }
 
-            // Fetch full rows
+            // Fetch full rows with agent scope filtering
             let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
+            let id_count = ids.len();
             let placeholders: String = ids
                 .iter()
                 .enumerate()
                 .map(|(i, _)| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
                 .join(",");
+
+            // Build agent scope clause
+            let (agent_clause, agent_params) = if let Some(ref aid) = agent_id {
+                // Look up agent's read_policy
+                let policy: String = conn
+                    .query_row(
+                        "SELECT read_policy FROM agents WHERE id = ?1",
+                        rusqlite::params![aid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or_else(|_| "isolated".to_string());
+
+                match policy.as_str() {
+                    "shared" => (
+                        format!(
+                            " AND (visibility = 'global' OR agent_id = ?{}) AND visibility != 'archived'",
+                            id_count + 1
+                        ),
+                        vec![aid.clone()],
+                    ),
+                    "group" => {
+                        let group: Option<String> = conn
+                            .query_row(
+                                "SELECT policy_group FROM agents WHERE id = ?1",
+                                rusqlite::params![aid],
+                                |row| row.get(0),
+                            )
+                            .ok()
+                            .flatten();
+                        (
+                            format!(
+                                " AND ((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?{})) OR agent_id = ?{}) AND visibility != 'archived'",
+                                id_count + 1,
+                                id_count + 2,
+                            ),
+                            vec![group.unwrap_or_default(), aid.clone()],
+                        )
+                    }
+                    _ => (
+                        format!(
+                            " AND agent_id = ?{} AND visibility != 'archived'",
+                            id_count + 1
+                        ),
+                        vec![aid.clone()],
+                    ),
+                }
+            } else {
+                (String::new(), vec![])
+            };
+
             let sql = format!(
                 "SELECT id, content, type, tags, pinned, importance, who, project, created_at
-                 FROM memories WHERE id IN ({placeholders})"
+                 FROM memories WHERE id IN ({placeholders}){agent_clause}"
             );
 
             let mut stmt = conn.prepare(&sql)?;
-            let refs: Vec<&dyn rusqlite::types::ToSql> = ids
+            let mut refs: Vec<Box<dyn rusqlite::types::ToSql>> = ids
                 .iter()
-                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
                 .collect();
+            for p in &agent_params {
+                refs.push(Box::new(p.clone()));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                refs.iter().map(|b| b.as_ref()).collect();
 
             let rows: std::collections::HashMap<String, RecallHit> = stmt
-                .query_map(refs.as_slice(), |row| {
+                .query_map(param_refs.as_slice(), |row| {
                     let content: String = row.get(1)?;
                     let len = content.len();
                     let is_truncated = len > truncate;

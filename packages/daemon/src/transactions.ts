@@ -34,7 +34,7 @@ export interface IngestEnvelope {
 	sourceId: string | null;
 	scope?: string | null;
 	agentId?: string;
-	visibility?: string;
+	visibility?: "global" | "private" | "archived";
 	createdAt: string;
 }
 

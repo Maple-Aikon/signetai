@@ -30,6 +30,8 @@ pub struct IngestInput<'a> {
     pub idempotency_key: Option<&'a str>,
     pub runtime_path: Option<&'a str>,
     pub actor: &'a str,
+    pub agent_id: &'a str,
+    pub visibility: &'a str,
 }
 
 pub struct IngestResult {
@@ -77,6 +79,8 @@ pub fn ingest(conn: &Connection, input: &IngestInput) -> Result<IngestResult, Co
             runtime_path: input.runtime_path,
             now: &now,
             updated_by: input.actor,
+            agent_id: input.agent_id,
+            visibility: input.visibility,
         },
     )?;
 

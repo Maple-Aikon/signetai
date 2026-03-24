@@ -169,6 +169,8 @@ pub struct InsertMemory<'a> {
     pub runtime_path: Option<&'a str>,
     pub now: &'a str,
     pub updated_by: &'a str,
+    pub agent_id: &'a str,
+    pub visibility: &'a str,
 }
 
 /// Insert a new memory row. Returns the ID.
@@ -179,8 +181,8 @@ pub fn insert(conn: &Connection, m: &InsertMemory) -> Result<String, CoreError> 
           who, why, project, importance, pinned, is_deleted,
           extraction_status, embedding_model, extraction_model,
           source_type, source_id, idempotency_key, runtime_path,
-          confidence, created_at, updated_at, updated_by)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?13,?14,?15,?16,?17,?18,?10,?19,?19,?20)",
+          confidence, created_at, updated_at, updated_by, agent_id, visibility)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?13,?14,?15,?16,?17,?18,?10,?19,?19,?20,?21,?22)",
         params![
             m.id,
             m.content,
@@ -202,6 +204,8 @@ pub fn insert(conn: &Connection, m: &InsertMemory) -> Result<String, CoreError> 
             m.runtime_path,
             m.now,
             m.updated_by,
+            m.agent_id,
+            m.visibility,
         ],
     )?;
     Ok(m.id.to_string())

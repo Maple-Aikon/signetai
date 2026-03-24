@@ -948,10 +948,10 @@ export async function hybridRecall(
 							 WHERE mem.entity_id IN (${ePlaceholders})
 							   AND m.type = 'rationale'
 							   AND m.is_deleted = 0
-							   ${scopeClause}
+							   ${scopeClause}${agentScope.sql}
 							 LIMIT 10`,
 					)
-					.all(...eIds, ...scopeArgs) as Array<{
+					.all(...eIds, ...scopeArgs, ...agentScope.args) as Array<{
 					id: string;
 					content: string;
 					type: string;

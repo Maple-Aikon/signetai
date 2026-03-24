@@ -2737,7 +2737,7 @@ app.post("/api/memory/remember", async (c) => {
 		sourceId?: string;
 		scope?: string | null;
 		agentId?: string;
-		visibility?: string;
+		visibility?: "global" | "private" | "archived";
 		hints?: string[];
 		transcript?: string;
 		structured?: {
