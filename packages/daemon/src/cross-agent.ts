@@ -777,24 +777,6 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 	}
 }
 
-/** Remove all presence entries (for graceful shutdown). Returns count cleared. */
-export function clearAllPresence(): number {
-	const now = new Date().toISOString();
-	let count = 0;
-	for (const [, presence] of presenceByKey) {
-		emit({
-			type: "presence",
-			action: "remove",
-			presence: clonePresence(presence),
-			activeCount: presenceByKey.size - count - 1,
-			timestamp: now,
-		});
-		count++;
-	}
-	presenceByKey.clear();
-	return count;
-}
-
 export function resetCrossAgentStateForTest(): void {
 	presenceByKey.clear();
 	messages.length = 0;
