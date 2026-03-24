@@ -28,7 +28,7 @@ import { insertHistoryEvent } from "./transactions";
 export interface RepairContext {
 	readonly reason: string;
 	readonly actor: string;
-	readonly actorType: "operator" | "agent" | "daemon";
+	readonly actorType: "operator" | "agent" | "daemon" | "system";
 	readonly requestId?: string;
 }
 
@@ -2028,7 +2028,6 @@ export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[])
 			actor: "api",
 			reason: "dead-memory hygiene",
 			actorType: "system",
-			requestId: null,
 		}, total, `soft-deleted ${total} dead memories`);
 		return total;
 	});

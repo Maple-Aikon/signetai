@@ -175,10 +175,11 @@ export function startHintsWorker(deps: {
 	readonly pipelineCfg: PipelineV2Config;
 }): HintsWorkerHandle {
 	const { accessor, provider, pipelineCfg } = deps;
-	const cfg = pipelineCfg.hints;
-	if (!cfg || !cfg.enabled) {
+	const maybeCfg = pipelineCfg.hints;
+	if (!maybeCfg || !maybeCfg.enabled) {
 		return { stop: async () => {}, running: false };
 	}
+	const cfg: PipelineHintsConfig = maybeCfg;
 
 	let running = true;
 	let timer: ReturnType<typeof setTimeout> | null = null;
