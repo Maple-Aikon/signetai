@@ -847,9 +847,9 @@ export async function hybridRecall(
 	const scopeClause =
 		params.scope !== undefined
 			? params.scope === null
-				? " AND scope IS NULL"
-				: " AND scope = ?"
-			: " AND scope IS NULL";
+				? " AND m.scope IS NULL"
+				: " AND m.scope = ?"
+			: " AND m.scope IS NULL";
 	const scopeArgs: unknown[] = params.scope !== undefined && params.scope !== null ? [params.scope] : [];
 	const agentScope =
 		params.agentId && params.readPolicy
