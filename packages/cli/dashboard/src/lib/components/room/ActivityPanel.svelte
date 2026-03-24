@@ -29,11 +29,30 @@
 	]);
 
 	let widgetHtml = $state<string | null>(null);
+	let widgetError = $state(false);
 
 	onMount(async () => {
 		if (agent.source.type === "mcp") {
-			const html = await fetchWidgetHtml(agent.source.serverId);
-			if (html) widgetHtml = html;
+			try {
+				// Try the os store cache first
+				const html = await fetchWidgetHtml(agent.source.serverId);
+				if (html) {
+					widgetHtml = html;
+					return;
+				}
+				// Direct fetch fallback
+				const res = await fetch(`/api/os/widget/${encodeURIComponent(agent.source.serverId)}`);
+				if (res.ok) {
+					const data = await res.json();
+					if (data.html) {
+						widgetHtml = data.html;
+						return;
+					}
+				}
+				widgetError = true;
+			} catch {
+				widgetError = true;
+			}
 		}
 	});
 
@@ -122,8 +141,12 @@
 			</div>
 		{:else if active === "browser" && isMcp}
 			{#if widgetHtml && agent.source.type === "mcp"}
-				<div class="widget-container">
+				<div class="widget-wrap">
 					<WidgetSandbox html={widgetHtml} serverId={agent.source.serverId} />
+				</div>
+			{:else if widgetError}
+				<div class="placeholder">
+					<span class="placeholder-text">Widget failed to load — try refreshing</span>
 				</div>
 			{:else}
 				<div class="placeholder">
@@ -183,12 +206,15 @@
 
 	.panel {
 		flex: 1;
-		min-height: 200px;
-		overflow: auto;
+		min-height: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.terminal {
-		height: 100%;
+		flex: 1;
+		min-height: 0;
 		overflow-y: auto;
 		padding: 12px;
 		background: #0c0c0c;
@@ -235,7 +261,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		height: 100%;
+		flex: 1;
+		min-height: 0;
 		background: #0c0c0c;
 	}
 
@@ -256,11 +283,23 @@
 		50% { opacity: 0.6; }
 	}
 
-	.widget-container {
+	.widget-wrap {
 		width: 100%;
 		height: 100%;
-		min-height: 300px;
-		background: #0c0c0c;
+		min-height: 400px;
+		background: var(--sig-bg, #0c0c0c);
 		position: relative;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.widget-wrap :global(.widget-sandbox) {
+		flex: 1;
+		min-height: 0;
+	}
+
+	.widget-wrap :global(.widget-iframe) {
+		width: 100%;
+		height: 100%;
 	}
 </style>
