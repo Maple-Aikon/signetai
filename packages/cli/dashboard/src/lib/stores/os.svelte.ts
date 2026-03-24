@@ -335,18 +335,25 @@ interface WidgetAction {
 let widgetActions = $state<Map<string, WidgetAction>>(new Map());
 let actionSeq = 0;
 
+// Version counter to force Svelte 5 reactivity on Map changes
+let actionVersion = $state(0);
+
 export function sendWidgetAction(serverId: string, action: string, data?: unknown): void {
-	widgetActions.set(serverId, { action, data, _seq: ++actionSeq });
-	// Auto-clear after a short delay
+	const seq = ++actionSeq;
+	widgetActions.set(serverId, { action, data, _seq: seq });
+	actionVersion++;
 	setTimeout(() => {
 		const current = widgetActions.get(serverId);
-		if (current && current._seq === actionSeq) {
+		if (current && current._seq === seq) {
 			widgetActions.delete(serverId);
+			actionVersion++;
 		}
 	}, 500);
 }
 
 export function getWidgetAction(serverId: string): WidgetAction | undefined {
+	// Access actionVersion to subscribe to changes (Svelte 5 reactivity)
+	void actionVersion;
 	return widgetActions.get(serverId);
 }
 
