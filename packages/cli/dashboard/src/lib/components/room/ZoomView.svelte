@@ -105,9 +105,21 @@
 				toolCalls: data.toolCalls,
 			});
 
-			// Play cursor automation sequence in the widget iframe
-			if (data.cursorSteps && data.cursorSteps.length > 0 && agent.source.type === "mcp") {
-				sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
+			// Refresh widget first (so new data shows), then play cursor sequence
+			if (agent.source.type === "mcp") {
+				const hasMutation = data.toolCalls?.some((tc: Record<string, unknown>) => {
+					const tool = String(tc.tool || "");
+					return tool.startsWith("create_") || tool.startsWith("update_") || tool.startsWith("delete_");
+				});
+				if (hasMutation) {
+					sendWidgetAction(agent.source.serverId, "refresh");
+				}
+				if (data.cursorSteps && data.cursorSteps.length > 0) {
+					// Delay cursor to let refresh complete
+					setTimeout(() => {
+						sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
+					}, hasMutation ? 2500 : 100);
+				}
 			}
 		} catch (err) {
 			messages.push({

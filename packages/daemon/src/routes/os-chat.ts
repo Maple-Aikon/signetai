@@ -64,60 +64,18 @@ function generateCursorSteps(
 		if (!call || r.error) continue;
 		const args = call.args || {};
 
-		if (r.tool.startsWith("create_")) {
-			// e.g. create_contact → "+ New Contact" button, fill fields, submit
-			const entityType = r.tool.replace("create_", "");
-			const firstName = String(args.firstName || args.first_name || args.name || "");
-			const lastName = String(args.lastName || args.last_name || "");
-			const email = String(args.email || "");
-			const companyName = String(args.companyName || args.company_name || args.company || "");
-			const title = String(args.title || args.dealName || args.deal_name || args.name || "");
+		if (r.tool.startsWith("create_") || r.tool.startsWith("update_")) {
+			// After API creates/updates, refresh widget then navigate to the item
+			const name = String(args.firstName || args.name || args.title || args.dealName || "");
 
-			steps.push({ action: "move", target: `new ${entityType}`, click: true });
-			steps.push({ action: "wait", ms: 800 });
+			// Wait for widget refresh to complete
+			steps.push({ action: "wait", ms: 2000 });
 
-			if (firstName) {
-				steps.push({ action: "move", target: "first name", click: true });
-				steps.push({ action: "type", text: firstName });
-			}
-			if (lastName) {
-				steps.push({ action: "move", target: "last name", click: true });
-				steps.push({ action: "type", text: lastName });
-			}
-			if (email) {
-				steps.push({ action: "move", target: "email", click: true });
-				steps.push({ action: "type", text: email });
-			}
-			if (companyName) {
-				steps.push({ action: "move", target: "company", click: true });
-				steps.push({ action: "type", text: companyName });
-			}
-			if (title) {
-				steps.push({ action: "move", target: "title", click: true });
-				steps.push({ action: "type", text: title });
-			}
-
-			steps.push({ action: "wait", ms: 300 });
-			steps.push({ action: "move", target: `create ${entityType}`, click: true });
-		} else if (r.tool.startsWith("update_")) {
-			const entityType = r.tool.replace("update_", "");
-			// Navigate to the row, click it, then update fields
-			const name = String(args.firstName || args.name || args.dealName || args.title || "");
+			// Find and click the newly created/updated item in the list
 			if (name) {
 				steps.push({ action: "move", target: name, click: true });
-				steps.push({ action: "wait", ms: 600 });
+				steps.push({ action: "wait", ms: 500 });
 			}
-
-			// For each arg that looks like a field update, move + type
-			for (const [key, val] of Object.entries(args)) {
-				if (["id", "contactId", "dealId"].includes(key)) continue;
-				if (val === undefined || val === null) continue;
-				steps.push({ action: "move", target: key.replace(/([A-Z])/g, " $1").toLowerCase(), click: true });
-				steps.push({ action: "type", text: String(val) });
-			}
-
-			steps.push({ action: "wait", ms: 300 });
-			steps.push({ action: "move", target: "save", click: true });
 		} else if (r.tool.startsWith("delete_")) {
 			const name = String(args.name || args.firstName || args.title || "");
 			if (name) {
