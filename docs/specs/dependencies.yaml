@@ -257,3 +257,22 @@ specs:
       - "Shadow mode records proposals without mutating attribute status"
       - "Sweep catches pre-existing contradictions across sessions"
     decision: null
+
+  - id: sub-agent-context-continuity
+    status: planning
+    path: docs/specs/planning/sub-agent-context-continuity.md
+    hard_depends_on:
+      - session-continuity-protocol
+      - multi-agent-support
+    soft_depends_on:
+      - knowledge-architecture-schema
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+    success_criteria:
+      - "Parent session transcript is queryable while the session is active (not only after session-end)"
+      - "Sub-agent sessions receive a deterministic context block from the parent at session-start with no LLM call"
+      - "Sub-agents can search parent session content via session_search MCP tool"
+      - "Inheritance is transparent — no explicit prepare/claim steps required from the agent"
+      - "CC SubagentStart hook + agent_id detection, OpenClaw session key parsing, OpenCode parentID — all three harnesses inherit automatically"
+    decision: null

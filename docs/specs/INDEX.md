@@ -29,6 +29,7 @@ flowchart TD
   PMS[Predictive Memory Scorer]
   SR[Signet Runtime]
   DP[Desire Paths Epic]
+  SACC[Sub-Agent Context Continuity]
 
   MP --> SCP
   MP --> PM
@@ -45,6 +46,9 @@ flowchart TD
   MA -.-> KA
   SR -.-> PM
   SR -.-> KA
+  SCP --> SACC
+  MA --> SACC
+  KA -.-> SACC
 ```
 
 Solid arrows = hard dependency. Dashed = integration contract (can build
@@ -318,6 +322,12 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 1 (parallel, no cross-dependencies)
 
+- **Sub-Agent Context Continuity Phase 1**: live transcript persistence
+  - Change `session_transcripts` write from session-end-only to
+    upsert on every `UserPromptSubmit`. No migration needed.
+  - Add `GET /api/sessions/{key}/transcript` endpoint and
+    `session_search` MCP tool.
+  - Unblocks Phase 2 and the session summary DAG (LCM Pattern 4).
 - **Procedural Memory P1**: schema + enrichment + node creation
   - Creates `skill_meta` table, skill entities, frontmatter enrichment
   - Unblocks KA structural assignment
@@ -337,6 +347,13 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 2 (depends on Wave 1)
 
+- **Sub-Agent Context Continuity Phase 2**: sub-agent context inheritance
+  - Harness-native detection: CC `agent_id` field + recency query on
+    `session_transcripts` (no SubagentStart hook needed), OpenClaw
+    session key parsing (already done in MA-8), OpenCode `parentID`.
+  - Deterministic inherit block: latest checkpoint + 3000 char
+    transcript tail + active constraints. No LLM call.
+  - Requires: Phase 1 complete, MA Phases 1-8 complete.
 - **Knowledge Architecture KA-1 + KA-2**: schema + structural assignment — COMPLETE
   - Requires skill entities from procedural memory P1
   - Adds `entity_aspects`, `entity_attributes`, `entity_dependencies`,
@@ -453,6 +470,7 @@ Legend:
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |
 | `predictor-agent-feedback` | approved | `docs/specs/approved/predictor-agent-feedback.md` | `predictive-memory-scorer` | - | |
 | `retroactive-supersession` | planning | `docs/specs/planning/retroactive-supersession.md` | `knowledge-architecture-schema` | - | Informed by MSAM-COMPARISON, RESEARCH-COMPETITIVE-SYSTEMS |
+| `sub-agent-context-continuity` | planning | `docs/specs/planning/sub-agent-context-continuity.md` | `session-continuity-protocol`, `multi-agent-support` | - | Phase 1: live transcript upsert (no migration). Phase 2: harness-native sub-agent detection + inherit block. Informed by issue #315 and LCM patterns. |
 | `competitive-systems-research` | reference | `docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md` | - | - | Informs desire-paths-epic, retroactive-supersession |
 
 ---
@@ -491,6 +509,12 @@ independent of harness-specific connectors.
 
 **multi-agent-support**: Multiple agents share one SQLite database
 without data collision via agent_id scoping.
+
+**sub-agent-context-continuity**: Parent session transcript is
+queryable while the session is active. Sub-agents receive a
+deterministic context block from the parent at session-start with
+no LLM call. Sub-agents can search parent session content via
+`session_search`.
 
 ---
 
