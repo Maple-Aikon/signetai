@@ -6,7 +6,7 @@
  * backpressure instead of setInterval.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PipelineEmbeddingTrackerConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
@@ -39,8 +39,12 @@ export interface EmbeddingTrackerHandle {
 interface StaleRow {
 	readonly id: string;
 	readonly content: string;
-	readonly contentHash: string;
+	readonly contentHash: string | null;
 	readonly currentModel: string | null;
+}
+
+function computeContentHash(content: string): string {
+	return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,9 +115,11 @@ export function startEmbeddingTracker(
 
 			for (const row of staleRows) {
 				if (!running) break;
+				// Compute hash for rows missing content_hash (legacy data)
+				const hash = row.contentHash ?? computeContentHash(row.content);
 				const vec = await fetchEmbeddingFn(row.content, embeddingCfg);
 				if (vec !== null) {
-					results.push({ row, vector: vec, contentHash: row.contentHash });
+					results.push({ row, vector: vec, contentHash: hash });
 				} else {
 					failed++;
 				}
@@ -147,6 +153,11 @@ export function startEmbeddingTracker(
 
 					if (actualRow) {
 						syncVecInsert(db, actualRow.id, vector);
+					}
+
+					// Backfill content_hash on the memory row if it was missing
+					if (!row.contentHash) {
+						db.prepare("UPDATE memories SET content_hash = ? WHERE id = ?").run(contentHash, row.id);
 					}
 
 					// Update embedding_model on the memory row
