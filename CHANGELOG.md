@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.76.2] - 2026-03-24
+
+### Bug Fixes
+
+- **memory**: raise contradiction timeout and guard embedding tracker null hashes
+
+
 ## [0.76.0] - 2026-03-24
 
 ### Bug Fixes
