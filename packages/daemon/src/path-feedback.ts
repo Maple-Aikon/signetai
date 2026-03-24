@@ -16,7 +16,7 @@ export interface FeedbackReward {
 }
 
 export interface PathFeedbackResult {
-	readonly recorded: number;
+	readonly accepted: number;
 	readonly propagated: number;
 	readonly cooccurrenceUpdated: number;
 	readonly dependenciesUpdated: number;
@@ -131,12 +131,14 @@ function reasonConfidence(reason: string | null): number {
 
 function nextReason(reason: string | null, rating: number): string | null {
 	if (rating > 0) {
+		if (reason === null) return "single-memory";
 		if (reason === "llm-uncertain") return "single-memory";
 		if (reason === "single-memory") return "pattern-matched";
 		if (reason === "pattern-matched") return "multi-memory";
 		return reason;
 	}
 	if (rating < 0) {
+		if (reason === null) return "llm-uncertain";
 		if (reason === "multi-memory") return "pattern-matched";
 		if (reason === "pattern-matched") return "single-memory";
 		if (reason === "single-memory") return "llm-uncertain";
@@ -166,11 +168,7 @@ function inferPath(db: WriteDb, memoryId: string, agentId: string): FeedbackPath
 	};
 }
 
-function loadStoredPaths(
-	db: WriteDb,
-	sessionKey: string,
-	memoryIds: ReadonlyArray<string>,
-): Map<string, FeedbackPath> {
+function loadStoredPaths(db: WriteDb, sessionKey: string, memoryIds: ReadonlyArray<string>): Map<string, FeedbackPath> {
 	if (memoryIds.length === 0) return new Map();
 	const ph = memoryIds.map(() => "?").join(", ");
 	const rows = db
@@ -208,6 +206,20 @@ function parsePathMap(raw: unknown): Map<string, FeedbackPath> {
 		map.set(id, path);
 	}
 	return map;
+}
+
+function loadSessionMembership(db: WriteDb, sessionKey: string, memoryIds: ReadonlyArray<string>): Set<string> {
+	if (memoryIds.length === 0) return new Set();
+	const ph = memoryIds.map(() => "?").join(", ");
+	const rows = db
+		.prepare(
+			`SELECT memory_id
+			 FROM session_memories
+			 WHERE session_key = ?
+			   AND memory_id IN (${ph})`,
+		)
+		.all(sessionKey, ...memoryIds) as Array<{ memory_id: string }>;
+	return new Set(rows.map((row) => row.memory_id));
 }
 
 function parseRewardMap(raw: unknown): Map<string, FeedbackReward> {
@@ -339,9 +351,9 @@ function upsertPathStats(
 }
 
 function sessionCount(db: WriteDb, agentId: string): number {
-	const row = db
-		.prepare("SELECT COUNT(*) AS cnt FROM path_feedback_sessions WHERE agent_id = ?")
-		.get(agentId) as { cnt: number } | undefined;
+	const row = db.prepare("SELECT COUNT(*) AS cnt FROM path_feedback_sessions WHERE agent_id = ?").get(agentId) as
+		| { cnt: number }
+		| undefined;
 	return Number(row?.cnt ?? 0);
 }
 
@@ -409,11 +421,17 @@ function countAutoEdges(db: WriteDb, agentId: string, source: string): number {
 	return Number(row?.cnt ?? 0);
 }
 
-function maybePromotePair(
+function canonicalPair(a: string, b: string): readonly [string, string] {
+	return a < b ? [a, b] : [b, a];
+}
+
+function maybePromoteDirected(
 	db: WriteDb,
 	agentId: string,
-	source: string,
-	target: string,
+	pairSource: string,
+	pairTarget: string,
+	edgeSource: string,
+	edgeTarget: string,
 	total: number,
 	cfg: PathFeedbackConfig,
 	ts: string,
@@ -427,7 +445,7 @@ function maybePromotePair(
 			   AND source_entity_id = ?
 			   AND target_entity_id = ?`,
 		)
-		.get(agentId, source, target) as { session_count: number } | undefined;
+		.get(agentId, pairSource, pairTarget) as { session_count: number } | undefined;
 	const src = db
 		.prepare(
 			`SELECT session_count
@@ -435,7 +453,7 @@ function maybePromotePair(
 			 WHERE agent_id = ?
 			   AND entity_id = ?`,
 		)
-		.get(agentId, source) as { session_count: number } | undefined;
+		.get(agentId, edgeSource) as { session_count: number } | undefined;
 	const tgt = db
 		.prepare(
 			`SELECT session_count
@@ -443,7 +461,7 @@ function maybePromotePair(
 			 WHERE agent_id = ?
 			   AND entity_id = ?`,
 		)
-		.get(agentId, target) as { session_count: number } | undefined;
+		.get(agentId, edgeTarget) as { session_count: number } | undefined;
 	const co = Number(pair?.session_count ?? 0);
 	const sx = Number(src?.session_count ?? 0);
 	const sy = Number(tgt?.session_count ?? 0);
@@ -466,16 +484,16 @@ function maybePromotePair(
 			   AND dependency_type = 'related_to'
 			 LIMIT 1`,
 		)
-		.get(agentId, source, target) as { id: string; strength: number; confidence: number } | undefined;
+		.get(agentId, edgeSource, edgeTarget) as { id: string; strength: number; confidence: number } | undefined;
 	const strength = clamp(0.3 + npmi * 0.5, 0.3, 0.9);
 	if (!existing) {
-		if (countAutoEdges(db, agentId, source) >= cfg.autoEdgeCap) return false;
+		if (countAutoEdges(db, agentId, edgeSource) >= cfg.autoEdgeCap) return false;
 		db.prepare(
 			`INSERT INTO entity_dependencies
 			 (id, source_entity_id, target_entity_id, agent_id, aspect_id,
 			  dependency_type, strength, confidence, reason, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, NULL, 'related_to', ?, 0.5, 'pattern-matched', ?, ?)`,
-		).run(crypto.randomUUID(), source, target, agentId, strength, ts, ts);
+		).run(crypto.randomUUID(), edgeSource, edgeTarget, agentId, strength, ts, ts);
 		return true;
 	}
 	db.prepare(
@@ -488,6 +506,26 @@ function maybePromotePair(
 		   AND agent_id = ?`,
 	).run(Math.max(existing.strength, strength), Math.max(existing.confidence, 0.5), ts, existing.id, agentId);
 	return true;
+}
+
+function maybePromotePair(
+	db: WriteDb,
+	agentId: string,
+	source: string,
+	target: string,
+	total: number,
+	cfg: PathFeedbackConfig,
+	ts: string,
+): number {
+	const [pairSource, pairTarget] = canonicalPair(source, target);
+	let count = 0;
+	if (maybePromoteDirected(db, agentId, pairSource, pairTarget, source, target, total, cfg, ts)) {
+		count++;
+	}
+	if (maybePromoteDirected(db, agentId, pairSource, pairTarget, target, source, total, cfg, ts)) {
+		count++;
+	}
+	return count;
 }
 
 export function recordPathFeedback(
@@ -514,23 +552,23 @@ export function recordPathFeedback(
 		recordAgentFeedbackInner(db, input.sessionKey, input.ratings);
 		const ts = new Date().toISOString();
 		const ids = Object.keys(input.ratings);
+		const sessionIds = loadSessionMembership(db, input.sessionKey, ids);
 		const storedById = loadStoredPaths(db, input.sessionKey, ids);
 		db.prepare(
 			`INSERT OR IGNORE INTO path_feedback_sessions (agent_id, session_key, created_at)
 			 VALUES (?, ?, ?)`,
 		).run(input.agentId, input.sessionKey, ts);
 
-		let recorded = 0;
+		let accepted = 0;
 		let propagated = 0;
 		let dependenciesUpdated = 0;
 		const entitySet = new Set<string>();
 
 		for (const [memoryId, ratingRaw] of Object.entries(input.ratings)) {
+			if (!sessionIds.has(memoryId)) continue;
+			accepted++;
 			const rating = clamp(ratingRaw, -1, 1);
-			const path =
-				pathById.get(memoryId) ??
-				storedById.get(memoryId) ??
-				inferPath(db, memoryId, input.agentId);
+			const path = pathById.get(memoryId) ?? storedById.get(memoryId) ?? inferPath(db, memoryId, input.agentId);
 			if (!path) continue;
 			const reward = rewardById.get(memoryId) ?? normalizeReward(null);
 			const score = rewardScore(reward);
@@ -565,7 +603,6 @@ export function recordPathFeedback(
 			updateAspects(db, input.agentId, path, rating, cfg, ts);
 			dependenciesUpdated += updateDependencies(db, input.agentId, path, rating, cfg, ts);
 			propagated++;
-			recorded++;
 
 			if (rating > 0) {
 				for (const entityId of path.entityIds) entitySet.add(entityId);
@@ -591,12 +628,13 @@ export function recordPathFeedback(
 		const total = sessionCount(db, input.agentId);
 		let cooccurrenceUpdated = 0;
 		for (const [source, target] of pairs) {
-			if (maybePromotePair(db, input.agentId, source, target, total, cfg, ts)) {
+			const promoted = maybePromotePair(db, input.agentId, source, target, total, cfg, ts);
+			if (promoted > 0) {
 				cooccurrenceUpdated++;
-				dependenciesUpdated++;
+				dependenciesUpdated += promoted;
 			}
 		}
 
-		return { recorded, propagated, cooccurrenceUpdated, dependenciesUpdated };
+		return { accepted, propagated, cooccurrenceUpdated, dependenciesUpdated };
 	});
 }

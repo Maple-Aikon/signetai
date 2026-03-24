@@ -3761,12 +3761,13 @@ app.post("/api/memory/feedback", async (c) => {
 			ratings: parsed,
 			paths: payload.paths,
 			rewards: payload.rewards,
-			maxAspectWeight: cfg.maxAspectWeight,
-			minAspectWeight: cfg.minAspectWeight,
+			maxAspectWeight: cfg?.maxAspectWeight,
+			minAspectWeight: cfg?.minAspectWeight,
 		});
 		return c.json({
 			ok: true,
-			recorded: result.recorded,
+			recorded: Object.keys(parsed).length,
+			accepted: result.accepted,
 			propagated: result.propagated,
 			cooccurrenceUpdated: result.cooccurrenceUpdated,
 			dependenciesUpdated: result.dependenciesUpdated,

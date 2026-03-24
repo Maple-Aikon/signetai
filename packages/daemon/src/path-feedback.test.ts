@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runMigrations } from "@signet/core";
 
 const TEST_DIR = join(tmpdir(), `signet-path-feedback-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
@@ -77,6 +77,15 @@ function seedGraph(db: Database): void {
 	);
 }
 
+function seedSessionMemory(db: Database, sessionKey: string, memoryId: string, pathJson: string | null = null): void {
+	const ts = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO session_memories
+		 (id, session_key, memory_id, source, effective_score, final_score, rank, was_injected, fts_hit_count, created_at, path_json)
+		 VALUES (?, ?, ?, 'ka_traversal', 0.8, 0.8, 0, 1, 0, ?, ?)`,
+	).run(`sm-${sessionKey}-${memoryId}`, sessionKey, memoryId, ts, pathJson);
+}
+
 let db: Database;
 
 beforeEach(() => {
@@ -101,7 +110,7 @@ describe("recordPathFeedback", () => {
 			rewards: { "mem-a": { forward_citation: 1 } },
 		});
 
-		expect(result.recorded).toBe(1);
+		expect(result.accepted).toBe(1);
 		expect(result.propagated).toBe(1);
 
 		const event = db
@@ -111,26 +120,80 @@ describe("recordPathFeedback", () => {
 		expect(event?.rating).toBe(1);
 		expect(event?.reward_forward).toBe(1);
 
-		const stats = db
-			.prepare("SELECT sample_count, positive_count FROM path_feedback_stats LIMIT 1")
-			.get() as { sample_count: number; positive_count: number } | undefined;
+		const stats = db.prepare("SELECT sample_count, positive_count FROM path_feedback_stats LIMIT 1").get() as
+			| { sample_count: number; positive_count: number }
+			| undefined;
 		expect(stats?.sample_count).toBe(1);
 		expect(stats?.positive_count).toBe(1);
 
-		const aspect = db
-			.prepare("SELECT weight FROM entity_aspects WHERE id = 'asp-a'")
-			.get() as { weight: number } | undefined;
+		const aspect = db.prepare("SELECT weight FROM entity_aspects WHERE id = 'asp-a'").get() as
+			| { weight: number }
+			| undefined;
 		expect(aspect?.weight).toBeGreaterThan(0.5);
 
-		const dep = db
-			.prepare("SELECT strength, reason FROM entity_dependencies WHERE id = 'dep-a'")
-			.get() as { strength: number; reason: string } | undefined;
+		const dep = db.prepare("SELECT strength, reason FROM entity_dependencies WHERE id = 'dep-a'").get() as
+			| { strength: number; reason: string }
+			| undefined;
 		expect(dep?.strength).toBeGreaterThan(0.5);
 		expect(dep?.reason).toBe("pattern-matched");
 	});
 
+	it("skips IDs that do not belong to the rated session", () => {
+		const result = recordPathFeedback(getDbAccessor(), {
+			sessionKey: "sess-a",
+			agentId: "default",
+			ratings: { ghost: 1 },
+			paths: {
+				ghost: {
+					entity_ids: ["ent-a", "ent-b"],
+					aspect_ids: ["asp-a"],
+					dependency_ids: ["dep-a"],
+				},
+			},
+		});
+
+		expect(result.accepted).toBe(0);
+		expect(result.propagated).toBe(0);
+
+		const events = db.prepare("SELECT COUNT(*) AS cnt FROM path_feedback_events WHERE memory_id = 'ghost'").get() as
+			| { cnt: number }
+			| undefined;
+		expect(events?.cnt).toBe(0);
+	});
+
+	it("assigns a default reason when positive feedback hits NULL reason", () => {
+		const ts = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO entity_dependencies
+			 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason, created_at, updated_at)
+			 VALUES ('dep-null', 'ent-a', 'ent-b', 'default', 'depends_on', 0.4, 0.4, NULL, ?, ?)`,
+		).run(ts, ts);
+
+		const result = recordPathFeedback(getDbAccessor(), {
+			sessionKey: "sess-a",
+			agentId: "default",
+			ratings: { "mem-a": 1 },
+			paths: {
+				"mem-a": {
+					entity_ids: ["ent-a", "ent-b"],
+					aspect_ids: [],
+					dependency_ids: ["dep-null"],
+				},
+			},
+		});
+		expect(result.accepted).toBe(1);
+		expect(result.propagated).toBe(1);
+
+		const dep = db.prepare("SELECT reason, confidence FROM entity_dependencies WHERE id = 'dep-null'").get() as
+			| { reason: string | null; confidence: number }
+			| undefined;
+		expect(dep?.reason).toBe("single-memory");
+		expect(dep?.confidence).toBeGreaterThanOrEqual(0.7);
+	});
+
 	it("promotes co-occurrence edge after repeated sessions", () => {
 		for (const key of ["sess-co-1", "sess-co-2", "sess-co-3"]) {
+			seedSessionMemory(db, key, "mem-a");
 			recordPathFeedback(getDbAccessor(), {
 				sessionKey: key,
 				agentId: "default",
@@ -145,7 +208,7 @@ describe("recordPathFeedback", () => {
 			});
 		}
 
-		const edge = db
+		const forward = db
 			.prepare(
 				`SELECT reason, confidence
 				 FROM entity_dependencies
@@ -156,8 +219,23 @@ describe("recordPathFeedback", () => {
 				 LIMIT 1`,
 			)
 			.get() as { reason: string; confidence: number } | undefined;
-		expect(edge).toBeDefined();
-		expect(edge?.reason).toBe("pattern-matched");
-		expect(edge?.confidence).toBeGreaterThanOrEqual(0.5);
+		expect(forward).toBeDefined();
+		expect(forward?.reason).toBe("pattern-matched");
+		expect(forward?.confidence).toBeGreaterThanOrEqual(0.5);
+
+		const reverse = db
+			.prepare(
+				`SELECT reason, confidence
+				 FROM entity_dependencies
+				 WHERE source_entity_id = 'ent-b'
+				   AND target_entity_id = 'ent-a'
+				   AND dependency_type = 'related_to'
+				 ORDER BY updated_at DESC
+				 LIMIT 1`,
+			)
+			.get() as { reason: string; confidence: number } | undefined;
+		expect(reverse).toBeDefined();
+		expect(reverse?.reason).toBe("pattern-matched");
+		expect(reverse?.confidence).toBeGreaterThanOrEqual(0.5);
 	});
 });

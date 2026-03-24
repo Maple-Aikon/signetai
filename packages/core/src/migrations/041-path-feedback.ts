@@ -1,11 +1,8 @@
 import type { MigrationDb } from "./index";
 
-function addColumnIfMissing(
-	db: MigrationDb,
-	table: string,
-	column: string,
-	definition: string,
-): void {
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
+	// SQLite PRAGMA/ALTER identifiers are not parameterizable.
+	// This helper is only called with internal constant identifiers.
 	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
 	if (!cols.some((c) => c.name === column)) {
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
