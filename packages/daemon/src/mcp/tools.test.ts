@@ -241,6 +241,42 @@ describe("createMcpServer", () => {
 		});
 	});
 
+	describe("memory_feedback", () => {
+		it("posts ratings with optional path and reward payload", async () => {
+			const cap: { method?: string; body?: string } = {};
+			mockFetch(200, { ok: true, recorded: 2 }, cap);
+
+			await callTool(server, "memory_feedback", {
+				session_key: "sess-1",
+				agent_id: "default",
+				ratings: { mem1: 1, mem2: -0.5 },
+				paths: {
+					mem1: {
+						entity_ids: ["ent-a", "ent-b"],
+						aspect_ids: ["asp-a"],
+						dependency_ids: ["dep-a"],
+					},
+				},
+				rewards: {
+					mem1: {
+						forward_citation: 1,
+						update_after_retrieval: 0.5,
+						downstream_creation: 0,
+						dead_end: 0,
+					},
+				},
+			});
+
+			expect(cap.method).toBe("POST");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.sessionKey).toBe("sess-1");
+			expect(body.agentId).toBe("default");
+			expect(body.feedback.mem1).toBe(1);
+			expect(body.paths.mem1.entity_ids[0]).toBe("ent-a");
+			expect(body.rewards.mem1.forward_citation).toBe(1);
+		});
+	});
+
 	describe("cross-agent tools", () => {
 		it("agent_peers calls presence endpoint with defaults", async () => {
 			const cap: { url?: string } = {};

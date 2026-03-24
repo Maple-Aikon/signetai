@@ -7,7 +7,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use signet_core::db::Priority;
+
+use crate::feedback::parse_scores;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -228,6 +232,98 @@ pub async fn history(
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Not found"})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/memory/feedback
+// ---------------------------------------------------------------------------
+
+pub async fn feedback(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let Some(obj) = payload.as_object() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid JSON body"})),
+        )
+            .into_response();
+    };
+
+    let session = obj
+        .get("sessionKey")
+        .and_then(Value::as_str)
+        .or_else(|| obj.get("session_key").and_then(Value::as_str));
+    let raw = obj.get("feedback").or_else(|| obj.get("ratings"));
+
+    let Some(session) = session else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "sessionKey required"})),
+        )
+            .into_response();
+    };
+    let Some(raw) = raw else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "feedback required"})),
+        )
+            .into_response();
+    };
+
+    let Some(feedback) = parse_scores(Some(raw)) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid feedback format — expected map of ID to number (-1 to 1)"})),
+        )
+            .into_response();
+    };
+
+    let session = session.to_string();
+    let recorded = feedback.len() as i64;
+    let updated = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "UPDATE session_memories
+                 SET agent_relevance_score = CASE
+                         WHEN agent_relevance_score IS NULL THEN ?1
+                         ELSE (agent_relevance_score * agent_feedback_count + ?1) / (agent_feedback_count + 1)
+                     END,
+                     agent_feedback_count = COALESCE(agent_feedback_count, 0) + 1
+                 WHERE session_key = ?2 AND memory_id = ?3",
+            )?;
+            let mut accepted = 0_i64;
+            for (memory_id, score) in feedback {
+                let changed = stmt.execute(rusqlite::params![score, session, memory_id])?;
+                accepted += changed as i64;
+            }
+            Ok(serde_json::json!({ "accepted": accepted }))
+        })
+        .await;
+
+    match updated {
+        Ok(val) => {
+            let accepted = val.get("accepted").and_then(Value::as_i64).unwrap_or(0);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "recorded": recorded,
+                    "accepted": accepted,
+                    "propagated": 0,
+                    "cooccurrenceUpdated": 0,
+                    "dependenciesUpdated": 0
+                })),
+            )
+                .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to record feedback"})),
         )
             .into_response(),
     }

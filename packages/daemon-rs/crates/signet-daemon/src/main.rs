@@ -10,6 +10,7 @@ use tracing::info;
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
+mod feedback;
 mod mcp;
 mod routes;
 mod service;
@@ -132,6 +133,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/memory/modify",
             axum::routing::post(routes::write::modify_batch),
         )
+        .route(
+            "/api/memory/feedback",
+            axum::routing::post(routes::memory::feedback),
+        )
         // Config routes
         .route(
             "/api/config",
@@ -167,6 +172,12 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/hooks/compaction-complete",
             axum::routing::post(routes::hooks::compaction_complete),
+        )
+        // Agent roster routes (multi-agent support — migration 043)
+        .route("/api/agents", get(routes::agents::list).post(routes::agents::create))
+        .route(
+            "/api/agents/{name}",
+            get(routes::agents::get).delete(routes::agents::delete),
         )
         // Session routes
         .route("/api/sessions", get(routes::sessions::list))
