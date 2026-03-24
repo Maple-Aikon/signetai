@@ -7295,10 +7295,11 @@ app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
 			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
 			latencyMs: typeof b.latencyMs === "number" && Number.isFinite(b.latencyMs) ? b.latencyMs : 0,
-			// Plugin sends per-heartbeat deltas, not cumulative totals.
-			lastFailedDelta: typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0),
-			totalSucceeded: (prev?.totalSucceeded ?? 0) + (typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
-			totalFailed: (prev?.totalFailed ?? 0) + (typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
+			// Plugin sends per-heartbeat deltas, not cumulative totals. Clamp to
+			// non-negative to guard against malformed or negative inputs corrupting counters.
+			lastFailedDelta: Math.max(0, typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
+			totalSucceeded: (prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
+			totalFailed: (prev?.totalFailed ?? 0) + Math.max(0, typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
 		},
 	};
 	invalidateDiagnosticsCache();
@@ -7911,9 +7912,9 @@ app.get("/api/repair/dead-memories", (c) => {
 	const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
 	if (
 		!Number.isFinite(maxConfidence) || !Number.isFinite(maxAccessDays) || !Number.isFinite(limit)
-		|| maxConfidence < 0 || maxAccessDays < 0 || limit < 0
+		|| maxConfidence < 0 || maxConfidence > 1 || maxAccessDays < 0 || limit < 0
 	) {
-		return c.json({ error: "maxConfidence, maxAccessDays, and limit must be finite non-negative numbers" }, 400);
+		return c.json({ error: "maxConfidence must be 0–1, maxAccessDays and limit must be non-negative" }, 400);
 	}
 	const dead = getDbAccessor().withReadDb((db) =>
 		findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
