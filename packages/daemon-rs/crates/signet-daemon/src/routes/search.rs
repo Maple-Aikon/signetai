@@ -179,14 +179,25 @@ pub async fn recall(
                             )
                             .ok()
                             .flatten();
-                        (
-                            format!(
-                                " AND ((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?{})) OR agent_id = ?{}) AND visibility != 'archived'",
-                                id_count + 1,
-                                id_count + 2,
-                            ),
-                            vec![group.unwrap_or_default(), aid.clone()],
-                        )
+                        if let Some(g) = group {
+                            (
+                                format!(
+                                    " AND ((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?{})) OR agent_id = ?{}) AND visibility != 'archived'",
+                                    id_count + 1,
+                                    id_count + 2,
+                                ),
+                                vec![g, aid.clone()],
+                            )
+                        } else {
+                            // No group configured — fall back to isolated (own memories only)
+                            (
+                                format!(
+                                    " AND agent_id = ?{} AND visibility != 'archived'",
+                                    id_count + 1
+                                ),
+                                vec![aid.clone()],
+                            )
+                        }
                     }
                     _ => (
                         format!(

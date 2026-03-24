@@ -554,6 +554,8 @@ mod tests {
             runtime_path: None,
             now: "2024-01-01T00:00:00Z",
             updated_by: "test",
+            agent_id: "default",
+            visibility: "global",
         }
     }
 

@@ -398,6 +398,8 @@ mod tests {
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "test",
+                agent_id: "default",
+                visibility: "global",
             },
         )
         .unwrap();
@@ -420,6 +422,8 @@ mod tests {
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "test",
+                agent_id: "default",
+                visibility: "global",
             },
         )
         .unwrap();
@@ -446,6 +450,8 @@ mod tests {
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "test",
+                agent_id: "default",
+                visibility: "global",
             },
         )
         .unwrap();
@@ -492,6 +498,8 @@ mod tests {
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "test",
+                agent_id: "default",
+                visibility: "global",
             },
         )
         .unwrap();
@@ -547,6 +555,8 @@ mod tests {
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "test",
+                agent_id: "default",
+                visibility: "global",
             },
         )
         .unwrap();
