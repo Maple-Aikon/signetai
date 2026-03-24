@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
+import { getSecret } from "../secrets.js";
 import { probeServer, storeProbeResult, removeProbeResult } from "../mcp-probe.js";
 import { withPooledClient, releaseServer, startProbe, endProbe } from "../mcp-pool.js";
 

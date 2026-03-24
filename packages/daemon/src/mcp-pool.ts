@@ -101,7 +101,7 @@ export async function getPooledClient(
 ): Promise<Client> {
 	const existing = pool.get(server.id);
 
-	if (existing?.connected) {
+	if (existing?.connected && existing.client) {
 		existing.lastUsed = Date.now();
 		existing.useCount++;
 		return existing.client;
@@ -110,7 +110,7 @@ export async function getPooledClient(
 	// Wait for in-flight connect if another caller is already connecting
 	if (existing?.connecting) {
 		await existing.connecting;
-		if (existing.connected) {
+		if (existing.connected && existing.client) {
 			existing.lastUsed = Date.now();
 			existing.useCount++;
 			return existing.client;
@@ -221,7 +221,7 @@ export async function shutdownPool(): Promise<void> {
 	probing.clear();
 	await Promise.allSettled(
 		entries.map(async (entry) => {
-			if (entry.connected) {
+			if (entry.connected && entry.client) {
 				await entry.client.close().catch(() => undefined);
 			}
 		}),

@@ -54,7 +54,8 @@ export type LogCategory =
 	| "event-bridge" // Browser-to-event-bus bridge
 	| "widget" // Widget HTML generation (Signet OS)
 	| "os-chat" // OS chat agent (natural language → MCP tools)
-	| "os-agent"; // OS page-agent (visual GUI automation)
+	| "os-agent" // OS page-agent (visual GUI automation)
+	| "mcp-pool"; // MCP server connection pool
 
 export interface LogEntry {
 	timestamp: string;
