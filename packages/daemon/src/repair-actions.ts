@@ -198,6 +198,19 @@ export function requeueDeadJobs(
 	// Requeue both memory_jobs and summary_jobs in a single transaction
 	// so the rate limiter only records on full success.
 	const { memoryCount, summaryCount } = accessor.withWriteTx((db) => {
+		// --- Universal promotion sweep (issue #311) ---
+		// Any job at max_attempts that isn't already dead/done is a logic
+		// contradiction. Promote them to dead before doing anything else.
+		const promoted = countChanges(db.prepare(
+			`UPDATE memory_jobs
+			 SET status = 'dead', updated_at = ?
+			 WHERE attempts >= max_attempts
+			   AND status NOT IN ('dead', 'completed')`,
+		).run(new Date().toISOString()));
+		if (promoted > 0) {
+			logger.info("repair", `Promoted ${promoted} exhausted jobs to dead (issue #311)`);
+		}
+
 		// --- memory_jobs ---
 		let memoryCount = 0;
 		// Exclude document_ingest jobs that failed with a content-hash collision —

@@ -221,9 +221,11 @@ export function startHintsWorker(deps: {
 				});
 			}
 		} catch (e) {
-			logger.warn("pipeline", "Hints worker tick failed", {
-				error: e instanceof Error ? e.message : String(e),
-			});
+			const msg = e instanceof Error ? e.message : String(e);
+			logger.warn("pipeline", "Hints worker tick failed", { error: msg });
+			if (job) {
+				accessor.withWriteTx((db) => failJob(db, job.id, msg));
+			}
 		}
 
 		schedule();
