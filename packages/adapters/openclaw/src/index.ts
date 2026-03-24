@@ -19,6 +19,11 @@ const DEFAULT_DAEMON_URL = "http://localhost:3850";
 const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 const WRITE_TIMEOUT = 10000;
+const HEALTH_TIMEOUT = 3000;
+const HEALTH_RETRIES = 3;
+const HEALTH_BACKOFF_MS = 1500;
+const MARKETPLACE_TIMEOUT = 15000;
+const MARKETPLACE_REFRESH_INTERVAL = 60_000;
 
 // ---------------------------------------------------------------------------
 // Prompt extraction — OpenClaw wraps user messages in metadata envelopes.
@@ -347,7 +352,7 @@ async function daemonFetch<T>(
 export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<boolean> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
-			signal: AbortSignal.timeout(1000),
+			signal: AbortSignal.timeout(HEALTH_TIMEOUT),
 		});
 		return res.ok;
 	} catch {
@@ -359,7 +364,7 @@ export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<b
 async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
-			signal: AbortSignal.timeout(1000),
+			signal: AbortSignal.timeout(HEALTH_TIMEOUT),
 		});
 		if (!res.ok) return null;
 		const body = (await res.json()) as { pid?: number };
@@ -367,6 +372,19 @@ async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 	} catch {
 		return null;
 	}
+}
+
+/** Retries getDaemonPid with backoff — gives the daemon time to finish
+ *  startup (DB migrations, provider checks) before declaring it unreachable. */
+async function getDaemonPidWithRetry(daemonUrl: string): Promise<number | null> {
+	for (let attempt = 0; attempt < HEALTH_RETRIES; attempt++) {
+		const pid = await getDaemonPid(daemonUrl);
+		if (pid !== null) return pid;
+		if (attempt < HEALTH_RETRIES - 1) {
+			await new Promise((r) => setTimeout(r, HEALTH_BACKOFF_MS * (attempt + 1)));
+		}
+	}
+	return null;
 }
 
 // ============================================================================
@@ -655,7 +673,7 @@ export async function marketplaceToolList(
 	const query = params.toString();
 	const path = `/api/marketplace/mcp/tools${query.length > 0 ? `?${query}` : ""}`;
 	return daemonFetch<MarketplaceToolCatalog>(daemonUrl, path, {
-		timeout: READ_TIMEOUT,
+		timeout: MARKETPLACE_TIMEOUT,
 	});
 }
 
@@ -788,9 +806,10 @@ async function registerMarketplaceProxyTools(
 	options: MarketplaceContextOptions,
 	knownNames: Set<string>,
 	proxyNameByToolKey: Map<string, string>,
+	refresh = false,
 ): Promise<{ registeredNow: number; total: number }> {
 	const [catalog, policy] = await Promise.all([
-		marketplaceToolList({ ...options, refresh: true }),
+		marketplaceToolList({ ...options, refresh }),
 		getMarketplaceExposurePolicy(options),
 	]);
 	if (!catalog || catalog.tools.length === 0) {
@@ -906,8 +925,9 @@ const signetPlugin = {
 
 		api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
 
-		// Fire-and-forget startup health check (also captures initial PID)
-		getDaemonPid(daemonUrl).then((pid) => {
+		// Fire-and-forget startup health check with retry — gives the daemon
+		// time to finish DB migrations and provider checks before giving up.
+		getDaemonPidWithRetry(daemonUrl).then((pid) => {
 			daemonReachable = pid !== null;
 			knownPid = pid;
 			if (!daemonReachable) {
@@ -1281,8 +1301,8 @@ const signetPlugin = {
 
 		const marketplaceProxyNameByToolKey = new Map<string, string>();
 
-		const refreshMarketplaceProxyTools = (): Promise<void> =>
-			registerMarketplaceProxyTools(api, opts, marketplaceProxyNames, marketplaceProxyNameByToolKey)
+		const doMarketplaceRefresh = (refresh: boolean): Promise<void> =>
+			registerMarketplaceProxyTools(api, opts, marketplaceProxyNames, marketplaceProxyNameByToolKey, refresh)
 				.then((result) => {
 					if (result.registeredNow > 0) {
 						api.logger.info(
@@ -1294,10 +1314,13 @@ const signetPlugin = {
 					api.logger.warn(`signet-memory: failed to register marketplace proxy tools: ${String(error)}`);
 				});
 
-		void refreshMarketplaceProxyTools();
+		// First call forces a refresh to populate; subsequent interval calls
+		// let the daemon-side 30s cache serve results, avoiding redundant
+		// MCP server queries on every tick.
+		void doMarketplaceRefresh(true);
 		marketplaceProxyTimer = setInterval(() => {
-			void refreshMarketplaceProxyTools();
-		}, 15_000);
+			void doMarketplaceRefresh(false);
+		}, MARKETPLACE_REFRESH_INTERVAL);
 
 		// ==================================================================
 		// Lifecycle hooks

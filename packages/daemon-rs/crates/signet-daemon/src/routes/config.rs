@@ -125,51 +125,69 @@ pub async fn save_config(
 // ---------------------------------------------------------------------------
 
 pub async fn identity(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let path = state.config.base_path.join("IDENTITY.md");
+    // Primary source: agent.yaml (already parsed into manifest)
+    let manifest_name = &state.config.manifest.agent.name;
+    let mut name = if manifest_name.is_empty() {
+        String::new()
+    } else {
+        manifest_name.clone()
+    };
+    let mut creature = String::new();
+    let mut vibe = String::new();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => {
-                return serde_json::json!({
-                    "name": "Unknown",
-                    "creature": "",
-                    "vibe": "",
-                });
+    // Secondary source: IDENTITY.md (supports both `- key:` and `**key:**`)
+    if name.is_empty() {
+        let path = state.config.base_path.join("IDENTITY.md");
+        let result = tokio::task::spawn_blocking(move || {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => return (String::new(), String::new(), String::new()),
+            };
+
+            let mut n = String::new();
+            let mut c = String::new();
+            let mut v = String::new();
+
+            for line in content.lines() {
+                let trimmed = line.trim();
+                // Legacy: `- name: Boogy`
+                let stripped = trimmed.trim_start_matches('-').trim();
+                if let Some(val) = stripped.strip_prefix("name:") {
+                    if n.is_empty() { n = val.trim().to_string(); }
+                } else if let Some(val) = stripped.strip_prefix("creature:") {
+                    if c.is_empty() { c = val.trim().to_string(); }
+                } else if let Some(val) = stripped.strip_prefix("vibe:") {
+                    if v.is_empty() { v = val.trim().to_string(); }
+                }
+                // Markdown bold: `**name:** Boogy`
+                if let Some(val) = trimmed.strip_prefix("**name:**") {
+                    if n.is_empty() { n = val.trim().to_string(); }
+                } else if let Some(val) = trimmed.strip_prefix("**creature:**") {
+                    if c.is_empty() { c = val.trim().to_string(); }
+                } else if let Some(val) = trimmed.strip_prefix("**vibe:**") {
+                    if v.is_empty() { v = val.trim().to_string(); }
+                }
             }
-        };
 
-        let mut name = "Unknown".to_string();
-        let mut creature = String::new();
-        let mut vibe = String::new();
-
-        for line in content.lines() {
-            let trimmed = line.trim().trim_start_matches('-').trim();
-            if let Some(val) = trimmed.strip_prefix("name:") {
-                name = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("creature:") {
-                creature = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("vibe:") {
-                vibe = val.trim().to_string();
-            }
-        }
-
-        serde_json::json!({
-            "name": name,
-            "creature": creature,
-            "vibe": vibe,
+            (n, c, v)
         })
-    })
-    .await
-    .unwrap_or_else(|_| {
-        serde_json::json!({
-            "name": "Unknown",
-            "creature": "",
-            "vibe": "",
-        })
-    });
+        .await
+        .unwrap_or_default();
 
-    Json(result)
+        if name.is_empty() { name = result.0; }
+        if creature.is_empty() { creature = result.1; }
+        if vibe.is_empty() { vibe = result.2; }
+    }
+
+    if name.is_empty() {
+        name = "Unknown".to_string();
+    }
+
+    Json(serde_json::json!({
+        "name": name,
+        "creature": creature,
+        "vibe": vibe,
+    }))
 }
 
 // ---------------------------------------------------------------------------

@@ -1824,25 +1824,66 @@ app.post("/api/config", async (c) => {
 // ============================================================================
 
 app.get("/api/identity", (c) => {
+	const identity = { name: "", creature: "", vibe: "" };
+
+	// Primary source: agent.yaml (reliable, structured)
 	try {
-		const content = readFileSync(join(AGENTS_DIR, "IDENTITY.md"), "utf-8");
-		const lines = content.split("\n");
-		const identity: { name: string; creature: string; vibe: string } = {
-			name: "",
-			creature: "",
-			vibe: "",
-		};
-
-		for (const line of lines) {
-			if (line.startsWith("- name:")) identity.name = line.replace("- name:", "").trim();
-			if (line.startsWith("- creature:")) identity.creature = line.replace("- creature:", "").trim();
-			if (line.startsWith("- vibe:")) identity.vibe = line.replace("- vibe:", "").trim();
+		for (const p of [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")]) {
+			if (existsSync(p)) {
+				const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
+				const agent = typeof yaml.agent === "object" && yaml.agent !== null
+					? (yaml.agent as Record<string, unknown>)
+					: undefined;
+				if (agent && typeof agent.name === "string") {
+					identity.name = agent.name.trim();
+				}
+				if (agent && typeof agent.creature === "string") {
+					identity.creature = agent.creature.trim();
+				}
+				if (agent && typeof agent.vibe === "string") {
+					identity.vibe = agent.vibe.trim();
+				}
+				break;
+			}
 		}
-
-		return c.json(identity);
 	} catch {
-		return c.json({ name: "Unknown", creature: "", vibe: "" });
+		/* agent.yaml parse error — fall through to IDENTITY.md */
 	}
+
+	// Secondary source: IDENTITY.md (supports both legacy `- key:` and
+	// markdown bold `**key:**` formats)
+	if (!identity.name) {
+		try {
+			const content = readFileSync(join(AGENTS_DIR, "IDENTITY.md"), "utf-8");
+			for (const line of content.split("\n")) {
+				const trimmed = line.trim();
+				// Legacy format: `- name: Boogy`
+				if (trimmed.startsWith("- name:")) {
+					identity.name = identity.name || trimmed.replace("- name:", "").trim();
+				}
+				if (trimmed.startsWith("- creature:")) {
+					identity.creature = identity.creature || trimmed.replace("- creature:", "").trim();
+				}
+				if (trimmed.startsWith("- vibe:")) {
+					identity.vibe = identity.vibe || trimmed.replace("- vibe:", "").trim();
+				}
+				// Markdown bold format: `**name:** Boogy`
+				if (trimmed.startsWith("**name:**")) {
+					identity.name = identity.name || trimmed.replace("**name:**", "").trim();
+				}
+				if (trimmed.startsWith("**creature:**")) {
+					identity.creature = identity.creature || trimmed.replace("**creature:**", "").trim();
+				}
+				if (trimmed.startsWith("**vibe:**")) {
+					identity.vibe = identity.vibe || trimmed.replace("**vibe:**", "").trim();
+				}
+			}
+		} catch {
+			/* IDENTITY.md missing or unreadable */
+		}
+	}
+
+	return c.json(identity);
 });
 
 // ============================================================================
