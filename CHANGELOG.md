@@ -2,6 +2,49 @@
 
 All notable changes to Signet are documented here.
 
+## [0.76.0] - 2026-03-24
+
+### Bug Fixes
+
+- wire agent_id and visibility through memory write and recall (#317)
+
+### Docs
+
+- spec and index for sub-agent context continuity (#315)
+
+
+## [0.75.3] - 2026-03-24
+
+### Features
+
+- multi-agent support — scoped identity, memory, and OpenClaw routing (#316)
+
+
+## [0.75.2] - 2026-03-24
+
+### Bug Fixes
+
+- session expiry, hooks config, dead-memory API, openclaw health (#295)
+
+
+## [0.75.1] - 2026-03-24
+
+### Bug Fixes
+
+- **daemon**: graceful SIGTERM shutdown (#307)
+
+
+## [0.75.0] - 2026-03-24
+
+### Bug Fixes
+
+- complete DP-9 path feedback propagation pipeline (#310)
+
+### Docs
+
+- competitive systems research — 3-repo analysis with integration contracts (#309)
+
+
 ## [0.74.1] - 2026-03-23
 
 ### Features

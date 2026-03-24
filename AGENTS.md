@@ -3,7 +3,7 @@ Repo: github.com/signetai/signetai
 GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 Branching: <username>/<feature> off main
 Conventional commits: type(scope) subject — reserve `feat:` for user-facing features only; use `fix:`, `refactor:`, `chore:`, or `perf:` for internal changes (feat bumps minor version)
-Last Updated: 2026/03/13
+Last Updated: 2026/03/24
 This file: AGENTS.md -> Symlinked to CLAUDE.md
 ---
 
@@ -13,6 +13,91 @@ Running `/init` is **strongly** discouraged.
 This file provides guidance to AI assistants working on this repository.
 It is version controlled and co-maintained by human developers and AI
 assistants. Changes to this document should be thoughtful and express good judgement.
+
+Session Protocol (MANDATORY)
+---
+
+Before starting any new feature, implementation, fix, refactor, or review,
+agents MUST:
+
+1. Read `docs/specs/INDEX.md` at the start of the session.
+2. Validate planned work against `docs/specs/dependencies.yaml`.
+3. Confirm the target spec status (`planning`/`approved`/`complete`) before coding.
+4. Keep `INDEX.md` and `dependencies.yaml` in sync when adding or changing spec work.
+5. Re-check implementation decisions against the integration contracts and invariants in `INDEX.md` before finishing.
+
+If work is not represented in the spec system, add a planning stub first (or update
+a relevant existing spec) before implementation.
+
+Incident -> Guardrail Loop (MANDATORY)
+---
+
+When a bug/regression/incident is discovered (in CI, review, or production),
+the fix is not complete until at least one durable prevention mechanism is added:
+
+1. A regression test, invariant check, or CI guard.
+2. A spec/index/dependency contract update if behavior or sequencing changed.
+3. An AGENTS.md rule/checklist refinement if the failure mode was process-related.
+
+Every incident should leave the codebase harder to break in the same way twice.
+
+Recurring PR Failure Modes (Last 2 Weeks)
+---
+
+The most frequent reviewer callouts across high-comment / high-size PRs
+(PRs #253, #267, #210, #217, #295, #202, #203, #211, #195, #277)
+were the following. Prevent them proactively:
+
+1. **Agent scoping leaks**
+   - Every read/write query touching user data must thread `agent_id`
+     (and `visibility` where relevant).
+   - Never hardcode `"default"` for scoped data paths.
+
+2. **Validation gaps and bounds bugs**
+   - Validate all external inputs and config values at boundaries.
+   - Clamp counters/latency/limits to sane non-negative ranges.
+   - Reject out-of-range values explicitly with clear errors.
+
+3. **Silent failures and weak fallback logic**
+   - Do not swallow errors. Log with context and return structured failure.
+   - For retries/refresh loops, enforce timeout floors, single-flight/serialization,
+     and timer cleanup to avoid stale or duplicated background work.
+
+4. **Doc and spec drift**
+   - Any behavior/API/schema change must update relevant docs in same PR
+     (`docs/API.md`, `docs/specs/INDEX.md`, `docs/specs/dependencies.yaml`,
+     roadmap/status text if affected).
+   - Story counts, status markers, and dependency edges must remain accurate.
+
+5. **Duplication and parity drift**
+   - No duplicated constants/maps/business rules across files.
+   - Extract shared sources of truth for dependency types, descriptions,
+     and config defaults.
+
+6. **Missing regression tests for fixed bugs**
+   - Every bug fix should include a test that would fail before the fix.
+   - Add edge-case tests for scoping, invalid inputs, timer lifecycle,
+     and fallback behavior.
+
+7. **Security and auth oversights on operational endpoints**
+   - Admin/refresh/mutation endpoints must have explicit permission checks.
+   - Add rate limiting for potentially expensive or abuse-prone paths.
+
+8. **Code hygiene misses (unused vars/assignments, stale comments)**
+   - Run lint and remove dead variables/imports before review.
+   - Keep inline comments aligned with actual implementation behavior.
+
+PR Readiness Checklist (MANDATORY Before Opening PR)
+---
+
+- [ ] Spec alignment validated (`INDEX.md` + `dependencies.yaml`).
+- [ ] Agent scoping verified on all new/changed data queries.
+- [ ] Input/config validation and bounds checks added.
+- [ ] Error handling and fallback paths tested (no silent swallow).
+- [ ] Security checks applied to admin/mutation endpoints.
+- [ ] Docs updated for API/spec/status changes.
+- [ ] Regression tests added for each bug fix.
+- [ ] Lint/typecheck/tests pass locally.
 
 Core Priorities
 ---

@@ -452,6 +452,72 @@ export class OpenClawConnector extends BaseConnector {
 	}
 
 	/**
+	 * Sync a multi-agent roster into the `agents.list` section of all
+	 * discovered OpenClaw configs. Only agents that include `"openclaw"` in
+	 * their `harnesses` array (or have no harnesses specified) are written.
+	 */
+	async syncMultipleAgents(
+		roster: ReadonlyArray<{
+			name: string;
+			harnesses?: ReadonlyArray<string>;
+			skills?: ReadonlyArray<string>;
+		}>,
+		basePath: string,
+	): Promise<void> {
+		// Validate names before any filesystem join — roster comes from a
+		// user-editable agent.yaml and must not contain path traversal sequences.
+		const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+		const eligible = roster.filter((a) => {
+			if (!SAFE_NAME.test(a.name)) {
+				console.warn(`[signet/openclaw] Skipped unsafe agent name: ${JSON.stringify(a.name)}`);
+				return false;
+			}
+			return !a.harnesses || a.harnesses.length === 0 || a.harnesses.includes("openclaw");
+		});
+
+		const signetEntries = eligible.map((a) => ({
+			id: a.name,
+			name: a.name,
+			workspace: join(basePath, "agents", a.name, "workspace"),
+			...(a.skills && a.skills.length > 0 ? { skills: a.skills } : {}),
+		}));
+		const signetIds = new Set(signetEntries.map((e) => e.id));
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const raw = readFileSync(configPath, "utf-8");
+				const config = parseJsonOrJson5(raw);
+				const indent = this.detectIndent(raw);
+
+				// Preserve pre-existing OpenClaw agents not managed by Signet.
+				// Only replace entries whose id is in the Signet roster.
+				const existing = config as Record<string, unknown>;
+				const agentsSection = existing.agents as Record<string, unknown> | undefined;
+				const prevList = Array.isArray(agentsSection?.list)
+					? (agentsSection.list as Array<Record<string, unknown>>)
+					: [];
+				const kept = prevList.filter((e) => !signetIds.has(e.id as string));
+				const dropped = prevList.length - kept.length;
+				if (dropped === 0 && prevList.length > 0 && signetEntries.length === 0) {
+					// Nothing to do — no Signet agents, no change needed
+					continue;
+				}
+
+				const merged = [...kept, ...signetEntries];
+				// deepMerge replaces arrays (not concatenates), so passing `merged`
+				// directly is intentional — it's already the complete target list.
+				const patch: JsonObject = { agents: { list: merged } };
+				deepMerge(config, patch);
+				backupConfig(configPath, raw);
+				atomicWriteJson(configPath, config, indent);
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				console.warn(`[signet/openclaw] Skipped agents.list patch for ${configPath}: ${message}`);
+			}
+		}
+	}
+
+	/**
 	 * Return all existing OpenClaw config paths discovered on this machine.
 	 */
 	getDiscoveredConfigPaths(): string[] {

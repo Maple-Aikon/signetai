@@ -159,9 +159,10 @@ export function runSessionComparison(
 				        was_injected, relevance_score, fts_hit_count,
 				        entity_slot, is_constraint
 				 FROM session_memories
-				 WHERE session_key = ?`,
+				 WHERE session_key = ?
+				   AND agent_id = ?`,
 			)
-			.all(sessionKey) as ReadonlyArray<SessionMemoryRow>;
+			.all(sessionKey, agentId) as ReadonlyArray<SessionMemoryRow>;
 	});
 
 	if (sessionMemories.length === 0) {
