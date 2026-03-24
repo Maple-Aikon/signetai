@@ -186,18 +186,22 @@ export function startHintsWorker(deps: {
 	async function tick(): Promise<void> {
 		if (!running) return;
 
+		// Hoisted so catch block can mark the job as failed if leased
+		let leasedId: string | null = null;
 		try {
 			const job = accessor.withWriteTx((db) => leaseJob(db, 3));
 			if (!job) {
 				schedule();
 				return;
 			}
+			leasedId = job.id;
+			const id = job.id;
 
 			let payload: HintPayload;
 			try {
 				payload = JSON.parse(job.payload) as HintPayload;
 			} catch {
-				accessor.withWriteTx((db) => failJob(db, job.id, "invalid payload"));
+				accessor.withWriteTx((db) => failJob(db, id, "invalid payload"));
 				schedule();
 				return;
 			}
@@ -208,14 +212,14 @@ export function startHintsWorker(deps: {
 			if (hints.length > 0) {
 				accessor.withWriteTx((db) => {
 					writeHints(db, payload.memoryId, "default", hints);
-					completeJob(db, job.id);
+					completeJob(db, id);
 				});
 				logger.info("pipeline", "Prospective hints generated", {
 					memoryId: payload.memoryId,
 					hints: hints.length,
 				});
 			} else {
-				accessor.withWriteTx((db) => completeJob(db, job.id));
+				accessor.withWriteTx((db) => completeJob(db, id));
 				logger.debug("pipeline", "No hints generated (empty LLM response)", {
 					memoryId: payload.memoryId,
 				});
@@ -223,8 +227,9 @@ export function startHintsWorker(deps: {
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			logger.warn("pipeline", "Hints worker tick failed", { error: msg });
-			if (job) {
-				accessor.withWriteTx((db) => failJob(db, job.id, msg));
+			const id = leasedId;
+			if (id) {
+				accessor.withWriteTx((db) => failJob(db, id, msg));
 			}
 		}
 
