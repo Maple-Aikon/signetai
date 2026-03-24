@@ -29,7 +29,32 @@ flowchart TD
   PMS[Predictive Memory Scorer]
   SR[Signet Runtime]
   DP[Desire Paths Epic]
+  OEC[Ontology Evolution Core]
+  OGW[Ontology Governance Workflow]
+  SSF[SSM Foundation Eval]
+  SST[SSM Temporal Backbone]
+  SSG[SSM Graph Traversal Model]
+  DRR[Daemon Rust Rewrite]
+  PAF[Predictor Agent Feedback]
   SACC[Sub-Agent Context Continuity]
+
+  subgraph W9[Wave 9 Strategic Stubs]
+    DHO[Distributed Harness Orchestration]
+    SNH[Signet Native Harness]
+    RRP[Remember/Recall Skill Parity]
+    RDC[Rust Daemon Parity Cutover]
+    DMS[Deep Memory Search]
+    MCB[MCP CLI Bridge + Usage Analytics]
+    GMM[Git Marketplace Monorepo]
+    ASL[Adaptive Skill Lifecycle]
+    CIR[Cryptographic Identity Roadmap]
+    CPY[Connector: Py Agent]
+    CHA[Connector: Hermes Agent]
+    PAPI[Plugin API Ecosystem]
+    CUV[Constellation Unified Viewer]
+    DIR[Dashboard IA Refactor]
+    PIA[Post-Install Migration Audit]
+  end
 
   MP --> SCP
   MP --> PM
@@ -42,13 +67,46 @@ flowchart TD
   MP --> PMS
   KA --> DP
   PMS --> DP
+  KA --> OEC
+  DP --> OEC
+  OEC --> OGW
+  PMS --> SSF
+  DP --> SSF
+  SSF --> SST
+  OEC --> SST
+  SST --> SSG
+  KA --> SSG
+  DP --> SSG
   MA -.-> PM
   MA -.-> KA
   SR -.-> PM
   SR -.-> KA
+  OGW -.-> OEC
+  OGW -.-> DP
   SCP --> SACC
   MA --> SACC
   KA -.-> SACC
+
+  MA --> DHO
+  SR --> DHO
+  DHO --> SNH
+  SR --> SNH
+  PM --> RRP
+  DRR --> RDC
+  MP --> RDC
+  DP --> DMS
+  SSF --> DMS
+  SR --> MCB
+  PAF --> GMM
+  PM --> ASL
+  PAF --> ASL
+  MA --> CIR
+  SR --> CPY
+  SR --> CHA
+  SR --> PAPI
+  KA --> CUV
+  SR --> DIR
+  MP --> PIA
 ```
 
 Solid arrows = hard dependency. Dashed = integration contract (can build
@@ -68,6 +126,18 @@ and market subdirectories). Reference repos live in `references/`.
 | `desire-paths-epic` | RESEARCH-LCM-ACP, RESEARCH-REFERENCE-REPOS | How does retrieval evolve from flat search to graph traversal? |
 | `predictive-memory-scorer` | MSAM-COMPARISON | How should scoring balance structural vs behavioral signals? |
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
+| `ontology-evolution-core`, `ontology-governance-workflow` | RESEARCH-ONTOLOGY-EVOLUTION | How should ontology schema and governance evolve without losing local-first simplicity? |
+| `ssm-foundation-evaluation`, `ssm-temporal-backbone`, `ssm-graph-traversal-model` | RESEARCH-SSM-INTEGRATION, SSM-GRAPH-INTERSECTION, SSM-LITERATURE-REVIEW, SYNTHETIC-DATA-GENERATION | How should SSM research translate into benchmarked, staged deployment without violating retrieval invariants? |
+
+### Research Adoption Ledger (high-impact)
+
+| Research Doc | Program Decision | Mapped To |
+|---|---|---|
+| `RESEARCH-COMPETITIVE-SYSTEMS` | ADOPT (tiered) | `desire-paths-epic`, `retroactive-supersession`, `ontology-evolution-core` |
+| `RESEARCH-GITNEXUS-PATTERNS` | ADOPT (selective) | KA traversal hardening, DP bounded traversal, ontology confidence/provenance |
+| `RESEARCH-REFERENCE-REPOS` | ADOPT/TEST | DP-16..DP-20 design direction |
+| `RESEARCH-SSM-INTEGRATION` | ADOPT (planning track active) | `ssm-foundation-evaluation`, `ssm-temporal-backbone` |
+| `SSM-GRAPH-INTERSECTION` | ADOPT (planning track active) | `ssm-graph-traversal-model` |
 
 ---
 
@@ -294,6 +364,44 @@ cannot suppress them. This is a hard retrieval invariant.
   the scorer provides learning signal, the graph provides structure
   to propagate it.
 
+### Ontology Evolution Core <-> Desire Paths
+
+- Traversal ranking consumes `confidence`, `reason`, and co-occurrence
+  association signals where present, with bounded fallback to existing
+  confidence-strength scoring when absent.
+- Typed relationship taxonomy is introduced behind compatibility mapping;
+  legacy edges remain queryable until strict mode is enabled.
+- Constraint surfacing invariant remains a hard override regardless of
+  ontology edge rank.
+
+### Ontology Evolution Core <-> Retroactive Supersession
+
+- Attribute supersession and memory lineage stay synchronized: when a new
+  fact supersedes an old fact, latest-truth retrieval prefers the newest
+  node while preserving full chain expansion for audit/history.
+- Constraints (`kind='constraint'`) are excluded from auto-supersession,
+  unchanged from invariant 5.
+
+### Ontology Governance Workflow <-> INDEX / CI
+
+- Any ontology-impacting schema PR must update: spec file, `dependencies.yaml`,
+  and this index registry in the same change.
+- CI contract checks block merge on ID/status/path drift between INDEX and
+  dependencies metadata.
+- Medium/high-risk ontology changes require explicit compatibility and rollback
+  notes before promotion from planning to approved.
+
+### SSM Track <-> Retrieval and Ontology Contracts
+
+- `ssm-foundation-evaluation` defines benchmark and canary gates. No SSM
+  routing may become default until these gates are green and repeatable.
+- `ssm-temporal-backbone` runs in shadow mode first. Production retrieval
+  remains deterministic with existing scorer fallback.
+- `ssm-graph-traversal-model` may re-rank traversal paths but cannot alter
+  traversal bounds, agent scoping, or constraint surfacing invariants.
+- SSM features consume ontology signals (`confidence`, relationship type,
+  co-occurrence, lineage), so ontology evolution is a hard prerequisite.
+
 ### Multi-Agent <-> All Specs
 
 - `agent_id` column appears on every data table (see invariant 1).
@@ -322,12 +430,6 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 1 (parallel, no cross-dependencies)
 
-- **Sub-Agent Context Continuity Phase 1**: live transcript persistence
-  - Change `session_transcripts` write from session-end-only to
-    upsert on every `UserPromptSubmit`. No migration needed.
-  - Add `GET /api/sessions/{key}/transcript` endpoint and
-    `session_search` MCP tool.
-  - Unblocks Phase 2 and the session summary DAG (LCM Pattern 4).
 - **Procedural Memory P1**: schema + enrichment + node creation
   - Creates `skill_meta` table, skill entities, frontmatter enrichment
   - Unblocks KA structural assignment
@@ -347,13 +449,6 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 2 (depends on Wave 1)
 
-- **Sub-Agent Context Continuity Phase 2**: sub-agent context inheritance
-  - Harness-native detection: CC `agent_id` field + recency query on
-    `session_transcripts` (no SubagentStart hook needed), OpenClaw
-    session key parsing (already done in MA-8), OpenCode `parentID`.
-  - Deterministic inherit block: latest checkpoint + 3000 char
-    transcript tail + active constraints. No LLM call.
-  - Requires: Phase 1 complete, MA Phases 1-8 complete.
 - **Knowledge Architecture KA-1 + KA-2**: schema + structural assignment — COMPLETE
   - Requires skill entities from procedural memory P1
   - Adds `entity_aspects`, `entity_attributes`, `entity_dependencies`,
@@ -440,6 +535,79 @@ Phase ordering based on hard dependencies and integration contracts.
   - DP-19: Adaptive write gate (per-memory surprisal) — NOT STARTED
   - DP-20: Sleep replay (background consolidation) — NOT STARTED
 
+### Wave 7 (ontology hardening and governance)
+
+- **Ontology Evolution Core**: planning
+  - confidence/provenance edge semantics
+  - dynamic co-occurrence weighting + normalization
+  - typed relationship taxonomy
+  - temporal lineage support for current-truth retrieval
+- **Ontology Governance Workflow**: planning
+  - proposal/review gates for ontology-impacting schema changes
+  - compatibility + rollback requirements
+  - CI checks for INDEX/dependencies contract drift
+
+### Wave 8 (SSM translation and shadow deployment)
+
+- **SSM Foundation and Evaluation**: planning (`ssm-foundation-evaluation`)
+  - reproducible benchmark harness + synthetic/real canaries
+  - ablations against current scorer (NDCG@10, MRR, temporal precision)
+- **SSM Temporal Backbone**: planning (`ssm-temporal-backbone`)
+  - shadow-mode temporal sidecar with deterministic fallback
+  - learned decay and continuity-aware ranking validation
+- **SSM Graph Traversal Model**: planning (`ssm-graph-traversal-model`)
+  - path-level SSM reranking in shadow mode
+  - strict preservation of traversal bounds and constraint surfacing
+
+### Wave 9 (strategic stub backlog, planning not complete)
+
+- **Distributed Harness and Agent Orchestration** (`distributed-harness-orchestration`)
+  - multi-remote harness management, multi-agent control, multi-memory backend topology
+- **Signet Native Harness** (`signet-native-harness`)
+  - first-party harness for benchmark parity and production-grade experimentation
+  - reference inspiration: Hermes Agent
+- **Remember/Recall Skill Parity Refresh** (`remember-recall-skill-parity`)
+  - align `/remember` and `/recall` skills with current architecture/schema
+- **Rust Daemon Parity and Runtime Cutover** (`rust-daemon-parity-cutover`)
+  - parity completion and primary-runtime switch strategy
+- **Deep Memory Search** (`deep-memory-search`)
+  - optional multi-agent LLM memory search path (not primary retrieval)
+- **MCP CLI Bridge and Usage Analytics** (`mcp-cli-bridge-and-usage-analytics`)
+  - expose installed MCP servers as Signet CLI commands and track usage in dashboard
+  - reference inspiration: MC Porter
+- **Git Marketplace Monorepo** (`git-marketplace-monorepo`)
+  - GitHub-authenticated PR workflow for skills/servers and JSON review artifacts
+- **Adaptive Skill Lifecycle** (`adaptive-skill-lifecycle`)
+  - passive/continuous skill maintenance with outcome feedback loops
+- **Cryptographic Identity Roadmap** (`cryptographic-identity-roadmap`)
+- **Connector: Py Agent** (`connector-py-agent`)
+- **Connector: Hermes Agent** (`connector-hermes-agent`)
+- **Plugin API and App Ecosystem** (`plugin-api-ecosystem`)
+  - dashboard/CLI plugin surface for app integrations (e.g. Obsidian, Drive)
+- **Unified Constellation Viewer** (`constellation-unified-viewer`)
+  - realtime unified constellation/embedding/entity view, replace slow 3D path
+- **Dashboard IA Refactor** (`dashboard-information-architecture-refactor`)
+  - settings as standalone page, breadcrumb-driven unified navigation model
+- **Post-Install Behavior Migration Audit** (`postinstall-behavior-migration-audit`)
+  - verify no critical install behavior relies on fragile post-install scripts
+
+- **Explicitly dropped:** client-side LLM reranking (superseded by different solution)
+
+### Wave 10 (CI/CD and workflow acceleration stubs)
+
+- **CI Changed-Files Selective Pipelines** (`ci-changed-files-selective`)
+- **CI Contract Invariants Lane** (`ci-contract-invariants-lane`)
+- **CI Flaky Test Quarantine** (`ci-flaky-test-quarantine`)
+- **PR Preview Environments** (`ci-pr-preview-environments`)
+- **PR Risk Tier Policy** (`pr-risk-tier-policy`)
+- **API Contract Snapshots** (`api-contract-snapshots`)
+- **Developer Doctor Command** (`developer-doctor-command`)
+- **Golden Path Contributor Docs** (`golden-path-docs`)
+- **Code Ownership and Review SLA** (`code-ownership-sla`)
+- **Release Train Cadence** (`release-train-cadence`)
+- **Post-Merge Canary Suite** (`post-merge-canary-suite`)
+- **Incident to Guardrail Loop** (`incident-guardrail-loop`)
+
 ---
 
 ## Spec Registry
@@ -470,8 +638,40 @@ Legend:
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |
 | `predictor-agent-feedback` | approved | `docs/specs/approved/predictor-agent-feedback.md` | `predictive-memory-scorer` | - | |
 | `retroactive-supersession` | planning | `docs/specs/planning/retroactive-supersession.md` | `knowledge-architecture-schema` | - | Informed by MSAM-COMPARISON, RESEARCH-COMPETITIVE-SYSTEMS |
-| `sub-agent-context-continuity` | planning | `docs/specs/planning/sub-agent-context-continuity.md` | `session-continuity-protocol`, `multi-agent-support` | - | Phase 1: live transcript upsert (no migration). Phase 2: harness-native sub-agent detection + inherit block. Informed by issue #315 and LCM patterns. |
-| `competitive-systems-research` | reference | `docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md` | - | - | Informs desire-paths-epic, retroactive-supersession |
+| `sub-agent-context-continuity` | planning | `docs/specs/planning/sub-agent-context-continuity.md` | `session-continuity-protocol`, `multi-agent-support` | - | Parent transcript query + deterministic sub-agent inheritance (issue #315) |
+| `ontology-evolution-core` | planning | `docs/specs/planning/ontology-evolution-core.md` | `knowledge-architecture-schema`, `desire-paths-epic` | `ontology-governance-workflow` | Confidence/provenance edges, co-occurrence signals, typed relationships, temporal lineage |
+| `ontology-governance-workflow` | planning | `docs/specs/planning/ontology-governance-workflow.md` | `ontology-evolution-core`, `knowledge-architecture-schema` | - | Proposal/review workflow for ontology-impacting schema changes |
+| `ssm-foundation-evaluation` | planning | `docs/specs/planning/ssm-foundation-evaluation.md` | `predictive-memory-scorer`, `desire-paths-epic` | `ssm-temporal-backbone` | Benchmark harness and canary gates for SSM adoption |
+| `ssm-temporal-backbone` | planning | `docs/specs/planning/ssm-temporal-backbone.md` | `ssm-foundation-evaluation`, `ontology-evolution-core`, `session-continuity-protocol` | `ssm-graph-traversal-model` | Shadow-mode temporal state model with fallback |
+| `ssm-graph-traversal-model` | planning | `docs/specs/planning/ssm-graph-traversal-model.md` | `ssm-temporal-backbone`, `desire-paths-epic`, `knowledge-architecture-schema` | - | SSM-assisted traversal path ranking |
+| `distributed-harness-orchestration` | planning | `docs/specs/planning/distributed-harness-orchestration.md` | `multi-agent-support`, `signet-runtime` | `signet-native-harness` | Stub: multi-remote harness/agent/memory orchestration |
+| `signet-native-harness` | planning | `docs/specs/planning/signet-native-harness.md` | `distributed-harness-orchestration`, `signet-runtime` | - | Stub: first-party harness track (Hermes-agent informed) |
+| `remember-recall-skill-parity` | planning | `docs/specs/planning/remember-recall-skill-parity.md` | `procedural-memory-plan` | - | Stub: /remember and /recall architecture/schema parity |
+| `rust-daemon-parity-cutover` | planning | `docs/specs/planning/rust-daemon-parity-cutover.md` | `daemon-rust-rewrite`, `memory-pipeline-v2` | - | Stub: rust daemon parity and primary-runtime cutover |
+| `deep-memory-search` | planning | `docs/specs/planning/deep-memory-search.md` | `desire-paths-epic`, `ssm-foundation-evaluation` | - | Stub: optional supermemory-style deep memory escalation |
+| `mcp-cli-bridge-and-usage-analytics` | planning | `docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md` | `signet-runtime` | - | Stub: MCP servers as CLI + dashboard usage tracking (MC Porter reference) |
+| `git-marketplace-monorepo` | planning | `docs/specs/planning/git-marketplace-monorepo.md` | `predictor-agent-feedback` | - | Stub: GitHub-authenticated PR marketplace for skills and MCP servers |
+| `adaptive-skill-lifecycle` | planning | `docs/specs/planning/adaptive-skill-lifecycle.md` | `procedural-memory-plan`, `predictor-agent-feedback` | - | Stub: passive continuous skill creation/maintenance loop |
+| `cryptographic-identity-roadmap` | planning | `docs/specs/planning/cryptographic-identity-roadmap.md` | `multi-agent-support` | - | Stub: signed identity and artifact trust roadmap |
+| `connector-py-agent` | planning | `docs/specs/planning/connector-py-agent.md` | `signet-runtime` | - | Stub: Py Agent connector |
+| `connector-hermes-agent` | planning | `docs/specs/planning/connector-hermes-agent.md` | `signet-runtime` | - | Stub: Hermes Agent connector |
+| `plugin-api-ecosystem` | planning | `docs/specs/planning/plugin-api-ecosystem.md` | `signet-runtime` | - | Stub: plugin/app API for dashboard and CLI integrations |
+| `constellation-unified-viewer` | planning | `docs/specs/planning/constellation-unified-viewer.md` | `knowledge-architecture-schema` | - | Stub: realtime unified constellation/embedding/entity viewer |
+| `dashboard-information-architecture-refactor` | planning | `docs/specs/planning/dashboard-information-architecture-refactor.md` | `signet-runtime` | - | Stub: dashboard IA cleanup, settings split, breadcrumb navigation |
+| `postinstall-behavior-migration-audit` | planning | `docs/specs/planning/postinstall-behavior-migration-audit.md` | `memory-pipeline-v2` | - | Stub: ensure post-install behavior is daemon/CLI-owned |
+| `ci-changed-files-selective` | planning | `docs/specs/planning/ci-changed-files-selective.md` | `memory-pipeline-v2` | - | Stub: selective PR CI by changed package graph |
+| `ci-contract-invariants-lane` | planning | `docs/specs/planning/ci-contract-invariants-lane.md` | `knowledge-architecture-schema` | - | Stub: mandatory fast invariant contract checks |
+| `ci-flaky-test-quarantine` | planning | `docs/specs/planning/ci-flaky-test-quarantine.md` | `ci-contract-invariants-lane` | - | Stub: flaky detection, quarantine, threshold policy |
+| `ci-pr-preview-environments` | planning | `docs/specs/planning/ci-pr-preview-environments.md` | `signet-runtime` | - | Stub: preview deploys and UI smoke checks |
+| `pr-risk-tier-policy` | planning | `docs/specs/planning/pr-risk-tier-policy.md` | `ci-contract-invariants-lane` | - | Stub: risk-tiered PR requirements |
+| `api-contract-snapshots` | planning | `docs/specs/planning/api-contract-snapshots.md` | `signet-runtime` | - | Stub: response contract snapshot guards |
+| `developer-doctor-command` | planning | `docs/specs/planning/developer-doctor-command.md` | `signet-runtime` | - | Stub: one-command local health checks |
+| `golden-path-docs` | planning | `docs/specs/planning/golden-path-docs.md` | `developer-doctor-command` | - | Stub: short contributor golden paths |
+| `code-ownership-sla` | planning | `docs/specs/planning/code-ownership-sla.md` | `multi-agent-support` | - | Stub: ownership map and review SLA |
+| `release-train-cadence` | planning | `docs/specs/planning/release-train-cadence.md` | `memory-pipeline-v2` | - | Stub: predictable release train model |
+| `post-merge-canary-suite` | planning | `docs/specs/planning/post-merge-canary-suite.md` | `release-train-cadence` | - | Stub: lightweight post-merge canaries |
+| `incident-guardrail-loop` | planning | `docs/specs/planning/incident-guardrail-loop.md` | `ci-contract-invariants-lane` | - | Stub: every incident adds durable guardrail |
+| `competitive-systems-research` | reference | `docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md` | - | - | Informs desire-paths-epic, retroactive-supersession, ontology-evolution-core |
 
 ---
 
@@ -510,11 +710,37 @@ independent of harness-specific connectors.
 **multi-agent-support**: Multiple agents share one SQLite database
 without data collision via agent_id scoping.
 
-**sub-agent-context-continuity**: Parent session transcript is
-queryable while the session is active. Sub-agents receive a
-deterministic context block from the parent at session-start with
-no LLM call. Sub-agents can search parent session content via
-`session_search`.
+**sub-agent-context-continuity**: Parent session transcript is queryable during active sessions, and sub-agents inherit deterministic parent context with no LLM call.
+
+
+**ontology-evolution-core**: Ontology retrieval uses confidence/provenance
+and normalized association signals to improve path quality while preserving
+constraint surfacing and agent scoping invariants.
+
+**ontology-governance-workflow**: Ontology-impacting schema changes require
+proposal/review metadata, compatibility notes, and rollback guidance with
+INDEX/dependency consistency checks in CI.
+
+**ssm-foundation-evaluation**: SSM benchmarks and canary suites produce
+reproducible, decision-grade comparisons against current scorer behavior.
+
+**ssm-temporal-backbone**: Temporal SSM shadow scoring improves long-gap
+and supersession-sensitive ranking slices while preserving deterministic
+fallback and latency bounds.
+
+**ssm-graph-traversal-model**: SSM path reranking improves multi-hop
+ranking quality without violating traversal bounds, agent scoping, or
+constraint surfacing invariants.
+
+
+**wave-9 strategic stubs**: The strategic backlog items listed in Wave 9
+are intentionally tracked as planning stubs and require dedicated planning
+spec expansion before implementation starts.
+
+
+**wave-10 devex/cicd stubs**: CI/CD acceleration and workflow quality items
+are tracked as planning stubs and should be promoted in priority order as
+team bandwidth allows.
 
 ---
 

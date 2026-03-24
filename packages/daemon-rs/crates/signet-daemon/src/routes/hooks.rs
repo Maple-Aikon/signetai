@@ -442,6 +442,8 @@ pub async fn remember(
                     idempotency_key: idempotency_key.as_deref(),
                     runtime_path: runtime_path_str.as_deref(),
                     actor: "hook",
+                    agent_id: "default",
+                    visibility: "global",
                 },
             )?;
 
@@ -726,6 +728,8 @@ pub async fn compaction_complete(
                     idempotency_key: None,
                     runtime_path: None,
                     actor: "compaction",
+                    agent_id: "default",
+                    visibility: "global",
                 },
             )?;
 

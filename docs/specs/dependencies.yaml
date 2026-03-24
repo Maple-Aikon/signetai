@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-23"
+updated_at: "2026-03-24"
 
 specs:
   - id: memory-pipeline-v2
@@ -94,10 +94,7 @@ specs:
       - "Per-agent read policy (isolated/shared/group) enforced at search time"
       - "OpenClaw session key auto-parse routes memories to correct agent with zero config"
       - "signet agent CLI manages the roster and scaffolds per-agent identity dirs"
-    decision: "Phases 1-8 implemented (2026-03-24): core types, agents.ts, migration 043,
-      memory scope filtering, agent-id.ts, daemon /api/agents, file watcher, harness sync,
-      CLI subcommand, OpenClaw connector syncMultipleAgents, hooks.ts agentId resolution.
-      Phases 9-10 (dashboard + setup wizard) deferred."
+    decision: null
 
   - id: signet-runtime
     status: approved
@@ -275,4 +272,462 @@ specs:
       - "Sub-agents can search parent session content via session_search MCP tool"
       - "Inheritance is transparent — no explicit prepare/claim steps required from the agent"
       - "CC SubagentStart hook + agent_id detection, OpenClaw session key parsing, OpenCode parentID — all three harnesses inherit automatically"
+    decision: null
+
+  - id: ontology-evolution-core
+    status: planning
+    path: docs/specs/planning/ontology-evolution-core.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+      - desire-paths-epic
+    soft_depends_on:
+      - retroactive-supersession
+      - predictive-memory-scorer
+    blocks:
+      - ontology-governance-workflow
+    informed_by:
+      - docs/research/technical/RESEARCH-ONTOLOGY-EVOLUTION.md
+      - docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md
+      - docs/research/technical/RESEARCH-GITNEXUS-PATTERNS.md
+    success_criteria:
+      - "Dependency edges include confidence and provenance signals used by traversal ranking"
+      - "Co-occurrence and normalized association signals improve path quality without hub domination"
+      - "Relationship taxonomy is constrained and validated for new writes"
+      - "Temporal lineage fields support current-truth retrieval with history expansion"
+    decision: null
+
+  - id: ontology-governance-workflow
+    status: planning
+    path: docs/specs/planning/ontology-governance-workflow.md
+    hard_depends_on:
+      - ontology-evolution-core
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-ONTOLOGY-EVOLUTION.md
+    success_criteria:
+      - "Ontology-impacting changes follow proposal and review workflow before merge"
+      - "Compatibility, migration, and rollback notes are required for ontology schema changes"
+      - "CI checks catch ontology contract drift across INDEX and dependencies metadata"
+    decision: null
+
+
+  - id: ssm-foundation-evaluation
+    status: planning
+    path: docs/specs/planning/ssm-foundation-evaluation.md
+    hard_depends_on:
+      - predictive-memory-scorer
+      - desire-paths-epic
+    soft_depends_on:
+      - predictor-agent-feedback
+    blocks:
+      - ssm-temporal-backbone
+    informed_by:
+      - docs/research/technical/RESEARCH-SSM-INTEGRATION.md
+      - docs/research/technical/SSM-LITERATURE-REVIEW.md
+      - docs/research/technical/SYNTHETIC-DATA-GENERATION.md
+      - docs/research/technical/ssm-implementations-survey.md
+    success_criteria:
+      - "SSM benchmark harness is reproducible across fixed datasets and seeds"
+      - "Temporal canary tests verify non-trivial pattern learning"
+      - "Ablation reports compare SSM candidates against current scorer on NDCG@10, MRR, and temporal precision"
+    decision: null
+
+  - id: ssm-temporal-backbone
+    status: planning
+    path: docs/specs/planning/ssm-temporal-backbone.md
+    hard_depends_on:
+      - ssm-foundation-evaluation
+      - ontology-evolution-core
+      - session-continuity-protocol
+    soft_depends_on:
+      - predictive-memory-scorer
+    blocks:
+      - ssm-graph-traversal-model
+    informed_by:
+      - docs/research/technical/RESEARCH-SSM-INTEGRATION.md
+      - docs/research/technical/SSM-CONTINUAL-LEARNING-DEEP-DIVE.md
+      - docs/research/technical/SSM-NOVEL-APPLICATIONS.md
+    success_criteria:
+      - "Temporal SSM sidecar improves long-gap and supersession-sensitive ranking slices"
+      - "Learned decay behavior outperforms fixed decay heuristics on benchmark canaries"
+      - "Shadow mode serves scores with bounded latency and deterministic fallback"
+    decision: null
+
+  - id: ssm-graph-traversal-model
+    status: planning
+    path: docs/specs/planning/ssm-graph-traversal-model.md
+    hard_depends_on:
+      - ssm-temporal-backbone
+      - desire-paths-epic
+      - knowledge-architecture-schema
+    soft_depends_on:
+      - ontology-evolution-core
+    blocks: []
+    informed_by:
+      - docs/research/technical/SSM-GRAPH-INTERSECTION.md
+      - docs/research/technical/RESEARCH-SSM-INTEGRATION.md
+      - docs/research/technical/SSM-LITERATURE-REVIEW.md
+    success_criteria:
+      - "SSM-assisted path ranking improves multi-hop retrieval quality over static scoring"
+      - "Graph-conditioned scoring respects constraint-surfacing and traversal bounds invariants"
+      - "Shadow and ablation runs show measurable gains before default-path adoption"
+    decision: null
+
+
+  - id: distributed-harness-orchestration
+    status: planning
+    path: docs/specs/planning/distributed-harness-orchestration.md
+    hard_depends_on:
+      - multi-agent-support
+      - signet-runtime
+    soft_depends_on: []
+    blocks:
+      - signet-native-harness
+    informed_by: []
+    success_criteria:
+      - "Architecture supports multiple remote harnesses, multiple agents, and multiple memory backends under one control plane"
+    decision: null
+
+
+  - id: signet-native-harness
+    status: planning
+    path: docs/specs/planning/signet-native-harness.md
+    hard_depends_on:
+      - distributed-harness-orchestration
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Signet ships a first-party harness for controlled benchmarking and production workflows while preserving existing harness support"
+    decision: null
+
+
+  - id: remember-recall-skill-parity
+    status: planning
+    path: docs/specs/planning/remember-recall-skill-parity.md
+    hard_depends_on:
+      - procedural-memory-plan
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "/remember and /recall skills align with current memory architecture and schema"
+    decision: null
+
+
+  - id: rust-daemon-parity-cutover
+    status: planning
+    path: docs/specs/planning/rust-daemon-parity-cutover.md
+    hard_depends_on:
+      - daemon-rust-rewrite
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Rust daemon reaches feature parity with JS daemon and becomes primary runtime"
+    decision: null
+
+
+  - id: deep-memory-search
+    status: planning
+    path: docs/specs/planning/deep-memory-search.md
+    hard_depends_on:
+      - desire-paths-epic
+      - ssm-foundation-evaluation
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Optional deep memory search path uses multi-agent LLM retrieval only when primary retrieval confidence is low"
+    decision: null
+
+
+  - id: mcp-cli-bridge-and-usage-analytics
+    status: planning
+    path: docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Installed MCP servers are invokable through Signet CLI with dashboard usage tracking"
+    decision: null
+
+
+  - id: git-marketplace-monorepo
+    status: planning
+    path: docs/specs/planning/git-marketplace-monorepo.md
+    hard_depends_on:
+      - predictor-agent-feedback
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "GitHub-authenticated pull-request workflow supports publishing and reviewing skills and MCP servers"
+    decision: null
+
+
+  - id: adaptive-skill-lifecycle
+    status: planning
+    path: docs/specs/planning/adaptive-skill-lifecycle.md
+    hard_depends_on:
+      - procedural-memory-plan
+      - predictor-agent-feedback
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Skills are continuously maintained and performance-scored from invocation outcomes"
+    decision: null
+
+
+  - id: cryptographic-identity-roadmap
+    status: planning
+    path: docs/specs/planning/cryptographic-identity-roadmap.md
+    hard_depends_on:
+      - multi-agent-support
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Identity model progresses toward cryptographic verification for agents and signed artifacts"
+    decision: null
+
+
+  - id: connector-py-agent
+    status: planning
+    path: docs/specs/planning/connector-py-agent.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Py Agent connector installs and syncs Signet memory lifecycle hooks"
+    decision: null
+
+
+  - id: connector-hermes-agent
+    status: planning
+    path: docs/specs/planning/connector-hermes-agent.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Hermes Agent connector installs and syncs Signet memory lifecycle hooks"
+    decision: null
+
+
+  - id: plugin-api-ecosystem
+    status: planning
+    path: docs/specs/planning/plugin-api-ecosystem.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Plugin API supports dashboard/CLI integrations for first-party and third-party apps"
+    decision: null
+
+
+  - id: constellation-unified-viewer
+    status: planning
+    path: docs/specs/planning/constellation-unified-viewer.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Realtime unified viewer replaces slow 3D renderer and visualizes new dependency types by default"
+    decision: null
+
+
+  - id: dashboard-information-architecture-refactor
+    status: planning
+    path: docs/specs/planning/dashboard-information-architecture-refactor.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Settings become standalone page and dashboard navigation is consolidated with breadcrumb-driven interaction"
+    decision: null
+
+
+  - id: postinstall-behavior-migration-audit
+    status: planning
+    path: docs/specs/planning/postinstall-behavior-migration-audit.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "All critical post-install behaviors are owned by CLI/daemon flows and not fragile post-install scripts"
+    decision: null
+
+
+  - id: ci-changed-files-selective
+    status: planning
+    path: docs/specs/planning/ci-changed-files-selective.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "PR CI runs only affected package lanes plus dependency closure while nightly runs full suite"
+    decision: null
+
+
+  - id: ci-contract-invariants-lane
+    status: planning
+    path: docs/specs/planning/ci-contract-invariants-lane.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "A fast mandatory CI lane validates core invariants and spec/dependency sync on every PR"
+    decision: null
+
+
+  - id: ci-flaky-test-quarantine
+    status: planning
+    path: docs/specs/planning/ci-flaky-test-quarantine.md
+    hard_depends_on:
+      - ci-contract-invariants-lane
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Flaky tests are detected, tracked, and quarantined with threshold-based enforcement"
+    decision: null
+
+
+  - id: ci-pr-preview-environments
+    status: planning
+    path: docs/specs/planning/ci-pr-preview-environments.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Each frontend-affecting PR can publish a preview with automated smoke and screenshot checks"
+    decision: null
+
+
+  - id: pr-risk-tier-policy
+    status: planning
+    path: docs/specs/planning/pr-risk-tier-policy.md
+    hard_depends_on:
+      - ci-contract-invariants-lane
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "PRs declare risk tier and high-risk PRs require rollback/test plans"
+    decision: null
+
+
+  - id: api-contract-snapshots
+    status: planning
+    path: docs/specs/planning/api-contract-snapshots.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Critical API response contracts are snapshotted to detect accidental breaking changes"
+    decision: null
+
+
+  - id: developer-doctor-command
+    status: planning
+    path: docs/specs/planning/developer-doctor-command.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "A single doctor command validates local setup, daemon health, and baseline checks"
+    decision: null
+
+
+  - id: golden-path-docs
+    status: planning
+    path: docs/specs/planning/golden-path-docs.md
+    hard_depends_on:
+      - developer-doctor-command
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Short golden-path guides exist for backend, dashboard, and connector changes"
+    decision: null
+
+
+  - id: code-ownership-sla
+    status: planning
+    path: docs/specs/planning/code-ownership-sla.md
+    hard_depends_on:
+      - multi-agent-support
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "CODEOWNERS and reviewer ownership map reduce review-routing latency"
+    decision: null
+
+
+  - id: release-train-cadence
+    status: planning
+    path: docs/specs/planning/release-train-cadence.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Predictable release windows reduce merge pressure and batch risk"
+    decision: null
+
+
+  - id: post-merge-canary-suite
+    status: planning
+    path: docs/specs/planning/post-merge-canary-suite.md
+    hard_depends_on:
+      - release-train-cadence
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Main branch merges trigger lightweight canary checks before broader rollout"
+    decision: null
+
+
+  - id: incident-guardrail-loop
+    status: planning
+    path: docs/specs/planning/incident-guardrail-loop.md
+    hard_depends_on:
+      - ci-contract-invariants-lane
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Every production incident produces at least one durable AGENTS/CI guardrail update"
     decision: null
