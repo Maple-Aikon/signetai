@@ -52,6 +52,7 @@ export function recordSessionCandidates(
 	sessionKey: string | undefined,
 	candidates: ReadonlyArray<SessionMemoryCandidate>,
 	injectedIds: ReadonlySet<string>,
+	agentId = "default",
 ): void {
 	if (!sessionKey || candidates.length === 0 || !existsSync(getMemoryDbPath())) return;
 
@@ -59,9 +60,9 @@ export function recordSessionCandidates(
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)";
+			const ROW = "(?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)";
 			const BASE_SQL = `INSERT OR IGNORE INTO session_memories
-					 (id, session_key, memory_id, source, effective_score,
+					 (id, session_key, agent_id, memory_id, source, effective_score,
 					  predictor_score, final_score, rank, was_injected,
 					  fts_hit_count, created_at,
 					  entity_slot, aspect_slot, is_constraint, structural_density,
@@ -93,6 +94,7 @@ export function recordSessionCandidates(
 					values.push(
 						crypto.randomUUID(),
 						sessionKey,
+						agentId,
 						c.id,
 						c.source,
 						c.effScore,
@@ -139,21 +141,25 @@ export function recordSessionCandidates(
  * Optimization: Uses SQLite UPSERT (INSERT ... ON CONFLICT DO UPDATE) to
  * collapse two queries into one, reducing roundtrips.
  */
-export function trackFtsHits(sessionKey: string | undefined, matchedIds: ReadonlyArray<string>): void {
+export function trackFtsHits(
+	sessionKey: string | undefined,
+	matchedIds: ReadonlyArray<string>,
+	agentId = "default",
+): void {
 	if (!sessionKey || matchedIds.length === 0 || !existsSync(getMemoryDbPath())) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			// Each row contributes 4 params: id, session_key, memory_id, created_at
-			const ROW = "(?, ?, ?, 'fts_only', 0, 0, 0, 0, 1, ?)";
+			// Each row contributes 5 params: id, session_key, agent_id, memory_id, created_at
+			const ROW = "(?, ?, ?, ?, 'fts_only', 0, 0, 0, 0, 1, ?)";
 			const BASE_SQL = `INSERT INTO session_memories
-				 (id, session_key, memory_id, source, effective_score,
+				 (id, session_key, agent_id, memory_id, source, effective_score,
 				  final_score, rank, was_injected, fts_hit_count, created_at)
 				 VALUES `;
 			const CONFLICT_CLAUSE = `
-				 ON CONFLICT(session_key, memory_id) DO UPDATE SET
+				 ON CONFLICT(session_key, agent_id, memory_id) DO UPDATE SET
 				  fts_hit_count = fts_hit_count + 1`;
 
 			// Pre-compile the full-chunk UPSERT statement once to avoid
@@ -181,7 +187,7 @@ export function trackFtsHits(sessionKey: string | undefined, matchedIds: Readonl
 
 				const values: unknown[] = [];
 				for (const id of chunk) {
-					values.push(crypto.randomUUID(), sessionKey, id, now);
+					values.push(crypto.randomUUID(), sessionKey, agentId, id, now);
 				}
 
 				stmt.run(...values);
@@ -233,6 +239,7 @@ export function recordAgentFeedbackInner(
 	db: WriteDb,
 	sessionKey: string,
 	feedback: Readonly<Record<string, number>>,
+	agentId = "default",
 ): void {
 	// Single-row UPDATE with running mean calculation.
 	// CASE handles NULL (first feedback) vs existing score.
@@ -243,11 +250,11 @@ export function recordAgentFeedbackInner(
 				ELSE (agent_relevance_score * agent_feedback_count + ?) / (agent_feedback_count + 1)
 			END,
 			agent_feedback_count = COALESCE(agent_feedback_count, 0) + 1
-		WHERE session_key = ? AND memory_id = ?
+		WHERE session_key = ? AND agent_id = ? AND memory_id = ?
 	`);
 
 	for (const [memoryId, score] of Object.entries(feedback)) {
-		stmt.run(score, score, sessionKey, memoryId);
+		stmt.run(score, score, sessionKey, agentId, memoryId);
 	}
 }
 
@@ -258,12 +265,13 @@ export function recordAgentFeedbackInner(
 export function recordAgentFeedback(
 	sessionKey: string | undefined,
 	feedback: Readonly<Record<string, number>>,
+	agentId = "default",
 ): void {
 	if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
-			recordAgentFeedbackInner(db, sessionKey, feedback);
+			recordAgentFeedbackInner(db, sessionKey, feedback, agentId);
 		});
 
 		logger.debug("session-memories", "Recorded agent feedback", {

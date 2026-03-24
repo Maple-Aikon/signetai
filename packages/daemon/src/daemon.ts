@@ -3773,7 +3773,7 @@ app.post("/api/memory/feedback", async (c) => {
 			dependenciesUpdated: result.dependenciesUpdated,
 		});
 	} catch (error) {
-		recordAgentFeedback(sessionKey, parsed);
+		recordAgentFeedback(sessionKey, parsed, agentId);
 		logger.warn("daemon", "Path feedback failed; fell back to legacy feedback", {
 			error: error instanceof Error ? error.message : String(error),
 			sessionKey,

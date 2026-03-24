@@ -1314,7 +1314,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				};
 			}),
 	];
-	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet);
+	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet, agentId);
 
 	// Format inject text
 	const injectParts: string[] = [];
@@ -1846,7 +1846,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		try {
 			const parsed = parseFeedback(req.memory_feedback);
 			if (parsed) {
-				recordAgentFeedback(req.sessionKey, parsed);
+				recordAgentFeedback(req.sessionKey, parsed, req.agentId ?? "default");
 			} else {
 				logger.warn("hooks", "Invalid memory_feedback format, skipping", {
 					sessionKey: req.sessionKey,
@@ -1938,7 +1938,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
-		trackFtsHits(req.sessionKey, allMatchedIds);
+		trackFtsHits(req.sessionKey, allMatchedIds, req.agentId ?? "default");
 
 		// Filter out memories already injected within the sliding window
 		let selected = budgetSelected;

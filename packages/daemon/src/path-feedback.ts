@@ -171,6 +171,7 @@ function inferPath(db: WriteDb, memoryId: string, agentId: string): FeedbackPath
 function loadSessionData(
 	db: WriteDb,
 	sessionKey: string,
+	agentId: string,
 	memoryIds: ReadonlyArray<string>,
 ): {
 	readonly sessionIds: Set<string>;
@@ -188,9 +189,10 @@ function loadSessionData(
 			`SELECT memory_id, path_json
 			 FROM session_memories
 			 WHERE session_key = ?
+			   AND agent_id = ?
 			   AND memory_id IN (${ph})`,
 		)
-		.all(sessionKey, ...memoryIds) as Array<{ memory_id: string; path_json: string | null }>;
+		.all(sessionKey, agentId, ...memoryIds) as Array<{ memory_id: string; path_json: string | null }>;
 	const sessionIds = new Set<string>();
 	const storedById = new Map<string, FeedbackPath>();
 	for (const row of rows) {
@@ -549,10 +551,10 @@ export function recordPathFeedback(
 	};
 
 	return accessor.withWriteTx((db) => {
-		recordAgentFeedbackInner(db, input.sessionKey, input.ratings);
+		recordAgentFeedbackInner(db, input.sessionKey, input.ratings, input.agentId);
 		const ts = new Date().toISOString();
 		const ids = Object.keys(input.ratings);
-		const sessionData = loadSessionData(db, input.sessionKey, ids);
+		const sessionData = loadSessionData(db, input.sessionKey, input.agentId, ids);
 		const sessionIds = sessionData.sessionIds;
 		const storedById = sessionData.storedById;
 		db.prepare(

@@ -77,13 +77,19 @@ function seedGraph(db: Database): void {
 	);
 }
 
-function seedSessionMemory(db: Database, sessionKey: string, memoryId: string, pathJson: string | null = null): void {
+function seedSessionMemory(
+	db: Database,
+	sessionKey: string,
+	memoryId: string,
+	pathJson: string | null = null,
+	agentId = "default",
+): void {
 	const ts = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO session_memories
-		 (id, session_key, memory_id, source, effective_score, final_score, rank, was_injected, fts_hit_count, created_at, path_json)
-		 VALUES (?, ?, ?, 'ka_traversal', 0.8, 0.8, 0, 1, 0, ?, ?)`,
-	).run(`sm-${sessionKey}-${memoryId}`, sessionKey, memoryId, ts, pathJson);
+		 (id, session_key, agent_id, memory_id, source, effective_score, final_score, rank, was_injected, fts_hit_count, created_at, path_json)
+		 VALUES (?, ?, ?, ?, 'ka_traversal', 0.8, 0.8, 0, 1, 0, ?, ?)`,
+	).run(`sm-${sessionKey}-${memoryId}-${agentId}`, sessionKey, agentId, memoryId, ts, pathJson);
 }
 
 let db: Database;
@@ -159,6 +165,26 @@ describe("recordPathFeedback", () => {
 			| { cnt: number }
 			| undefined;
 		expect(events?.cnt).toBe(0);
+	});
+
+	it("skips IDs recorded for a different agent with same session key", () => {
+		seedSessionMemory(db, "sess-shared", "mem-a", null, "agent-b");
+
+		const result = recordPathFeedback(getDbAccessor(), {
+			sessionKey: "sess-shared",
+			agentId: "agent-a",
+			ratings: { "mem-a": 1 },
+			paths: {
+				"mem-a": {
+					entity_ids: ["ent-a"],
+					aspect_ids: ["asp-a"],
+					dependency_ids: ["dep-a"],
+				},
+			},
+		});
+
+		expect(result.accepted).toBe(0);
+		expect(result.propagated).toBe(0);
 	});
 
 	it("assigns a default reason when positive feedback hits NULL reason", () => {

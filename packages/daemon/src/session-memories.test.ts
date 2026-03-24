@@ -68,6 +68,7 @@ function getSessionMemoryRows(
 ): Array<{
 	id: string;
 	session_key: string;
+	agent_id: string;
 	memory_id: string;
 	source: string;
 	effective_score: number | null;
@@ -80,13 +81,14 @@ function getSessionMemoryRows(
 }> {
 	return db
 		.prepare(
-			`SELECT id, session_key, memory_id, source, effective_score,
+			`SELECT id, session_key, agent_id, memory_id, source, effective_score,
 			        final_score, rank, was_injected, relevance_score, fts_hit_count, path_json
 			 FROM session_memories WHERE session_key = ? ORDER BY rank ASC`,
 		)
 		.all(sessionKey) as Array<{
 		id: string;
 		session_key: string;
+		agent_id: string;
 		memory_id: string;
 		source: string;
 		effective_score: number | null;
@@ -208,6 +210,21 @@ describe("recordSessionCandidates", () => {
 		expect(rows[0].path_json).toContain("entity_ids");
 	});
 
+	it("stores provided agent_id", () => {
+		const candidates = [
+			{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
+		];
+
+		recordSessionCandidates("session-agent-001", candidates, new Set(["mem-aaa-111"]), "agent-a");
+
+		const testDb = openTestDb();
+		const rows = getSessionMemoryRows(testDb, "session-agent-001");
+		testDb.close();
+
+		expect(rows.length).toBe(1);
+		expect(rows[0].agent_id).toBe("agent-a");
+	});
+
 	it("is idempotent (INSERT OR IGNORE on duplicate session+memory)", () => {
 		const candidates = [
 			{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
@@ -317,6 +334,41 @@ describe("trackFtsHits", () => {
 		testDb.close();
 
 		expect(rows[0].fts_hit_count).toBe(3);
+	});
+
+	it("tracks fts hits per agent for same session+memory", () => {
+		recordSessionCandidates(
+			"session-fts-agent",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+			"agent-a",
+		);
+		recordSessionCandidates(
+			"session-fts-agent",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+			"agent-b",
+		);
+
+		trackFtsHits("session-fts-agent", ["mem-aaa-111"], "agent-a");
+		trackFtsHits("session-fts-agent", ["mem-aaa-111"], "agent-a");
+		trackFtsHits("session-fts-agent", ["mem-aaa-111"], "agent-b");
+
+		const testDb = openTestDb();
+		const rows = testDb
+			.prepare(
+				`SELECT agent_id, fts_hit_count
+				 FROM session_memories
+				 WHERE session_key = ? AND memory_id = ?
+				 ORDER BY agent_id ASC`,
+			)
+			.all("session-fts-agent", "mem-aaa-111") as Array<{ agent_id: string; fts_hit_count: number }>;
+		testDb.close();
+
+		expect(rows).toEqual([
+			{ agent_id: "agent-a", fts_hit_count: 2 },
+			{ agent_id: "agent-b", fts_hit_count: 1 },
+		]);
 	});
 
 	it("creates fts_only rows for memories not in candidate pool", () => {
@@ -447,14 +499,15 @@ function getFeedbackColumns(
 	testDb: Database,
 	sessionKey: string,
 	memoryId: string,
+	agentId = "default",
 ): { agent_relevance_score: number | null; agent_feedback_count: number } | undefined {
 	return testDb
 		.prepare(
 			`SELECT agent_relevance_score, agent_feedback_count
 			 FROM session_memories
-			 WHERE session_key = ? AND memory_id = ?`,
+			 WHERE session_key = ? AND agent_id = ? AND memory_id = ?`,
 		)
-		.get(sessionKey, memoryId) as
+		.get(sessionKey, agentId, memoryId) as
 		| { agent_relevance_score: number | null; agent_feedback_count: number }
 		| undefined;
 }
@@ -584,6 +637,31 @@ describe("recordAgentFeedbackInner", () => {
 		testDb.close();
 
 		expect(a!.agent_relevance_score).toBeCloseTo(0.7, 6);
+		expect(b!.agent_relevance_score).toBeNull();
+	});
+
+	it("feedback is scoped by agent_id", () => {
+		recordSessionCandidates(
+			"session-fb-agent",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+			"agent-a",
+		);
+		recordSessionCandidates(
+			"session-fb-agent",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+			"agent-b",
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-agent", { "mem-aaa-111": 0.9 }, "agent-a");
+
+		const a = getFeedbackColumns(testDb, "session-fb-agent", "mem-aaa-111", "agent-a");
+		const b = getFeedbackColumns(testDb, "session-fb-agent", "mem-aaa-111", "agent-b");
+		testDb.close();
+
+		expect(a!.agent_relevance_score).toBeCloseTo(0.9, 6);
 		expect(b!.agent_relevance_score).toBeNull();
 	});
 

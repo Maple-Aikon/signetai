@@ -25,7 +25,8 @@ mod tests {
 
     #[test]
     fn parse_scores_accepts_and_clamps_scores() {
-        let parsed = parse_scores(Some(&json!({"a": 2.5, "b": -3.0, "c": 0.5}))).unwrap();
+        let mut parsed = parse_scores(Some(&json!({"a": 2.5, "b": -3.0, "c": 0.5}))).unwrap();
+        parsed.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0], ("a".to_string(), 1.0));
         assert_eq!(parsed[1], ("b".to_string(), -1.0));

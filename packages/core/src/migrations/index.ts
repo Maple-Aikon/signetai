@@ -47,6 +47,7 @@ import { up as memoryHints } from "./038-memory-hints";
 import { up as dedupEntityDependencies } from "./039-dedup-entity-dependencies";
 import { up as sessionTranscripts } from "./040-session-transcripts";
 import { up as pathFeedback } from "./041-path-feedback";
+import { up as sessionMemoriesAgentId } from "./042-session-memories-agent-id";
 
 // -- Public interface consumed by Database.init() --
 
@@ -409,6 +410,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				"path_feedback_sessions",
 			],
 			columns: [{ table: "session_memories", column: "path_json" }],
+		},
+	},
+	{
+		version: 42,
+		name: "session-memories-agent-id",
+		up: sessionMemoriesAgentId,
+		artifacts: {
+			columns: [{ table: "session_memories", column: "agent_id" }],
 		},
 	},
 ];
