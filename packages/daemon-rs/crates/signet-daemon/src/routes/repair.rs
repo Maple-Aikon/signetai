@@ -68,26 +68,49 @@ pub async fn release_leases(State(state): State<Arc<AppState>>) -> impl IntoResp
     let result = state
         .pool
         .write(signet_core::db::Priority::Low, |conn| {
-            let count = conn.execute(
-                "UPDATE memory_jobs SET status = 'pending', leased_at = NULL, updated_at = datetime('now')
-                 WHERE status = 'leased' AND leased_at < datetime('now', '-5 minutes')",
+            let dead = conn.execute(
+                "UPDATE memory_jobs
+                 SET status = 'dead',
+                     leased_at = NULL,
+                     failed_at = datetime('now'),
+                     error = COALESCE(error, 'lease expired before completion'),
+                     updated_at = datetime('now')
+                 WHERE status = 'leased'
+                   AND leased_at < datetime('now', '-5 minutes')
+                   AND attempts >= max_attempts",
                 [],
             )?;
-            Ok(serde_json::json!(count))
+            let pending = conn.execute(
+                "UPDATE memory_jobs
+                 SET status = 'pending',
+                     leased_at = NULL,
+                     updated_at = datetime('now')
+                 WHERE status = 'leased'
+                   AND leased_at < datetime('now', '-5 minutes')
+                   AND attempts < max_attempts",
+                [],
+            )?;
+            Ok(serde_json::json!({
+                "pending": pending,
+                "dead": dead,
+                "total": pending + dead,
+            }))
         })
         .await;
 
     match result {
         Ok(count) => {
-            let n = count.as_u64().unwrap_or(0) as usize;
+            let pending = count["pending"].as_u64().unwrap_or(0) as usize;
+            let dead = count["dead"].as_u64().unwrap_or(0) as usize;
+            let n = count["total"].as_u64().unwrap_or(0) as usize;
+            let msg = if dead > 0 {
+                format!("{pending} stale leases released, {dead} exhausted jobs dead-lettered")
+            } else {
+                format!("{pending} stale leases released")
+            };
             (
                 StatusCode::OK,
-                Json(repair_result(
-                    "release_leases",
-                    true,
-                    n,
-                    &format!("{n} stale leases released"),
-                )),
+                Json(repair_result("release_leases", true, n, &msg)),
             )
         }
         Err(e) => (

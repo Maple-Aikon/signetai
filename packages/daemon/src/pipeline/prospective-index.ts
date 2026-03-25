@@ -120,7 +120,7 @@ function leaseJob(db: WriteDb, maxAttempts: number): HintJobRow | null {
 		 WHERE id = ?`,
 	).run(now, now, row.id);
 
-	return row;
+	return { ...row, attempts: row.attempts + 1 };
 }
 
 function completeJob(db: WriteDb, jobId: string): void {
@@ -186,8 +186,9 @@ export function startHintsWorker(deps: {
 	async function tick(): Promise<void> {
 		if (!running) return;
 
+		let job: HintJobRow | null = null;
 		try {
-			const job = accessor.withWriteTx((db) => leaseJob(db, 3));
+			job = accessor.withWriteTx((db) => leaseJob(db, 3));
 			if (!job) {
 				schedule();
 				return;
@@ -221,6 +222,16 @@ export function startHintsWorker(deps: {
 				});
 			}
 		} catch (e) {
+			if (job) {
+				const msg = e instanceof Error ? e.message : String(e);
+				accessor.withWriteTx((db) => failJob(db, job.id, msg));
+				logger.warn("pipeline", "Hints worker job failed", {
+					jobId: job.id,
+					memoryId: job.memory_id,
+					error: msg,
+					attempt: job.attempts,
+				});
+			}
 			logger.warn("pipeline", "Hints worker tick failed", {
 				error: e instanceof Error ? e.message : String(e),
 			});
