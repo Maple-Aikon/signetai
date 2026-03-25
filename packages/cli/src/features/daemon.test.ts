@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { requestPipelinePauseApi } from "./daemon.js";
+import { requestPipelinePauseApi, summarizePipelineToggle } from "./daemon.js";
 
 describe("requestPipelinePauseApi", () => {
 	it("uses the live daemon pause endpoint when available", async () => {
@@ -47,5 +47,14 @@ describe("requestPipelinePauseApi", () => {
 				});
 			}),
 		).rejects.toThrow("Pipeline transition already in progress");
+	});
+});
+
+describe("summarizePipelineToggle", () => {
+	it("reports resume as still disabled when the pause flag clears under disabled mode", () => {
+		expect(summarizePipelineToggle(false, "disabled", true)).toEqual({
+			title: "Pipeline pause cleared, still disabled",
+			detail: "  Pause flag cleared, but the pipeline is still disabled in config. Enable it before extraction can run.",
+		});
 	});
 });

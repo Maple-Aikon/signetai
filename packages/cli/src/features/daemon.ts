@@ -372,6 +372,43 @@ function printReleaseResults(results: readonly Awaited<ReturnType<typeof release
 	}
 }
 
+function readPipelineMode(state: { readonly enabled: boolean; readonly paused: boolean }): string {
+	if (state.enabled === false) return "disabled";
+	if (state.paused) return "paused";
+	return "controlled-write";
+}
+
+export function summarizePipelineToggle(
+	paused: boolean,
+	mode: string,
+	running: boolean,
+): { readonly detail: string; readonly title: string } {
+	if (paused) {
+		return {
+			title: running ? "Extraction pipeline paused" : "Pipeline pause recorded",
+			detail: running
+				? "  New memories can still queue for later extraction while workers stay offline."
+				: "  The daemon is not running. New extraction work will stay paused on next start.",
+		};
+	}
+
+	if (mode === "disabled") {
+		return {
+			title: running ? "Pipeline pause cleared, still disabled" : "Pipeline pause cleared",
+			detail: running
+				? "  Pause flag cleared, but the pipeline is still disabled in config. Enable it before extraction can run."
+				: "  The daemon is not running, and the pipeline is still disabled in config. Enable it before extraction can resume on next start.",
+		};
+	}
+
+	return {
+		title: running ? "Extraction pipeline resumed" : "Pipeline resume recorded",
+		detail: running
+			? "  Queued extraction work can drain again now that the pipeline is active."
+			: "  The daemon is not running. Normal extraction will resume on next start.",
+	};
+}
+
 async function togglePipelinePause(options: PathOptions, deps: Deps, paused: boolean): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
@@ -414,8 +451,9 @@ async function togglePipelinePause(options: PathOptions, deps: Deps, paused: boo
 		if (running) {
 			const live = await requestPipelinePauseApi(deps.defaultPort, paused);
 			if (live.kind === "ok") {
+				const summary = summarizePipelineToggle(paused, live.data.mode, true);
 				const released = paused ? await releaseOllamaModels(basePath) : [];
-				spinner.succeed(paused ? "Extraction pipeline paused" : "Extraction pipeline resumed");
+				spinner.succeed(summary.title);
 				if (live.data.file) {
 					console.log(chalk.dim(`  Config: ${live.data.file}`));
 				}
@@ -424,28 +462,17 @@ async function togglePipelinePause(options: PathOptions, deps: Deps, paused: boo
 					console.log(chalk.dim(`  ${line}`));
 				}
 				printReleaseResults(released);
-				console.log(
-					chalk.dim(
-						paused
-							? "  New memories can still queue for later extraction while workers stay offline."
-							: "  Queued extraction work can drain again now that the pipeline is active.",
-					),
-				);
+				console.log(chalk.dim(summary.detail));
 				return;
 			}
 		}
 
 		const next = setPipelinePaused(basePath, paused);
 		if (!running) {
-			spinner.succeed(paused ? "Pipeline pause recorded" : "Pipeline resume recorded");
+			const summary = summarizePipelineToggle(paused, readPipelineMode(next), false);
+			spinner.succeed(summary.title);
 			console.log(chalk.dim(`  Config: ${next.file}`));
-			console.log(
-				chalk.dim(
-					paused
-						? "  The daemon is not running. New extraction work will stay paused on next start."
-						: "  The daemon is not running. Normal extraction will resume on next start.",
-				),
-			);
+			console.log(chalk.dim(summary.detail));
 			return;
 		}
 
@@ -464,20 +491,15 @@ async function togglePipelinePause(options: PathOptions, deps: Deps, paused: boo
 			return;
 		}
 
-		spinner.succeed(paused ? "Extraction pipeline paused" : "Extraction pipeline resumed");
+		const summary = summarizePipelineToggle(paused, readPipelineMode(next), true);
+		spinner.succeed(summary.title);
 		console.log(chalk.dim(`  Config: ${next.file}`));
 		const status = await deps.getDaemonStatus();
 		for (const line of daemonAccessLines(deps.defaultPort, status)) {
 			console.log(chalk.dim(`  ${line}`));
 		}
 		printReleaseResults(released);
-		console.log(
-			chalk.dim(
-				paused
-					? "  New memories can still queue for later extraction while workers stay offline."
-					: "  Queued extraction work can drain again now that the pipeline is active.",
-			),
-		);
+		console.log(chalk.dim(summary.detail));
 	} catch (err) {
 		spinner.fail(paused ? "Failed to pause extraction pipeline" : "Failed to resume extraction pipeline");
 		console.log(chalk.red(`  ${readErr(err)}`));
