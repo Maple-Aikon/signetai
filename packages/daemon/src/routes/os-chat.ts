@@ -108,7 +108,7 @@ function generateCursorSteps(
 
 			// Click the "+ New" button
 			steps.push({ action: "move", target: `new ${entity}`, click: true });
-			steps.push({ action: "wait", ms: 800 });
+			steps.push({ action: "wait", ms: 100 });
 
 			// Fill in fields
 			if (firstName) {
@@ -133,16 +133,16 @@ function generateCursorSteps(
 			}
 
 			// Click save/create button
-			steps.push({ action: "wait", ms: 300 });
+			steps.push({ action: "wait", ms: 100 });
 			steps.push({ action: "move", target: `create ${entity}`, click: true });
 		} else if (call.toolName.startsWith("update_")) {
 			const target = String(args.firstName || args.name || args.title || "");
 			if (target) {
 				steps.push({ action: "move", target, click: true });
-				steps.push({ action: "wait", ms: 600 });
+				steps.push({ action: "wait", ms: 200 });
 			}
 			steps.push({ action: "move", target: "edit", click: true });
-			steps.push({ action: "wait", ms: 500 });
+			steps.push({ action: "wait", ms: 200 });
 			for (const [key, val] of Object.entries(args)) {
 				if (["id", "contactId", "dealId"].includes(key) || val == null) continue;
 				steps.push({ action: "move", target: key.replace(/([A-Z])/g, " $1").toLowerCase(), click: true });
@@ -153,10 +153,10 @@ function generateCursorSteps(
 			const name = String(args.name || args.firstName || args.title || "");
 			if (name) {
 				steps.push({ action: "move", target: name, click: true });
-				steps.push({ action: "wait", ms: 400 });
+				steps.push({ action: "wait", ms: 150 });
 			}
 			steps.push({ action: "move", target: "delete", click: true });
-			steps.push({ action: "wait", ms: 300 });
+			steps.push({ action: "wait", ms: 100 });
 		}
 	}
 

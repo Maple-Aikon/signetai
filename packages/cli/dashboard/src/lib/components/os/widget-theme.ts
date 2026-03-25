@@ -298,7 +298,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
   // ── Visual cursor for agent automation ──────────────────────────────
   var cursor = document.createElement('div');
   cursor.id = 'signet-cursor';
-  cursor.style.cssText = 'position:fixed;width:20px;height:20px;pointer-events:none;z-index:99999;opacity:0;transition:left 0.4s cubic-bezier(0.23,1,0.32,1),top 0.4s cubic-bezier(0.23,1,0.32,1),opacity 0.2s;';
+  cursor.style.cssText = 'position:fixed;width:20px;height:20px;pointer-events:none;z-index:99999;opacity:0;transition:left 0.15s cubic-bezier(0.23,1,0.32,1),top 0.15s cubic-bezier(0.23,1,0.32,1),opacity 0.1s;';
   cursor.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M5.65 2.3l12.6 10.1-5.9 1.3-3.4 5.4L5.65 2.3z" fill="rgba(0,188,212,0.9)" stroke="rgba(255,255,255,0.8)" stroke-width="1.5"/></svg>';
   function appendCursorElements() {
     if (document.body) {
@@ -324,7 +324,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
       showCursor();
       cursor.style.left = x + 'px';
       cursor.style.top = y + 'px';
-      setTimeout(resolve, 450);
+      setTimeout(resolve, 200);
     });
   }
 
@@ -334,7 +334,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
     ripple.style.opacity = '1';
     ripple.style.transform = 'scale(0)';
     ripple.offsetHeight;
-    ripple.style.transition = 'transform 0.3s ease-out, opacity 0.3s ease-out';
+    ripple.style.transition = 'transform 0.15s ease-out, opacity 0.15s ease-out';
     ripple.style.transform = 'scale(2)';
     ripple.style.opacity = '0';
 
@@ -366,7 +366,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
         }
         active.dispatchEvent(new Event('input', {bubbles:true}));
         active.dispatchEvent(new Event('change', {bubbles:true}));
-        setTimeout(next, 50 + Math.random() * 30);
+        setTimeout(next, 15 + Math.random() * 10);
       }
       next();
     });
@@ -414,7 +414,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
 
   async function runCursorSequence(steps) {
     // Wait for the widget DOM to be ready before starting
-    await new Promise(function(r) { setTimeout(r, 1500); });
+    await new Promise(function(r) { setTimeout(r, 500); });
     showCursor();
     for (var s = 0; s < steps.length; s++) {
       var step = steps[s];
@@ -425,17 +425,16 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
           await moveCursorTo(found.x, found.y);
           if (step.click) {
             clickAt(found.x, found.y);
-            // After clicking, wait for potential DOM changes (form appearing, etc.)
-            await new Promise(function(r){setTimeout(r, 600)});
+            await new Promise(function(r){setTimeout(r, 200)});
           }
         }
       }
       if (step.action === 'type' && step.text) {
         await typeText(step.text);
-        await new Promise(function(r){setTimeout(r, 200)});
+        await new Promise(function(r){setTimeout(r, 50)});
       }
       if (step.action === 'wait') {
-        await new Promise(function(r){setTimeout(r, step.ms || 500)});
+        await new Promise(function(r){setTimeout(r, step.ms || 150)});
       }
     }
     setTimeout(hideCursor, 2000);
