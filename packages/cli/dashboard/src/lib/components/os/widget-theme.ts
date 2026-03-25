@@ -373,37 +373,72 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
   }
 
   function findByText(text) {
-    var all = document.querySelectorAll('button, a, td, th, span, label, div, input, [role="button"]');
-    for (var i = 0; i < all.length; i++) {
-      var el = all[i];
-      var t = (el.textContent || el.placeholder || el.value || '').trim().toLowerCase();
-      if (t.includes(text.toLowerCase())) {
-        var r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, el: el };
+    var lower = text.toLowerCase();
+    // Check inputs by placeholder first
+    var inputs = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < inputs.length; i++) {
+      var ph = (inputs[i].placeholder || inputs[i].name || inputs[i].getAttribute('aria-label') || '').toLowerCase();
+      if (ph.includes(lower)) {
+        var r = inputs[i].getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2, el: inputs[i] };
+      }
+    }
+    // Check buttons and other interactive elements by text content
+    var all = document.querySelectorAll('button, a, td, th, span, label, div, [role="button"]');
+    for (var j = 0; j < all.length; j++) {
+      var el = all[j];
+      var t = (el.textContent || '').trim().toLowerCase();
+      if (t.includes(lower) && t.length < 100) {
+        var r2 = el.getBoundingClientRect();
+        if (r2.width > 0 && r2.height > 0) return { x: r2.left + r2.width / 2, y: r2.top + r2.height / 2, el: el };
       }
     }
     return null;
   }
 
+  // Wait for an element to appear in the DOM (retries for up to timeoutMs)
+  function waitForElement(text, timeoutMs) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      var interval = 200;
+      function check() {
+        var found = findByText(text);
+        if (found) { resolve(found); return; }
+        elapsed += interval;
+        if (elapsed >= timeoutMs) { resolve(null); return; }
+        setTimeout(check, interval);
+      }
+      check();
+    });
+  }
+
   async function runCursorSequence(steps) {
+    // Wait for the widget DOM to be ready before starting
+    await new Promise(function(r) { setTimeout(r, 1500); });
     showCursor();
     for (var s = 0; s < steps.length; s++) {
       var step = steps[s];
       if (step.action === 'move' && step.target) {
-        var found = findByText(step.target);
+        // Wait up to 3 seconds for the element to appear
+        var found = await waitForElement(step.target, 3000);
         if (found) {
           await moveCursorTo(found.x, found.y);
-          if (step.click) { clickAt(found.x, found.y); await new Promise(function(r){setTimeout(r,300)}); }
+          if (step.click) {
+            clickAt(found.x, found.y);
+            // After clicking, wait for potential DOM changes (form appearing, etc.)
+            await new Promise(function(r){setTimeout(r, 600)});
+          }
         }
       }
       if (step.action === 'type' && step.text) {
         await typeText(step.text);
+        await new Promise(function(r){setTimeout(r, 200)});
       }
       if (step.action === 'wait') {
         await new Promise(function(r){setTimeout(r, step.ms || 500)});
       }
     }
-    setTimeout(hideCursor, 1000);
+    setTimeout(hideCursor, 2000);
   }
 
   parent.postMessage({ type: 'signet:ready' }, '*');
