@@ -26,7 +26,7 @@ async function chatLlm(prompt: string, maxTokens = 2048): Promise<string> {
 			method: "POST",
 			headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
 			body: JSON.stringify({
-				model: "gpt-4o",
+				model: "gpt-4o-mini",
 				max_tokens: maxTokens,
 				messages: [{ role: "user", content: prompt }],
 			}),
@@ -432,24 +432,8 @@ export function mountOsChatRoutes(app: Hono): void {
 			// Generate cursor steps from the mutation calls
 			const cursorSteps = generateCursorSteps(results, [...reads, ...mutations]);
 
-			// Summarize results through the provider
-			if (results.some((r) => r.result)) {
-				const text = results
-					.map((r) => {
-						if (r.error) return `${r.tool}: ERROR — ${r.error}`;
-						const s = typeof r.result === "string" ? r.result : JSON.stringify(r.result);
-						return `${r.tool}: ${s.slice(0, 2000)}`;
-					})
-					.join("\n\n");
-
-				try {
-					const summary = await chatLlm(buildSummary(message, text), 1024);
-					return c.json({ response: summary.trim(), toolCalls: results, cursorSteps });
-				} catch {
-					return c.json({ response: parsed.response, toolCalls: results, cursorSteps });
-				}
-			}
-
+			// Return results — use LLM response text directly (skip expensive summary call)
+			// The LLM already wrote a response anticipating the results
 			return c.json({ response: parsed.response, toolCalls: results, cursorSteps });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
