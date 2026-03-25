@@ -15,6 +15,41 @@ import { generateWithTracking } from "../pipeline/provider.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
 // ---------------------------------------------------------------------------
+// Fast LLM path — direct OpenAI API for low-latency chat
+// Falls back to synthesis provider if no API key available
+// ---------------------------------------------------------------------------
+
+async function chatLlm(prompt: string, maxTokens = 2048): Promise<string> {
+	const key = process.env.OPENAI_API_KEY;
+	if (key) {
+		const res = await fetch("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+			body: JSON.stringify({
+				model: "gpt-4o",
+				max_tokens: maxTokens,
+				messages: [{ role: "user", content: prompt }],
+			}),
+		});
+		if (res.ok) {
+			const data: unknown = await res.json();
+			if (isRecord(data) && Array.isArray(data.choices)) {
+				const first = data.choices[0];
+				if (isRecord(first) && isRecord(first.message) && typeof first.message.content === "string") {
+					return first.message.content;
+				}
+			}
+		}
+		// If 429 or other error, fall through to synthesis provider
+		logger.warn("os-chat", `OpenAI fast path failed (${res.status}), falling back to synthesis`);
+	}
+	// Fallback: synthesis provider (claude-code, slower but always works)
+	const provider = getSynthesisProvider();
+	const result = await generateWithTracking(provider, prompt, { maxTokens, timeoutMs: 30000 });
+	return result.text;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -332,21 +367,15 @@ export function mountOsChatRoutes(app: Hono): void {
 				});
 			}
 
-			const provider = getSynthesisProvider();
 			const prompt = buildPrompt(tools, message);
 
 			logger.info("os-chat", "Processing message", {
 				message: message.slice(0, 100),
 				tools: tools.length,
-				provider: provider.name,
 			});
 
-			const raw = await generateWithTracking(provider, prompt, {
-				maxTokens: 2048,
-				timeoutMs: 30000,
-			});
-
-			const parsed = parse(raw.text);
+			const raw = await chatLlm(prompt);
+			const parsed = parse(raw);
 
 			// If LLM decided this needs the visual agent, return immediately.
 			// The dashboard will use POST /api/os/agent-execute for real
@@ -409,11 +438,8 @@ export function mountOsChatRoutes(app: Hono): void {
 					.join("\n\n");
 
 				try {
-					const summary = await generateWithTracking(provider, buildSummary(message, text), {
-						maxTokens: 1024,
-						timeoutMs: 20000,
-					});
-					return c.json({ response: summary.text.trim(), toolCalls: results, cursorSteps });
+					const summary = await chatLlm(buildSummary(message, text), 1024);
+					return c.json({ response: summary.trim(), toolCalls: results, cursorSteps });
 				} catch {
 					return c.json({ response: parsed.response, toolCalls: results, cursorSteps });
 				}
