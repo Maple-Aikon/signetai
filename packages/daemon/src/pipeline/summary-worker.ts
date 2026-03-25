@@ -1006,6 +1006,11 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	const endpoint = cfg.pipelineV2.synthesis.endpoint;
 	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
+	const fallback = () =>
+		createOllamaProvider({
+			defaultTimeoutMs: timeout,
+			maxContextTokens: ollamaFallbackMaxContextTokens,
+		});
 	switch (p) {
 		case "none":
 			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
@@ -1023,10 +1028,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 					"summary-worker",
 					"ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
 				);
-				return createOllamaProvider({
-					defaultTimeoutMs: timeout,
-					maxContextTokens: ollamaFallbackMaxContextTokens,
-				});
+				return fallback();
 			}
 			return createAnthropicProvider({ model: model || "haiku", apiKey, defaultTimeoutMs: timeout });
 		}
@@ -1044,10 +1046,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 					"summary-worker",
 					"OPENROUTER_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
 				);
-				return createOllamaProvider({
-					defaultTimeoutMs: timeout,
-					maxContextTokens: ollamaFallbackMaxContextTokens,
-				});
+				return fallback();
 			}
 			return createOpenRouterProvider({
 				model: model || "openai/gpt-4o-mini",
@@ -1058,10 +1057,18 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 				defaultTimeoutMs: timeout,
 			});
 		}
-		case "claude-code":
-			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
-		case "codex":
-			return createCodexProvider({ model: model || "gpt-5-codex-mini", defaultTimeoutMs: timeout });
+		case "claude-code": {
+			const provider = createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
+			if (await provider.available()) return provider;
+			logger.warn("summary-worker", "Claude Code CLI not available for summary worker — falling back to ollama");
+			return fallback();
+		}
+		case "codex": {
+			const provider = createCodexProvider({ model: model || "gpt-5-codex-mini", defaultTimeoutMs: timeout });
+			if (await provider.available()) return provider;
+			logger.warn("summary-worker", "Codex CLI not available for summary worker — falling back to ollama");
+			return fallback();
+		}
 		case "opencode":
 			return createOpenCodeProvider({
 				model: model || "anthropic/claude-haiku-4-5-20251001",

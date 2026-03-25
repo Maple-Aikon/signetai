@@ -37,8 +37,10 @@ function makeAccessor(db: Database): DbAccessor {
 }
 
 const tmpDirs: string[] = [];
+const originalWhich = Bun.which;
 
 afterEach(() => {
+	Bun.which = originalWhich;
 	while (tmpDirs.length > 0) {
 		const dir = tmpDirs.pop();
 		if (!dir) continue;
@@ -222,6 +224,19 @@ describe("resolveSummaryProvider", () => {
 
 		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
 		expect(provider.name).toBe("codex:gpt-5-codex-mini");
+	});
+
+	it("falls back to ollama when synthesis codex is configured but CLI is unavailable", async () => {
+		Bun.which = (() => null) as typeof Bun.which;
+		const dir = makeAgentsDir(`memory:
+  pipelineV2:
+    synthesis:
+      provider: codex
+      model: gpt-5-codex-mini
+`);
+
+		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
+		expect(provider.name.startsWith("ollama:")).toBe(true);
 	});
 
 	it("falls back to resolved extraction config when synthesis is absent", async () => {
