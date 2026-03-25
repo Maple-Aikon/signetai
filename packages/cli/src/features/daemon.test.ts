@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { requestPipelinePauseApi, summarizePipelineToggle } from "./daemon.js";
+import { doRestart, doStop, requestPipelinePauseApi, summarizePipelineToggle } from "./daemon.js";
 
 describe("requestPipelinePauseApi", () => {
 	it("uses the live daemon pause endpoint when available", async () => {
@@ -54,7 +54,69 @@ describe("summarizePipelineToggle", () => {
 	it("reports resume as still disabled when the pause flag clears under disabled mode", () => {
 		expect(summarizePipelineToggle(false, "disabled", true)).toEqual({
 			title: "Pipeline pause cleared, still disabled",
-			detail: "  Pause flag cleared, but the pipeline is still disabled in config. Enable it before extraction can run.",
+			detail:
+				"  Pause flag cleared, but the pipeline is still disabled in config. Enable it before extraction can run.",
 		});
+	});
+});
+
+function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Parameters<typeof doRestart>[1] {
+	return {
+		agentsDir: "/tmp/.agents",
+		defaultPort: 3850,
+		extractPathOption: () => null,
+		getDaemonStatus: async () => ({
+			running: true,
+			pid: 42,
+			uptime: 1,
+			version: "0.77.1",
+			host: "127.0.0.1",
+			bindHost: "0.0.0.0",
+			networkMode: "local",
+		}),
+		hasDaemonProcess: async () => false,
+		isDaemonRunning: async () => false,
+		normalizeAgentPath: (pathValue) => pathValue,
+		signetLogo: () => "",
+		sleep: async () => {},
+		startDaemon: async () => true,
+		stopDaemon: async () => true,
+		...overrides,
+	};
+}
+
+describe("daemon lifecycle recovery", () => {
+	it("restart stops a stale daemon process even when health checks say stopped", async () => {
+		const calls: string[] = [];
+		const deps = makeDeps({
+			hasDaemonProcess: async () => true,
+			startDaemon: async () => {
+				calls.push("start");
+				return true;
+			},
+			stopDaemon: async () => {
+				calls.push("stop");
+				return true;
+			},
+		});
+
+		await doRestart({ openclaw: false }, deps);
+
+		expect(calls).toEqual(["stop", "start"]);
+	});
+
+	it("stop attempts cleanup for a stale daemon process even when health checks fail", async () => {
+		let stopped = false;
+		const deps = makeDeps({
+			hasDaemonProcess: async () => true,
+			stopDaemon: async () => {
+				stopped = true;
+				return true;
+			},
+		});
+
+		await doStop({}, deps);
+
+		expect(stopped).toBe(true);
 	});
 });

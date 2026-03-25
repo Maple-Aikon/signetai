@@ -109,6 +109,34 @@ export async function isDaemonRunning(): Promise<boolean> {
 	return urls.length > 0;
 }
 
+export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+	const pidFile = join(agentsDir, ".daemon", "pid");
+	if (!existsSync(pidFile)) {
+		return false;
+	}
+
+	try {
+		const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+		if (!Number.isInteger(pid) || pid <= 0) {
+			rmSync(pidFile, { force: true });
+			return false;
+		}
+		if (isAlive(pid)) {
+			return true;
+		}
+	} catch {
+		// Ignore and clean up below.
+	}
+
+	try {
+		rmSync(pidFile, { force: true });
+	} catch {
+		// Ignore stale cleanup failures.
+	}
+
+	return false;
+}
+
 export async function getDaemonStatus(): Promise<{
 	running: boolean;
 	pid: number | null;
@@ -208,6 +236,13 @@ async function downloadDaemonBinary(): Promise<void> {
 export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	if (await isDaemonRunning()) {
 		return true;
+	}
+
+	if (await hasDaemonProcess(agentsDir)) {
+		const stopped = await stopDaemon(agentsDir);
+		if (!stopped) {
+			return false;
+		}
 	}
 
 	try {

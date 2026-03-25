@@ -46,6 +46,7 @@ interface Deps {
 	readonly defaultPort: number;
 	readonly extractPathOption: (value: unknown) => string | null;
 	readonly getDaemonStatus: () => Promise<DaemonStatus>;
+	readonly hasDaemonProcess: (agentsDir?: string) => Promise<boolean>;
 	readonly isDaemonRunning: () => Promise<boolean>;
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly signetLogo: () => string;
@@ -210,7 +211,8 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
 	const running = await deps.isDaemonRunning();
-	if (!running) {
+	const stale = running ? false : await deps.hasDaemonProcess(basePath);
+	if (!running && !stale) {
 		console.log(chalk.yellow("  Daemon is not running"));
 		return;
 	}
@@ -230,8 +232,9 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 	const basePath = readPath(options, deps);
 	const spinner = ora("Restarting daemon...").start();
 	const running = await deps.isDaemonRunning();
+	const stale = running ? false : await deps.hasDaemonProcess(basePath);
 
-	if (running) {
+	if (running || stale) {
 		const stopped = await deps.stopDaemon(basePath);
 		if (!stopped) {
 			spinner.fail("Failed to stop daemon");
@@ -243,7 +246,7 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 	const started = await deps.startDaemon(basePath);
 
 	if (started) {
-		spinner.succeed(running ? "Daemon restarted" : "Daemon started");
+		spinner.succeed(running || stale ? "Daemon restarted" : "Daemon started");
 		const status = await deps.getDaemonStatus();
 		for (const line of daemonAccessLines(deps.defaultPort, status)) {
 			console.log(chalk.dim(`  ${line}`));
@@ -365,7 +368,9 @@ function printReleaseResults(results: readonly Awaited<ReturnType<typeof release
 		console.log(chalk.dim(`  Released ${ok} local Ollama model${ok === 1 ? "" : "s"} from memory.`));
 	}
 	for (const item of results.filter((entry) => !entry.ok)) {
-		console.log(chalk.yellow(`  Failed to release ${item.label} model ${item.model}: ${item.error ?? "unknown error"}`));
+		console.log(
+			chalk.yellow(`  Failed to release ${item.label} model ${item.model}: ${item.error ?? "unknown error"}`),
+		);
 	}
 	if (failed === 0) {
 		console.log(chalk.dim("  Local Ollama VRAM should clear as those models unload."));

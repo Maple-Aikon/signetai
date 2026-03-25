@@ -136,6 +136,7 @@ specs:
       - "Daemon startup keeps /health responsive while recovery work runs on large databases"
       - "Startup recovery and embedding coverage queries avoid unbounded synchronous scans on the main thread"
       - "Regression tests cover batched summary-job recovery and duplicate-hash embedding coverage"
+      - "CLI start/restart can recover from a stale managed daemon process that still owns the port after health probes fail"
     decision: null
 
   - id: daemon-refactor
