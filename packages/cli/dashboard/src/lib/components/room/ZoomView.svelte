@@ -243,7 +243,10 @@
 
 			// Play cursor automation in widget for mutations
 			if (agent.source.type === "mcp" && data.cursorSteps && data.cursorSteps.length > 0) {
+				console.log("[ZoomView] sending cursor steps to", agent.source.serverId, "steps:", data.cursorSteps.length);
 				sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
+			} else {
+				console.log("[ZoomView] no cursor:", agent.source.type, "steps:", data.cursorSteps?.length ?? 0);
 			}
 		} catch (err) {
 			messages.push({
