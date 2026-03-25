@@ -188,6 +188,10 @@
 	 */
 	$effect(() => {
 		const action = getWidgetAction(serverId);
+		// Both action presence AND ready state are reactive dependencies.
+		// When either changes, this re-evaluates. This handles the case
+		// where a cursor action arrives before the widget is ready —
+		// the effect will fire again when ready becomes true.
 		if (action && ready) {
 			if (action.action === 'refresh') {
 				// Force full iframe reload: reset srcdoc to trigger React remount

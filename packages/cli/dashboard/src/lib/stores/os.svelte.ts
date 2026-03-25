@@ -342,13 +342,16 @@ export function sendWidgetAction(serverId: string, action: string, data?: unknow
 	const seq = ++actionSeq;
 	widgetActions.set(serverId, { action, data, _seq: seq });
 	actionVersion++;
+	// Cursor sequences can take 10+ seconds to play through all steps.
+	// Use a longer timeout for cursor actions, short for one-shot actions.
+	const ttl = action === "cursor" ? 30000 : 500;
 	setTimeout(() => {
 		const current = widgetActions.get(serverId);
 		if (current && current._seq === seq) {
 			widgetActions.delete(serverId);
 			actionVersion++;
 		}
-	}, 500);
+	}, ttl);
 }
 
 export function getWidgetAction(serverId: string): WidgetAction | undefined {
