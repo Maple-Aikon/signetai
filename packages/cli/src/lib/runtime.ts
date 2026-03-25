@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	appendFileSync,
@@ -12,7 +12,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSimpleYaml } from "@signet/core";
 import chalk from "chalk";
@@ -33,10 +33,29 @@ interface DaemonInstance {
 	readonly networkMode: string | null;
 }
 
+interface DaemonProbeDeps {
+	readonly daemonPaths?: readonly string[];
+	readonly isAlive?: (pid: number) => boolean;
+	readonly readCmd?: (pid: number) => string | null;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const cliDir = dirname(__dirname);
 const pkgDir = dirname(cliDir);
+
+function pidFile(agentsDir: string): string {
+	return join(agentsDir, ".daemon", "pid");
+}
+
+function daemonPaths(): string[] {
+	return [
+		join(__dirname, "daemon.js"),
+		join(cliDir, "daemon.js"),
+		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
+		join(pkgDir, "..", "daemon", "src", "daemon.ts"),
+	].filter((path, index, items) => items.indexOf(path) === index);
+}
 
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -109,32 +128,72 @@ export async function isDaemonRunning(): Promise<boolean> {
 	return urls.length > 0;
 }
 
-export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<boolean> {
-	const pidFile = join(agentsDir, ".daemon", "pid");
-	if (!existsSync(pidFile)) {
-		return false;
+function normalizeCmd(value: string): string {
+	return normalize(value).replaceAll("\\", "/").toLowerCase();
+}
+
+function matchesDaemon(cmd: string, paths: readonly string[]): boolean {
+	const normalizedCmd = normalizeCmd(cmd);
+	return paths.some((path) => normalizedCmd.includes(normalizeCmd(path)));
+}
+
+function readCmd(pid: number): string | null {
+	try {
+		if (process.platform === "linux") {
+			const raw = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
+			const value = raw.replaceAll("\u0000", " ").trim();
+			return value.length > 0 ? value : null;
+		}
+	} catch {
+		// Fall through.
 	}
 
 	try {
-		const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+		const proc = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
+			encoding: "utf-8",
+			windowsHide: true,
+		});
+		if (proc.status !== 0) return null;
+		const value = proc.stdout.trim();
+		return value.length > 0 ? value : null;
+	} catch {
+		return null;
+	}
+}
+
+export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: DaemonProbeDeps = {}): number | null {
+	const path = pidFile(agentsDir);
+	if (!existsSync(path)) {
+		return null;
+	}
+
+	const alive = deps.isAlive ?? isAlive;
+	try {
+		const pid = Number.parseInt(readFileSync(path, "utf-8").trim(), 10);
 		if (!Number.isInteger(pid) || pid <= 0) {
-			rmSync(pidFile, { force: true });
-			return false;
+			rmSync(path, { force: true });
+			return null;
 		}
-		if (isAlive(pid)) {
-			return true;
+		if (!alive(pid)) {
+			rmSync(path, { force: true });
+			return null;
 		}
-	} catch {
-		// Ignore and clean up below.
-	}
 
-	try {
-		rmSync(pidFile, { force: true });
-	} catch {
-		// Ignore stale cleanup failures.
-	}
+		// Only reclaim live PIDs that still look like a Signet daemon process.
+		const cmd = (deps.readCmd ?? readCmd)(pid);
+		if (!cmd) {
+			return null;
+		}
 
-	return false;
+		const paths = deps.daemonPaths ?? daemonPaths();
+		return matchesDaemon(cmd, paths) ? pid : null;
+	} catch {
+		return null;
+	}
+}
+
+export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+	return readManagedDaemonPid(agentsDir) !== null;
 }
 
 export async function getDaemonStatus(): Promise<{
@@ -267,15 +326,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	// In the published bundle, everything flattens into dist/cli.js so
 	// __dirname already points at dist/ — check it first to handle the
 	// bundled layout where cliDir overshoots to the package root.
-	const daemonLocations = [
-		join(__dirname, "daemon.js"), // bundled: dist/daemon.js (same dir as cli.js)
-		join(cliDir, "daemon.js"), // dev only: src/daemon.js (dead in bundle — cliDir overshoots)
-		join(pkgDir, "..", "daemon", "dist", "daemon.js"), // dev: packages/daemon/dist/daemon.js
-		join(pkgDir, "..", "daemon", "src", "daemon.ts"), // dev: packages/daemon/src/daemon.ts
-	];
-
 	let daemonPath: string | null = null;
-	for (const loc of daemonLocations) {
+	for (const loc of daemonPaths()) {
 		if (existsSync(loc)) {
 			daemonPath = loc;
 			break;
@@ -348,18 +400,10 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 }
 
 export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
-	const pidFile = join(agentsDir, ".daemon", "pid");
 	const pids = new Set<number>();
-
-	if (existsSync(pidFile)) {
-		try {
-			const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-			if (Number.isInteger(pid) && pid > 0) {
-				pids.add(pid);
-			}
-		} catch {
-			// Ignore unreadable/stale PID file.
-		}
+	const managed = readManagedDaemonPid(agentsDir);
+	if (managed !== null) {
+		pids.add(managed);
 	}
 
 	for (const instance of await getDaemonInstances()) {
@@ -391,9 +435,10 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolea
 		await waitForPidExit(pid);
 	}
 
-	if (existsSync(pidFile)) {
+	const path = pidFile(agentsDir);
+	if (existsSync(path)) {
 		try {
-			rmSync(pidFile, { force: true });
+			rmSync(path, { force: true });
 		} catch {
 			// Ignore.
 		}
