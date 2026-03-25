@@ -141,6 +141,9 @@ interface ToolSpec {
 
 interface ParsedResponse {
 	readonly thinking?: string;
+	readonly useAgent?: boolean;
+	readonly agentServerId?: string;
+	readonly agentTask?: string;
 	readonly toolCalls: ReadonlyArray<{ serverId: string; toolName: string; args: Record<string, unknown> }>;
 	readonly response: string;
 }
@@ -197,17 +200,22 @@ function buildPrompt(tools: readonly ToolSpec[], message: string): string {
 Available MCP tools:
 ${list}
 
-Respond in JSON only:
-{"thinking":"...","toolCalls":[{"serverId":"id","toolName":"name","args":{}}],"response":"..."}
+IMPORTANT: There are TWO modes:
 
-No tools needed? Use empty toolCalls array.
+**READ MODE** — for fetching/searching/listing data. Use toolCalls:
+{"thinking":"...","useAgent":false,"toolCalls":[{"serverId":"id","toolName":"name","args":{}}],"response":"..."}
+
+**AGENT MODE** — for creating/updating/deleting/modifying data. An AI cursor will visually perform the action in the app UI. Do NOT include toolCalls — the agent handles everything:
+{"thinking":"needs visual agent","useAgent":true,"agentServerId":"ghl-contacts-hub","agentTask":"Create a contact named John Smith with email john@example.com","toolCalls":[],"response":"watch the contacts app — cursor is on it"}
+
+Use AGENT MODE for: create, add, update, edit, delete, remove, merge, change, modify, send, book, schedule
+Use READ MODE for: fetch, get, list, search, find, show, count, lookup, check
 
 Rules:
 - concise, no walls of text
 - "convos" = conversations, "contacts" = contacts, "deals" = pipeline
-- split names into firstName + lastName for contacts
+- split names into firstName + lastName in the agentTask description
 - always include email when creating contacts (generate firstname.lastname@example.com if not given)
-- args must use camelCase (firstName, lastName, companyName)
 - JSON only, no markdown fences
 
 User: ${message}`;
@@ -230,6 +238,9 @@ function extractParsed(d: unknown, fallback: string): ParsedResponse {
 	if (!isRecord(d)) return { toolCalls: [], response: fallback };
 	return {
 		thinking: typeof d.thinking === "string" ? d.thinking : undefined,
+		useAgent: d.useAgent === true,
+		agentServerId: typeof d.agentServerId === "string" ? d.agentServerId : undefined,
+		agentTask: typeof d.agentTask === "string" ? d.agentTask : undefined,
 		toolCalls: Array.isArray(d.toolCalls) ? d.toolCalls : [],
 		response: typeof d.response === "string" ? d.response : fallback,
 	};
@@ -336,6 +347,24 @@ export function mountOsChatRoutes(app: Hono): void {
 			});
 
 			const parsed = parse(raw.text);
+
+			// If LLM decided this needs the visual agent, return immediately.
+			// The dashboard will use POST /api/os/agent-execute for real
+			// observe→think→act loop with PageController cursor.
+			if (parsed.useAgent && parsed.agentServerId) {
+				logger.info("os-chat", "Routing to visual agent", {
+					server: parsed.agentServerId,
+					task: (parsed.agentTask || message).slice(0, 100),
+				});
+				return c.json({
+					response: parsed.response,
+					toolCalls: [],
+					useAgent: true,
+					agentServerId: parsed.agentServerId,
+					agentTask: parsed.agentTask || message,
+				});
+			}
+
 			const results: ToolResult[] = [];
 
 			// Build set of valid tool keys for validation
