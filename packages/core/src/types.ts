@@ -37,10 +37,7 @@ export interface LlmProvider {
  * - "shared": all global memories + own private
  * - { type: "group" }: global memories from group members + own private
  */
-export type ReadPolicy =
-	| "isolated"
-	| "shared"
-	| { readonly type: "group"; readonly group: string };
+export type ReadPolicy = "isolated" | "shared" | { readonly type: "group"; readonly group: string };
 
 /** A named agent entry in the roster. */
 export interface AgentDefinition {
@@ -163,6 +160,7 @@ export interface AgentConfig {
 
 export const PIPELINE_FLAGS = [
 	"enabled",
+	"paused",
 	"shadowMode",
 	"mutationsFrozen",
 	"graph.enabled",
@@ -185,14 +183,7 @@ export interface PipelineEscalationConfig {
 }
 
 export interface PipelineExtractionConfig {
-	readonly provider:
-		| "none"
-		| "ollama"
-		| "claude-code"
-		| "opencode"
-		| "codex"
-		| "anthropic"
-		| "openrouter";
+	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
@@ -287,6 +278,7 @@ export interface PipelineContinuityConfig {
 export interface PipelineV2Config {
 	// Master switches (flat)
 	readonly enabled: boolean;
+	readonly paused: boolean;
 	readonly shadowMode: boolean;
 	readonly nativeShadowEnabled: boolean;
 	readonly mutationsFrozen: boolean;
@@ -359,13 +351,7 @@ export interface PipelineEmbeddingTrackerConfig {
 
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
-	readonly provider:
-		| "none"
-		| "ollama"
-		| "claude-code"
-		| "opencode"
-		| "anthropic"
-		| "openrouter";
+	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "anthropic" | "openrouter";
 	readonly model: string;
 	readonly endpoint?: string;
 	readonly timeout: number;
@@ -661,16 +647,31 @@ export type AttributeStatus = (typeof ATTRIBUTE_STATUSES)[number];
 
 export const DEPENDENCY_TYPES = [
 	// core
-	"uses", "requires", "owned_by", "blocks", "informs",
+	"uses",
+	"requires",
+	"owned_by",
+	"blocks",
+	"informs",
 	// knowledge
-	"built", "depends_on", "related_to", "learned_from",
-	"teaches", "knows", "assumes",
+	"built",
+	"depends_on",
+	"related_to",
+	"learned_from",
+	"teaches",
+	"knows",
+	"assumes",
 	// structural
-	"contradicts", "supersedes", "part_of",
+	"contradicts",
+	"supersedes",
+	"part_of",
 	// temporal / execution flow
-	"precedes", "follows", "triggers",
+	"precedes",
+	"follows",
+	"triggers",
 	// impact
-	"impacts", "produces", "consumes",
+	"impacts",
+	"produces",
+	"consumes",
 ] as const;
 export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
 

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import { pausePipeline, resumePipeline } from "$lib/api";
 	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Switch from "$lib/components/ui/switch/index.js";
@@ -11,6 +12,7 @@
 		pipeline,
 		connectSSE,
 		disconnectSSE,
+		pollStatus,
 		startPolling,
 		stopPolling,
 		selectNode,
@@ -22,12 +24,13 @@
 	import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
 	import { nav } from "$lib/stores/navigation.svelte";
 	import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
-
-
+	import { toast } from "$lib/stores/toast.svelte";
 
 	function handleSelectNode(id: string) {
 		selectNode(pipeline.selectedNodeId === id ? null : id);
 	}
+
+	let op = $state<"pause" | "resume" | null>(null);
 
 	let feedViewport: HTMLElement | null = $state(null);
 	let autoScroll = $state(true);
@@ -116,6 +119,40 @@
 		mobileFeedActionsOpen = false;
 	}
 
+	async function handleModeToggle(): Promise<void> {
+		if (op) return;
+		if (pipeline.mode === "disabled") {
+			toast("Pipeline is disabled in config", "warning");
+			return;
+		}
+
+		const next = pipeline.mode === "paused" ? "resume" : "pause";
+		op = next;
+
+		try {
+			const res = next === "pause" ? await pausePipeline() : await resumePipeline();
+			if (!res.success) {
+				toast(res.error ?? `Failed to ${next} pipeline`, "error");
+				return;
+			}
+
+			if (res.mode) {
+				pipeline.mode = res.mode;
+				pipeline.lastPoll = new Date().toISOString();
+			}
+			await pollStatus();
+
+			if (res.changed === false) {
+				toast(next === "pause" ? "Pipeline already paused" : "Pipeline already running");
+				return;
+			}
+
+			toast(next === "pause" ? "Pipeline paused" : "Pipeline resumed", "success");
+		} finally {
+			op = null;
+		}
+	}
+
 	function getEntryDataKeySummary(data?: Record<string, unknown>): string {
 		if (!data) return "";
 		const keys = Object.keys(data);
@@ -155,6 +192,7 @@
 		"controlled-write": "border-[#4ade80] text-[#4ade80]",
 		shadow: "border-[#fbbf24] text-[#fbbf24]",
 		frozen: "border-[#94a3b8] text-[#94a3b8]",
+		paused: "border-[#60a5fa] text-[#60a5fa]",
 		disabled: "border-[#f87171] text-[#f87171]",
 		unknown: "border-[var(--sig-border)] text-[var(--sig-text-muted)]",
 	};
@@ -382,6 +420,29 @@
 				<span class="sig-meta">
 					polled {formatTime(pipeline.lastPoll)}
 				</span>
+			{/if}
+			{#if pipeline.mode === "disabled"}
+				<span class="sig-meta text-[var(--sig-text-muted)]">
+					pipeline disabled in config
+				</span>
+			{:else}
+				<Button
+					variant="outline"
+					size="sm"
+					class="sig-meta uppercase tracking-[0.08em] px-2.5 py-[5px] h-auto hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+					disabled={op !== null}
+					onclick={handleModeToggle}
+				>
+					{#if op === "pause"}
+						Pausing...
+					{:else if op === "resume"}
+						Resuming...
+					{:else if pipeline.mode === "paused"}
+						Resume
+					{:else}
+						Pause
+					{/if}
+				</Button>
 			{/if}
 		</div>
 	</div>

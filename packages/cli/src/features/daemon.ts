@@ -10,6 +10,7 @@ import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions } from "../commands/shared.js";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
+import { readPipelinePauseState, releaseOllamaModels, setPipelinePaused } from "./pipeline-pause.js";
 
 interface DaemonStatus {
 	readonly running: boolean;
@@ -265,8 +266,222 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 	}
 }
 
+export async function doPause(options: PathOptions, deps: Deps): Promise<void> {
+	await togglePipelinePause(options, deps, true);
+}
+
+export async function doResume(options: PathOptions, deps: Deps): Promise<void> {
+	await togglePipelinePause(options, deps, false);
+}
+
 function readPath(options: PathOptions, deps: Deps): string {
 	return deps.normalizeAgentPath(deps.extractPathOption(options) ?? deps.agentsDir);
+}
+
+interface PipelinePauseApiResponse {
+	readonly changed: boolean;
+	readonly file: string | null;
+	readonly mode: string;
+	readonly paused: boolean;
+	readonly success: boolean;
+}
+
+type PipelinePauseApiResult =
+	| {
+			readonly kind: "fallback";
+	  }
+	| {
+			readonly data: PipelinePauseApiResponse;
+			readonly kind: "ok";
+	  };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readPipelinePauseApiResponse(value: unknown): PipelinePauseApiResponse | null {
+	if (!isRecord(value)) return null;
+	if (value.success !== true) return null;
+	if (typeof value.changed !== "boolean") return null;
+	if (typeof value.paused !== "boolean") return null;
+	if (value.file !== null && typeof value.file !== "string") return null;
+	if (typeof value.mode !== "string") return null;
+	return {
+		changed: value.changed,
+		file: value.file,
+		mode: value.mode,
+		paused: value.paused,
+		success: true,
+	};
+}
+
+function readApiError(value: unknown, fallback: string): string {
+	if (!isRecord(value)) return fallback;
+	return typeof value.error === "string" && value.error.length > 0 ? value.error : fallback;
+}
+
+export async function requestPipelinePauseApi(
+	port: number,
+	paused: boolean,
+	doFetch: typeof fetch = fetch,
+): Promise<PipelinePauseApiResult> {
+	let res: Response;
+	try {
+		res = await doFetch(`http://localhost:${port}/api/pipeline/${paused ? "pause" : "resume"}`, {
+			method: "POST",
+		});
+	} catch {
+		return { kind: "fallback" };
+	}
+
+	if (res.status === 401 || res.status === 403 || res.status === 404) {
+		return { kind: "fallback" };
+	}
+
+	let body: unknown = null;
+	try {
+		body = await res.json();
+	} catch {
+		body = null;
+	}
+
+	if (!res.ok) {
+		throw new Error(readApiError(body, `Daemon returned HTTP ${res.status}`));
+	}
+
+	const data = readPipelinePauseApiResponse(body);
+	if (data === null) {
+		throw new Error("Daemon returned an invalid pause response");
+	}
+
+	return { kind: "ok", data };
+}
+
+function printReleaseResults(results: readonly Awaited<ReturnType<typeof releaseOllamaModels>>[number][]): void {
+	if (results.length === 0) return;
+	const ok = results.filter((item) => item.ok).length;
+	const failed = results.length - ok;
+	if (ok > 0) {
+		console.log(chalk.dim(`  Released ${ok} local Ollama model${ok === 1 ? "" : "s"} from memory.`));
+	}
+	for (const item of results.filter((entry) => !entry.ok)) {
+		console.log(chalk.yellow(`  Failed to release ${item.label} model ${item.model}: ${item.error ?? "unknown error"}`));
+	}
+	if (failed === 0) {
+		console.log(chalk.dim("  Local Ollama VRAM should clear as those models unload."));
+	}
+}
+
+async function togglePipelinePause(options: PathOptions, deps: Deps, paused: boolean): Promise<void> {
+	console.log(deps.signetLogo());
+	const basePath = readPath(options, deps);
+
+	let state: ReturnType<typeof readPipelinePauseState>;
+	try {
+		state = readPipelinePauseState(basePath);
+	} catch (err) {
+		console.log(chalk.red(`  ${readErr(err)}`));
+		return;
+	}
+
+	if (!state.exists) {
+		console.log(chalk.red("  No Signet config file found."));
+		console.log(chalk.dim("  Run `signet setup` first."));
+		return;
+	}
+
+	if (paused && state.enabled === false) {
+		console.log(chalk.yellow("  Pipeline is disabled in config, nothing to pause."));
+		return;
+	}
+
+	if (!paused && state.enabled === false && state.paused === false) {
+		console.log(chalk.yellow("  Pipeline is disabled in config. Enable it before resuming."));
+		return;
+	}
+
+	if (state.paused === paused) {
+		console.log(
+			chalk.yellow(paused ? "  Extraction pipeline is already paused." : "  Extraction pipeline is already active."),
+		);
+		return;
+	}
+
+	const spinner = ora(paused ? "Pausing extraction pipeline..." : "Resuming extraction pipeline...").start();
+
+	try {
+		const running = await deps.isDaemonRunning();
+		if (running) {
+			const live = await requestPipelinePauseApi(deps.defaultPort, paused);
+			if (live.kind === "ok") {
+				const released = paused ? await releaseOllamaModels(basePath) : [];
+				spinner.succeed(paused ? "Extraction pipeline paused" : "Extraction pipeline resumed");
+				if (live.data.file) {
+					console.log(chalk.dim(`  Config: ${live.data.file}`));
+				}
+				const status = await deps.getDaemonStatus();
+				for (const line of daemonAccessLines(deps.defaultPort, status)) {
+					console.log(chalk.dim(`  ${line}`));
+				}
+				printReleaseResults(released);
+				console.log(
+					chalk.dim(
+						paused
+							? "  New memories can still queue for later extraction while workers stay offline."
+							: "  Queued extraction work can drain again now that the pipeline is active.",
+					),
+				);
+				return;
+			}
+		}
+
+		const next = setPipelinePaused(basePath, paused);
+		if (!running) {
+			spinner.succeed(paused ? "Pipeline pause recorded" : "Pipeline resume recorded");
+			console.log(chalk.dim(`  Config: ${next.file}`));
+			console.log(
+				chalk.dim(
+					paused
+						? "  The daemon is not running. New extraction work will stay paused on next start."
+						: "  The daemon is not running. Normal extraction will resume on next start.",
+				),
+			);
+			return;
+		}
+
+		const stopped = await deps.stopDaemon(basePath);
+		if (!stopped) {
+			spinner.fail("Failed to restart daemon after updating config");
+			return;
+		}
+
+		const released = paused ? await releaseOllamaModels(basePath) : [];
+		await deps.sleep(500);
+
+		const started = await deps.startDaemon(basePath);
+		if (!started) {
+			spinner.fail("Config updated, but daemon failed to restart");
+			return;
+		}
+
+		spinner.succeed(paused ? "Extraction pipeline paused" : "Extraction pipeline resumed");
+		console.log(chalk.dim(`  Config: ${next.file}`));
+		const status = await deps.getDaemonStatus();
+		for (const line of daemonAccessLines(deps.defaultPort, status)) {
+			console.log(chalk.dim(`  ${line}`));
+		}
+		printReleaseResults(released);
+		console.log(
+			chalk.dim(
+				paused
+					? "  New memories can still queue for later extraction while workers stay offline."
+					: "  Queued extraction work can drain again now that the pipeline is active.",
+			),
+		);
+	} catch (err) {
+		spinner.fail(paused ? "Failed to pause extraction pipeline" : "Failed to resume extraction pipeline");
+		console.log(chalk.red(`  ${readErr(err)}`));
+	}
 }
 
 function printMigrationErrors(errors: readonly string[]): void {

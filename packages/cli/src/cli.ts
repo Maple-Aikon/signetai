@@ -4,8 +4,8 @@
  * Own your agent. Bring it anywhere.
  */
 
-import { spawnSync } from "child_process";
-import { createHash } from "crypto";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	closeSync,
@@ -22,10 +22,10 @@ import {
 	statSync,
 	symlinkSync,
 	writeFileSync,
-} from "fs";
-import { homedir, tmpdir } from "os";
-import { dirname, join, resolve as resolvePath } from "path";
-import { fileURLToPath } from "url";
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
 import { OpenClawConnector } from "@signet/connector-openclaw";
@@ -40,21 +40,63 @@ import {
 	detectExistingSetup as detectExistingSetupCore,
 	formatYaml,
 	getGlobalInstallCommand,
-	resolveGlobalPackagePath,
 	getMissingIdentityFiles,
 	getSkillsRunnerCommand,
 	hasValidIdentity,
 	importMemoryLogs,
 	loadSqliteVec,
 	parseSimpleYaml,
+	readStaticIdentity,
+	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
 	symlinkSkills,
-	readStaticIdentity,
 	unifySkills,
 } from "@signet/core";
 import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
+import { registerBrowseCommand } from "./browse.js";
+import { registerAgentCommands } from "./commands/agent.js";
+import { registerAppCommands } from "./commands/app.js";
+import { registerDaemonCommands } from "./commands/daemon.js";
+import { registerGitCommands } from "./commands/git.js";
+import { registerHookCommands } from "./commands/hook.js";
+import { registerMemoryCommands } from "./commands/memory.js";
+import { registerPortableCommands } from "./commands/portable.js";
+import { registerSecretCommands } from "./commands/secret.js";
+import { registerSessionCommands } from "./commands/session.js";
+import { registerSkillCommands } from "./commands/skill.js";
+import { registerUpdateCommands } from "./commands/update.js";
+import { registerVectorCommands } from "./commands/vector.js";
+import { registerWorkspaceCommands } from "./commands/workspace.js";
+import { configureAgent } from "./features/configure.js";
+import {
+	doPause,
+	doRestart,
+	doResume,
+	doStart,
+	doStop,
+	launchDashboard,
+	migrateSchema,
+	showLogs,
+} from "./features/daemon.js";
+import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
+import { importFromGitHub } from "./features/import.js";
+import { setupWizard } from "./features/setup.js";
+import { syncTemplates } from "./features/sync.js";
+import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
+import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
+import {
+	AGENTS_DIR,
+	DEFAULT_PORT,
+	formatUptime,
+	getDaemonStatus,
+	getReachableDaemonUrls,
+	isDaemonRunning,
+	sleep,
+	startDaemon,
+	stopDaemon,
+} from "./lib/runtime.js";
 import {
 	type CondaInfo,
 	type PyenvInfo,
@@ -73,39 +115,6 @@ import {
 	isZvecCompatible,
 } from "./python.js";
 import Database from "./sqlite.js";
-import { registerBrowseCommand } from "./browse.js";
-import { registerAgentCommands } from "./commands/agent.js";
-import { registerAppCommands } from "./commands/app.js";
-import { registerDaemonCommands } from "./commands/daemon.js";
-import { registerGitCommands } from "./commands/git.js";
-import { registerHookCommands } from "./commands/hook.js";
-import { registerMemoryCommands } from "./commands/memory.js";
-import { registerPortableCommands } from "./commands/portable.js";
-import { registerSecretCommands } from "./commands/secret.js";
-import { registerSessionCommands } from "./commands/session.js";
-import { registerSkillCommands } from "./commands/skill.js";
-import { registerUpdateCommands } from "./commands/update.js";
-import { registerVectorCommands } from "./commands/vector.js";
-import { registerWorkspaceCommands } from "./commands/workspace.js";
-import { configureAgent } from "./features/configure.js";
-import { doRestart, doStart, doStop, launchDashboard, migrateSchema, showLogs } from "./features/daemon.js";
-import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
-import { importFromGitHub } from "./features/import.js";
-import { setupWizard } from "./features/setup.js";
-import { syncTemplates } from "./features/sync.js";
-import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
-import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
-import {
-	AGENTS_DIR,
-	DEFAULT_PORT,
-	formatUptime,
-	getDaemonStatus,
-	getReachableDaemonUrls,
-	isDaemonRunning,
-	sleep,
-	startDaemon,
-	stopDaemon,
-} from "./lib/runtime.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -1181,7 +1190,7 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 	let current: Command | null = actionCommand;
 	let topLevelCommand = "";
 
-	while (current && current.parent) {
+	while (current?.parent) {
 		if (current.parent.name() === "signet") {
 			topLevelCommand = current.name();
 			break;
@@ -1283,7 +1292,9 @@ registerAppCommands(program, {
 });
 
 registerDaemonCommands(program, {
+	doPause: (options) => doPause(options, daemonDeps),
 	doRestart: (options) => doRestart(options, daemonDeps),
+	doResume: (options) => doResume(options, daemonDeps),
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),
 	showLogs: (options) => showLogs(options, daemonDeps),

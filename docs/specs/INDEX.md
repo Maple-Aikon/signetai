@@ -630,6 +630,7 @@ Legend:
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
 | `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
 | `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |
+| `pipeline-pause-control` | complete | `docs/specs/complete/pipeline-pause-control.md` | `memory-pipeline-v2` | - | CLI and dashboard pause/resume shipped on top of live daemon pause/resume API, paused-mode observability, and local Ollama unload |
 | `daemon-refactor` | planning | `docs/specs/planning/daemon-refactor.md` | - | `daemon-refactor-plan` | |
 | `daemon-refactor-plan` | planning | `docs/specs/planning/daemon-refactor-plan.md` | `daemon-refactor` | - | |
 | `daemon-rust-rewrite` | planning | `docs/specs/planning/daemon-rust-rewrite.md` | `memory-pipeline-v2` | - | deferred — complexity cost exceeds current benefit |
@@ -698,6 +699,11 @@ search alone.
 **predictive-memory-scorer**: Session-start context relevance
 improves over time without manual curation. NDCG@10 on continuity
 scores is the quantitative metric.
+
+**pipeline-pause-control**: Operators can pause extraction work from
+the CLI or dashboard to free resources without dropping future backlog
+processing, then resume normal draining later, with live daemon
+control when available.
 
 **desire-paths-epic**: Graph traversal discovers relevant memories
 that embedding search alone misses. Path feedback propagates learning

@@ -103,6 +103,10 @@ memory:
     # When false, shadowMode is ignored and the pipeline is fully disabled.
     enabled: true
 
+    # Temporary operator pause. Keeps queueing raw work, but workers stay offline
+    # until you run `signet daemon resume`.
+    # paused: false
+
     # Shadow mode: extract but don't write to DB (dry-run for testing)
     # shadowMode: false
 

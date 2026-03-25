@@ -37,7 +37,9 @@ import {
 	networkModeFromBindHost,
 	parseSimpleYaml,
 	readNetworkMode,
+	readPipelinePauseState,
 	resolveNetworkBinding,
+	setPipelinePaused,
 	stripSignetBlock,
 	vectorSearch,
 } from "@signet/core";
@@ -120,7 +122,7 @@ import {
 } from "./knowledge-graph";
 import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
 import { type LogEntry, logger } from "./logger";
-import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
+import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
@@ -131,11 +133,11 @@ import {
 	enqueueDocumentIngestJob,
 	enqueueExtractionJob,
 	getPipelineWorkerStatus,
+	ensureRetentionWorker,
 	getSynthesisWorker,
 	nudgeExtractionWorker,
 	readLastSynthesisTime,
 	startPipeline,
-	startRetentionWorker,
 	stopPipeline,
 } from "./pipeline";
 import { clusterEntities } from "./pipeline/community-detection";
@@ -403,7 +405,22 @@ const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? NET.bin
 const NETWORK_MODE = networkModeFromBindHost(BIND_HOST);
 const INTERNAL_SELF_HOST = BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
 
-type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
+type RuntimeProviderName =
+	| "none"
+	| "ollama"
+	| "claude-code"
+	| "opencode"
+	| "codex"
+	| "anthropic"
+	| "openrouter";
+
+type RuntimeSynthesisProviderName =
+	| "none"
+	| "ollama"
+	| "claude-code"
+	| "opencode"
+	| "anthropic"
+	| "openrouter";
 
 interface ProviderRuntimeResolution {
 	extraction: {
@@ -413,8 +430,8 @@ interface ProviderRuntimeResolution {
 	};
 	synthesis: {
 		configured: string | null;
-		resolved: "ollama" | "claude-code" | "opencode" | "anthropic" | null;
-		effective: "ollama" | "claude-code" | "opencode" | "anthropic" | null;
+		resolved: RuntimeSynthesisProviderName | null;
+		effective: RuntimeSynthesisProviderName | null;
 	};
 }
 
@@ -442,6 +459,8 @@ let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let predictorClientRef: PredictorClient | null = null;
 let shadowProcess: ChildProcess | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
+let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
+let pipelineTransition = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 let httpServer: ReturnType<typeof serve> | null = null;
@@ -7466,13 +7485,7 @@ app.get("/api/pipeline/status", (c) => {
 	const diagnostics = getCachedDiagnosticsReport();
 
 	const pipelineV2 = cfg.pipelineV2;
-	const mode = !pipelineV2.enabled
-		? "disabled"
-		: pipelineV2.mutationsFrozen
-			? "frozen"
-			: pipelineV2.shadowMode
-				? "shadow"
-				: "controlled-write";
+	const mode = readPipelineMode(pipelineV2);
 
 	// Predictor sidecar snapshot for pipeline overview
 	const predictorHealth = diagnostics.predictor;
@@ -7500,8 +7513,63 @@ app.get("/api/pipeline/status", (c) => {
 	});
 });
 
+const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
+	const perm = requirePermission("admin", authConfig);
+	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
+	return perm(c, async () => rate(c, next));
+};
+
+async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
+	if (shuttingDown) {
+		return c.json({ error: "Daemon is shutting down" }, 503);
+	}
+	if (pipelineTransition) {
+		return c.json({ error: "Pipeline transition already in progress" }, 409);
+	}
+
+	const prev = readPipelinePauseState(AGENTS_DIR);
+	if (!prev.exists) {
+		return c.json({ error: "No Signet config file found" }, 404);
+	}
+
+	pipelineTransition = true;
+	try {
+		const changed = prev.paused !== paused;
+		const next = changed ? setPipelinePaused(AGENTS_DIR, paused) : prev;
+		if (changed) {
+			await restartPipelineRuntime(loadMemoryConfig(AGENTS_DIR), telemetryRef);
+		}
+		const liveCfg = loadMemoryConfig(AGENTS_DIR);
+		return c.json({
+			success: true,
+			changed,
+			paused: next.paused,
+			file: next.file,
+			mode: readPipelineMode(liveCfg.pipelineV2),
+		});
+	} catch (err) {
+		logger.error("pipeline", paused ? "Failed to pause pipeline" : "Failed to resume pipeline", err);
+		return c.json(
+			{ error: err instanceof Error ? err.message : String(err) },
+			500,
+		);
+	} finally {
+		pipelineTransition = false;
+	}
+}
+
+app.use("/api/pipeline/pause", pipelineAdminGuard);
+app.use("/api/pipeline/resume", pipelineAdminGuard);
 app.use("/api/pipeline/nudge", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
+});
+
+app.post("/api/pipeline/pause", (c) => {
+	return togglePipelinePause(c, true);
+});
+
+app.post("/api/pipeline/resume", (c) => {
+	return togglePipelinePause(c, false);
 });
 
 app.post("/api/pipeline/nudge", (c) => {
@@ -10789,42 +10857,6 @@ async function cleanup() {
 		telemetryRef = undefined;
 	}
 
-	// Stop skill reconciler
-	if (skillReconcilerHandle) {
-		skillReconcilerHandle.stop();
-		skillReconcilerHandle = null;
-	}
-
-	// Kill shadow daemon if running
-	if (shadowProcess) {
-		try {
-			shadowProcess.kill();
-		} catch {
-			// best-effort
-		}
-		shadowProcess = null;
-	}
-
-	// Stop predictor sidecar before pipeline/DB teardown
-	if (predictorClientRef) {
-		try {
-			await predictorClientRef.stop();
-		} catch {
-			// best-effort
-		}
-		predictorClientRef = null;
-	}
-
-	// Stop embedding tracker before pipeline/DB teardown
-	if (embeddingTrackerHandle) {
-		try {
-			await embeddingTrackerHandle.stop();
-		} catch {
-			// best-effort
-		}
-		embeddingTrackerHandle = null;
-	}
-
 	// Flush any pending checkpoint writes before closing DB
 	try {
 		flushPendingCheckpoints();
@@ -10832,12 +10864,7 @@ async function cleanup() {
 		// best-effort
 	}
 
-	// Drain pipeline before closing DB so in-flight jobs finish writes
-	try {
-		await stopPipeline();
-	} catch {
-		// best-effort
-	}
+	await stopPipelineRuntime();
 
 	// Shut down native embedding WASM runtime
 	try {
@@ -10846,12 +10873,6 @@ async function cleanup() {
 	} catch {
 		// best-effort — module may not have been loaded
 	}
-
-	closeLlmProvider();
-	closeSynthesisProvider();
-	closeWidgetProvider();
-	stopOpenCodeServer();
-	stopModelRegistry();
 
 	// ------------------------------------------------------------------
 	// Phase 2: Release all session claims and presence so other daemons
@@ -10959,48 +10980,78 @@ function syncAgentRoster(agentsDir: string): void {
 	logger.info("daemon", "Agent roster synced", { count: roster.length });
 }
 
-async function main() {
-	logger.info("daemon", "Signet Daemon starting");
-	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
-	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 
-	// Ensure daemon directory exists
-	mkdirSync(DAEMON_DIR, { recursive: true });
-	mkdirSync(LOG_DIR, { recursive: true });
+function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
+	if (!cfg.enabled) return "disabled";
+	if (cfg.paused) return "paused";
+	if (cfg.mutationsFrozen) return "frozen";
+	if (cfg.shadowMode) return "shadow";
+	return "controlled-write";
+}
 
-	// Initialise singleton DB accessor (opens write connection, sets pragmas,
-	// runs migrations). This is the sole schema authority.
-	initDbAccessor(MEMORY_DB);
+function clearStructuralBackfillTimer(): void {
+	if (!structuralBackfillTimer) return;
+	clearTimeout(structuralBackfillTimer);
+	structuralBackfillTimer = null;
+}
 
-	// Sync agent roster from manifest into the agents table.
-	syncAgentRoster(AGENTS_DIR);
+async function stopPipelineRuntime(): Promise<void> {
+	clearStructuralBackfillTimer();
 
-	// Migrations may have created traversal tables — clear the cache
-	invalidateTraversalCache();
-
-	// Write PID file
-	writeFileSync(PID_FILE, process.pid.toString());
-	logger.info("daemon", "Process ID", { pid: process.pid });
-
-	// Migrate config defaults before watcher starts (one-time, guarded by configVersion)
-	try {
-		migrateConfig(AGENTS_DIR);
-	} catch (err) {
-		logger.warn("config-migration", "Config migration failed; continuing startup", {
-			error: err instanceof Error ? err.message : String(err),
-		});
+	if (skillReconcilerHandle) {
+		skillReconcilerHandle.stop();
+		skillReconcilerHandle = null;
 	}
 
-	// Start file watcher
-	startFileWatcher();
-	logger.info("watcher", "File watcher started");
+	if (shadowProcess) {
+		try {
+			shadowProcess.kill();
+		} catch {
+			// best-effort
+		}
+		shadowProcess = null;
+	}
 
-	// Ensure SIGNET-ARCHITECTURE.md exists on startup (file watcher uses
-	// ignoreInitial:true so it won't recreate missing files on its own)
-	ensureArchitectureDoc();
+	if (predictorClientRef) {
+		try {
+			await predictorClientRef.stop();
+		} catch {
+			// best-effort
+		}
+		predictorClientRef = null;
+	}
 
-	// Load config and log resolved embedding settings for diagnostics
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	if (embeddingTrackerHandle) {
+		try {
+			await embeddingTrackerHandle.stop();
+		} catch {
+			// best-effort
+		}
+		embeddingTrackerHandle = null;
+	}
+
+	try {
+		await stopPipeline();
+	} catch {
+		// best-effort
+	}
+
+	closeLlmProvider();
+	closeSynthesisProvider();
+	closeWidgetProvider();
+	stopOpenCodeServer();
+	stopModelRegistry();
+	invalidateDiagnosticsCache();
+}
+
+async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
+	await stopPipelineRuntime();
+	await startPipelineRuntime(memoryCfg, telemetry);
+}
+
+async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
+	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	clearStructuralBackfillTimer();
 	logger.info("config", "Resolved embedding config", {
 		provider: memoryCfg.embedding.provider,
 		model: memoryCfg.embedding.model,
@@ -11073,7 +11124,10 @@ async function main() {
 	);
 	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
 	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
-	if (effectiveExtractionProvider === "none") {
+	if (pipelinePaused) {
+		logger.info("config", "Pipeline paused; extraction provider startup deferred");
+		effectiveExtractionProvider = "none";
+	} else if (effectiveExtractionProvider === "none") {
 		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
 	} else if (effectiveExtractionProvider === "opencode") {
 		if (extractionOpenCodeShouldManage) {
@@ -11272,7 +11326,7 @@ async function main() {
 	}
 
 	// Initialize model registry for dynamic model discovery
-	if (memoryCfg.pipelineV2.modelRegistry.enabled) {
+	if (memoryCfg.pipelineV2.modelRegistry.enabled && !pipelinePaused) {
 		const registryAnthropicApiKey = anthropicApiKey ?? (await getKey("ANTHROPIC_API_KEY"));
 		const registryOpenRouterApiKey = openRouterApiKey ?? (await getKey("OPENROUTER_API_KEY"));
 		initModelRegistry(
@@ -11286,7 +11340,14 @@ async function main() {
 
 	// Create synthesis provider — separate from extraction because synthesis
 	// needs a smarter model that can reason across long context
-	if (memoryCfg.pipelineV2.synthesis.provider === "none") {
+	if (pipelinePaused) {
+		providerRuntimeResolution.synthesis = {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+			effective: null,
+		};
+		logger.info("config", "Pipeline paused; synthesis provider startup deferred");
+	} else if (memoryCfg.pipelineV2.synthesis.provider === "none") {
 		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
 	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
 		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
@@ -11437,57 +11498,9 @@ async function main() {
 		logger.info("config", "Synthesis disabled");
 	}
 
-	// Telemetry collector (opt-in, anonymous)
-	let telemetryCollector: TelemetryCollector | undefined;
-	if (memoryCfg.pipelineV2.telemetryEnabled) {
-		// Resolve PostHog API key: secrets first, then inline config
-		const secretKey = !memoryCfg.pipelineV2.telemetry.posthogApiKey
-			? (getSecret("POSTHOG_API_KEY") ?? "")
-			: memoryCfg.pipelineV2.telemetry.posthogApiKey;
-		const resolvedTelemetryCfg = {
-			...memoryCfg.pipelineV2.telemetry,
-			posthogApiKey: secretKey,
-		};
-		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION);
-		telemetryCollector.start();
-		telemetryRef = telemetryCollector;
-
-		// Heartbeat: record daemon stats every 5 minutes
-		const daemonStartTime = Date.now();
-		heartbeatTimer = setInterval(
-			() => {
-				if (!telemetryRef) return;
-				try {
-					const memoryCount = getDbAccessor().withReadDb((db) => {
-						const row = db
-							.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
-							.get() as { cnt: number } | undefined;
-						return row?.cnt ?? 0;
-					});
-					const connectors = listConnectors();
-					telemetryRef.record("daemon.heartbeat", {
-						uptimeMs: Date.now() - daemonStartTime,
-						memoryCount,
-						connectorsActive: connectors.filter((cn) => cn.status === "active").length,
-						pipelineMode: memoryCfg.pipelineV2.enabled
-							? memoryCfg.pipelineV2.shadowMode
-								? "shadow"
-								: "controlled-write"
-							: "disabled",
-						extractionProvider: memoryCfg.pipelineV2.extraction.provider,
-						embeddingProvider: memoryCfg.embedding.provider,
-					});
-				} catch {
-					// best effort
-				}
-			},
-			5 * 60 * 1000,
-		);
-	}
-
 	// Start extraction pipeline only when explicitly enabled and an LLM is available.
 	// shadowMode controls behavior inside the enabled pipeline.
-	if (memoryCfg.pipelineV2.enabled && effectiveExtractionProvider !== "none") {
+	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && effectiveExtractionProvider !== "none") {
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
@@ -11496,16 +11509,16 @@ async function main() {
 			memoryCfg.search,
 			providerTracker,
 			analyticsCollector,
-			telemetryCollector,
+			telemetry,
 		);
 	} else {
 		// Retention worker runs unconditionally — cleans up tombstones,
 		// expired history, and dead jobs even without the full pipeline.
-		startRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
+		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}
 
 	// Start embedding tracker if provider is configured and tracker enabled
-	if (memoryCfg.embedding.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled) {
+	if (memoryCfg.embedding.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
 		embeddingTrackerHandle = startEmbeddingTracker(
 			getDbAccessor(),
 			memoryCfg.embedding,
@@ -11518,13 +11531,14 @@ async function main() {
 	// One-time structural backfill: populate entity_aspects/attributes for
 	// existing entities that predate the knowledge architecture migrations.
 	// Runs in the background, rate-limited, so it doesn't block startup.
-	if (memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.structural.enabled) {
+	if (memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.structural.enabled && !pipelinePaused) {
 		const backfillCtx: RepairContext = {
 			reason: "post-upgrade structural backfill",
 			actor: "daemon",
 			actorType: "daemon",
 		};
-		setTimeout(() => {
+		structuralBackfillTimer = setTimeout(() => {
+			structuralBackfillTimer = null;
 			try {
 				const result = structuralBackfill(getDbAccessor(), memoryCfg.pipelineV2, backfillCtx, repairLimiter, {
 					batchSize: 50,
@@ -11540,18 +11554,17 @@ async function main() {
 					error: err instanceof Error ? err.message : String(err),
 				});
 			}
-		}, 10_000); // 10s delay — let the pipeline warm up first
+		}, 10_000);
 	}
 
 	// Spawn predictor sidecar if enabled
-	if (memoryCfg.pipelineV2.predictor?.enabled) {
+	if (memoryCfg.pipelineV2.predictor?.enabled && !pipelinePaused) {
 		const predictorCfg = memoryCfg.pipelineV2.predictor;
 		try {
 			const client = createPredictorClient(predictorCfg, "default", memoryCfg.embedding.dimensions);
 			await client.start();
 			predictorClientRef = client;
 			logger.info("predictor", "Predictor sidecar started");
-
 		} catch (err) {
 			// Fail open: predictor is optional
 			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
@@ -11581,7 +11594,7 @@ async function main() {
 	}
 
 	// Start skill reconciler if procedural memory is enabled
-	if (memoryCfg.pipelineV2.procedural.enabled) {
+	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {
 		skillReconcilerHandle = startReconciler({
 			accessor: getDbAccessor(),
 			pipelineConfig: memoryCfg.pipelineV2,
@@ -11597,6 +11610,98 @@ async function main() {
 			agentsDir: AGENTS_DIR,
 		});
 	}
+
+	invalidateDiagnosticsCache();
+}
+
+async function main() {
+	logger.info("daemon", "Signet Daemon starting");
+	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
+	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
+
+	// Ensure daemon directory exists
+	mkdirSync(DAEMON_DIR, { recursive: true });
+	mkdirSync(LOG_DIR, { recursive: true });
+
+	// Initialise singleton DB accessor (opens write connection, sets pragmas,
+	// runs migrations). This is the sole schema authority.
+	initDbAccessor(MEMORY_DB);
+
+	// Sync agent roster from manifest into the agents table.
+	syncAgentRoster(AGENTS_DIR);
+
+	// Migrations may have created traversal tables — clear the cache
+	invalidateTraversalCache();
+
+	// Write PID file
+	writeFileSync(PID_FILE, process.pid.toString());
+	logger.info("daemon", "Process ID", { pid: process.pid });
+
+	// Migrate config defaults before watcher starts (one-time, guarded by configVersion)
+	try {
+		migrateConfig(AGENTS_DIR);
+	} catch (err) {
+		logger.warn("config-migration", "Config migration failed; continuing startup", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
+	// Start file watcher
+	startFileWatcher();
+	logger.info("watcher", "File watcher started");
+
+	// Ensure SIGNET-ARCHITECTURE.md exists on startup (file watcher uses
+	// ignoreInitial:true so it won't recreate missing files on its own)
+	ensureArchitectureDoc();
+
+	// Load config and initialize telemetry before starting runtime.
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	let telemetryCollector: TelemetryCollector | undefined;
+	if (memoryCfg.pipelineV2.telemetryEnabled) {
+		let posthogApiKey = memoryCfg.pipelineV2.telemetry.posthogApiKey;
+		if (!posthogApiKey) {
+			try {
+				posthogApiKey = await getSecret("POSTHOG_API_KEY");
+			} catch {
+				posthogApiKey = "";
+			}
+		}
+		const resolvedTelemetryCfg = {
+			...memoryCfg.pipelineV2.telemetry,
+			posthogApiKey,
+		};
+		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION);
+		telemetryCollector.start();
+		telemetryRef = telemetryCollector;
+
+		// Heartbeat: record daemon stats every 5 minutes using live config.
+		const daemonStartTime = Date.now();
+		heartbeatTimer = setInterval(() => {
+			if (!telemetryRef) return;
+			try {
+				const liveCfg = loadMemoryConfig(AGENTS_DIR);
+				const memoryCount = getDbAccessor().withReadDb((db) => {
+					const row = db
+						.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
+						.get() as { cnt: number } | undefined;
+					return row?.cnt ?? 0;
+				});
+				const connectors = listConnectors();
+				telemetryRef.record("daemon.heartbeat", {
+					uptimeMs: Date.now() - daemonStartTime,
+					memoryCount,
+					connectorsActive: connectors.filter((cn) => cn.status === "active").length,
+					pipelineMode: readPipelineMode(liveCfg.pipelineV2),
+					extractionProvider: liveCfg.pipelineV2.extraction.provider,
+					embeddingProvider: liveCfg.embedding.provider,
+				});
+			} catch {
+				// best-effort
+			}
+		}, 5 * 60 * 1000);
+	}
+
+	await startPipelineRuntime(memoryCfg, telemetryCollector);
 
 	// Initialize checkpoint flush queue for continuity protocol
 	initCheckpointFlush(getDbAccessor());

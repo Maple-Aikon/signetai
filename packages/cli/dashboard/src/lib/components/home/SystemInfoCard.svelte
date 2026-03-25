@@ -42,8 +42,7 @@
 
 	const pipelineMode = $derived.by(() => {
 		if (!pipelineStatus) return "unknown";
-		const mode = (pipelineStatus as Record<string, unknown>).mode;
-		if (typeof mode === "string") return mode;
+		if (typeof pipelineStatus.mode === "string") return pipelineStatus.mode;
 		return "active";
 	});
 

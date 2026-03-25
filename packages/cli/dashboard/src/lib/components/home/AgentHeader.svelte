@@ -97,8 +97,9 @@
 
 	const pipelineMode = $derived.by(() => {
 		if (!pipelineStatus) return "UNKNOWN";
-		const mode = (pipelineStatus as Record<string, unknown>).mode;
-		if (typeof mode === "string") return mode.toUpperCase();
+		if (typeof pipelineStatus.mode === "string") {
+			return pipelineStatus.mode.toUpperCase();
+		}
 		return "ACTIVE";
 	});
 

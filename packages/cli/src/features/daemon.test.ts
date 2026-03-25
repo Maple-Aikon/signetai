@@ -1,0 +1,51 @@
+import { describe, expect, it } from "bun:test";
+import { requestPipelinePauseApi } from "./daemon.js";
+
+describe("requestPipelinePauseApi", () => {
+	it("uses the live daemon pause endpoint when available", async () => {
+		const result = await requestPipelinePauseApi(3850, true, async (input, init) => {
+			expect(String(input)).toBe("http://localhost:3850/api/pipeline/pause");
+			expect(init?.method).toBe("POST");
+			return new Response(
+				JSON.stringify({
+					success: true,
+					changed: true,
+					paused: true,
+					file: "/tmp/agent.yaml",
+					mode: "paused",
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		});
+
+		expect(result).toEqual({
+			kind: "ok",
+			data: {
+				success: true,
+				changed: true,
+				paused: true,
+				file: "/tmp/agent.yaml",
+				mode: "paused",
+			},
+		});
+	});
+
+	it("falls back when the live endpoint is unavailable", async () => {
+		const result = await requestPipelinePauseApi(3850, false, async () => {
+			return new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } });
+		});
+
+		expect(result).toEqual({ kind: "fallback" });
+	});
+
+	it("surfaces daemon API errors instead of silently falling back", async () => {
+		await expect(
+			requestPipelinePauseApi(3850, true, async () => {
+				return new Response(JSON.stringify({ error: "Pipeline transition already in progress" }), {
+					status: 409,
+					headers: { "Content-Type": "application/json" },
+				});
+			}),
+		).rejects.toThrow("Pipeline transition already in progress");
+	});
+});

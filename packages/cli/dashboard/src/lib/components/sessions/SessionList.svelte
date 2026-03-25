@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Badge } from "$lib/components/ui/badge/index.js";
-import * as Switch from "$lib/components/ui/switch/index.js";
+import { Switch } from "$lib/components/ui/switch/index.js";
 import { fetchSessions, toggleSessionBypass, type SessionInfo } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
@@ -90,14 +90,12 @@ $effect(() => {
 						<span class="sig-meta" class:text-[var(--sig-text-muted)]={!session.bypassed} class:text-[var(--sig-accent)]={session.bypassed}>
 							{session.bypassed ? "bypassed" : "active"}
 						</span>
-						<Switch.Root
+						<Switch
 							checked={session.bypassed}
 							disabled={pending.has(session.key)}
 							onCheckedChange={(checked: boolean) => handleToggle(session, checked)}
-							aria-label="Bypass session {session.key}"
-						>
-							<Switch.Thumb />
-						</Switch.Root>
+							aria-label={`Bypass session ${session.key}`}
+						/>
 					</div>
 				</div>
 			{/each}

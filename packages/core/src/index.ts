@@ -209,6 +209,13 @@ export {
 
 // YAML utilities
 export { parseSimpleYaml, formatYaml } from "./yaml";
+export {
+	PIPELINE_CONFIG_FILES,
+	findPipelineConfigFile,
+	readPipelinePauseState,
+	setPipelinePaused,
+} from "./pipeline-pause";
+export type { PipelinePauseState } from "./pipeline-pause";
 
 // Symlink utilities
 export {

@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-24"
+updated_at: "2026-03-25"
 
 specs:
   - id: memory-pipeline-v2
@@ -106,6 +106,21 @@ specs:
     informed_by: []
     success_criteria:
       - "Signet operates as a standalone runtime channel independent of harness-specific connectors"
+    decision: null
+
+  - id: pipeline-pause-control
+    status: complete
+    path: docs/specs/complete/pipeline-pause-control.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-PIPELINE-PAUSE-CONTROL.md
+    success_criteria:
+      - "Operators can pause extraction work from the CLI or dashboard without losing later backlog processing"
+      - "While paused, new memories still persist and queue for later extraction instead of being dropped"
+      - "Resuming restores normal worker startup and backlog draining with no schema migration"
     decision: null
 
   - id: daemon-refactor

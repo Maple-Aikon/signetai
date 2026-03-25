@@ -108,6 +108,7 @@ composite health score derived from diagnostics.
   "memoryDb": true,
   "pipelineV2": {
     "enabled": true,
+    "paused": false,
     "shadowMode": false,
     "mutationsFrozen": false,
     "graphEnabled": false,
@@ -2195,6 +2196,9 @@ Composite pipeline status snapshot for dashboard visualization. Returns
 worker status, job queue counts (memory and summary), diagnostics, latency
 histograms, error summary, and the current pipeline mode.
 
+Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
+`disabled`.
+
 **Response**
 
 ```json
@@ -2211,7 +2215,46 @@ histograms, error summary, and the current pipeline mode.
 }
 ```
 
-Mode is one of: `disabled`, `frozen`, `shadow`, `controlled-write`.
+Mode is one of: `disabled`, `frozen`, `shadow`, `paused`, `controlled-write`.
+
+### POST /api/pipeline/pause
+
+Pause the extraction runtime in-place without restarting the daemon.
+Requires `admin` permission and uses the admin rate limit bucket.
+
+Returns `409` if another pause/resume transition is already running.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "changed": true,
+  "paused": true,
+  "file": "/home/user/.agents/agent.yaml",
+  "mode": "paused"
+}
+```
+
+### POST /api/pipeline/resume
+
+Resume the extraction runtime in-place without restarting the daemon.
+Requires `admin` permission and uses the admin rate limit bucket.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "changed": true,
+  "paused": false,
+  "file": "/home/user/.agents/agent.yaml",
+  "mode": "controlled-write"
+}
+```
+
+`changed` is `false` when the persisted pause flag already matches the
+requested state.
 
 
 Checkpoints

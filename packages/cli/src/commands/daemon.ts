@@ -10,7 +10,9 @@ import {
 } from "./shared.js";
 
 interface DaemonDeps {
+	readonly doPause: (options?: PathOptions) => Promise<void>;
 	readonly doRestart: (options?: RestartOptions) => Promise<void>;
+	readonly doResume: (options?: PathOptions) => Promise<void>;
 	readonly doStart: (options?: PathOptions) => Promise<void>;
 	readonly doStop: (options?: PathOptions) => Promise<void>;
 	readonly showLogs: (options: LogOptions) => Promise<void>;
@@ -32,6 +34,18 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 		.option("--no-openclaw", "Skip OpenClaw restart prompt")
 		.action(deps.doRestart);
 	withPath(restart);
+
+	const pause = daemonCmd
+		.command("pause")
+		.description("Pause extraction workers and free local pipeline resources")
+		.action(deps.doPause);
+	withPath(pause);
+
+	const resume = daemonCmd
+		.command("resume")
+		.description("Resume extraction workers after a pause")
+		.action(deps.doResume);
+	withPath(resume);
 
 	const status = daemonCmd.command("status").description("Show daemon status").action(deps.showStatus);
 	withJson(withPath(status));
@@ -57,6 +71,18 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 		.option("--no-openclaw", "Skip OpenClaw restart prompt")
 		.action(deps.doRestart);
 	withPath(restartAlias);
+
+	const pauseAlias = program
+		.command("pause")
+		.description("Pause extraction workers (alias for: signet daemon pause)")
+		.action(deps.doPause);
+	withPath(pauseAlias);
+
+	const resumeAlias = program
+		.command("resume")
+		.description("Resume extraction workers (alias for: signet daemon resume)")
+		.action(deps.doResume);
+	withPath(resumeAlias);
 
 	const logsAlias = program
 		.command("logs")

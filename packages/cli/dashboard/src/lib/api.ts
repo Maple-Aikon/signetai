@@ -1863,6 +1863,56 @@ export interface PipelineStatus {
 	};
 }
 
+export interface PipelinePauseResult {
+	success: boolean;
+	changed?: boolean;
+	paused?: boolean;
+	file?: string;
+	mode?: string;
+	error?: string;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function readPipelinePauseResult(
+	body: unknown,
+	fallback: string,
+): PipelinePauseResult {
+	if (!isObject(body)) return { success: false, error: fallback };
+	if (body.success !== true) {
+		return {
+			success: false,
+			error: typeof body.error === "string" ? body.error : fallback,
+		};
+	}
+
+	return {
+		success: true,
+		changed: typeof body.changed === "boolean" ? body.changed : undefined,
+		paused: typeof body.paused === "boolean" ? body.paused : undefined,
+		file: typeof body.file === "string" ? body.file : undefined,
+		mode: typeof body.mode === "string" ? body.mode : undefined,
+	};
+}
+
+async function updatePipelineMode(
+	mode: "pause" | "resume",
+): Promise<PipelinePauseResult> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/${mode}`, {
+			method: "POST",
+		});
+		const body = await res.json().catch(() => null);
+		const fallback = `Request failed (${res.status})`;
+		if (!res.ok) return readPipelinePauseResult(body, fallback);
+		return readPipelinePauseResult(body, "Malformed pipeline response");
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
 export async function getPipelineStatus(): Promise<PipelineStatus | null> {
 	try {
 		const res = await fetch(`${API_BASE}/api/pipeline/status`);
@@ -1871,6 +1921,14 @@ export async function getPipelineStatus(): Promise<PipelineStatus | null> {
 	} catch {
 		return null;
 	}
+}
+
+export async function pausePipeline(): Promise<PipelinePauseResult> {
+	return updatePipelineMode("pause");
+}
+
+export async function resumePipeline(): Promise<PipelinePauseResult> {
+	return updatePipelineMode("resume");
 }
 
 export interface KnowledgeEntityListItem {

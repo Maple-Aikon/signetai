@@ -10,15 +10,15 @@ import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
 import type { DecisionConfig } from "./decision";
+import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
 import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
+import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
 import { DEFAULT_RETENTION, type RetentionHandle, startRetentionWorker } from "./retention-worker";
-import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./structural-classify";
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
-import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
+import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
-import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
 import { type WorkerHandle, type WorkerStats, startWorker } from "./worker";
 
 export { enqueueExtractionJob } from "./worker";
@@ -60,10 +60,7 @@ let dependencySynthesisHandle: DependencySynthesisHandle | null = null;
 let hintsWorkerHandle: HintsWorkerHandle | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
-export function getPipelineWorkerStatus(): Record<
-	string,
-	{ running: boolean; stats?: WorkerStats }
-> {
+export function getPipelineWorkerStatus(): Record<string, { running: boolean; stats?: WorkerStats }> {
 	return {
 		extraction: {
 			running: workerHandle !== null,
@@ -88,6 +85,11 @@ export function nudgeExtractionWorker(): boolean {
 	return true;
 }
 
+export function ensureRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig = DEFAULT_RETENTION): void {
+	if (retentionHandle) return;
+	retentionHandle = startRetentionWorker(accessor, cfg);
+}
+
 // ---------------------------------------------------------------------------
 // Start / Stop
 // ---------------------------------------------------------------------------
@@ -110,6 +112,10 @@ export function startPipeline(
 		logger.info("pipeline", "Pipeline disabled; worker start skipped");
 		return;
 	}
+	if (pipelineCfg.paused) {
+		logger.info("pipeline", "Pipeline paused; worker start skipped");
+		return;
+	}
 
 	const provider = getLlmProvider();
 
@@ -124,9 +130,7 @@ export function startPipeline(
 
 	// Retention worker also managed here when pipeline is active;
 	// standalone retention is started separately in main() for non-pipeline users.
-	if (!retentionHandle) {
-		retentionHandle = startRetentionWorker(accessor, DEFAULT_RETENTION);
-	}
+	ensureRetentionWorker(accessor, DEFAULT_RETENTION);
 
 	// Maintenance worker (F3) — runs alongside retention
 	if (!maintenanceHandle && providerTracker) {
@@ -156,11 +160,7 @@ export function startPipeline(
 	// Structural assignment workers (KA-2) — classify aspects and extract
 	// dependencies from entity-linked facts. Gate on both structural.enabled
 	// and graph.enabled since they depend on the entity graph.
-	if (
-		pipelineCfg.structural.enabled &&
-		pipelineCfg.graph.enabled &&
-		!pipelineCfg.mutationsFrozen
-	) {
+	if (pipelineCfg.structural.enabled && pipelineCfg.graph.enabled && !pipelineCfg.mutationsFrozen) {
 		if (!structuralClassifyHandle) {
 			structuralClassifyHandle = startStructuralClassifyWorker({
 				accessor,

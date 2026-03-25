@@ -426,51 +426,52 @@ onMount(() => {
 									Select an entity to inspect its structure.
 								</div>
 							{:else}
+								{@const entity = entityDetail.entity}
 								<div class="space-y-4">
 									<div class="space-y-2 border-b border-[var(--sig-border)] pb-3">
 										<div class="flex items-start justify-between gap-3">
 											<div>
 												<div class="flex items-center gap-2">
-													<span class={`size-2 rounded-full ${healthToneClass(entityDetail.entity.id)}`}></span>
+													<span class={`size-2 rounded-full ${healthToneClass(entity.id)}`}></span>
 													<h3 class="sig-heading text-[14px] uppercase tracking-[0.08em]">
-														{entityDetail.entity.name}
+														{entity.name}
 													</h3>
-													{#if entityDetail.entity.pinned}
+													{#if entity.pinned}
 														<Badge variant="outline" class={metricClass("accent")}>
 															pinned
 														</Badge>
 													{/if}
 												</div>
 												<p class="sig-label text-[var(--sig-text-muted)]">
-													{entityDetail.entity.canonicalName ?? entityDetail.entity.name}
+													{entity.canonicalName ?? entity.name}
 												</p>
 											</div>
 											<div class="flex items-center gap-2">
 												<Badge variant="outline" class={metricClass("accent")}>
-													{entityDetail.entity.entityType}
+													{entity.entityType}
 												</Badge>
 												<Button
 													variant="outline"
 													size="sm"
 													class="h-8 px-2"
-													disabled={pinBusyEntityId === entityDetail.entity.id}
+													disabled={pinBusyEntityId === entity.id}
 													onclick={() =>
 														void togglePin(
-															entityDetail.entity.id,
-															entityDetail.entity.pinned ?? false,
+															entity.id,
+															entity.pinned ?? false,
 														)}
 												>
 													<Pin class="mr-1 size-3.5" />
-													{entityDetail.entity.pinned ? "Unpin" : "Pin"}
+													{entity.pinned ? "Unpin" : "Pin"}
 												</Button>
 											</div>
 										</div>
 										<div class="flex flex-wrap gap-1.5">
 											<Badge variant="outline" class={metricClass()}>
-												mentions {entityDetail.entity.mentions ?? 0}
+												mentions {entity.mentions ?? 0}
 											</Badge>
 											<Badge variant="outline" class={metricClass()}>
-												in {formatDate(entityDetail.entity.updatedAt)}
+												in {formatDate(entity.updatedAt)}
 											</Badge>
 										</div>
 									</div>
