@@ -232,15 +232,18 @@
 			});
 			const data = await res.json();
 
-			// All responses go through the same path — cursor steps handle visual mutations
-			{
-				messages.push({
-					id: ++msgId,
-					role: "agent",
-					content: data.response ?? "No response",
-					ts: Date.now(),
-					toolCalls: data.toolCalls,
-				});
+			// Push chat response
+			messages.push({
+				id: ++msgId,
+				role: "agent",
+				content: data.response ?? "No response",
+				ts: Date.now(),
+				toolCalls: data.toolCalls,
+			});
+
+			// Play cursor automation in widget for mutations
+			if (agent.source.type === "mcp" && data.cursorSteps && data.cursorSteps.length > 0) {
+				sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
 			}
 		} catch (err) {
 			messages.push({
