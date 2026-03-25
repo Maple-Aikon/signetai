@@ -89,7 +89,8 @@ pub async fn recall(
         .unwrap_or(50_000);
 
     // Embed query if we have a provider
-    let query_vec = if let Some(ref provider) = state.embedding {
+    let provider = state.embedding.read().await.clone();
+    let query_vec = if let Some(provider) = provider {
         provider.embed(&query).await
     } else {
         None

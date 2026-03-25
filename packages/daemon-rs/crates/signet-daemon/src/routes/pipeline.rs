@@ -1,16 +1,22 @@
 //! Pipeline status and model management routes.
 
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Json},
+    extract::{ConnectInfo, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Json, Response},
 };
-use signet_core::config::PipelineV2Config;
 use serde_yml::{Mapping, Value};
+use signet_core::config::PipelineV2Config;
 
+use crate::auth::middleware::{
+    authenticate_headers, require_permission_guard, require_rate_limit_guard,
+};
+use crate::auth::types::Permission;
 use crate::state::AppState;
 
 const PIPELINE_CONFIG_FILES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
@@ -46,11 +52,12 @@ fn read_pipeline_mode_from_value(
     value: &Value,
     fallback: Option<&PipelineV2Config>,
 ) -> PipelineMode {
+    let fallback = fallback.cloned().unwrap_or_default();
     let mut mode = PipelineMode {
-        enabled: fallback.map(|cfg| cfg.enabled).unwrap_or(false),
-        paused: fallback.map(|cfg| cfg.paused).unwrap_or(false),
-        frozen: fallback.map(|cfg| cfg.mutations_frozen).unwrap_or(false),
-        shadow: fallback.map(|cfg| cfg.shadow_mode).unwrap_or(false),
+        enabled: fallback.enabled,
+        paused: fallback.paused,
+        frozen: fallback.mutations_frozen,
+        shadow: fallback.shadow_mode,
     };
 
     let Some(root) = value.as_mapping() else {
@@ -147,6 +154,71 @@ fn set_pipeline_paused(
     ))
 }
 
+fn is_loopback(addr: &SocketAddr) -> bool {
+    match addr.ip() {
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip
+                    .to_ipv4_mapped()
+                    .map(|mapped| mapped.is_loopback())
+                    .unwrap_or(false)
+        }
+    }
+}
+
+fn live_pipeline_mode(state: &AppState) -> PipelineMode {
+    let pipeline = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref());
+    let mut mode = read_pipeline_mode(state.config.base_path.as_path(), pipeline);
+    mode.paused = state.pipeline_paused();
+    mode
+}
+
+fn build_embedding(
+    state: &AppState,
+) -> Option<Arc<dyn signet_pipeline::embedding::EmbeddingProvider>> {
+    state
+        .config
+        .manifest
+        .embedding
+        .as_ref()
+        .map(|cfg| signet_pipeline::embedding::from_config(cfg, None))
+}
+
+async fn apply_pause_state(state: &AppState, paused: bool) {
+    state.pipeline_paused.store(paused, Ordering::SeqCst);
+    let next = if paused { None } else { build_embedding(state) };
+    *state.embedding.write().await = next;
+}
+
+fn guard_admin(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+) -> Result<(), Box<Response>> {
+    let is_local = is_loopback(peer);
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )?;
+    require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)?;
+    require_rate_limit_guard(
+        &auth,
+        "admin",
+        &state.auth_admin_limiter,
+        state.auth_mode,
+        None,
+    )?;
+    Ok(())
+}
+
 /// GET /api/pipeline/status — pipeline worker and queue status.
 pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let queues = state
@@ -188,7 +260,6 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
                 )
                 .unwrap_or(0);
 
-            // Summary queue (table may not exist yet)
             let summary_pending: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM summary_jobs WHERE status = 'pending'",
@@ -229,17 +300,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         .await
         .unwrap_or_else(|_| serde_json::json!({}));
 
-    let pipeline = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref());
-    let mode = format_pipeline_mode(read_pipeline_mode(state.config.base_path.as_path(), pipeline));
-
     Json(serde_json::json!({
         "queues": queues,
-        "mode": mode,
+        "mode": format_pipeline_mode(live_pipeline_mode(&state)),
         "predictor": {
             "running": false,
             "modelReady": false,
@@ -296,19 +359,46 @@ pub async fn models_by_provider(State(state): State<Arc<AppState>>) -> Json<serd
 
 /// POST /api/pipeline/models/refresh — refresh model registry.
 pub async fn models_refresh(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    // TODO: Query Ollama /api/tags and Anthropic for available models
     models(State(state)).await
 }
 
-pub async fn pause(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    toggle_pause(state, true).await
+pub async fn pause(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    toggle_pause(state, headers, peer, true).await
 }
 
-pub async fn resume(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    toggle_pause(state, false).await
+pub async fn resume(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    toggle_pause(state, headers, peer, false).await
 }
 
-async fn toggle_pause(state: Arc<AppState>, paused: bool) -> impl IntoResponse {
+async fn toggle_pause(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    peer: SocketAddr,
+    paused: bool,
+) -> Response {
+    if let Err(resp) = guard_admin(state.as_ref(), &headers, &peer) {
+        return *resp;
+    }
+
+    if state.pipeline_transition.swap(true, Ordering::SeqCst) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "Pipeline transition already in progress",
+            })),
+        )
+            .into_response();
+    }
+
     let base = state.config.base_path.clone();
     let fallback = state
         .config
@@ -322,18 +412,23 @@ async fn toggle_pause(state: Arc<AppState>, paused: bool) -> impl IntoResponse {
     })
     .await;
 
+    state.pipeline_transition.store(false, Ordering::SeqCst);
+
     match res {
-        Ok(Ok((file, changed, mode))) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "success": true,
-                "changed": changed,
-                "paused": paused,
-                "file": file,
-                "mode": format_pipeline_mode(mode),
-            })),
-        )
-            .into_response(),
+        Ok(Ok((file, changed, _))) => {
+            apply_pause_state(state.as_ref(), paused).await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "changed": changed,
+                    "paused": paused,
+                    "file": file,
+                    "mode": format_pipeline_mode(live_pipeline_mode(&state)),
+                })),
+            )
+                .into_response()
+        }
         Ok(Err(err)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({
@@ -355,15 +450,187 @@ async fn toggle_pause(state: Arc<AppState>, paused: bool) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
-    use super::{find_config_file, format_pipeline_mode, read_pipeline_mode, set_pipeline_paused};
+    use axum::Router;
+    use axum::body::{Body, to_bytes};
+    use axum::extract::connect_info::ConnectInfo;
+    use axum::http::{Method, Request, StatusCode};
+    use axum::routing::{get, post};
+    use signet_core::config::{
+        AgentIdentity, AgentManifest, AuthConfig as ManifestAuthConfig, DaemonConfig,
+        EmbeddingConfig, MemoryManifestConfig, PipelineV2Config, RateLimitConfig,
+    };
+    use signet_core::db::DbPool;
+    use tempfile::{TempDir, tempdir};
+    use tower::ServiceExt;
+
+    use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
+    use crate::auth::tokens::{create_token, generate_secret};
+    use crate::auth::types::{AuthMode, TokenRole, TokenScope};
+    use crate::state::AppState;
+
+    use super::{
+        find_config_file, format_pipeline_mode, pause, read_pipeline_mode, resume,
+        set_pipeline_paused, status,
+    };
+
+    struct TestState {
+        state: Arc<AppState>,
+        secret: Option<Vec<u8>>,
+        _dir: TempDir,
+    }
+
+    fn mode_name(mode: AuthMode) -> String {
+        match mode {
+            AuthMode::Local => "local",
+            AuthMode::Team => "team",
+            AuthMode::Hybrid => "hybrid",
+        }
+        .to_string()
+    }
+
+    fn build_state(mode: AuthMode, paused: bool, admin_max: u64) -> TestState {
+        let dir = tempdir().expect("tempdir");
+        let db = dir.path().join("memory").join("memories.db");
+        std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
+        std::fs::write(
+            dir.path().join("agent.yaml"),
+            format!(
+                "memory:\n  pipelineV2:\n    enabled: true\n    paused: {}\n",
+                if paused { "true" } else { "false" }
+            ),
+        )
+        .expect("write config");
+
+        let (pool, _writer) = DbPool::open(&db).expect("open db");
+
+        let mut limits = HashMap::new();
+        limits.insert(
+            "admin".to_string(),
+            RateLimitConfig {
+                window_ms: Some(60_000),
+                max: Some(admin_max),
+            },
+        );
+
+        let manifest = AgentManifest {
+            agent: AgentIdentity {
+                name: "test-agent".to_string(),
+                description: None,
+                created: None,
+                updated: None,
+            },
+            embedding: Some(EmbeddingConfig::default()),
+            memory: Some(MemoryManifestConfig {
+                database: None,
+                vectors: None,
+                session_budget: None,
+                decay_rate: None,
+                pipeline_v2: Some(PipelineV2Config {
+                    paused,
+                    ..Default::default()
+                }),
+            }),
+            auth: Some(ManifestAuthConfig {
+                method: "token".to_string(),
+                chain_id: None,
+                mode: Some(mode_name(mode)),
+                rate_limits: Some(limits),
+            }),
+            ..Default::default()
+        };
+
+        let secret = if mode == AuthMode::Local {
+            None
+        } else {
+            Some(generate_secret())
+        };
+        let embedding = if paused {
+            None
+        } else {
+            manifest
+                .embedding
+                .as_ref()
+                .map(|cfg| signet_pipeline::embedding::from_config(cfg, None))
+        };
+
+        let mut rules = default_limits();
+        if let Some(rule) = rules.get_mut("admin") {
+            rule.max = admin_max;
+        }
+
+        let state = Arc::new(AppState::new(
+            DaemonConfig {
+                base_path: dir.path().to_path_buf(),
+                db_path: db,
+                port: 3850,
+                host: "127.0.0.1".to_string(),
+                bind: Some("127.0.0.1".to_string()),
+                manifest,
+            },
+            pool,
+            embedding,
+            mode,
+            secret.clone(),
+            AuthRateLimiter::from_rules(&rules),
+        ));
+
+        TestState {
+            state,
+            secret,
+            _dir: dir,
+        }
+    }
+
+    fn app(state: Arc<AppState>) -> Router {
+        Router::new()
+            .route("/pause", post(pause))
+            .route("/resume", post(resume))
+            .route("/status", get(status))
+            .with_state(state)
+    }
+
+    async fn call(
+        app: Router,
+        method: Method,
+        path: &str,
+        peer: SocketAddr,
+        token: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .expect("build request");
+        if let Some(token) = token {
+            req.headers_mut().insert(
+                "authorization",
+                format!("Bearer {token}").parse().expect("auth header"),
+            );
+        }
+        req.extensions_mut().insert(ConnectInfo(peer));
+
+        let resp = app.oneshot(req).await.expect("send request");
+        let status = resp.status();
+        let body = to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let json = serde_json::from_slice(&body).expect("json body");
+        (status, json)
+    }
 
     #[test]
     fn finds_fallback_config_files() {
         let dir = tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("AGENT.yaml"), "memory:\n  pipelineV2:\n    paused: true\n")
-            .expect("write config");
+        std::fs::write(
+            dir.path().join("AGENT.yaml"),
+            "memory:\n  pipelineV2:\n    paused: true\n",
+        )
+        .expect("write config");
 
         let file = find_config_file(dir.path()).expect("config file");
 
@@ -398,5 +665,117 @@ mod tests {
         let mode = read_pipeline_mode(dir.path(), None);
 
         assert_eq!(format_pipeline_mode(mode), "paused");
+    }
+
+    #[tokio::test]
+    async fn team_pause_requires_admin_token() {
+        let test = build_state(AuthMode::Team, false, 10);
+        let peer = SocketAddr::from(([10, 0, 0, 8], 9000));
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "authentication required");
+
+        let secret = test.secret.as_ref().expect("team secret");
+        let token = create_token(
+            secret,
+            "agent-1",
+            TokenScope::default(),
+            TokenRole::Agent,
+            3600,
+        );
+        let (status, body) = call(
+            app(test.state.clone()),
+            Method::POST,
+            "/pause",
+            peer,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("permission")
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_flip_live_runtime_state() {
+        let test = build_state(AuthMode::Local, false, 10);
+        let peer = SocketAddr::from(([127, 0, 0, 1], 3850));
+
+        assert!(test.state.embedding.read().await.is_some());
+        assert!(!test.state.pipeline_paused());
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], true);
+        assert_eq!(body["mode"], "paused");
+        assert!(test.state.pipeline_paused());
+        assert!(test.state.embedding.read().await.is_none());
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::GET, "/status", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["mode"], "paused");
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/resume", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], false);
+        assert_eq!(body["mode"], "controlled-write");
+        assert!(!test.state.pipeline_paused());
+        assert!(test.state.embedding.read().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn team_pause_rate_limits_admin_requests() {
+        let test = build_state(AuthMode::Team, false, 1);
+        let peer = SocketAddr::from(([10, 0, 0, 9], 9001));
+        let secret = test.secret.as_ref().expect("team secret");
+        let token = create_token(
+            secret,
+            "admin-1",
+            TokenScope::default(),
+            TokenRole::Admin,
+            3600,
+        );
+
+        let (status, _) = call(
+            app(test.state.clone()),
+            Method::POST,
+            "/pause",
+            peer,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = call(
+            app(test.state.clone()),
+            Method::POST,
+            "/resume",
+            peer,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["error"], "rate limit exceeded");
+    }
+
+    #[tokio::test]
+    async fn pause_returns_conflict_when_transition_is_active() {
+        let test = build_state(AuthMode::Local, false, 10);
+        let peer = SocketAddr::from(([127, 0, 0, 1], 3850));
+        test.state.pipeline_transition.store(true, Ordering::SeqCst);
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "Pipeline transition already in progress");
     }
 }

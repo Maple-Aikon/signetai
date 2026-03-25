@@ -50,64 +50,85 @@ pub struct AuthConfig {
     pub secret: Option<Vec<u8>>,
 }
 
-// ---------------------------------------------------------------------------
-// Auth middleware (validates token, sets AuthState in extensions)
-// ---------------------------------------------------------------------------
-
-pub async fn auth_middleware(auth_cfg: AuthConfig, mut req: Request<Body>, next: Next) -> Response {
-    let headers = req.headers();
-
-    // Local mode: no auth required
-    if auth_cfg.mode == AuthMode::Local {
-        req.extensions_mut().insert(AuthState {
+pub fn authenticate_headers(
+    mode: AuthMode,
+    secret: Option<&[u8]>,
+    headers: &HeaderMap,
+    is_local: bool,
+) -> Result<AuthState, Box<Response>> {
+    if mode == AuthMode::Local {
+        return Ok(AuthState {
             result: AuthResult::unauthenticated(),
         });
-        return next.run(req).await;
     }
 
-    // Hybrid mode: localhost skips token requirement
-    if auth_cfg.mode == AuthMode::Hybrid && is_localhost(headers) {
-        let result = if let Some(token) = extract_bearer(headers)
-            && let Some(secret) = &auth_cfg.secret
-        {
-            verify_token(secret, token)
+    if mode == AuthMode::Hybrid && is_local {
+        let result = if let Some(token) = extract_bearer(headers) {
+            if let Some(secret) = secret {
+                verify_token(secret, token)
+            } else {
+                AuthResult::unauthenticated()
+            }
         } else {
             AuthResult::unauthenticated()
         };
-        req.extensions_mut().insert(AuthState { result });
-        return next.run(req).await;
+
+        return Ok(AuthState { result });
     }
 
-    // Team mode (or hybrid+remote): token required
     let Some(token) = extract_bearer(headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [("www-authenticate", "Bearer")],
-            Json(serde_json::json!({"error": "authentication required"})),
-        )
-            .into_response();
+        return Err(Box::new(
+            (
+                StatusCode::UNAUTHORIZED,
+                [("www-authenticate", "Bearer")],
+                Json(serde_json::json!({"error": "authentication required"})),
+            )
+                .into_response(),
+        ));
     };
 
-    let Some(secret) = &auth_cfg.secret else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "auth secret not configured"})),
-        )
-            .into_response();
+    let Some(secret) = secret else {
+        return Err(Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "auth secret not configured"})),
+            )
+                .into_response(),
+        ));
     };
 
     let result = verify_token(secret, token);
     if !result.authenticated {
         let err = result.error.as_deref().unwrap_or("invalid token");
-        return (
-            StatusCode::UNAUTHORIZED,
-            [("www-authenticate", "Bearer")],
-            Json(serde_json::json!({"error": err})),
-        )
-            .into_response();
+        return Err(Box::new(
+            (
+                StatusCode::UNAUTHORIZED,
+                [("www-authenticate", "Bearer")],
+                Json(serde_json::json!({"error": err})),
+            )
+                .into_response(),
+        ));
     }
 
-    req.extensions_mut().insert(AuthState { result });
+    Ok(AuthState { result })
+}
+
+// ---------------------------------------------------------------------------
+// Auth middleware (validates token, sets AuthState in extensions)
+// ---------------------------------------------------------------------------
+
+pub async fn auth_middleware(auth_cfg: AuthConfig, mut req: Request<Body>, next: Next) -> Response {
+    let auth = match authenticate_headers(
+        auth_cfg.mode,
+        auth_cfg.secret.as_deref(),
+        req.headers(),
+        auth_cfg.mode == AuthMode::Hybrid && is_localhost(req.headers()),
+    ) {
+        Ok(auth) => auth,
+        Err(resp) => return *resp,
+    };
+
+    req.extensions_mut().insert(auth);
     next.run(req).await
 }
 

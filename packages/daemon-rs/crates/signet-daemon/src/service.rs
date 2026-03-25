@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -15,7 +15,9 @@ fn home() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            eprintln!("warning: neither HOME nor USERPROFILE is set; falling back to current directory");
+            eprintln!(
+                "warning: neither HOME nor USERPROFILE is set; falling back to current directory"
+            );
             PathBuf::from(".")
         })
 }

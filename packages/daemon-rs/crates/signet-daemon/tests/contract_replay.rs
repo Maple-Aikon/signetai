@@ -305,7 +305,8 @@ async fn pipeline_endpoints() {
     let resp = server.get("/api/pipeline/status").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert!(body["pending"].is_number() || body["enabled"].is_boolean());
+    assert!(body["queues"].is_object());
+    assert!(body["mode"].is_string());
 
     let resp = server.post("/api/pipeline/pause", json!({})).await;
     assert_eq!(resp.status(), 200);
