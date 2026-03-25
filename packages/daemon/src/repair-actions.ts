@@ -471,9 +471,21 @@ export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
 		const totalRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
 		const unembeddedRow = db
 			.prepare(
+				// A memory is considered embedded if EITHER:
+				//   (a) an embedding row directly references its id via source_id, OR
+				//   (b) an embedding row shares its content_hash (duplicate content — the
+				//       vector already exists, just attributed to a different memory row).
+				// Without the hash fallback, memories with duplicate content create an
+				// infinite cycle: backfill writes embedding X→source_id=A, then processes
+				// B (same hash), ON CONFLICT reassigns source_id to B, making A "missing"
+				// again, triggering another backfill pass.
 				`SELECT COUNT(*) as n FROM memories m
 				 LEFT JOIN embeddings e
-				   ON e.source_type = 'memory' AND e.source_id = m.id
+				   ON e.source_type = 'memory'
+				   AND (
+				     e.source_id = m.id
+				     OR (m.content_hash IS NOT NULL AND e.content_hash = m.content_hash)
+				   )
 				 WHERE m.is_deleted = 0 AND e.id IS NULL`,
 			)
 			.get() as { n: number };
@@ -519,10 +531,19 @@ async function reembedMissingMemoriesBatch(
 	const unembedded = accessor.withReadDb((db) => {
 		return db
 			.prepare(
+				// Exclude memories where the vector already exists under the same
+				// content_hash (attributed to a different memory row). Re-embedding
+				// those would trigger an ON CONFLICT that reassigns the existing
+				// embedding's source_id, making the previous owner "missing" again
+				// and creating an infinite backfill cycle.
 				`SELECT m.id, m.content, m.content_hash
 				 FROM memories m
 				 LEFT JOIN embeddings e
-				   ON e.source_type = 'memory' AND e.source_id = m.id
+				   ON e.source_type = 'memory'
+				   AND (
+				     e.source_id = m.id
+				     OR (m.content_hash IS NOT NULL AND e.content_hash = m.content_hash)
+				   )
 				 WHERE m.is_deleted = 0 AND e.id IS NULL
 				 ORDER BY m.created_at ASC
 				 LIMIT ?`,
@@ -592,7 +613,6 @@ async function reembedMissingMemoriesBatch(
 					   vector = excluded.vector,
 					   dimensions = excluded.dimensions,
 					   source_type = excluded.source_type,
-					   source_id = excluded.source_id,
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				)
@@ -761,7 +781,8 @@ export async function reembedMissingMemories(
 // ---------------------------------------------------------------------------
 
 /**
- * Remove embeddings whose source memory is deleted or missing.
+ * Remove embeddings whose source memory is deleted or missing, unless the
+ * vector is still covering an active memory with the same content hash.
  * Syncs vec_embeddings to match.
  */
 export function cleanOrphanedEmbeddings(
@@ -787,8 +808,13 @@ export function cleanOrphanedEmbeddings(
 			.prepare(
 				`SELECT e.id FROM embeddings e
 				 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
+				 LEFT JOIN memories m2
+				   ON e.source_type = 'memory'
+				  AND e.content_hash = m2.content_hash
+				  AND m2.is_deleted = 0
 				 WHERE e.source_type = 'memory'
-				   AND (m.id IS NULL OR m.is_deleted = 1)`,
+				   AND (m.id IS NULL OR m.is_deleted = 1)
+				   AND m2.id IS NULL`,
 			)
 			.all() as Array<{ id: string }>;
 
