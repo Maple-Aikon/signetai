@@ -1,22 +1,20 @@
+import { defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =
 	"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on a Pro/Max subscription, or local Ollama models at qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
-
-const MODEL_DEFAULTS = {
-	none: "",
-	"claude-code": "haiku",
-	codex: "gpt-5-codex-mini",
-	ollama: "qwen3:4b",
-	opencode: "anthropic/claude-haiku-4-5-20251001",
-	openrouter: "openai/gpt-4o-mini",
-} as const satisfies Record<ExtractionProviderChoice, string>;
 
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
 	readonly extraction: {
 		readonly provider: ExtractionProviderChoice;
 		readonly model: string;
+	};
+	readonly synthesis?: {
+		readonly enabled: boolean;
+		readonly provider: ExtractionProviderChoice;
+		readonly model: string;
+		readonly timeout: number;
 	};
 	readonly semanticContradictionEnabled?: boolean;
 	readonly graph?: {
@@ -40,16 +38,23 @@ export interface SetupPipelineConfig {
 }
 
 export function defaultExtractionModel(provider: ExtractionProviderChoice): string {
-	return MODEL_DEFAULTS[provider];
+	return defaultPipelineModel(provider);
 }
 
 export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: string): SetupPipelineConfig {
+	const resolved = model?.trim() || defaultExtractionModel(provider);
 	if (provider === "none") {
 		return {
 			enabled: false,
 			extraction: {
 				provider: "none",
 				model: "",
+			},
+			synthesis: {
+				enabled: false,
+				provider: "none",
+				model: "",
+				timeout: 120000,
 			},
 		};
 	}
@@ -58,7 +63,13 @@ export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: s
 		enabled: true,
 		extraction: {
 			provider,
-			model: model?.trim() || defaultExtractionModel(provider),
+			model: resolved,
+		},
+		synthesis: {
+			enabled: true,
+			provider,
+			model: resolved,
+			timeout: 120000,
 		},
 		semanticContradictionEnabled: true,
 		graph: { enabled: true },

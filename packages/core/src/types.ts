@@ -351,7 +351,7 @@ export interface PipelineEmbeddingTrackerConfig {
 
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
-	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "anthropic" | "openrouter";
+	readonly provider: "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter";
 	readonly model: string;
 	readonly endpoint?: string;
 	readonly timeout: number;

@@ -110,6 +110,10 @@ memory:
     extraction:
       provider: ollama
       model: qwen3:4b
+    synthesis:
+      enabled: true
+      provider: ollama
+      model: qwen3:4b
     graph:
       enabled: true
     autonomous:
@@ -325,6 +329,27 @@ When using `ollama`, the model must be available locally. When using
 Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
+
+
+### Session synthesis (`synthesis`)
+
+Controls the provider used by the `summary-worker` for session summaries.
+This is separate from fact extraction once explicitly configured.
+
+If the `synthesis` block is omitted entirely, Signet falls back to the
+resolved extraction provider, model, endpoint, and timeout instead of
+using a hidden hardcoded provider.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Enable background session summary generation |
+| `provider` | inherited from extraction when omitted | — | `"none"`, `"ollama"`, `"claude-code"`, `"codex"`, `"opencode"`, `"anthropic"`, or `"openrouter"` |
+| `model` | inherited from extraction when omitted | — | Model name for the configured provider |
+| `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, or OpenRouter |
+| `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |
+
+Set `provider: none` or `enabled: false` to disable background session
+summary synthesis entirely.
 
 
 ### Worker (`worker`)

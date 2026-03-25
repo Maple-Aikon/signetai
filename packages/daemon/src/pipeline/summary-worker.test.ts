@@ -1,11 +1,16 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { loadMemoryConfig } from "../memory-config";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
 	insertSummaryFacts,
 	recoverSummaryJobs,
+	resolveSummaryProvider,
 	startSummaryWorker,
 } from "./summary-worker";
 
@@ -29,6 +34,23 @@ function makeAccessor(db: Database): DbAccessor {
 			db.close();
 		},
 	};
+}
+
+const tmpDirs: string[] = [];
+
+afterEach(() => {
+	while (tmpDirs.length > 0) {
+		const dir = tmpDirs.pop();
+		if (!dir) continue;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+function makeAgentsDir(content: string): string {
+	const dir = mkdtempSync(join(tmpdir(), "signet-summary-worker-"));
+	tmpDirs.push(dir);
+	writeFileSync(join(dir, "agent.yaml"), content);
+	return dir;
 }
 
 describe("insertSummaryFacts", () => {
@@ -184,5 +206,33 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+});
+
+describe("resolveSummaryProvider", () => {
+	it("uses explicit synthesis codex config", async () => {
+		const dir = makeAgentsDir(`memory:
+  pipelineV2:
+    extractionProvider: ollama
+    extractionModel: qwen3.5:4b
+    synthesis:
+      provider: codex
+      model: gpt-5-codex-mini
+`);
+
+		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
+		expect(provider.name).toBe("codex:gpt-5-codex-mini");
+	});
+
+	it("falls back to resolved extraction config when synthesis is absent", async () => {
+		const dir = makeAgentsDir(`memory:
+  pipelineV2:
+    extractionProvider: ollama
+    extractionModel: qwen3.5:4b
+    extractionEndpoint: http://127.0.0.1:11434
+`);
+
+		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
+		expect(provider.name).toBe("ollama:qwen3.5:4b");
 	});
 });

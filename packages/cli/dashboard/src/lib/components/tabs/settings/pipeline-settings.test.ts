@@ -1,0 +1,68 @@
+// @ts-nocheck
+import { describe, expect, it } from "bun:test";
+import {
+	hasExplicitSynthesisConfig,
+	resolveSynthesisEndpoint,
+	resolveSynthesisModel,
+	resolveSynthesisProvider,
+	resolveSynthesisTimeout,
+} from "./pipeline-settings";
+
+describe("pipeline-settings synthesis resolution", () => {
+	it("falls back to extraction values when synthesis is absent", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					extractionEndpoint: "http://127.0.0.1:11434",
+					extractionTimeout: 75000,
+				},
+			},
+		};
+
+		expect(hasExplicitSynthesisConfig(agent)).toBe(false);
+		expect(resolveSynthesisProvider(agent)).toBe("ollama");
+		expect(resolveSynthesisModel(agent)).toBe("qwen3.5:4b");
+		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:11434");
+		expect(resolveSynthesisTimeout(agent)).toBe(75000);
+	});
+
+	it("keeps explicit synthesis separate from extraction", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					synthesis: {
+						provider: "claude-code",
+						model: "haiku",
+						endpoint: "http://127.0.0.1:9999",
+						timeout: 180000,
+					},
+				},
+			},
+		};
+
+		expect(hasExplicitSynthesisConfig(agent)).toBe(true);
+		expect(resolveSynthesisProvider(agent)).toBe("claude-code");
+		expect(resolveSynthesisModel(agent)).toBe("haiku");
+		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:9999");
+		expect(resolveSynthesisTimeout(agent)).toBe(180000);
+	});
+
+	it("uses provider defaults for explicit synthesis blocks without a model", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {
+					synthesis: {
+						provider: "codex",
+					},
+				},
+			},
+		};
+
+		expect(resolveSynthesisProvider(agent)).toBe("codex");
+		expect(resolveSynthesisModel(agent)).toBe("gpt-5-codex-mini");
+	});
+});

@@ -178,7 +178,7 @@ impl Default for EmbeddingConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{network_mode_from_bind, resolve_network_binding};
+    use super::{AgentManifest, network_mode_from_bind, resolve_network_binding};
 
     #[test]
     fn resolves_localhost_binding_by_default() {
@@ -197,6 +197,30 @@ mod tests {
     fn infers_network_mode_from_bind_host() {
         assert_eq!(network_mode_from_bind("127.0.0.1"), "localhost");
         assert_eq!(network_mode_from_bind("0.0.0.0"), "tailscale");
+    }
+
+    #[test]
+    fn synthesis_defaults_stay_local_when_pipeline_block_omits_them() {
+        let manifest: AgentManifest = serde_yml::from_str(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      model: qwen3.5:4b
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.extraction.provider, "ollama");
+        assert_eq!(pipeline.extraction.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.provider, "ollama");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
     }
 }
 

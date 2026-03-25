@@ -19,6 +19,12 @@ describe("buildSetupPipeline", () => {
 				provider: "none",
 				model: "",
 			},
+			synthesis: {
+				enabled: false,
+				provider: "none",
+				model: "",
+				timeout: 120000,
+			},
 		});
 	});
 
@@ -28,6 +34,12 @@ describe("buildSetupPipeline", () => {
 			extraction: {
 				provider: "claude-code",
 				model: "haiku",
+			},
+			synthesis: {
+				enabled: true,
+				provider: "claude-code",
+				model: "haiku",
+				timeout: 120000,
 			},
 			semanticContradictionEnabled: true,
 			graph: { enabled: true },
@@ -42,6 +54,15 @@ describe("buildSetupPipeline", () => {
 				agentFeedback: true,
 				trainingTelemetry: false,
 			},
+		});
+	});
+
+	it("copies the selected extraction provider into explicit synthesis config", () => {
+		expect(buildSetupPipeline("ollama", "qwen3.5:4b").synthesis).toEqual({
+			enabled: true,
+			provider: "ollama",
+			model: "qwen3.5:4b",
+			timeout: 120000,
 		});
 	});
 });

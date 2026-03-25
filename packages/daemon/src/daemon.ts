@@ -11076,7 +11076,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
 	const validExtractionProviders = new Set(["none", "ollama", "claude-code", "opencode", "codex", "anthropic", "openrouter"]);
-	const validSynthesisProviders = new Set(["none", "ollama", "claude-code", "opencode", "anthropic", "openrouter"]);
+	const validSynthesisProviders = new Set(["none", "ollama", "claude-code", "codex", "opencode", "anthropic", "openrouter"]);
 
 	providerRuntimeResolution.extraction = {
 		configured: providerHints.extraction,
@@ -11453,6 +11453,32 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					effectiveSynthesisProvider = "ollama";
 				}
 			}
+		} else if (effectiveSynthesisProvider === "codex") {
+			const resolvedCodex = Bun.which("codex");
+			if (resolvedCodex === null) {
+				logger.warn("config", "Codex CLI not found, falling back to ollama for synthesis");
+				effectiveSynthesisProvider = "ollama";
+			} else {
+				try {
+					const exitCode = await new Promise<number>((resolve) => {
+						const proc = spawn(resolvedCodex, ["--version"], {
+							stdio: "pipe",
+							windowsHide: true,
+							env: {
+								...process.env,
+								SIGNET_NO_HOOKS: "1",
+								SIGNET_CODEX_BYPASS_WRAPPER: "1",
+							},
+						});
+						proc.on("close", (code) => resolve(code ?? 1));
+						proc.on("error", () => resolve(1));
+					});
+					if (exitCode !== 0) throw new Error("non-zero exit");
+				} catch {
+					logger.warn("config", "Codex CLI not found, falling back to ollama for synthesis");
+					effectiveSynthesisProvider = "ollama";
+				}
+			}
 		}
 		providerRuntimeResolution.synthesis = {
 			configured: providerHints.synthesis,
@@ -11513,6 +11539,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 							})
+						: effectiveSynthesisProvider === "codex"
+							? createCodexProvider({
+									model: effectiveSynthesisModel || "gpt-5-codex-mini",
+									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+								})
 						: effectiveSynthesisProvider === "claude-code"
 							? createClaudeCodeProvider({
 									model: effectiveSynthesisModel || "haiku",

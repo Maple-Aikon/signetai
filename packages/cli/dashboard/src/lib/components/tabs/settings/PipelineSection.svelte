@@ -16,6 +16,14 @@ import {
 	PIPELINE_WORKER_NUMS,
 	st,
 } from "$lib/stores/settings.svelte";
+import { defaultPipelineModel } from "@signet/core/pipeline-providers";
+import {
+	hasExplicitSynthesisConfig,
+	resolveSynthesisEndpoint,
+	resolveSynthesisModel,
+	resolveSynthesisProvider,
+	resolveSynthesisTimeout,
+} from "./pipeline-settings";
 
 const selectTriggerClass =
 	"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
@@ -171,9 +179,14 @@ function isKnownPreset(model: string): boolean {
 	return false;
 }
 
+function isKnownProvider(provider: string): provider is Parameters<typeof defaultPipelineModel>[0] {
+	return EXTRACTION_PROVIDER_OPTIONS.some((option) => option.value === provider);
+}
+
 function defaultModelForProvider(provider: string): string {
 	const presets = getModelPresets(provider);
-	return pickPreferredModel(provider, presets);
+	if (presets.length > 0) return pickPreferredModel(provider, presets);
+	return isKnownProvider(provider) ? defaultPipelineModel(provider) : "";
 }
 
 function extractionModel(): string {
@@ -184,18 +197,82 @@ function extractionDisabled(): boolean {
 	return extractionProvider() === "none";
 }
 
-function extractionProviderRisky(): boolean {
-	const provider = extractionProvider();
+function providerRisky(provider: string): boolean {
 	return provider === "anthropic" || provider === "openrouter" || provider === "opencode";
+}
+
+function extractionProviderRisky(): boolean {
+	return providerRisky(extractionProvider());
+}
+
+function modelNeedsCostWarning(provider: string, model: string): boolean {
+	const normalized = model.toLowerCase();
+	if (!normalized) return false;
+	if (provider === "claude-code") return !normalized.includes("haiku");
+	if (provider === "codex") return !normalized.includes("mini");
+	return false;
 }
 
 function extractionModelNeedsCostWarning(): boolean {
 	const provider = extractionProvider();
-	const model = extractionModel().toLowerCase();
-	if (!model) return false;
-	if (provider === "claude-code") return !model.includes("haiku");
-	if (provider === "codex") return !model.includes("mini");
-	return false;
+	const model = extractionModel();
+	return modelNeedsCostWarning(provider, model);
+}
+
+function synthesisProvider(): string {
+	return resolveSynthesisProvider(st.agent);
+}
+
+function synthesisModel(): string {
+	return resolveSynthesisModel(st.agent);
+}
+
+function synthesisEndpoint(): string {
+	return resolveSynthesisEndpoint(st.agent);
+}
+
+function synthesisTimeout(): number {
+	return resolveSynthesisTimeout(st.agent);
+}
+
+function synthesisDisabled(): boolean {
+	return (
+		(synthesisExplicit() && st.aBool(["memory", "pipelineV2", "synthesis", "enabled"]) === false) ||
+		synthesisProvider() === "none"
+	);
+}
+
+function synthesisExplicit(): boolean {
+	return hasExplicitSynthesisConfig(st.agent);
+}
+
+function synthesisModelPresets() {
+	const provider = synthesisProvider();
+	return provider ? getModelPresets(provider) : [];
+}
+
+let customSynthesisModelActive = $state(false);
+
+function synthesisModelSelectValue(): string {
+	if (customSynthesisModelActive) return "__custom__";
+	const model = synthesisModel();
+	if (!model) return "";
+	return synthesisModelPresets().some((preset) => preset.value === model) ? model : "__custom__";
+}
+
+function synthesisModelLabel(): string {
+	const model = synthesisModel();
+	if (!model) return "";
+	const preset = synthesisModelPresets().find((entry) => entry.value === model);
+	return preset ? preset.label : model;
+}
+
+function synthesisProviderRisky(): boolean {
+	return providerRisky(synthesisProvider());
+}
+
+function synthesisModelNeedsCostWarning(): boolean {
+	return modelNeedsCostWarning(synthesisProvider(), synthesisModel());
 }
 
 function setNum(path: string[]) {
@@ -248,6 +325,32 @@ function setExtractionModelPreset(v: string | undefined): void {
 	}
 	customModelActive = false;
 	st.aSetStr(["memory", "pipelineV2", "extractionModel"], v);
+}
+
+function setSynthesisProvider(v: string | undefined): void {
+	const nextProvider = v ?? "";
+	customSynthesisModelActive = false;
+	st.aSetStr(["memory", "pipelineV2", "synthesis", "provider"], nextProvider);
+	st.aSetBool(["memory", "pipelineV2", "synthesis", "enabled"], nextProvider !== "none");
+	if (!nextProvider) {
+		st.aSetStr(["memory", "pipelineV2", "synthesis", "model"], "");
+		return;
+	}
+	st.aSetStr(["memory", "pipelineV2", "synthesis", "model"], defaultModelForProvider(nextProvider));
+}
+
+function setSynthesisModelPreset(v: string | undefined): void {
+	if (!v) {
+		customSynthesisModelActive = false;
+		st.aSetStr(["memory", "pipelineV2", "synthesis", "model"], "");
+		return;
+	}
+	if (v === "__custom__") {
+		customSynthesisModelActive = true;
+		return;
+	}
+	customSynthesisModelActive = false;
+	st.aSetStr(["memory", "pipelineV2", "synthesis", "model"], v);
 }
 
 function extractionModelLabel(): string {
@@ -334,6 +437,72 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				{#if extractionModelNeedsCostWarning()}
 					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt mini for codex. larger models will burn more money.</span>
 				{/if}
+			</div>
+		</FormField>
+
+		<FormField label="Session synthesis" description="Provider used by the summary-worker for session summaries. This is separate from fact extraction once explicitly configured.">
+			<div class="flex flex-col gap-2">
+				<div class="flex items-center justify-between gap-3 rounded-lg border border-[var(--sig-border)] px-3 py-2">
+					<div class="flex flex-col gap-0.5">
+						<span class="text-[11px] text-[var(--sig-text-bright)]">enabled</span>
+						<span class="text-[9px] uppercase tracking-wider text-[var(--sig-text-muted)]">summary-worker and widget synthesis</span>
+					</div>
+					<Switch checked={synthesisExplicit() ? st.aBool(["memory", "pipelineV2", "synthesis", "enabled"]) : true} onCheckedChange={setBool(["memory", "pipelineV2", "synthesis", "enabled"])} />
+				</div>
+
+				{#if !synthesisExplicit()}
+					<span class="text-[9px] text-[var(--sig-warning)] tracking-wider uppercase">legacy config: synthesis is currently inheriting extraction values until you save an explicit override here.</span>
+				{/if}
+
+				<Select.Root
+					type="single"
+					value={synthesisProvider()}
+					onValueChange={setSynthesisProvider}
+				>
+					<Select.Trigger class={selectTriggerClass}>
+						{synthesisProvider() || "None selected"}
+					</Select.Trigger>
+					<Select.Content class={selectContentClass}>
+						{#each EXTRACTION_PROVIDER_OPTIONS as option (option.value)}
+							<Select.Item class={selectItemClass} value={option.value} label={option.label} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
+
+				{#if synthesisDisabled()}
+					<span class="text-[9px] text-[var(--sig-highlight)] tracking-wider uppercase">session synthesis disabled. summary-worker will not call a background provider.</span>
+				{:else if synthesisProviderRisky()}
+					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">this synthesis provider usually means billed api usage. session summaries can get expensive fast.</span>
+				{/if}
+
+				<Select.Root
+					type="single"
+					value={synthesisModelSelectValue()}
+					onValueChange={setSynthesisModelPreset}
+				>
+					<Select.Trigger class={selectTriggerClass}>
+						{synthesisModelSelectValue() === "__custom__"
+							? `custom: ${synthesisModel()}`
+							: synthesisModelLabel() || "None selected"}
+					</Select.Trigger>
+					<Select.Content class={selectContentClass}>
+						{#each synthesisModelPresets() as preset (preset.value)}
+							<Select.Item class={selectItemClass} value={preset.value} label={preset.label} />
+						{/each}
+						<Select.Item class={selectItemClass} value="__custom__" label="custom" />
+					</Select.Content>
+				</Select.Root>
+
+				{#if synthesisModelSelectValue() === "__custom__" || synthesisModelPresets().length === 0}
+					<Input value={synthesisModel()} oninput={setStr(["memory", "pipelineV2", "synthesis", "model"])} placeholder="custom model id" />
+				{/if}
+
+				{#if synthesisModelNeedsCostWarning()}
+					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt mini for codex. larger models will burn more money.</span>
+				{/if}
+
+				<Input value={synthesisEndpoint()} oninput={setStr(["memory", "pipelineV2", "synthesis", "endpoint"])} placeholder="endpoint override (optional)" />
+				<Input value={String(synthesisTimeout())} oninput={setNum(["memory", "pipelineV2", "synthesis", "timeout"])} placeholder="timeout ms" />
 			</div>
 		</FormField>
 

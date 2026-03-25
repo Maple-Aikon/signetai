@@ -964,6 +964,13 @@ extraction:
   timeout: 45000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
 
+synthesis:
+  enabled: true
+  provider: ollama               # same provider choices as extraction
+  model: qwen3:4b
+  timeout: 120000                # ms, range 5000–300000
+  # when omitted entirely, synthesis falls back to the resolved extraction provider/model
+
 worker:
   pollMs: 2000                   # ms, range 100–60000
   maxRetries: 3                  # range 1–10

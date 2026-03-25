@@ -348,22 +348,76 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.model).toBe("openai/gpt-4o-mini");
 	});
 
+	it("accepts codex synthesis provider", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					synthesis: {
+						provider: "codex",
+						model: "gpt-5-codex-mini",
+					},
+				},
+			},
+		});
+		expect(result.synthesis.provider).toBe("codex");
+		expect(result.synthesis.model).toBe("gpt-5-codex-mini");
+	});
+
 	it("flat provider without flat model uses provider default", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
-					extractionProvider: "ollama",
+					extractionProvider: "codex",
 					extraction: {
-						provider: "codex",
-						model: "gpt-5.3-codex",
+						provider: "ollama",
+						model: "qwen3:8b",
 					},
 				},
 			},
 		});
 
 		// Flat provider wins — model must NOT bleed from nested config
+		expect(result.extraction.provider).toBe("codex");
+		expect(result.extraction.model).toBe("gpt-5-codex-mini");
+	});
+
+	it("defaults missing synthesis to the resolved extraction provider and model", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					extractionEndpoint: "http://127.0.0.1:11434",
+				},
+			},
+		});
+
+		expect(result.synthesis.provider).toBe("ollama");
+		expect(result.synthesis.model).toBe("qwen3.5:4b");
+		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
+		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
+	});
+
+	it("keeps explicit synthesis separate from extraction", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					synthesis: {
+						provider: "claude-code",
+						model: "haiku",
+						timeout: 180000,
+					},
+				},
+			},
+		});
+
 		expect(result.extraction.provider).toBe("ollama");
-		expect(result.extraction.model).not.toBe("gpt-5.3-codex");
+		expect(result.extraction.model).toBe("qwen3.5:4b");
+		expect(result.synthesis.provider).toBe("claude-code");
+		expect(result.synthesis.model).toBe("haiku");
+		expect(result.synthesis.timeout).toBe(180000);
 	});
 
 	it("flat model without flat provider is honoured (not silently discarded)", () => {

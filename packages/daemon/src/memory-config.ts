@@ -4,6 +4,8 @@ import {
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
+	defaultPipelineModel,
+	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth/config";
@@ -134,8 +136,8 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	},
 	synthesis: {
 		enabled: true,
-		provider: "claude-code",
-		model: "haiku",
+		provider: "ollama",
+		model: "qwen3:4b",
 		endpoint: undefined,
 		timeout: 120000,
 		maxTokens: 8000,
@@ -218,12 +220,7 @@ export interface ResolvedMemoryConfig {
 	auth: AuthConfig;
 }
 
-function clampPositive(
-	raw: unknown,
-	min: number,
-	max: number,
-	fallback: number,
-): number {
+function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(min, Math.min(max, raw));
 }
@@ -248,9 +245,7 @@ function parseOptionalUrl(raw: unknown): string | undefined {
  * Flat extraction keys (dashboard-written) take precedence over nested keys.
  * Provider and model are paired — if flat provider wins, flat model wins too.
  */
-export function loadPipelineConfig(
-	yaml: Record<string, unknown>,
-): PipelineV2Config {
+export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Config {
 	const mem = yaml.memory as Record<string, unknown> | undefined;
 	const raw = mem?.pipelineV2 as Record<string, unknown> | undefined;
 	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
@@ -295,37 +290,65 @@ export function loadPipelineConfig(
 	const flatProvider = raw.extractionProvider;
 	const flatModel = raw.extractionModel;
 
-	type ProviderKind =
-		| "none"
-		| "ollama"
-		| "claude-code"
-		| "opencode"
-		| "codex"
-		| "anthropic"
-		| "openrouter";
-	const VALID_PROVIDERS: ReadonlySet<string> = new Set<ProviderKind>([
-		"none", "codex", "opencode", "claude-code", "ollama", "anthropic", "openrouter",
-	]);
+	type ProviderKind = Parameters<typeof defaultPipelineModel>[0];
 
-	function isValidProvider(v: unknown): v is ProviderKind {
-		return typeof v === "string" && VALID_PROVIDERS.has(v);
+	function resolveModel(provider: ProviderKind, raw: unknown, fallback?: string): string {
+		if (typeof raw === "string" && raw.trim().length > 0) {
+			return raw;
+		}
+		if (typeof fallback === "string" && fallback.trim().length > 0) {
+			return fallback;
+		}
+		return defaultPipelineModel(provider);
 	}
 
-	const flatProviderWon = isValidProvider(flatProvider);
+	const flatProviderWon = isPipelineProvider(flatProvider);
+	const nestedProviderWon = isPipelineProvider(nestedProvider);
 	// Model-only flat key: no provider set anywhere, but extractionModel is
 	// present.  Default to "ollama" so the model isn't silently discarded.
-	const flatModelOnly =
-		!flatProviderWon &&
-		!isValidProvider(nestedProvider) &&
-		typeof flatModel === "string";
-	const resolvedProvider: ProviderKind =
-		flatProviderWon
-			? flatProvider
-			: isValidProvider(nestedProvider)
-				? nestedProvider
-				: flatModelOnly
-					? "ollama"
-					: d.extraction.provider;
+	const flatModelOnly = !flatProviderWon && !nestedProviderWon && typeof flatModel === "string";
+	const resolvedProvider: ProviderKind = flatProviderWon
+		? flatProvider
+		: nestedProviderWon
+			? nestedProvider
+			: flatModelOnly
+				? "ollama"
+				: d.extraction.provider;
+	const resolvedModel = flatProviderWon
+		? resolveModel(resolvedProvider, flatModel)
+		: nestedProviderWon && typeof extractionRaw?.model === "string"
+			? extractionRaw.model
+			: flatModelOnly
+				? resolveModel(resolvedProvider, flatModel)
+				: resolveModel(resolvedProvider, undefined, d.extraction.model);
+	const resolvedEndpoint =
+		parseOptionalUrl(extractionRaw?.endpoint) ??
+		parseOptionalUrl(extractionRaw?.base_url) ??
+		parseOptionalUrl(raw.extractionEndpoint) ??
+		parseOptionalUrl(raw.extractionBaseUrl);
+	const resolvedTimeout = clampPositive(
+		extractionRaw?.timeout ?? raw.extractionTimeout,
+		5000,
+		300000,
+		d.extraction.timeout,
+	);
+	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
+	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
+	const resolvedSynthesisModel = resolveModel(
+		resolvedSynthesisProvider,
+		synthesisProviderWon ? synthesisRaw?.model : undefined,
+		synthesisRaw ? undefined : resolvedModel,
+	);
+	const resolvedSynthesisEndpoint =
+		parseOptionalUrl(synthesisRaw?.endpoint) ??
+		parseOptionalUrl(synthesisRaw?.base_url) ??
+		(synthesisRaw ? undefined : resolvedEndpoint);
+	const resolvedSynthesisTimeout = clampPositive(
+		synthesisRaw?.timeout,
+		5000,
+		300000,
+		synthesisRaw ? d.synthesis.timeout : resolvedTimeout,
+	);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -337,8 +360,7 @@ export function loadPipelineConfig(
 		paused: typeof raw.paused === "boolean" ? raw.paused : d.paused,
 		shadowMode: typeof raw.shadowMode === "boolean" ? raw.shadowMode : d.shadowMode,
 		nativeShadowEnabled: typeof raw.nativeShadowEnabled === "boolean" ? raw.nativeShadowEnabled : d.nativeShadowEnabled,
-		mutationsFrozen:
-			typeof raw.mutationsFrozen === "boolean" ? raw.mutationsFrozen : d.mutationsFrozen,
+		mutationsFrozen: typeof raw.mutationsFrozen === "boolean" ? raw.mutationsFrozen : d.mutationsFrozen,
 		semanticContradictionEnabled:
 			typeof raw.semanticContradictionEnabled === "boolean"
 				? raw.semanticContradictionEnabled
@@ -352,29 +374,14 @@ export function loadPipelineConfig(
 
 		extraction: {
 			provider: resolvedProvider,
-			model: flatProviderWon
-				? (typeof flatModel === "string" ? flatModel : d.extraction.model)
-				: typeof extractionRaw?.model === "string"
-					? extractionRaw.model
-					: flatModelOnly
-						? flatModel
-						: d.extraction.model,
+			model: resolvedModel,
 			strength: (() => {
 				// Flat keys win when set (dashboard writes these); nested is fallback
 				const candidate = raw.extractionStrength ?? extractionRaw?.strength;
 				return isExtractionStrength(candidate) ? candidate : d.extraction.strength;
 			})(),
-			endpoint:
-				parseOptionalUrl(extractionRaw?.endpoint) ??
-				parseOptionalUrl(extractionRaw?.base_url) ??
-				parseOptionalUrl(raw.extractionEndpoint) ??
-				parseOptionalUrl(raw.extractionBaseUrl),
-			timeout: clampPositive(
-				extractionRaw?.timeout ?? raw.extractionTimeout,
-				5000,
-				300000,
-				d.extraction.timeout,
-			),
+			endpoint: resolvedEndpoint,
+			timeout: resolvedTimeout,
 			minConfidence: clampFraction(
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
@@ -402,18 +409,8 @@ export function loadPipelineConfig(
 		},
 
 		worker: {
-			pollMs: clampPositive(
-				workerRaw?.pollMs ?? raw.workerPollMs,
-				100,
-				60000,
-				d.worker.pollMs,
-			),
-			maxRetries: clampPositive(
-				workerRaw?.maxRetries ?? raw.workerMaxRetries,
-				1,
-				10,
-				d.worker.maxRetries,
-			),
+			pollMs: clampPositive(workerRaw?.pollMs ?? raw.workerPollMs, 100, 60000, d.worker.pollMs),
+			maxRetries: clampPositive(workerRaw?.maxRetries ?? raw.workerMaxRetries, 1, 10, d.worker.maxRetries),
 			leaseTimeoutMs: clampPositive(
 				workerRaw?.leaseTimeoutMs ?? raw.leaseTimeoutMs,
 				10000,
@@ -424,10 +421,7 @@ export function loadPipelineConfig(
 
 		graph: {
 			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),
-			boostWeight: clampFraction(
-				graphRaw?.boostWeight ?? raw.graphBoostWeight,
-				d.graph.boostWeight,
-			),
+			boostWeight: clampFraction(graphRaw?.boostWeight ?? raw.graphBoostWeight, d.graph.boostWeight),
 			boostTimeoutMs: clampPositive(
 				graphRaw?.boostTimeoutMs ?? raw.graphBoostTimeoutMs,
 				50,
@@ -437,12 +431,8 @@ export function loadPipelineConfig(
 		},
 
 		traversal: {
-			enabled: resolveBool(
-				traversalRaw?.enabled, undefined, d.traversal?.enabled ?? true,
-			),
-			primary: resolveBool(
-				traversalRaw?.primary, undefined, d.traversal?.primary ?? true,
-			),
+			enabled: resolveBool(traversalRaw?.enabled, undefined, d.traversal?.enabled ?? true),
+			primary: resolveBool(traversalRaw?.primary, undefined, d.traversal?.primary ?? true),
 			maxAspectsPerEntity: clampPositive(
 				traversalRaw?.maxAspectsPerEntity,
 				1,
@@ -455,42 +445,16 @@ export function loadPipelineConfig(
 				200,
 				d.traversal?.maxAttributesPerAspect ?? 20,
 			),
-			maxDependencyHops: clampPositive(
-				traversalRaw?.maxDependencyHops,
-				1,
-				200,
-				d.traversal?.maxDependencyHops ?? 10,
-			),
+			maxDependencyHops: clampPositive(traversalRaw?.maxDependencyHops, 1, 200, d.traversal?.maxDependencyHops ?? 10),
 			minDependencyStrength: clampFraction(
 				traversalRaw?.minDependencyStrength,
 				d.traversal?.minDependencyStrength ?? 0.3,
 			),
-			maxBranching: clampPositive(
-				traversalRaw?.maxBranching,
-				1,
-				50,
-				d.traversal?.maxBranching ?? 4,
-			),
-			maxTraversalPaths: clampPositive(
-				traversalRaw?.maxTraversalPaths,
-				1,
-				500,
-				d.traversal?.maxTraversalPaths ?? 50,
-			),
-			minConfidence: clampFraction(
-				traversalRaw?.minConfidence,
-				d.traversal?.minConfidence ?? 0.5,
-			),
-			timeoutMs: clampPositive(
-				traversalRaw?.timeoutMs,
-				50,
-				5000,
-				d.traversal?.timeoutMs ?? 500,
-			),
-			boostWeight: clampFraction(
-				traversalRaw?.boostWeight,
-				d.traversal?.boostWeight ?? 0.2,
-			),
+			maxBranching: clampPositive(traversalRaw?.maxBranching, 1, 50, d.traversal?.maxBranching ?? 4),
+			maxTraversalPaths: clampPositive(traversalRaw?.maxTraversalPaths, 1, 500, d.traversal?.maxTraversalPaths ?? 50),
+			minConfidence: clampFraction(traversalRaw?.minConfidence, d.traversal?.minConfidence ?? 0.5),
+			timeoutMs: clampPositive(traversalRaw?.timeoutMs, 50, 5000, d.traversal?.timeoutMs ?? 500),
+			boostWeight: clampFraction(traversalRaw?.boostWeight, d.traversal?.boostWeight ?? 0.2),
 			constraintBudgetChars: clampPositive(
 				traversalRaw?.constraintBudgetChars,
 				200,
@@ -507,29 +471,20 @@ export function loadPipelineConfig(
 					: typeof raw.rerankerModel === "string"
 						? (raw.rerankerModel as string)
 						: d.reranker.model,
-			topN: clampPositive(
-				rerankerRaw?.topN ?? raw.rerankerTopN,
-				1,
-				100,
-				d.reranker.topN,
-			),
-			timeoutMs: clampPositive(
-				rerankerRaw?.timeoutMs ?? raw.rerankerTimeoutMs,
-				100,
-				30000,
-				d.reranker.timeoutMs,
-			),
+			topN: clampPositive(rerankerRaw?.topN ?? raw.rerankerTopN, 1, 100, d.reranker.topN),
+			timeoutMs: clampPositive(rerankerRaw?.timeoutMs ?? raw.rerankerTimeoutMs, 100, 30000, d.reranker.timeoutMs),
 		},
 
 		autonomous: {
 			enabled: resolveBool(autonomousRaw?.enabled, raw.autonomousEnabled, d.autonomous.enabled),
 			frozen: resolveBool(autonomousRaw?.frozen, raw.autonomousFrozen, d.autonomous.frozen),
 			allowUpdateDelete: resolveBool(
-				autonomousRaw?.allowUpdateDelete, raw.allowUpdateDelete, d.autonomous.allowUpdateDelete,
+				autonomousRaw?.allowUpdateDelete,
+				raw.allowUpdateDelete,
+				d.autonomous.allowUpdateDelete,
 			),
 			maintenanceIntervalMs: clampPositive(
-				autonomousRaw?.maintenanceIntervalMs ??
-					raw.maintenanceIntervalMs,
+				autonomousRaw?.maintenanceIntervalMs ?? raw.maintenanceIntervalMs,
 				60000,
 				86400000,
 				d.autonomous.maintenanceIntervalMs,
@@ -549,8 +504,7 @@ export function loadPipelineConfig(
 				d.repair.reembedCooldownMs,
 			),
 			reembedHourlyBudget: clampPositive(
-				repairRaw?.reembedHourlyBudget ??
-					raw.repairReembedHourlyBudget,
+				repairRaw?.reembedHourlyBudget ?? raw.repairReembedHourlyBudget,
 				1,
 				1000,
 				d.repair.reembedHourlyBudget,
@@ -562,8 +516,7 @@ export function loadPipelineConfig(
 				d.repair.requeueCooldownMs,
 			),
 			requeueHourlyBudget: clampPositive(
-				repairRaw?.requeueHourlyBudget ??
-					raw.repairRequeueHourlyBudget,
+				repairRaw?.requeueHourlyBudget ?? raw.repairRequeueHourlyBudget,
 				1,
 				1000,
 				d.repair.requeueHourlyBudget,
@@ -581,8 +534,7 @@ export function loadPipelineConfig(
 				d.repair.dedupHourlyBudget,
 			),
 			dedupSemanticThreshold: clampFraction(
-				repairRaw?.dedupSemanticThreshold ??
-					raw.repairDedupSemanticThreshold,
+				repairRaw?.dedupSemanticThreshold ?? raw.repairDedupSemanticThreshold,
 				d.repair.dedupSemanticThreshold,
 			),
 			dedupBatchSize: clampPositive(
@@ -595,18 +547,12 @@ export function loadPipelineConfig(
 
 		documents: {
 			workerIntervalMs: clampPositive(
-				documentsRaw?.workerIntervalMs ??
-					raw.documentWorkerIntervalMs,
+				documentsRaw?.workerIntervalMs ?? raw.documentWorkerIntervalMs,
 				1000,
 				300000,
 				d.documents.workerIntervalMs,
 			),
-			chunkSize: clampPositive(
-				documentsRaw?.chunkSize ?? raw.documentChunkSize,
-				200,
-				50000,
-				d.documents.chunkSize,
-			),
+			chunkSize: clampPositive(documentsRaw?.chunkSize ?? raw.documentChunkSize, 200, 50000, d.documents.chunkSize),
 			chunkOverlap: clampPositive(
 				documentsRaw?.chunkOverlap ?? raw.documentChunkOverlap,
 				0,
@@ -614,8 +560,7 @@ export function loadPipelineConfig(
 				d.documents.chunkOverlap,
 			),
 			maxContentBytes: clampPositive(
-				documentsRaw?.maxContentBytes ??
-					raw.documentMaxContentBytes,
+				documentsRaw?.maxContentBytes ?? raw.documentMaxContentBytes,
 				1024,
 				100 * 1024 * 1024,
 				d.documents.maxContentBytes,
@@ -623,18 +568,8 @@ export function loadPipelineConfig(
 		},
 
 		guardrails: {
-			maxContentChars: clampPositive(
-				guardrailsRaw?.maxContentChars,
-				50,
-				100000,
-				d.guardrails.maxContentChars,
-			),
-			chunkTargetChars: clampPositive(
-				guardrailsRaw?.chunkTargetChars,
-				50,
-				50000,
-				d.guardrails.chunkTargetChars,
-			),
+			maxContentChars: clampPositive(guardrailsRaw?.maxContentChars, 50, 100000, d.guardrails.maxContentChars),
+			chunkTargetChars: clampPositive(guardrailsRaw?.chunkTargetChars, 50, 50000, d.guardrails.chunkTargetChars),
 			recallTruncateChars: clampPositive(
 				guardrailsRaw?.recallTruncateChars,
 				50,
@@ -651,30 +586,15 @@ export function loadPipelineConfig(
 
 		continuity: {
 			enabled: resolveBool(continuityRaw?.enabled, undefined, d.continuity.enabled),
-			promptInterval: clampPositive(
-				continuityRaw?.promptInterval,
-				1,
-				1000,
-				d.continuity.promptInterval,
-			),
-			timeIntervalMs: clampPositive(
-				continuityRaw?.timeIntervalMs,
-				60000,
-				3600000,
-				d.continuity.timeIntervalMs,
-			),
+			promptInterval: clampPositive(continuityRaw?.promptInterval, 1, 1000, d.continuity.promptInterval),
+			timeIntervalMs: clampPositive(continuityRaw?.timeIntervalMs, 60000, 3600000, d.continuity.timeIntervalMs),
 			maxCheckpointsPerSession: clampPositive(
 				continuityRaw?.maxCheckpointsPerSession,
 				1,
 				500,
 				d.continuity.maxCheckpointsPerSession,
 			),
-			retentionDays: clampPositive(
-				continuityRaw?.retentionDays,
-				1,
-				90,
-				d.continuity.retentionDays,
-			),
+			retentionDays: clampPositive(continuityRaw?.retentionDays, 1, 90, d.continuity.retentionDays),
 			recoveryBudgetChars: clampPositive(
 				continuityRaw?.recoveryBudgetChars,
 				200,
@@ -683,116 +603,43 @@ export function loadPipelineConfig(
 			),
 		},
 
-		telemetryEnabled:
-			typeof raw.telemetryEnabled === "boolean" ? raw.telemetryEnabled : d.telemetryEnabled,
+		telemetryEnabled: typeof raw.telemetryEnabled === "boolean" ? raw.telemetryEnabled : d.telemetryEnabled,
 		telemetry: {
-			posthogHost:
-				typeof telemetryRaw?.posthogHost === "string"
-					? telemetryRaw.posthogHost
-					: d.telemetry.posthogHost,
+			posthogHost: typeof telemetryRaw?.posthogHost === "string" ? telemetryRaw.posthogHost : d.telemetry.posthogHost,
 			posthogApiKey:
-				typeof telemetryRaw?.posthogApiKey === "string"
-					? telemetryRaw.posthogApiKey
-					: d.telemetry.posthogApiKey,
-			flushIntervalMs: clampPositive(
-				telemetryRaw?.flushIntervalMs,
-				5000,
-				600000,
-				d.telemetry.flushIntervalMs,
-			),
-			flushBatchSize: clampPositive(
-				telemetryRaw?.flushBatchSize,
-				1,
-				500,
-				d.telemetry.flushBatchSize,
-			),
-			retentionDays: clampPositive(
-				telemetryRaw?.retentionDays,
-				1,
-				365,
-				d.telemetry.retentionDays,
-			),
+				typeof telemetryRaw?.posthogApiKey === "string" ? telemetryRaw.posthogApiKey : d.telemetry.posthogApiKey,
+			flushIntervalMs: clampPositive(telemetryRaw?.flushIntervalMs, 5000, 600000, d.telemetry.flushIntervalMs),
+			flushBatchSize: clampPositive(telemetryRaw?.flushBatchSize, 1, 500, d.telemetry.flushBatchSize),
+			retentionDays: clampPositive(telemetryRaw?.retentionDays, 1, 365, d.telemetry.retentionDays),
 		},
 
 		embeddingTracker: {
-			enabled: resolveBool(
-				embeddingTrackerRaw?.enabled, undefined, d.embeddingTracker.enabled,
-			),
-			pollMs: clampPositive(
-				embeddingTrackerRaw?.pollMs,
-				1000,
-				60000,
-				d.embeddingTracker.pollMs,
-			),
-			batchSize: clampPositive(
-				embeddingTrackerRaw?.batchSize,
-				1,
-				20,
-				d.embeddingTracker.batchSize,
-			),
+			enabled: resolveBool(embeddingTrackerRaw?.enabled, undefined, d.embeddingTracker.enabled),
+			pollMs: clampPositive(embeddingTrackerRaw?.pollMs, 1000, 60000, d.embeddingTracker.pollMs),
+			batchSize: clampPositive(embeddingTrackerRaw?.batchSize, 1, 20, d.embeddingTracker.batchSize),
 		},
 
 		synthesis: {
 			enabled: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled),
 			provider: (() => {
 				const p = synthesisRaw?.provider;
-				if (
-					p === "none" ||
-					p === "ollama" ||
-					p === "claude-code" ||
-					p === "opencode" ||
-					p === "anthropic" ||
-					p === "openrouter"
-				) {
+				if (isPipelineProvider(p)) {
 					return p;
 				}
-				return d.synthesis.provider;
+				return resolvedSynthesisProvider;
 			})(),
-			model:
-				typeof synthesisRaw?.model === "string"
-					? synthesisRaw.model
-					: d.synthesis.model,
-			endpoint:
-				parseOptionalUrl(synthesisRaw?.endpoint) ??
-				parseOptionalUrl(synthesisRaw?.base_url),
-			timeout: clampPositive(
-				synthesisRaw?.timeout,
-				5000,
-				300000,
-				d.synthesis.timeout,
-			),
-			maxTokens: clampPositive(
-				synthesisRaw?.maxTokens ?? synthesisRaw?.max_tokens,
-				1000,
-				32000,
-				d.synthesis.maxTokens,
-			),
-			idleGapMinutes: clampPositive(
-				synthesisRaw?.idleGapMinutes,
-				1,
-				1440,
-				d.synthesis.idleGapMinutes,
-			),
+			model: resolvedSynthesisModel,
+			endpoint: resolvedSynthesisEndpoint,
+			timeout: resolvedSynthesisTimeout,
+			maxTokens: clampPositive(synthesisRaw?.maxTokens ?? synthesisRaw?.max_tokens, 1000, 32000, d.synthesis.maxTokens),
+			idleGapMinutes: clampPositive(synthesisRaw?.idleGapMinutes, 1, 1440, d.synthesis.idleGapMinutes),
 		},
 		procedural: {
-			enabled: resolveBool(
-				proceduralRaw?.enabled, undefined, d.procedural.enabled,
-			),
-			decayRate: clampFraction(
-				proceduralRaw?.decayRate,
-				d.procedural.decayRate,
-			),
-			minImportance: clampFraction(
-				proceduralRaw?.minImportance,
-				d.procedural.minImportance,
-			),
-			importanceOnInstall: clampFraction(
-				proceduralRaw?.importanceOnInstall,
-				d.procedural.importanceOnInstall,
-			),
-			enrichOnInstall: resolveBool(
-				proceduralRaw?.enrichOnInstall, undefined, d.procedural.enrichOnInstall,
-			),
+			enabled: resolveBool(proceduralRaw?.enabled, undefined, d.procedural.enabled),
+			decayRate: clampFraction(proceduralRaw?.decayRate, d.procedural.decayRate),
+			minImportance: clampFraction(proceduralRaw?.minImportance, d.procedural.minImportance),
+			importanceOnInstall: clampFraction(proceduralRaw?.importanceOnInstall, d.procedural.importanceOnInstall),
+			enrichOnInstall: resolveBool(proceduralRaw?.enrichOnInstall, undefined, d.procedural.enrichOnInstall),
 			enrichMinDescription: clampPositive(
 				proceduralRaw?.enrichMinDescription,
 				10,
@@ -808,30 +655,11 @@ export function loadPipelineConfig(
 		},
 
 		structural: {
-			enabled: resolveBool(
-				structuralRaw?.enabled, undefined, d.structural.enabled,
-			),
-			classifyBatchSize: clampPositive(
-				structuralRaw?.classifyBatchSize,
-				1,
-				20,
-				d.structural.classifyBatchSize,
-			),
-			dependencyBatchSize: clampPositive(
-				structuralRaw?.dependencyBatchSize,
-				1,
-				10,
-				d.structural.dependencyBatchSize,
-			),
-			pollIntervalMs: clampPositive(
-				structuralRaw?.pollIntervalMs,
-				2000,
-				120000,
-				d.structural.pollIntervalMs,
-			),
-			synthesisEnabled: resolveBool(
-				structuralRaw?.synthesisEnabled, undefined, d.structural.synthesisEnabled,
-			),
+			enabled: resolveBool(structuralRaw?.enabled, undefined, d.structural.enabled),
+			classifyBatchSize: clampPositive(structuralRaw?.classifyBatchSize, 1, 20, d.structural.classifyBatchSize),
+			dependencyBatchSize: clampPositive(structuralRaw?.dependencyBatchSize, 1, 10, d.structural.dependencyBatchSize),
+			pollIntervalMs: clampPositive(structuralRaw?.pollIntervalMs, 2000, 120000, d.structural.pollIntervalMs),
+			synthesisEnabled: resolveBool(structuralRaw?.synthesisEnabled, undefined, d.structural.synthesisEnabled),
 			synthesisIntervalMs: clampPositive(
 				structuralRaw?.synthesisIntervalMs,
 				10000,
@@ -844,20 +672,17 @@ export function loadPipelineConfig(
 				100,
 				d.structural.synthesisTopEntities,
 			),
-			synthesisMaxFacts: clampPositive(
-				structuralRaw?.synthesisMaxFacts,
-				3,
-				50,
-				d.structural.synthesisMaxFacts,
-			),
-			supersessionEnabled: resolveBool(
-				structuralRaw?.supersessionEnabled, undefined, d.structural.supersessionEnabled,
-			),
+			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
+			supersessionEnabled: resolveBool(structuralRaw?.supersessionEnabled, undefined, d.structural.supersessionEnabled),
 			supersessionSweepEnabled: resolveBool(
-				structuralRaw?.supersessionSweepEnabled, undefined, d.structural.supersessionSweepEnabled,
+				structuralRaw?.supersessionSweepEnabled,
+				undefined,
+				d.structural.supersessionSweepEnabled,
 			),
 			supersessionSemanticFallback: resolveBool(
-				structuralRaw?.supersessionSemanticFallback, undefined, d.structural.supersessionSemanticFallback,
+				structuralRaw?.supersessionSemanticFallback,
+				undefined,
+				d.structural.supersessionSemanticFallback,
 			),
 			supersessionMinConfidence: clampPositive(
 				structuralRaw?.supersessionMinConfidence,
@@ -868,28 +693,13 @@ export function loadPipelineConfig(
 		},
 
 		feedback: {
-			enabled: resolveBool(
-				feedbackRaw?.enabled, undefined, d.feedback.enabled,
-			),
-			ftsWeightDelta: clampFraction(
-				feedbackRaw?.ftsWeightDelta,
-				d.feedback.ftsWeightDelta,
-			),
+			enabled: resolveBool(feedbackRaw?.enabled, undefined, d.feedback.enabled),
+			ftsWeightDelta: clampFraction(feedbackRaw?.ftsWeightDelta, d.feedback.ftsWeightDelta),
 			maxAspectWeight: maxAW,
 			minAspectWeight: validatedMinAW,
-			decayEnabled: resolveBool(
-				feedbackRaw?.decayEnabled, undefined, d.feedback.decayEnabled,
-			),
-			decayRate: clampFraction(
-				feedbackRaw?.decayRate,
-				d.feedback.decayRate,
-			),
-			staleDays: clampPositive(
-				feedbackRaw?.staleDays,
-				1,
-				365,
-				d.feedback.staleDays,
-			),
+			decayEnabled: resolveBool(feedbackRaw?.decayEnabled, undefined, d.feedback.decayEnabled),
+			decayRate: clampFraction(feedbackRaw?.decayRate, d.feedback.decayRate),
+			staleDays: clampPositive(feedbackRaw?.staleDays, 1, 365, d.feedback.staleDays),
 			decayIntervalSessions: clampPositive(
 				feedbackRaw?.decayIntervalSessions,
 				1,
@@ -899,31 +709,14 @@ export function loadPipelineConfig(
 		},
 
 		significance: {
-			enabled: resolveBool(
-				significanceRaw?.enabled, undefined, d.significance?.enabled ?? true,
-			),
-			minTurns: clampPositive(
-				significanceRaw?.minTurns,
-				1,
-				100,
-				d.significance?.minTurns ?? 5,
-			),
-			minEntityOverlap: clampPositive(
-				significanceRaw?.minEntityOverlap,
-				0,
-				100,
-				d.significance?.minEntityOverlap ?? 1,
-			),
-			noveltyThreshold: clampFraction(
-				significanceRaw?.noveltyThreshold,
-				d.significance?.noveltyThreshold ?? 0.15,
-			),
+			enabled: resolveBool(significanceRaw?.enabled, undefined, d.significance?.enabled ?? true),
+			minTurns: clampPositive(significanceRaw?.minTurns, 1, 100, d.significance?.minTurns ?? 5),
+			minEntityOverlap: clampPositive(significanceRaw?.minEntityOverlap, 0, 100, d.significance?.minEntityOverlap ?? 1),
+			noveltyThreshold: clampFraction(significanceRaw?.noveltyThreshold, d.significance?.noveltyThreshold ?? 0.15),
 		},
 
 		predictor: {
-			enabled: resolveBool(
-				predictorRaw?.enabled, undefined, d.predictor?.enabled ?? true,
-			),
+			enabled: resolveBool(predictorRaw?.enabled, undefined, d.predictor?.enabled ?? true),
 			trainIntervalSessions: clampPositive(
 				predictorRaw?.trainIntervalSessions,
 				1,
@@ -936,63 +729,33 @@ export function loadPipelineConfig(
 				1000,
 				d.predictor?.minTrainingSessions ?? 10,
 			),
-			scoreTimeoutMs: clampPositive(
-				predictorRaw?.scoreTimeoutMs,
-				10,
-				10000,
-				d.predictor?.scoreTimeoutMs ?? 120,
-			),
-			trainTimeoutMs: clampPositive(
-				predictorRaw?.trainTimeoutMs,
-				1000,
-				120000,
-				d.predictor?.trainTimeoutMs ?? 30000,
-			),
+			scoreTimeoutMs: clampPositive(predictorRaw?.scoreTimeoutMs, 10, 10000, d.predictor?.scoreTimeoutMs ?? 120),
+			trainTimeoutMs: clampPositive(predictorRaw?.trainTimeoutMs, 1000, 120000, d.predictor?.trainTimeoutMs ?? 30000),
 			crashDisableThreshold: clampPositive(
 				predictorRaw?.crashDisableThreshold,
 				1,
 				20,
 				d.predictor?.crashDisableThreshold ?? 3,
 			),
-			rrfK: clampPositive(
-				predictorRaw?.rrfK,
-				1,
-				100,
-				d.predictor?.rrfK ?? 12,
-			),
-			explorationRate: clampFraction(
-				predictorRaw?.explorationRate,
-				d.predictor?.explorationRate ?? 0.05,
-			),
-			driftResetWindow: clampPositive(
-				predictorRaw?.driftResetWindow,
-				1,
-				100,
-				d.predictor?.driftResetWindow ?? 10,
-			),
-			binaryPath:
-				typeof predictorRaw?.binaryPath === "string"
-					? predictorRaw.binaryPath
-					: d.predictor?.binaryPath,
+			rrfK: clampPositive(predictorRaw?.rrfK, 1, 100, d.predictor?.rrfK ?? 12),
+			explorationRate: clampFraction(predictorRaw?.explorationRate, d.predictor?.explorationRate ?? 0.05),
+			driftResetWindow: clampPositive(predictorRaw?.driftResetWindow, 1, 100, d.predictor?.driftResetWindow ?? 10),
+			binaryPath: typeof predictorRaw?.binaryPath === "string" ? predictorRaw.binaryPath : d.predictor?.binaryPath,
 			checkpointPath:
-				typeof predictorRaw?.checkpointPath === "string"
-					? predictorRaw.checkpointPath
-					: d.predictor?.checkpointPath,
+				typeof predictorRaw?.checkpointPath === "string" ? predictorRaw.checkpointPath : d.predictor?.checkpointPath,
 		},
 
 		predictorPipeline: {
-			agentFeedback: resolveBool(
-				predictorPipelineRaw?.agentFeedback, undefined, d.predictorPipeline.agentFeedback,
-			),
+			agentFeedback: resolveBool(predictorPipelineRaw?.agentFeedback, undefined, d.predictorPipeline.agentFeedback),
 			trainingTelemetry: resolveBool(
-				predictorPipelineRaw?.trainingTelemetry, undefined, d.predictorPipeline.trainingTelemetry,
+				predictorPipelineRaw?.trainingTelemetry,
+				undefined,
+				d.predictorPipeline.trainingTelemetry,
 			),
 		},
 
 		modelRegistry: {
-			enabled: resolveBool(
-				modelRegistryRaw?.enabled, undefined, d.modelRegistry.enabled,
-			),
+			enabled: resolveBool(modelRegistryRaw?.enabled, undefined, d.modelRegistry.enabled),
 			refreshIntervalMs: clampPositive(
 				modelRegistryRaw?.refreshIntervalMs,
 				60000,
@@ -1002,21 +765,11 @@ export function loadPipelineConfig(
 		},
 
 		hints: {
-			enabled: resolveBool(
-				hintsRaw?.enabled, undefined, d.hints?.enabled ?? true,
-			),
-			max: clampPositive(
-				hintsRaw?.max, 1, 10, d.hints?.max ?? 5,
-			),
-			timeout: clampPositive(
-				hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 30000,
-			),
-			maxTokens: clampPositive(
-				hintsRaw?.maxTokens, 64, 1024, d.hints?.maxTokens ?? 256,
-			),
-			poll: clampPositive(
-				hintsRaw?.poll, 1000, 60000, d.hints?.poll ?? 5000,
-			),
+			enabled: resolveBool(hintsRaw?.enabled, undefined, d.hints?.enabled ?? true),
+			max: clampPositive(hintsRaw?.max, 1, 10, d.hints?.max ?? 5),
+			timeout: clampPositive(hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 30000),
+			maxTokens: clampPositive(hintsRaw?.maxTokens, 64, 1024, d.hints?.maxTokens ?? 256),
+			poll: clampPositive(hintsRaw?.poll, 1000, 60000, d.hints?.poll ?? 5000),
 		},
 	};
 }
@@ -1041,11 +794,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 		auth: parseAuthConfig(undefined, agentsDir),
 	};
 
-	const paths = [
-		join(agentsDir, "agent.yaml"),
-		join(agentsDir, "AGENT.yaml"),
-		join(agentsDir, "config.yaml"),
-	];
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
 
 	for (const path of paths) {
 		if (!existsSync(path)) continue;
@@ -1053,9 +802,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
 			const emb =
 				(yaml.embedding as Record<string, unknown> | undefined) ??
-				((yaml.memory as Record<string, unknown> | undefined)?.embeddings as
-					| Record<string, unknown>
-					| undefined) ??
+				((yaml.memory as Record<string, unknown> | undefined)?.embeddings as Record<string, unknown> | undefined) ??
 				(yaml.embeddings as Record<string, unknown> | undefined) ??
 				{};
 			const srch = (yaml.search as Record<string, unknown> | undefined) ?? {};
@@ -1064,12 +811,8 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				defaults.embedding.provider = "none";
 			} else if (emb.provider) {
 				defaults.embedding.provider = emb.provider as "native" | "ollama" | "openai";
-				defaults.embedding.model =
-					(emb.model as string | undefined) ?? defaults.embedding.model;
-				defaults.embedding.dimensions = Number.parseInt(
-					String(emb.dimensions ?? "768"),
-					10,
-				);
+				defaults.embedding.model = (emb.model as string | undefined) ?? defaults.embedding.model;
+				defaults.embedding.dimensions = Number.parseInt(String(emb.dimensions ?? "768"), 10);
 				const explicitBaseUrl =
 					(typeof emb.base_url === "string" ? emb.base_url : undefined) ??
 					(typeof emb.endpoint === "string" ? emb.endpoint : undefined);
@@ -1092,9 +835,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			if (srch.alpha !== undefined) {
 				defaults.search.alpha = Number.parseFloat(String(srch.alpha));
 				defaults.search.top_k = Number.parseInt(String(srch.top_k ?? "20"), 10);
-				defaults.search.min_score = Number.parseFloat(
-					String(srch.min_score ?? "0.3"),
-				);
+				defaults.search.min_score = Number.parseFloat(String(srch.min_score ?? "0.3"));
 			}
 			if (srch.rehearsal_enabled !== undefined) {
 				defaults.search.rehearsal_enabled = srch.rehearsal_enabled === true;

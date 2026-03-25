@@ -24,6 +24,7 @@ import { getSecret } from "../secrets";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
+	createCodexProvider,
 	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
@@ -999,7 +1000,7 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 	});
 }
 
-async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promise<LlmProvider> {
+export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promise<LlmProvider> {
 	const p = cfg.pipelineV2.synthesis.provider;
 	const model = cfg.pipelineV2.synthesis.model;
 	const timeout = cfg.pipelineV2.synthesis.timeout;
@@ -1059,6 +1060,8 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 		}
 		case "claude-code":
 			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
+		case "codex":
+			return createCodexProvider({ model: model || "gpt-5-codex-mini", defaultTimeoutMs: timeout });
 		case "opencode":
 			return createOpenCodeProvider({
 				model: model || "anthropic/claude-haiku-4-5-20251001",
@@ -1151,7 +1154,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
 			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
 			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
-				cachedProvider = await resolveProvider(cfg);
+				cachedProvider = await resolveSummaryProvider(cfg);
 				cachedProviderKey = providerKey;
 				cachedProviderAt = Date.now();
 			}

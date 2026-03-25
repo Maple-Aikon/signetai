@@ -90,6 +90,12 @@ export {
 } from "./network";
 export type { NetworkMode } from "./network";
 export {
+	PIPELINE_PROVIDER_CHOICES,
+	defaultPipelineModel,
+	isPipelineProvider,
+} from "./pipeline-providers";
+export type { PipelineProviderChoice } from "./pipeline-providers";
+export {
 	search,
 	vectorSearch,
 	keywordSearch,
