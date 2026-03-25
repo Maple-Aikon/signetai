@@ -16,7 +16,8 @@
 
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { getSecret } from "../secrets.js";
+import { getSynthesisProvider } from "../synthesis-llm.js";
+import { generateWithTracking } from "../pipeline/provider.js";
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -62,15 +63,7 @@ function createSessionId(): string {
 // LLM Integration
 // ============================================================================
 
-let cachedApiKey: string | null = null;
-
-async function getApiKey(): Promise<string> {
-	if (!cachedApiKey) {
-		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
-	}
-	if (!cachedApiKey) throw new Error("OPENAI_API_KEY not found");
-	return cachedApiKey;
-}
+// LLM provider resolved from daemon synthesis config (claude-code, anthropic, etc.)
 
 const AGENT_SYSTEM_PROMPT = `You are a GUI automation agent operating inside a web widget. You can see the page as simplified HTML with indexed interactive elements like [0]<button>Click me</button>.
 
@@ -113,31 +106,21 @@ interface AgentAction {
 }
 
 async function callAgentLlm(messages: Array<{ role: string; content: string }>): Promise<AgentAction> {
-	const apiKey = await getApiKey();
+	const provider = getSynthesisProvider();
 
-	const res = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o",
-			max_tokens: 512,
-			temperature: 0.1,
-			messages,
-		}),
+	// Build a single prompt from the message array (synthesis provider takes a flat string)
+	const prompt = messages.map((m) => {
+		if (m.role === "system") return m.content;
+		if (m.role === "user") return `\n---\n${m.content}`;
+		return `\nAssistant: ${m.content}`;
+	}).join("\n");
+
+	const result = await generateWithTracking(provider, prompt, {
+		maxTokens: 512,
+		timeoutMs: 30000,
 	});
 
-	if (!res.ok) {
-		const errText = await res.text();
-		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
-	}
-
-	const data = (await res.json()) as {
-		choices: Array<{ message: { content: string } }>;
-	};
-	const raw = data.choices?.[0]?.message?.content ?? "";
+	const raw = result.text.trim();
 
 	// Parse the action JSON
 	let cleaned = raw.trim();
