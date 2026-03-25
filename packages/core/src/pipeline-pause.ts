@@ -11,6 +11,13 @@ export interface PipelinePauseState {
 	readonly paused: boolean;
 }
 
+export interface PipelineConfigData {
+	readonly file: string | null;
+	readonly root: Record<string, unknown> | null;
+	readonly memory: Record<string, unknown> | null;
+	readonly pipeline: Record<string, unknown> | null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -43,32 +50,43 @@ function readPipeline(cfg: Record<string, unknown>): Record<string, unknown> | n
 	return mem && isRecord(mem.pipelineV2) ? mem.pipelineV2 : null;
 }
 
+export function readPipelineConfigData(dir: string): PipelineConfigData {
+	const { cfg: root, file } = readCfg(dir);
+	if (root === null) {
+		return { file: null, root: null, memory: null, pipeline: null };
+	}
+
+	const memory = readMem(root);
+	return {
+		file,
+		root,
+		memory,
+		pipeline: readPipeline(root),
+	};
+}
+
 export function readPipelinePauseState(dir: string): PipelinePauseState {
-	const { cfg, file } = readCfg(dir);
-	if (cfg === null) {
+	const { file, pipeline } = readPipelineConfigData(dir);
+	if (file === null) {
 		return { file: null, exists: false, enabled: false, paused: false };
 	}
 
-	const p2 = readPipeline(cfg);
 	return {
 		file,
 		exists: true,
-		enabled: p2?.enabled !== false,
-		paused: p2?.paused === true,
+		enabled: pipeline?.enabled !== false,
+		paused: pipeline?.paused === true,
 	};
 }
 
 export function setPipelinePaused(dir: string, paused: boolean): PipelinePauseState {
-	const { cfg, file } = readCfg(dir);
-	if (file === null) {
+	const { file, root, memory, pipeline } = readPipelineConfigData(dir);
+	if (file === null || root === null) {
 		throw new Error("No Signet config file found. Run `signet setup` first.");
 	}
 
-	const root = cfg ?? {};
-	const mem = isRecord(root.memory) ? root.memory : {};
-	const p2 = isRecord(mem.pipelineV2) ? mem.pipelineV2 : {};
-	const nextP2 = { ...p2, paused };
-	const nextMem = { ...mem, pipelineV2: nextP2 };
+	const nextP2 = { ...(pipeline ?? {}), paused };
+	const nextMem = { ...(memory ?? {}), pipelineV2: nextP2 };
 	const next = { ...root, memory: nextMem };
 
 	writeFileSync(file, formatYaml(next));
@@ -76,7 +94,7 @@ export function setPipelinePaused(dir: string, paused: boolean): PipelinePauseSt
 	return {
 		file,
 		exists: true,
-		enabled: p2.enabled !== false,
+		enabled: pipeline?.enabled !== false,
 		paused,
 	};
 }

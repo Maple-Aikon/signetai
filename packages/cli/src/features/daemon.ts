@@ -295,12 +295,12 @@ type PipelinePauseApiResult =
 			readonly kind: "ok";
 	  };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isPipelinePauseRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readPipelinePauseApiResponse(value: unknown): PipelinePauseApiResponse | null {
-	if (!isRecord(value)) return null;
+	if (!isPipelinePauseRecord(value)) return null;
 	if (value.success !== true) return null;
 	if (typeof value.changed !== "boolean") return null;
 	if (typeof value.paused !== "boolean") return null;

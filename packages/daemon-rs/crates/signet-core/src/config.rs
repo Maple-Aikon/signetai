@@ -274,6 +274,7 @@ pub struct RateLimitConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct PipelineV2Config {
     pub enabled: bool,
+    pub paused: bool,
     pub shadow_mode: bool,
     /// Spawn the native Rust daemon as a shadow on :3851. Distinct from
     /// `shadow_mode` (extract-without-write). Only meaningful when read
@@ -309,6 +310,7 @@ impl Default for PipelineV2Config {
     fn default() -> Self {
         Self {
             enabled: true,
+            paused: false,
             shadow_mode: false,
             native_shadow_enabled: false,
             mutations_frozen: false,

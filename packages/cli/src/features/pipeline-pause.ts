@@ -1,14 +1,12 @@
-import { readFileSync } from "node:fs";
 import {
-	findPipelineConfigFile,
-	parseSimpleYaml,
+	readPipelineConfigData,
 	readPipelinePauseState,
 	setPipelinePaused,
 } from "@signet/core";
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 const DEFAULT_EXTRACTION_MODEL = "qwen3.5:4b";
-const DEFAULT_SYNTHESIS_MODEL = "haiku";
+const DEFAULT_SYNTHESIS_MODEL = "qwen3:4b";
 const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v1.5";
 
 export { readPipelinePauseState, setPipelinePaused };
@@ -25,7 +23,7 @@ export interface OllamaReleaseResult extends OllamaReleaseTarget {
 	readonly ok: boolean;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -41,7 +39,28 @@ function trimSlash(url: string): string {
 
 function normalizeUrl(raw: unknown, fallback: string): string {
 	const text = trimText(raw);
-	return trimSlash(text ?? fallback);
+	const url = trimSlash(text ?? fallback);
+
+	try {
+		const parsed = new URL(url);
+		if (parsed.hostname === "0.0.0.0") {
+			parsed.hostname = "127.0.0.1";
+			return trimSlash(parsed.toString());
+		}
+
+		if (parsed.hostname === "::" || parsed.hostname === "[::]") {
+			const auth =
+				parsed.username.length > 0
+					? `${parsed.username}${parsed.password.length > 0 ? `:${parsed.password}` : ""}@`
+					: "";
+			const port = parsed.port.length > 0 ? `:${parsed.port}` : "";
+			return trimSlash(`${parsed.protocol}//${auth}[::1]${port}${parsed.pathname}${parsed.search}${parsed.hash}`);
+		}
+
+		return trimSlash(parsed.toString());
+	} catch {
+		return url;
+	}
 }
 
 function isLoopback(url: string): boolean {
@@ -51,31 +70,11 @@ function isLoopback(url: string): boolean {
 			parsed.hostname === "127.0.0.1" ||
 			parsed.hostname === "localhost" ||
 			parsed.hostname === "::1" ||
-			parsed.hostname === "[::1]" ||
-			parsed.hostname === "0.0.0.0" ||
-			parsed.hostname === "::"
+			parsed.hostname === "[::1]"
 		);
 	} catch {
 		return false;
 	}
-}
-
-function readCfg(dir: string): { readonly cfg: Record<string, unknown> | null; readonly file: string | null } {
-	const file = findPipelineConfigFile(dir);
-	if (file === null) {
-		return { file: null, cfg: null };
-	}
-	const cfg = parseSimpleYaml(readFileSync(file, "utf-8"));
-	return { file, cfg: isRecord(cfg) ? cfg : {} };
-}
-
-function readMem(cfg: Record<string, unknown>): Record<string, unknown> | null {
-	return isRecord(cfg.memory) ? cfg.memory : null;
-}
-
-function readPipeline(cfg: Record<string, unknown>): Record<string, unknown> | null {
-	const mem = readMem(cfg);
-	return mem && isRecord(mem.pipelineV2) ? mem.pipelineV2 : null;
 }
 
 function addTarget(
@@ -93,15 +92,13 @@ function addTarget(
 }
 
 export function readOllamaReleaseTargets(dir: string): readonly OllamaReleaseTarget[] {
-	const { cfg } = readCfg(dir);
-	if (cfg === null) return [];
+	const { root, memory, pipeline } = readPipelineConfigData(dir);
+	if (root === null) return [];
 
 	const out: OllamaReleaseTarget[] = [];
 	const seen = new Set<string>();
-	const mem = readMem(cfg);
-	const p2 = readPipeline(cfg);
 
-	const extraction = p2 && isRecord(p2.extraction) ? p2.extraction : null;
+	const extraction = pipeline && isObject(pipeline.extraction) ? pipeline.extraction : null;
 	if (extraction?.provider === "ollama") {
 		addTarget(
 			out,
@@ -112,7 +109,7 @@ export function readOllamaReleaseTargets(dir: string): readonly OllamaReleaseTar
 		);
 	}
 
-	const synthesis = p2 && isRecord(p2.synthesis) ? p2.synthesis : null;
+	const synthesis = pipeline && isObject(pipeline.synthesis) ? pipeline.synthesis : null;
 	if (synthesis?.provider === "ollama") {
 		addTarget(
 			out,
@@ -123,12 +120,12 @@ export function readOllamaReleaseTargets(dir: string): readonly OllamaReleaseTar
 		);
 	}
 
-	const embedding = isRecord(cfg.embedding)
-		? cfg.embedding
-		: mem && isRecord(mem.embeddings)
-			? mem.embeddings
-			: isRecord(cfg.embeddings)
-				? cfg.embeddings
+	const embedding = isObject(root.embedding)
+		? root.embedding
+		: memory && isObject(memory.embeddings)
+			? memory.embeddings
+			: isObject(root.embeddings)
+				? root.embeddings
 				: null;
 	if (embedding?.provider === "ollama") {
 		addTarget(

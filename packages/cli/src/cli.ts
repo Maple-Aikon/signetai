@@ -97,24 +97,7 @@ import {
 	startDaemon,
 	stopDaemon,
 } from "./lib/runtime.js";
-import {
-	type CondaInfo,
-	type PyenvInfo,
-	type PythonInfo,
-	checkZvecInstalled,
-	createCondaEnv,
-	createVenv,
-	detectBestPython,
-	detectConda,
-	detectPyenv,
-	detectSystemPython,
-	getCondaPython,
-	getPyenvPython,
-	installDeps,
-	installPyenvPython,
-	isZvecCompatible,
-} from "./python.js";
-import Database from "./sqlite.js";
+import "./sqlite.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {

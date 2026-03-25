@@ -99,6 +99,57 @@ describe("pipeline pause config", () => {
 		]);
 	});
 
+	it("falls back to a valid ollama synthesis model", () => {
+		const dir = makeTempDir("signet-pipeline-pause-synthesis-");
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			[
+				"memory:",
+				"  pipelineV2:",
+				"    synthesis:",
+				"      provider: ollama",
+				"      endpoint: http://127.0.0.1:11434",
+				"",
+			].join("\n"),
+		);
+
+		const targets = readOllamaReleaseTargets(dir);
+
+		expect(targets).toEqual([
+			{
+				label: "synthesis",
+				model: "qwen3:4b",
+				baseUrl: "http://127.0.0.1:11434",
+			},
+		]);
+	});
+
+	it("normalizes wildcard ollama endpoints to loopback", () => {
+		const dir = makeTempDir("signet-pipeline-pause-wildcard-");
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			[
+				"memory:",
+				"  pipelineV2:",
+				"    extraction:",
+				"      provider: ollama",
+				"      model: qwen3.5:4b",
+				"      endpoint: http://0.0.0.0:11434",
+				"",
+			].join("\n"),
+		);
+
+		const targets = readOllamaReleaseTargets(dir);
+
+		expect(targets).toEqual([
+			{
+				label: "extraction",
+				model: "qwen3.5:4b",
+				baseUrl: "http://127.0.0.1:11434",
+			},
+		]);
+	});
+
 	it("releases local ollama models through the generate API", async () => {
 		const dir = makeTempDir("signet-pipeline-pause-release-");
 		writeFileSync(

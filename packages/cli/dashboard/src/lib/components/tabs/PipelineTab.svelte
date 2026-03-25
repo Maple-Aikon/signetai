@@ -140,10 +140,18 @@
 				pipeline.mode = res.mode;
 				pipeline.lastPoll = new Date().toISOString();
 			}
-			await pollStatus();
+			const refreshed = await pollStatus();
 
 			if (res.changed === false) {
 				toast(next === "pause" ? "Pipeline already paused" : "Pipeline already running");
+				return;
+			}
+
+			if (!refreshed) {
+				toast(
+					`${next === "pause" ? "Pipeline paused" : "Pipeline resumed"}, but live status refresh failed`,
+					"warning",
+				);
 				return;
 			}
 

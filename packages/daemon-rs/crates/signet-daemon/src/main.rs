@@ -84,11 +84,23 @@ async fn main() -> anyhow::Result<()> {
     let (pool, writer_handle) = DbPool::open(&config.db_path).context("failed to open database")?;
 
     // Initialize embedding provider
-    let embedding = config
+    let pipeline_paused = config
         .manifest
-        .embedding
+        .memory
         .as_ref()
-        .map(|cfg| signet_pipeline::embedding::from_config(cfg, None));
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|p| p.paused)
+        .unwrap_or(false);
+    let embedding = if pipeline_paused {
+        info!("pipeline paused; embedding provider startup deferred");
+        None
+    } else {
+        config
+            .manifest
+            .embedding
+            .as_ref()
+            .map(|cfg| signet_pipeline::embedding::from_config(cfg, None))
+    };
 
     // Build app state
     let state = Arc::new(AppState::new(config.clone(), pool, embedding));
@@ -232,6 +244,14 @@ async fn main() -> anyhow::Result<()> {
         )
         // Pipeline routes
         .route("/api/pipeline/status", get(routes::pipeline::status))
+        .route(
+            "/api/pipeline/pause",
+            axum::routing::post(routes::pipeline::pause),
+        )
+        .route(
+            "/api/pipeline/resume",
+            axum::routing::post(routes::pipeline::resume),
+        )
         .route("/api/pipeline/models", get(routes::pipeline::models))
         .route(
             "/api/pipeline/models/by-provider",

@@ -186,10 +186,10 @@ function applyQueueCounts(
 	}
 }
 
-export async function pollStatus(): Promise<void> {
+export async function pollStatus(): Promise<boolean> {
 	try {
 		const status = await getPipelineStatus();
-		if (!status) return;
+		if (!status) return false;
 
 		pipeline.mode = status.mode;
 		pipeline.lastPoll = new Date().toISOString();
@@ -235,15 +235,18 @@ export async function pollStatus(): Promise<void> {
 				}
 			}
 		}
+		return true;
 	} catch {
-		// silently ignore poll failures
+		return false;
 	}
 }
 
 export function startPolling(intervalMs = 5000): void {
 	if (pollInterval) return;
-	pollStatus();
-	pollInterval = setInterval(pollStatus, intervalMs);
+	void pollStatus();
+	pollInterval = setInterval(() => {
+		void pollStatus();
+	}, intervalMs);
 }
 
 export function stopPolling(): void {

@@ -306,6 +306,19 @@ async fn pipeline_endpoints() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert!(body["pending"].is_number() || body["enabled"].is_boolean());
+
+    let resp = server.post("/api/pipeline/pause", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["paused"], true);
+    assert_eq!(body["mode"], "paused");
+
+    let resp = server.post("/api/pipeline/resume", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["paused"], false);
 }
 
 #[tokio::test]
