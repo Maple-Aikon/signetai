@@ -232,28 +232,8 @@
 			});
 			const data = await res.json();
 
-			// If the LLM decided this needs visual agent execution (mutations on MCP widgets)
-			if (agent.source.type === "mcp" && data.useAgent && data.agentServerId) {
-				loadingStatus = "cursor taking over...";
-				try {
-					const result = await executeAgentTask(data.agentServerId, data.agentTask || text);
-					messages.push({
-						id: ++msgId,
-						role: "agent",
-						content: result,
-						ts: Date.now(),
-						toolCalls: data.toolCalls,
-					});
-				} catch (err) {
-					messages.push({
-						id: ++msgId,
-						role: "agent",
-						content: `Agent error: ${err instanceof Error ? err.message : String(err)}`,
-						ts: Date.now(),
-					});
-				}
-			} else {
-				// Direct tool call response (reads, queries)
+			// All responses go through the same path — cursor steps handle visual mutations
+			{
 				messages.push({
 					id: ++msgId,
 					role: "agent",

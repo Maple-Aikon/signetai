@@ -240,16 +240,8 @@ function buildPrompt(tools: readonly ToolSpec[], message: string): string {
 Available MCP tools:
 ${list}
 
-IMPORTANT: There are TWO modes:
-
-**READ MODE** — for fetching/searching/listing data. Use toolCalls:
-{"thinking":"...","useAgent":false,"toolCalls":[{"serverId":"id","toolName":"name","args":{}}],"response":"..."}
-
-**AGENT MODE** — for creating/updating/deleting/modifying data. An AI cursor will visually perform the action in the app UI. Do NOT include toolCalls — the agent handles everything:
-{"thinking":"needs visual agent","useAgent":true,"agentServerId":"ghl-contacts-hub","agentTask":"Create a contact named John Smith with email john@example.com","toolCalls":[],"response":"watch the contacts app — cursor is on it"}
-
-Use AGENT MODE for: create, add, update, edit, delete, remove, merge, change, modify, send, book, schedule
-Use READ MODE for: fetch, get, list, search, find, show, count, lookup, check
+Respond in JSON:
+{"thinking":"...","toolCalls":[{"serverId":"id","toolName":"name","args":{}}],"response":"..."}
 
 Rules:
 - concise, no walls of text
