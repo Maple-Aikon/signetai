@@ -42,11 +42,11 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 		{ id: "claude-3-5-haiku-20241022", provider: "anthropic", label: "Claude 3.5 Haiku", tier: "low", deprecated: false },
 	],
 	codex: [
+		{ id: "gpt-5-codex-mini", provider: "codex", label: "GPT Mini", tier: "low", deprecated: false },
 		{ id: "gpt-5.4", provider: "codex", label: "GPT 5.4", tier: "high", deprecated: false },
 		{ id: "gpt-5.3-codex", provider: "codex", label: "GPT 5.3 Codex", tier: "high", deprecated: false },
 		{ id: "gpt-5.3-codex-spark", provider: "codex", label: "GPT 5.3 Codex Spark", tier: "high", deprecated: false },
 		{ id: "gpt-5-codex", provider: "codex", label: "GPT 5 Codex", tier: "mid", deprecated: false },
-		{ id: "codex-mini-latest", provider: "codex", label: "Codex Mini", tier: "low", deprecated: false },
 	],
 	opencode: [
 		{ id: "anthropic/claude-opus-4-6", provider: "opencode", label: "Claude Opus 4.6", tier: "high", deprecated: false },

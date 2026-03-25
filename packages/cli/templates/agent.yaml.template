@@ -110,8 +110,14 @@ memory:
     # mutationsFrozen: false
 
     # Extraction provider and model
+    # Safety: on a VPS, set provider: none unless you explicitly want
+    # background extraction.
+    # Intended usage: Claude Code on haiku, Codex on GPT Mini with a
+    # Pro/Max subscription, or local Ollama at qwen3:4b or larger.
+    # Remote API extraction can rack up extreme fees fast.
     extraction:
-      # "claude-code" (Claude CLI), "codex" (Codex CLI), "opencode" (OpenCode), or "ollama" (local)
+      # "none", "claude-code" (Claude CLI), "codex" (Codex CLI),
+      # "opencode" (OpenCode), or "ollama" (local)
       provider: claude-code
       model: haiku
       # endpoint/base_url override (ollama base URL, or OpenCode server URL when provider=opencode)

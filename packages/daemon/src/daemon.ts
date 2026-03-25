@@ -11217,9 +11217,51 @@ async function main() {
 					? extractionOpenCodeBaseUrl
 					: effectiveExtractionProvider === "openrouter"
 						? extractionOpenRouterBaseUrl
-						: undefined,
+				: undefined,
 		),
 	});
+	const extractionModelName =
+		effectiveExtractionModel ?? memoryCfg.pipelineV2.extraction.model;
+	if (
+		effectiveExtractionProvider === "anthropic" ||
+		effectiveExtractionProvider === "openrouter" ||
+		effectiveExtractionProvider === "opencode"
+	) {
+		logger.warn(
+			"config",
+			"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on Pro/Max, or local Ollama qwen3:4b+. Remote API extraction can create extreme fees fast. Set provider to 'none' to disable it on a VPS.",
+			{
+				provider: effectiveExtractionProvider,
+				model: extractionModelName,
+			},
+		);
+	}
+	if (
+		effectiveExtractionProvider === "claude-code" &&
+		extractionModelName &&
+		!extractionModelName.toLowerCase().includes("haiku")
+	) {
+		logger.warn(
+			"config",
+			"Claude Code extraction is safest on Haiku. Larger models increase cost significantly.",
+			{
+				model: extractionModelName,
+			},
+		);
+	}
+	if (
+		effectiveExtractionProvider === "codex" &&
+		extractionModelName &&
+		!extractionModelName.toLowerCase().includes("mini")
+	) {
+		logger.warn(
+			"config",
+			"Codex extraction is safest on GPT Mini. Larger models increase cost significantly.",
+			{
+				model: extractionModelName,
+			},
+		);
+	}
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider = effectiveExtractionProvider === "none"
@@ -11254,7 +11296,7 @@ async function main() {
 							})
 						: effectiveExtractionProvider === "codex"
 							? createCodexProvider({
-									model: effectiveExtractionModel || "gpt-5.3-codex",
+									model: effectiveExtractionModel || "gpt-5-codex-mini",
 									defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 								})
 							: createOllamaProvider({

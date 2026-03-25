@@ -1,12 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-	parseSimpleYaml,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
+	parseSimpleYaml,
 } from "@signet/core";
-import { parseAuthConfig, type AuthConfig } from "./auth/config";
+import { type AuthConfig, parseAuthConfig } from "./auth/config";
 
 export interface EmbeddingConfig {
 	provider: "native" | "ollama" | "openai" | "none";
@@ -37,7 +37,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	semanticContradictionTimeoutMs: 120000,
 	extraction: {
 		provider: "ollama",
-		model: "qwen3.5:4b",
+		model: "qwen3:4b",
 		strength: "low",
 		endpoint: undefined,
 		timeout: 90000,

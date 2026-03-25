@@ -5,14 +5,13 @@
  * The LlmProvider interface itself lives in @signet/core so that the
  * ingestion pipeline and other consumers can accept any provider.
  */
-
-import type { LlmProvider, LlmGenerateResult } from "@signet/core";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { Readable } from "node:stream";
+import type { LlmGenerateResult, LlmProvider } from "@signet/core";
 import { logger } from "../logger";
 import { trimTrailingSlash } from "./url";
 
@@ -1134,7 +1133,7 @@ export interface CodexProviderConfig {
 }
 
 const DEFAULT_CODEX_CONFIG: CodexProviderConfig = {
-	model: "gpt-5.3-codex",
+	model: "gpt-5-codex-mini",
 	defaultTimeoutMs: 60000,
 	workingDirectory: homedir(),
 };

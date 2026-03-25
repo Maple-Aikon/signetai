@@ -948,10 +948,19 @@ telemetryEnabled                    false
 
 ### Nested sub-objects and defaults
 
+Extraction safety note:
+
+- intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a
+  Pro/Max subscription, or local Ollama with at least `qwen3:4b`
+- set `provider: none` on a VPS if you do not want background
+  extraction
+- remote API extraction can accumulate extreme fees quickly
+  (`anthropic`, `openrouter`, or remote OpenCode routes)
+
 ```yaml
 extraction:
-  provider: claude-code          # "ollama" | "claude-code" | "opencode"
-  model: haiku
+  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  model: qwen3:4b
   timeout: 45000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
 

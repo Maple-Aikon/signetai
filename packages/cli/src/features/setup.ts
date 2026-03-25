@@ -8,6 +8,7 @@ import open from "open";
 import ora from "ora";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
+import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
 import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
@@ -459,13 +460,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		? "claude-code"
 		: hasCommand("codex")
 			? "codex"
-			: hasCommand("opencode")
-				? "opencode"
-				: deps.normalizeStringValue(process.env.OPENROUTER_API_KEY)
-					? "openrouter"
-					: hasCommand("ollama")
-						? "ollama"
-						: "none";
+			: hasCommand("ollama")
+				? "ollama"
+				: hasCommand("opencode")
+					? "opencode"
+					: "none";
 
 	let extractionProvider: ExtractionProviderChoice;
 	if (nonInteractive) {
@@ -475,28 +474,30 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider = requestedExtractionProvider ?? providerFromConfig ?? detectedProvider;
 	} else {
 		console.log();
+		console.log(chalk.yellow(`  Warning: ${EXTRACTION_SAFETY_WARNING}`));
+		console.log();
 		const choices = [
 			{
 				value: "claude-code",
-				name: `Claude Code (uses your Claude subscription via CLI)${detectedProvider === "claude-code" ? " — detected" : ""}`,
+				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,
 			},
 			{
 				value: "codex",
-				name: `Codex (uses your OpenAI Codex CLI locally)${detectedProvider === "codex" ? " — detected" : ""}`,
-			},
-			{
-				value: "opencode",
-				name: `OpenCode (uses the OpenCode CLI or local server)${detectedProvider === "opencode" ? " — detected" : ""}`,
-			},
-			{
-				value: "openrouter",
-				name: `OpenRouter (cloud API, requires OPENROUTER_API_KEY)${detectedProvider === "openrouter" ? " — detected" : ""}`,
+				name: `Codex (GPT Mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
 			},
 			{
 				value: "ollama",
-				name: `Ollama (local, requires running Ollama server)${detectedProvider === "ollama" ? " — detected" : ""}`,
+				name: `Ollama (local, qwen3:4b minimum)${detectedProvider === "ollama" ? " — detected" : ""}`,
 			},
-			{ value: "none", name: "Skip extraction pipeline" },
+			{ value: "none", name: "Disable extraction pipeline" },
+			{
+				value: "opencode",
+				name: `OpenCode (advanced, can route to paid APIs)${detectedProvider === "opencode" ? " — detected" : ""}`,
+			},
+			{
+				value: "openrouter",
+				name: "OpenRouter (cloud API, billed usage, expensive if left running)",
+			},
 		];
 		extractionProvider = await select({
 			message: "Memory extraction provider (analyzes conversations):",
@@ -512,7 +513,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				"haiku";
+				defaultExtractionModel("claude-code");
 		} else {
 			console.log();
 			extractionModel = await select({
@@ -529,15 +530,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				"gpt-5.3-codex";
+				defaultExtractionModel("codex");
 		} else {
 			console.log();
 			extractionModel = await select({
 				message: "Which Codex model for extraction?",
 				choices: [
-					{ value: "gpt-5.3-codex", name: "gpt-5.3-codex (recommended)" },
+					{ value: "gpt-5-codex-mini", name: "gpt-5-codex-mini (GPT Mini, recommended)" },
+					{ value: "gpt-5.3-codex", name: "gpt-5.3-codex (higher usage)" },
 					{ value: "gpt-5-codex", name: "gpt-5-codex (stable fallback)" },
-					{ value: "gpt-5-codex-mini", name: "gpt-5-codex-mini (faster, lighter)" },
 				],
 			});
 		}
@@ -565,7 +566,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				"openai/gpt-4o-mini";
+				defaultExtractionModel("openrouter");
 		} else {
 			console.log();
 			extractionModel = await select({
@@ -584,14 +585,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				"glm-4.7-flash";
+				defaultExtractionModel("ollama");
 		} else {
 			console.log();
 			extractionModel = await select({
 				message: "Which Ollama model for extraction?",
 				choices: [
-					{ value: "glm-4.7-flash", name: "glm-4.7-flash (good quality, recommended)" },
-					{ value: "qwen3:4b", name: "qwen3:4b (lighter, faster)" },
+					{ value: "qwen3:4b", name: "qwen3:4b (minimum recommended local model)" },
+					{ value: "glm-4.7-flash", name: "glm-4.7-flash (alternative)" },
 					{ value: "llama3", name: "llama3 (general purpose)" },
 				],
 			});
