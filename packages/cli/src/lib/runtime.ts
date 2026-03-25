@@ -57,6 +57,15 @@ function daemonPaths(): string[] {
 	].filter((path, index, items) => items.indexOf(path) === index);
 }
 
+function daemonMarks(paths: readonly string[]): string[] {
+	return [
+		...paths,
+		"/signetai/dist/daemon.js",
+		"/packages/daemon/dist/daemon.js",
+		"/packages/daemon/src/daemon.ts",
+	].filter((path, index, items) => items.indexOf(path) === index);
+}
+
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -134,7 +143,7 @@ function normalizeCmd(value: string): string {
 
 function matchesDaemon(cmd: string, paths: readonly string[]): boolean {
 	const normalizedCmd = normalizeCmd(cmd);
-	return paths.some((path) => normalizedCmd.includes(normalizeCmd(path)));
+	return daemonMarks(paths).some((path) => normalizedCmd.includes(normalizeCmd(path)));
 }
 
 function readCmd(pid: number): string | null {

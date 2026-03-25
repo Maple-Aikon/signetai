@@ -22,6 +22,23 @@ describe("readManagedDaemonPid", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
+	it("accepts an older global install path for a live daemon pid", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		const dir = join(root, ".daemon");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "pid"), "5252\n");
+
+		const pid = readManagedDaemonPid(root, {
+			daemonPaths: ["/home/nicholai/.bun/install/global/node_modules/signetai/dist/daemon.js"],
+			isAlive: () => true,
+			readCmd: () => "bun /home/nicholai/.bun/install/cache/signetai@0.77.0/node_modules/signetai/dist/daemon.js",
+		});
+
+		expect(pid).toBe(5252);
+
+		rmSync(root, { recursive: true, force: true });
+	});
+
 	it("rejects a live reused pid when the command does not match signet daemon", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
 		const dir = join(root, ".daemon");
