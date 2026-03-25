@@ -17,12 +17,13 @@ import {
 	st,
 } from "$lib/stores/settings.svelte";
 import { defaultPipelineModel } from "@signet/core/pipeline-providers";
-import {
-	hasExplicitSynthesisConfig,
-	resolveSynthesisEndpoint,
-	resolveSynthesisModel,
-	resolveSynthesisProvider,
-	resolveSynthesisTimeout,
+	import {
+		hasExplicitSynthesisConfig,
+		hasExplicitSynthesisProvider,
+		resolveSynthesisEndpoint,
+		resolveSynthesisModel,
+		resolveSynthesisProvider,
+		resolveSynthesisTimeout,
 } from "./pipeline-settings";
 
 const selectTriggerClass =
@@ -246,6 +247,10 @@ function synthesisExplicit(): boolean {
 	return hasExplicitSynthesisConfig(st.agent);
 }
 
+function synthesisProviderExplicit(): boolean {
+	return hasExplicitSynthesisProvider(st.agent);
+}
+
 function synthesisModelPresets() {
 	const provider = synthesisProvider();
 	return provider ? getModelPresets(provider) : [];
@@ -450,8 +455,8 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 					<Switch checked={synthesisExplicit() ? st.aBool(["memory", "pipelineV2", "synthesis", "enabled"]) : true} onCheckedChange={setBool(["memory", "pipelineV2", "synthesis", "enabled"])} />
 				</div>
 
-				{#if !synthesisExplicit()}
-					<span class="text-[9px] text-[var(--sig-warning)] tracking-wider uppercase">legacy config: synthesis is currently inheriting extraction values until you save an explicit override here.</span>
+				{#if !synthesisProviderExplicit()}
+					<span class="text-[9px] text-[var(--sig-warning)] tracking-wider uppercase">synthesis is currently inheriting the extraction provider and any unset fields until you save an explicit provider override here.</span>
 				{/if}
 
 				<Select.Root

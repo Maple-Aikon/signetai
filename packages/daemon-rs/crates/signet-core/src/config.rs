@@ -91,7 +91,105 @@ fn dirs_home() -> PathBuf {
 fn load_manifest(base: &Path) -> Option<AgentManifest> {
     let path = base.join("agent.yaml");
     let content = std::fs::read_to_string(&path).ok()?;
-    serde_yml::from_str(&content).ok()
+    parse_manifest(&content)
+}
+
+fn parse_manifest(content: &str) -> Option<AgentManifest> {
+    let raw: serde_yml::Value = serde_yml::from_str(content).ok()?;
+    let manifest: AgentManifest = serde_yml::from_str(content).ok()?;
+    Some(normalize_manifest(manifest, &raw))
+}
+
+fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> AgentManifest {
+    let Some(memory) = manifest.memory.as_mut() else {
+        return manifest;
+    };
+    let Some(pipeline) = memory.pipeline_v2.as_mut() else {
+        return manifest;
+    };
+    normalize_pipeline_synthesis(pipeline, raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2")));
+    manifest
+}
+
+fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let extraction = pipeline.extraction.clone();
+    let fallback = SynthesisConfig::default();
+    let provider = raw
+        .and_then(|value| raw_child(value, "synthesis"))
+        .and_then(|value| raw_string(value, "provider"))
+        .filter(|value| is_pipeline_provider(value));
+    let model = raw
+        .and_then(|value| raw_child(value, "synthesis"))
+        .and_then(|value| raw_string(value, "model"));
+    let endpoint = raw
+        .and_then(|value| raw_child(value, "synthesis"))
+        .and_then(|value| {
+            raw_string(value, "endpoint").or_else(|| raw_string(value, "base_url"))
+        });
+    let timeout = raw
+        .and_then(|value| raw_child(value, "synthesis"))
+        .and_then(|value| raw_u64(value, "timeout"));
+    let provider_won = provider.is_some();
+
+    pipeline.synthesis.provider = provider
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| extraction.provider.clone());
+    pipeline.synthesis.model = model.map(ToOwned::to_owned).unwrap_or_else(|| {
+        if provider_won {
+            default_pipeline_model(&pipeline.synthesis.provider).to_string()
+        } else {
+            extraction.model.clone()
+        }
+    });
+    pipeline.synthesis.endpoint = endpoint.map(ToOwned::to_owned).or_else(|| {
+        if provider_won {
+            None
+        } else {
+            extraction.endpoint.clone()
+        }
+    });
+    pipeline.synthesis.timeout = timeout.unwrap_or_else(|| {
+        if provider_won {
+            fallback.timeout
+        } else {
+            extraction.timeout
+        }
+    });
+}
+
+fn raw_child<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a serde_yml::Value> {
+    value
+        .as_mapping()?
+        .get(serde_yml::Value::String(key.to_string()))
+}
+
+fn raw_string<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a str> {
+    raw_child(value, key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn raw_u64(value: &serde_yml::Value, key: &str) -> Option<u64> {
+    raw_child(value, key)?.as_u64()
+}
+
+fn is_pipeline_provider(value: &str) -> bool {
+    matches!(
+        value,
+        "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter"
+    )
+}
+
+fn default_pipeline_model(provider: &str) -> &'static str {
+    match provider {
+        "none" => "",
+        "claude-code" | "anthropic" => "haiku",
+        "codex" => "gpt-5-codex-mini",
+        "opencode" => "anthropic/claude-haiku-4-5-20251001",
+        "openrouter" => "openai/gpt-4o-mini",
+        _ => "qwen3:4b",
+    }
 }
 
 fn resolve_network_binding(mode: Option<&str>) -> (&'static str, &'static str) {
@@ -178,7 +276,7 @@ impl Default for EmbeddingConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentManifest, network_mode_from_bind, resolve_network_binding};
+    use super::{network_mode_from_bind, parse_manifest, resolve_network_binding};
 
     #[test]
     fn resolves_localhost_binding_by_default() {
@@ -201,7 +299,7 @@ mod tests {
 
     #[test]
     fn synthesis_defaults_stay_local_when_pipeline_block_omits_them() {
-        let manifest: AgentManifest = serde_yml::from_str(
+        let manifest = parse_manifest(
             r#"
 memory:
   pipelineV2:
@@ -220,7 +318,63 @@ memory:
         assert_eq!(pipeline.extraction.provider, "ollama");
         assert_eq!(pipeline.extraction.model, "qwen3.5:4b");
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.timeout, pipeline.extraction.timeout);
+    }
+
+    #[test]
+    fn synthesis_enabled_only_keeps_inheriting_extraction_values() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      model: qwen3.5:4b
+      endpoint: http://127.0.0.1:11434
+      timeout: 75000
+    synthesis:
+      enabled: true
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.synthesis.provider, "ollama");
+        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(
+            pipeline.synthesis.endpoint.as_deref(),
+            Some("http://127.0.0.1:11434")
+        );
+        assert_eq!(pipeline.synthesis.timeout, 75_000);
+    }
+
+    #[test]
+    fn explicit_synthesis_provider_uses_provider_default_model() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      model: qwen3.5:4b
+    synthesis:
+      provider: codex
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.synthesis.provider, "codex");
+        assert_eq!(pipeline.synthesis.model, "gpt-5-codex-mini");
     }
 }
 

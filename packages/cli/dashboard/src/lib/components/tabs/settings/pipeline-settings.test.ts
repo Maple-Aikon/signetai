@@ -2,6 +2,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	hasExplicitSynthesisConfig,
+	hasExplicitSynthesisProvider,
 	resolveSynthesisEndpoint,
 	resolveSynthesisModel,
 	resolveSynthesisProvider,
@@ -28,6 +29,29 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(resolveSynthesisTimeout(agent)).toBe(75000);
 	});
 
+	it("keeps inheriting extraction values when synthesis only sets enabled", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					extractionEndpoint: "http://127.0.0.1:11434",
+					extractionTimeout: 75000,
+					synthesis: {
+						enabled: true,
+					},
+				},
+			},
+		};
+
+		expect(hasExplicitSynthesisConfig(agent)).toBe(true);
+		expect(hasExplicitSynthesisProvider(agent)).toBe(false);
+		expect(resolveSynthesisProvider(agent)).toBe("ollama");
+		expect(resolveSynthesisModel(agent)).toBe("qwen3.5:4b");
+		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:11434");
+		expect(resolveSynthesisTimeout(agent)).toBe(75000);
+	});
+
 	it("keeps explicit synthesis separate from extraction", () => {
 		const agent = {
 			memory: {
@@ -45,6 +69,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		};
 
 		expect(hasExplicitSynthesisConfig(agent)).toBe(true);
+		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("claude-code");
 		expect(resolveSynthesisModel(agent)).toBe("haiku");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:9999");
@@ -62,6 +87,7 @@ describe("pipeline-settings synthesis resolution", () => {
 			},
 		};
 
+		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("codex");
 		expect(resolveSynthesisModel(agent)).toBe("gpt-5-codex-mini");
 	});

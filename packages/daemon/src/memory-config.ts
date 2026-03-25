@@ -334,20 +334,21 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	);
 	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
 	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
-	const resolvedSynthesisModel = resolveModel(
-		resolvedSynthesisProvider,
-		synthesisProviderWon ? synthesisRaw?.model : undefined,
-		synthesisRaw ? undefined : resolvedModel,
-	);
+	const resolvedSynthesisModel =
+		typeof synthesisRaw?.model === "string" && synthesisRaw.model.trim().length > 0
+			? synthesisRaw.model
+			: synthesisProviderWon
+				? defaultPipelineModel(resolvedSynthesisProvider)
+				: resolvedModel;
 	const resolvedSynthesisEndpoint =
 		parseOptionalUrl(synthesisRaw?.endpoint) ??
 		parseOptionalUrl(synthesisRaw?.base_url) ??
-		(synthesisRaw ? undefined : resolvedEndpoint);
+		(synthesisProviderWon ? undefined : resolvedEndpoint);
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,
 		300000,
-		synthesisRaw ? d.synthesis.timeout : resolvedTimeout,
+		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
 	);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max

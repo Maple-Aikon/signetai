@@ -40,6 +40,11 @@ export function hasExplicitSynthesisConfig(agent: unknown): boolean {
 	return toRecord(readPipeline(agent)?.synthesis) !== null;
 }
 
+export function hasExplicitSynthesisProvider(agent: unknown): boolean {
+	const pipeline = readPipeline(agent);
+	return isPipelineProvider(readString(pipeline, "synthesis", "provider"));
+}
+
 export function resolveSynthesisProvider(agent: unknown): PipelineProviderChoice {
 	const pipeline = readPipeline(agent);
 	const explicit = readString(pipeline, "synthesis", "provider");
@@ -56,7 +61,7 @@ export function resolveSynthesisModel(agent: unknown): string {
 	const provider = resolveSynthesisProvider(agent);
 	const explicit = readString(pipeline, "synthesis", "model");
 	if (explicit) return explicit;
-	if (hasExplicitSynthesisConfig(agent)) return defaultPipelineModel(provider);
+	if (hasExplicitSynthesisProvider(agent)) return defaultPipelineModel(provider);
 	return (
 		readString(pipeline, "extractionModel") ??
 		readString(pipeline, "extraction", "model") ??
@@ -68,7 +73,7 @@ export function resolveSynthesisEndpoint(agent: unknown): string {
 	const pipeline = readPipeline(agent);
 	const explicit = readString(pipeline, "synthesis", "endpoint") ?? readString(pipeline, "synthesis", "base_url");
 	if (explicit) return explicit;
-	if (hasExplicitSynthesisConfig(agent)) return "";
+	if (hasExplicitSynthesisProvider(agent)) return "";
 	return (
 		readString(pipeline, "extraction", "endpoint") ??
 		readString(pipeline, "extraction", "base_url") ??
@@ -82,6 +87,6 @@ export function resolveSynthesisTimeout(agent: unknown): number {
 	const pipeline = readPipeline(agent);
 	const explicit = readNumber(pipeline, "synthesis", "timeout");
 	if (explicit !== undefined) return explicit;
-	if (hasExplicitSynthesisConfig(agent)) return 120000;
+	if (hasExplicitSynthesisProvider(agent)) return 120000;
 	return readNumber(pipeline, "extraction", "timeout") ?? readNumber(pipeline, "extractionTimeout") ?? 90000;
 }

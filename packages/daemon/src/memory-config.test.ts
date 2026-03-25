@@ -398,6 +398,47 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
 	});
 
+	it("keeps inheriting extraction values when synthesis only sets enabled", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					extractionEndpoint: "http://127.0.0.1:11434",
+					extractionTimeout: 75000,
+					synthesis: {
+						enabled: true,
+					},
+				},
+			},
+		});
+
+		expect(result.synthesis.provider).toBe("ollama");
+		expect(result.synthesis.model).toBe("qwen3.5:4b");
+		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
+		expect(result.synthesis.timeout).toBe(75000);
+	});
+
+	it("keeps inherited synthesis provider overrides field-specific", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "ollama",
+					extractionModel: "qwen3.5:4b",
+					extractionEndpoint: "http://127.0.0.1:11434",
+					synthesis: {
+						model: "qwen3:8b",
+					},
+				},
+			},
+		});
+
+		expect(result.synthesis.provider).toBe("ollama");
+		expect(result.synthesis.model).toBe("qwen3:8b");
+		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
+		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
+	});
+
 	it("keeps explicit synthesis separate from extraction", () => {
 		const result = loadPipelineConfig({
 			memory: {
