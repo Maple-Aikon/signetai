@@ -223,11 +223,16 @@ function gatherTools(): ToolSpec[] {
 // ---------------------------------------------------------------------------
 
 function buildPrompt(tools: readonly ToolSpec[], message: string): string {
-	const list = tools
-		.map((t) => {
-			const s = t.schema ? ` Args: ${JSON.stringify(t.schema).slice(0, 200)}` : "";
-			return `- ${t.server}/${t.name}: ${t.desc}${s}`;
-		})
+	// Group tools by server and keep descriptions short to minimize prompt size
+	const byServer = new Map<string, string[]>();
+	for (const t of tools) {
+		const srv = t.server;
+		if (!byServer.has(srv)) byServer.set(srv, []);
+		const desc = t.desc.length > 60 ? t.desc.slice(0, 57) + "..." : t.desc;
+		byServer.get(srv)?.push(`  ${t.name}: ${desc}`);
+	}
+	const list = [...byServer.entries()]
+		.map(([srv, items]) => `[${srv}]\n${items.join("\n")}`)
 		.join("\n");
 
 	return `You are Oogie — a direct, dorky, helpful AI assistant. Keep it casual. Use keyboard emojis like (╯°□°)╯ occasionally. Never use unicode emojis.
