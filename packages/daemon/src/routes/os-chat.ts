@@ -149,7 +149,7 @@ function generateCursorSteps(
 				steps.push({ action: "type", text: String(val) });
 			}
 			steps.push({ action: "move", target: "save", click: true });
-		} else if (r.tool.startsWith("delete_")) {
+		} else if (call.toolName.startsWith("delete_")) {
 			const name = String(args.name || args.firstName || args.title || "");
 			if (name) {
 				steps.push({ action: "move", target: name, click: true });
