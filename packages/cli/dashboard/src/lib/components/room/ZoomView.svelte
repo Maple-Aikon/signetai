@@ -2,7 +2,7 @@
 	import { tick } from "svelte";
 	import type { Agent } from "$lib/stores/agents.svelte";
 	import { API_BASE } from "$lib/api";
-	import { sendWidgetAction } from "$lib/stores/os.svelte";
+	import { sendWidgetAction, getWidgetSandbox, setAgentSession, fetchWidgetHtml } from "$lib/stores/os.svelte";
 	import ArrowLeft from "@lucide/svelte/icons/arrow-left";
 	import Send from "@lucide/svelte/icons/send";
 	import Wrench from "@lucide/svelte/icons/wrench";
@@ -73,12 +73,144 @@
 	let messages = $state<ChatMessage[]>([]);
 	let input = $state("");
 	let loading = $state(false);
+	let loadingStatus = $state("");
+	let agentRunning = $state(false);
 	let msgId = 0;
 	let chatEl: HTMLDivElement | null = $state(null);
 
 	async function scrollToBottom(): Promise<void> {
 		await tick();
 		if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+	}
+
+	/**
+	 * Execute a visual agent task using the daemon's observe→think→act loop.
+	 * Same architecture as the Apps/Cortex tab — real DOM reading + LLM decisions.
+	 */
+	async function executeAgentTask(serverId: string, task: string): Promise<string> {
+		agentRunning = true;
+		try {
+			// Wait for widget to be ready
+			loadingStatus = "starting agent...";
+			await new Promise((r) => setTimeout(r, 1500));
+
+			// Start agent session on daemon
+			const ctl = new AbortController();
+			const timeout = setTimeout(() => ctl.abort(), 30000);
+			let execRes: Response;
+			try {
+				execRes = await fetch(`${API_BASE}/api/os/agent-execute`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ serverId, task }),
+					signal: ctl.signal,
+				});
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") {
+					throw new Error("Timed out starting agent");
+				}
+				throw err;
+			} finally {
+				clearTimeout(timeout);
+			}
+
+			const execData = await execRes.json();
+			if (!execRes.ok || !execData.sessionId) {
+				throw new Error(execData.error || "Failed to start agent session");
+			}
+
+			const sessionId = execData.sessionId;
+
+			// Connect to SSE stream for agent events
+			return await new Promise<string>((resolve, reject) => {
+				const evtSource = new EventSource(`${API_BASE}/api/os/agent-events?session=${sessionId}`);
+				let result = "Task completed";
+
+				evtSource.onmessage = async (e) => {
+					try {
+						const event = JSON.parse(e.data);
+
+						if (event.type === "connected") return;
+
+						if (event.type === "agentStart") {
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox) sandbox.agentStart();
+							return;
+						}
+
+						if (event.type === "agentStop") {
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox) sandbox.agentStop();
+							return;
+						}
+
+						if (event.type === "getDomState") {
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (!sandbox) {
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ sessionId, domState: { success: false, error: "Sandbox not found" } }),
+								});
+								return;
+							}
+							try {
+								const domState = await sandbox.getDomState();
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ sessionId, domState }),
+								});
+							} catch (err) {
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ sessionId, domState: { success: false, error: err instanceof Error ? err.message : String(err) } }),
+								});
+							}
+							return;
+						}
+
+						if (event.type === "executeAction") {
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox && event.data?.action) {
+								try { await sandbox.executeAction(event.data.action); } catch { /* ignore */ }
+							}
+							return;
+						}
+
+						if (event.type === "status") {
+							loadingStatus = event.data?.message || `step ${event.data?.step}...`;
+							scrollToBottom();
+							return;
+						}
+
+						if (event.type === "done") {
+							result = event.data?.summary || "Task completed";
+							evtSource.close();
+							resolve(result);
+							return;
+						}
+
+						if (event.type === "error") {
+							evtSource.close();
+							reject(new Error(event.data?.error || "Agent error"));
+							return;
+						}
+					} catch { /* parse error */ }
+				};
+
+				evtSource.onerror = () => {
+					evtSource.close();
+					reject(new Error("Agent event stream disconnected"));
+				};
+
+				setTimeout(() => { evtSource.close(); reject(new Error("Agent timed out")); }, 300000);
+			});
+		} finally {
+			agentRunning = false;
+			setAgentSession(null);
+		}
 	}
 
 	async function send(): Promise<void> {
@@ -88,26 +220,47 @@
 		messages.push({ id: ++msgId, role: "user", content: text, ts: Date.now() });
 		input = "";
 		loading = true;
+		loadingStatus = "thinking...";
 		scrollToBottom();
 
 		try {
+			// First, ask the LLM what to do
 			const res = await fetch(`${API_BASE}/api/os/chat`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ message: text }),
 			});
 			const data = await res.json();
-			messages.push({
-				id: ++msgId,
-				role: "agent",
-				content: data.response ?? "No response",
-				ts: Date.now(),
-				toolCalls: data.toolCalls,
-			});
 
-			// Play cursor automation in widget — cursor drives the UI for mutations
-			if (agent.source.type === "mcp" && data.cursorSteps && data.cursorSteps.length > 0) {
-				sendWidgetAction(agent.source.serverId, "cursor", { steps: data.cursorSteps });
+			// If the LLM decided this needs visual agent execution (mutations on MCP widgets)
+			if (agent.source.type === "mcp" && data.useAgent && data.agentServerId) {
+				loadingStatus = "cursor taking over...";
+				try {
+					const result = await executeAgentTask(data.agentServerId, data.agentTask || text);
+					messages.push({
+						id: ++msgId,
+						role: "agent",
+						content: result,
+						ts: Date.now(),
+						toolCalls: data.toolCalls,
+					});
+				} catch (err) {
+					messages.push({
+						id: ++msgId,
+						role: "agent",
+						content: `Agent error: ${err instanceof Error ? err.message : String(err)}`,
+						ts: Date.now(),
+					});
+				}
+			} else {
+				// Direct tool call response (reads, queries)
+				messages.push({
+					id: ++msgId,
+					role: "agent",
+					content: data.response ?? "No response",
+					ts: Date.now(),
+					toolCalls: data.toolCalls,
+				});
 			}
 		} catch (err) {
 			messages.push({
@@ -118,6 +271,7 @@
 			});
 		} finally {
 			loading = false;
+			loadingStatus = "";
 			scrollToBottom();
 		}
 	}
