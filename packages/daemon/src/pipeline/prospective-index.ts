@@ -193,12 +193,13 @@ export function startHintsWorker(deps: {
 				schedule();
 				return;
 			}
+			const j = job;
 
 			let payload: HintPayload;
 			try {
-				payload = JSON.parse(job.payload) as HintPayload;
+				payload = JSON.parse(j.payload) as HintPayload;
 			} catch {
-				accessor.withWriteTx((db) => failJob(db, job.id, "invalid payload"));
+				accessor.withWriteTx((db) => failJob(db, j.id, "invalid payload"));
 				schedule();
 				return;
 			}
@@ -209,27 +210,28 @@ export function startHintsWorker(deps: {
 			if (hints.length > 0) {
 				accessor.withWriteTx((db) => {
 					writeHints(db, payload.memoryId, "default", hints);
-					completeJob(db, job.id);
+					completeJob(db, j.id);
 				});
 				logger.info("pipeline", "Prospective hints generated", {
 					memoryId: payload.memoryId,
 					hints: hints.length,
 				});
 			} else {
-				accessor.withWriteTx((db) => completeJob(db, job.id));
+				accessor.withWriteTx((db) => completeJob(db, j.id));
 				logger.debug("pipeline", "No hints generated (empty LLM response)", {
 					memoryId: payload.memoryId,
 				});
 			}
 		} catch (e) {
 			if (job) {
+				const j = job;
 				const msg = e instanceof Error ? e.message : String(e);
-				accessor.withWriteTx((db) => failJob(db, job.id, msg));
+				accessor.withWriteTx((db) => failJob(db, j.id, msg));
 				logger.warn("pipeline", "Hints worker job failed", {
-					jobId: job.id,
-					memoryId: job.memory_id,
+					jobId: j.id,
+					memoryId: j.memory_id,
 					error: msg,
-					attempt: job.attempts,
+					attempt: j.attempts,
 				});
 			}
 			logger.warn("pipeline", "Hints worker tick failed", {

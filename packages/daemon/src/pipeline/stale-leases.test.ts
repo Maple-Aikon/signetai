@@ -4,11 +4,22 @@ import { runMigrations } from "@signet/core";
 import type { WriteDb } from "../db-accessor";
 import { recoverStaleLeases } from "./stale-leases";
 
+function insertMemory(db: Database, id: string): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO memories
+		 (id, type, content, confidence, importance, created_at, updated_at,
+		  updated_by, vector_clock, is_deleted, extraction_status)
+		 VALUES (?, 'fact', ?, 1.0, 0.5, ?, ?, 'test', '{}', 0, 'none')`,
+	).run(id, `content for ${id}`, now, now);
+}
+
 describe("recoverStaleLeases", () => {
 	let db: Database;
 
 	beforeEach(() => {
 		db = new Database(":memory:");
+		db.exec("PRAGMA foreign_keys = ON");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	});
 
@@ -22,6 +33,10 @@ describe("recoverStaleLeases", () => {
 		const freshAt = new Date("2026-03-25T00:14:30.000Z").toISOString();
 		const now = new Date("2026-03-25T00:15:00.000Z").toISOString();
 		const cutoff = new Date("2026-03-25T00:10:00.000Z").toISOString();
+
+		insertMemory(db, "mem-1");
+		insertMemory(db, "mem-2");
+		insertMemory(db, "mem-3");
 
 		db.prepare(
 			`INSERT INTO memory_jobs
