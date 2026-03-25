@@ -20,6 +20,7 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
+import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
@@ -148,31 +149,12 @@ export async function runExistingSetupWizard(
 			};
 		}
 
-		if (options?.extractionProvider && options.extractionProvider !== "none") {
+		if (options?.extractionProvider) {
 			const memory = readRecord(config.memory);
-			memory.pipelineV2 = {
-				enabled: true,
-				extraction: {
-					provider: options.extractionProvider,
-					model:
-						options.extractionModel ||
-						(options.extractionProvider === "claude-code"
-							? "haiku"
-							: options.extractionProvider === "codex"
-								? "gpt-5.3-codex"
-								: options.extractionProvider === "opencode"
-									? "anthropic/claude-haiku-4-5-20251001"
-									: options.extractionProvider === "openrouter"
-										? "openai/gpt-4o-mini"
-										: "glm-4.7-flash"),
-				},
-				semanticContradictionEnabled: true,
-				graph: { enabled: true },
-				reranker: { enabled: true },
-				autonomous: { enabled: true, allowUpdateDelete: true },
-				predictor: { enabled: true },
-				predictorPipeline: { agentFeedback: true, trainingTelemetry: false },
-			};
+			memory.pipelineV2 = buildSetupPipeline(
+				options.extractionProvider,
+				options.extractionModel || defaultExtractionModel(options.extractionProvider),
+			);
 			config.memory = memory;
 		}
 

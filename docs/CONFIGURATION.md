@@ -108,8 +108,8 @@ memory:
     enabled: true
     shadowMode: false
     extraction:
-      provider: claude-code
-      model: haiku
+      provider: ollama
+      model: qwen3:4b
     graph:
       enabled: true
     autonomous:
@@ -300,17 +300,31 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"claude-code"` | — | `"ollama"`, `"openai"`, `"claude-code"`, `"opencode"`, `"codex"`, or `"native"` |
-| `model` | `"haiku"` | — | Model name for the configured provider |
+| `provider` | `"ollama"` | — | `"none"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, or `"openrouter"` |
+| `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `45000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
 
+For safety, the intended extraction setups are:
+
+- `claude-code` on a Haiku model
+- `codex` on a GPT Mini model
+- local `ollama` with at least `qwen3:4b`
+
+Set `provider: none` to disable extraction entirely, which is the
+recommended default for VPS installs that should not make background LLM
+calls.
+
+Remote API extraction can accumulate extreme fees quickly because the
+pipeline runs continuously in the background. Use `anthropic`,
+`openrouter`, or remote OpenCode routes only when you explicitly want
+that billing behavior.
+
 When using `ollama`, the model must be available locally. When using
 `claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
-Codex harness as the extraction provider. `native` uses the
-`@signet/native` Rust/NAPI module for local vector operations. Lower
-`minConfidence` to capture more facts at the cost of noise; raise it
-to write only high-confidence facts.
+Codex CLI as the extraction provider. Lower `minConfidence` to capture
+more facts at the cost of noise; raise it to write only high-confidence
+facts.
 
 
 ### Worker (`worker`)

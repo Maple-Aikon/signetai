@@ -7,6 +7,7 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
+import { buildSetupPipeline } from "./setup-pipeline.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
@@ -106,27 +107,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			};
 		}
 
-		if (cfg.extractionProvider !== "none") {
-			const memory = readRecord(config.memory);
-			memory.pipelineV2 = {
-				enabled: true,
-				extraction: {
-					provider: cfg.extractionProvider,
-					model: cfg.extractionModel,
-				},
-				semanticContradictionEnabled: true,
-				graph: { enabled: true },
-				reranker: { enabled: true },
-				autonomous: {
-					enabled: true,
-					allowUpdateDelete: true,
-					maintenanceMode: "execute",
-				},
-				predictor: { enabled: true },
-				predictorPipeline: { agentFeedback: true, trainingTelemetry: false },
-			};
-			config.memory = memory;
-		}
+		const memory = readRecord(config.memory);
+		memory.pipelineV2 = buildSetupPipeline(cfg.extractionProvider, cfg.extractionModel);
+		config.memory = memory;
 
 		writeFileSync(join(cfg.basePath, "agent.yaml"), formatYaml(config));
 

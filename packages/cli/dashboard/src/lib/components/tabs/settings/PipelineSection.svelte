@@ -1,4 +1,5 @@
 <script lang="ts">
+import { type ModelRegistryEntry, getModelsByProvider } from "$lib/api";
 import AdvancedSection from "$lib/components/config/AdvancedSection.svelte";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
@@ -15,10 +16,6 @@ import {
 	PIPELINE_WORKER_NUMS,
 	st,
 } from "$lib/stores/settings.svelte";
-import {
-	getModelsByProvider,
-	type ModelRegistryEntry,
-} from "$lib/api";
 
 const selectTriggerClass =
 	"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
@@ -26,7 +23,11 @@ const selectContentClass =
 	"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
 const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
 
+const EXTRACTION_SAFETY_TEXT =
+	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local ollama at qwen3:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
+
 const EXTRACTION_PROVIDER_OPTIONS = [
+	{ value: "none", label: "none (disable extraction)" },
 	{ value: "ollama", label: "ollama" },
 	{ value: "claude-code", label: "claude-code" },
 	{ value: "codex", label: "codex" },
@@ -37,42 +38,42 @@ const EXTRACTION_PROVIDER_OPTIONS = [
 
 // Hardcoded fallback presets — used when the registry API is unavailable
 const FALLBACK_MODEL_PRESETS: Record<string, Array<{ value: string; label: string }>> = {
-	"ollama": [
-		{ value: "glm-4.7-flash", label: "glm-4.7-flash" },
+	ollama: [
 		{ value: "qwen3:4b", label: "qwen3:4b" },
+		{ value: "glm-4.7-flash", label: "glm-4.7-flash" },
 		{ value: "llama3", label: "llama3" },
 	],
 	"claude-code": [
-		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
-		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
 		{ value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
 		{ value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
+		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
 	],
-	"codex": [
+	codex: [
+		{ value: "gpt-5-codex-mini", label: "GPT Mini" },
 		{ value: "gpt-5.4", label: "GPT 5.4" },
 		{ value: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
 		{ value: "gpt-5.3-codex-spark", label: "GPT 5.3 Codex Spark" },
 		{ value: "gpt-5-codex", label: "GPT 5 Codex" },
-		{ value: "codex-mini-latest", label: "Codex Mini" },
 	],
-	"opencode": [
-		{ value: "anthropic/claude-opus-4-6", label: "Claude Opus 4.6" },
-		{ value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+	opencode: [
 		{ value: "anthropic/claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
 		{ value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+		{ value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+		{ value: "anthropic/claude-opus-4-6", label: "Claude Opus 4.6" },
 	],
-	"anthropic": [
-		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
-		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+	anthropic: [
 		{ value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
 		{ value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
+		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
 	],
-	"openrouter": [
+	openrouter: [
 		{ value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
-		{ value: "openai/gpt-4o", label: "GPT-4o" },
 		{ value: "anthropic/claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-		{ value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
 		{ value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+		{ value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+		{ value: "openai/gpt-4o", label: "GPT-4o" },
 	],
 };
 
@@ -85,16 +86,20 @@ $effect(() => {
 	const _enabled = st.aBool(["memory", "pipelineV2", "modelRegistry", "enabled"]);
 	void _enabled;
 	let cancelled = false;
-	getModelsByProvider().then((models) => {
-		if (cancelled) return;
-		if (models && Object.keys(models).length > 0) {
-			dynamicModels = models;
-			registryLoaded = true;
-		}
-	}).catch(() => {
-		// Registry unavailable — fall back to static presets
-	});
-	return () => { cancelled = true; };
+	getModelsByProvider()
+		.then((models) => {
+			if (cancelled) return;
+			if (models && Object.keys(models).length > 0) {
+				dynamicModels = models;
+				registryLoaded = true;
+			}
+		})
+		.catch(() => {
+			// Registry unavailable — fall back to static presets
+		});
+	return () => {
+		cancelled = true;
+	};
 });
 
 function getModelPresets(provider: string): Array<{ value: string; label: string }> {
@@ -105,6 +110,37 @@ function getModelPresets(provider: string): Array<{ value: string; label: string
 		}));
 	}
 	return FALLBACK_MODEL_PRESETS[provider] ?? [];
+}
+
+function pickPreferredModel(provider: string, presets: Array<{ value: string; label: string }>): string {
+	const vals = presets.map((preset) => preset.value);
+	if (provider === "claude-code" || provider === "anthropic") {
+		return vals.find((v) => v.toLowerCase().includes("haiku")) ?? vals[0] ?? "";
+	}
+	if (provider === "codex") {
+		return vals.find((v) => v.toLowerCase().includes("mini")) ?? vals[0] ?? "";
+	}
+	if (provider === "ollama") {
+		return vals.find((v) => v === "qwen3:4b") ?? vals[0] ?? "";
+	}
+	if (provider === "opencode") {
+		return (
+			vals.find((v) => v.toLowerCase().includes("haiku")) ??
+			vals.find((v) => v.toLowerCase().includes("flash")) ??
+			vals[0] ??
+			""
+		);
+	}
+	if (provider === "openrouter") {
+		return (
+			vals.find((v) => v.toLowerCase().includes("gpt-4o-mini")) ??
+			vals.find((v) => v.toLowerCase().includes("haiku")) ??
+			vals.find((v) => v.toLowerCase().includes("flash")) ??
+			vals[0] ??
+			""
+		);
+	}
+	return vals[0] ?? "";
 }
 
 function extractionProvider(): string {
@@ -122,9 +158,7 @@ function extractionModelSelectValue(): string {
 	if (customModelActive) return "__custom__";
 	const model = st.aStr(["memory", "pipelineV2", "extractionModel"]);
 	if (!model) return "";
-	return extractionModelPresets().some((preset) => preset.value === model)
-		? model
-		: "__custom__";
+	return extractionModelPresets().some((preset) => preset.value === model) ? model : "__custom__";
 }
 
 function isKnownPreset(model: string): boolean {
@@ -139,7 +173,29 @@ function isKnownPreset(model: string): boolean {
 
 function defaultModelForProvider(provider: string): string {
 	const presets = getModelPresets(provider);
-	return presets[0]?.value ?? "";
+	return pickPreferredModel(provider, presets);
+}
+
+function extractionModel(): string {
+	return st.aStr(["memory", "pipelineV2", "extractionModel"]);
+}
+
+function extractionDisabled(): boolean {
+	return extractionProvider() === "none";
+}
+
+function extractionProviderRisky(): boolean {
+	const provider = extractionProvider();
+	return provider === "anthropic" || provider === "openrouter" || provider === "opencode";
+}
+
+function extractionModelNeedsCostWarning(): boolean {
+	const provider = extractionProvider();
+	const model = extractionModel().toLowerCase();
+	if (!model) return false;
+	if (provider === "claude-code") return !model.includes("haiku");
+	if (provider === "codex") return !model.includes("mini");
+	return false;
 }
 
 function setNum(path: string[]) {
@@ -208,7 +264,12 @@ function strengthMaxTokensLabel(): number {
 	return STRENGTH_MAX_TOKENS[s] ?? 1024;
 }
 
-const TOP_LEVEL_FEATURE_KEYS = ["allowUpdateDelete", "graphEnabled", "autonomousEnabled", "semanticContradictionEnabled"] as const;
+const TOP_LEVEL_FEATURE_KEYS = [
+	"allowUpdateDelete",
+	"graphEnabled",
+	"autonomousEnabled",
+	"semanticContradictionEnabled",
+] as const;
 const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 </script>
 
@@ -219,21 +280,29 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 		</FormField>
 
 		<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; codex uses the local Codex CLI; opencode uses the OpenCode server; anthropic uses direct API; openrouter uses the OpenRouter API.">
-			<Select.Root
-				type="single"
-				value={st.aStr(["memory", "pipelineV2", "extractionProvider"])}
-				onValueChange={setExtractionProvider}
-			>
-				<Select.Trigger class={selectTriggerClass}>
-					{st.aStr(["memory", "pipelineV2", "extractionProvider"]) || "None selected"}
-				</Select.Trigger>
-				<Select.Content class={selectContentClass}>
-					<Select.Item class={selectItemClass} value="" label="None selected" />
-					{#each EXTRACTION_PROVIDER_OPTIONS as option (option.value)}
-						<Select.Item class={selectItemClass} value={option.value} label={option.label} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
+			<div class="flex flex-col gap-2">
+				<Select.Root
+					type="single"
+					value={st.aStr(["memory", "pipelineV2", "extractionProvider"])}
+					onValueChange={setExtractionProvider}
+				>
+					<Select.Trigger class={selectTriggerClass}>
+						{st.aStr(["memory", "pipelineV2", "extractionProvider"]) || "None selected"}
+					</Select.Trigger>
+					<Select.Content class={selectContentClass}>
+						<Select.Item class={selectItemClass} value="" label="None selected" />
+						{#each EXTRACTION_PROVIDER_OPTIONS as option (option.value)}
+							<Select.Item class={selectItemClass} value={option.value} label={option.label} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				<span class="text-[9px] text-[var(--sig-warning)] tracking-wider uppercase">{EXTRACTION_SAFETY_TEXT}</span>
+				{#if extractionDisabled()}
+					<span class="text-[9px] text-[var(--sig-highlight)] tracking-wider uppercase">extraction disabled. no background provider calls will run.</span>
+				{:else if extractionProviderRisky()}
+					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">this provider usually means billed api usage. costs can snowball fast if you leave extraction on.</span>
+				{/if}
+			</div>
 		</FormField>
 
 		<FormField label="Extraction model" description={registryLoaded ? "Models auto-discovered from provider. Switch to custom for any supported model string." : "Choose a provider default or switch to custom. Models will auto-update when the registry connects."}>
@@ -261,6 +330,9 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				{/if}
 				{#if registryLoaded}
 					<span class="text-[9px] text-[var(--sig-text-muted)] tracking-wider uppercase">auto-discovered from registry</span>
+				{/if}
+				{#if extractionModelNeedsCostWarning()}
+					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt mini for codex. larger models will burn more money.</span>
 				{/if}
 			</div>
 		</FormField>

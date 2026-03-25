@@ -313,6 +313,11 @@ describe("createClaudeCodeProvider", () => {
 describe("createCodexProvider", () => {
 	afterEach(() => restoreSpawn());
 
+	it("uses the default model (gpt-5-codex-mini) when none is supplied", () => {
+		const provider = createCodexProvider();
+		expect(provider.name).toBe("codex:gpt-5-codex-mini");
+	});
+
 	it("returns a provider with the correct name", () => {
 		const provider = createCodexProvider({ model: "gpt-5.3-codex" });
 		expect(provider.name).toBe("codex:gpt-5.3-codex");

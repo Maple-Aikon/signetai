@@ -124,6 +124,14 @@ signet setup --non-interactive \
 In non-interactive mode, agents should ask the user to choose both
 providers first, then pass those choices explicitly.
 
+Extraction safety note:
+
+- intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a
+  Pro/Max subscription, or local Ollama with at least `qwen3:4b`
+- on a VPS, set extraction to `none` unless you explicitly want
+  background LLM calls
+- remote API extraction can rack up extreme fees fast
+
 ---
 
 Setup Wizard
@@ -218,8 +226,11 @@ across all your AI tools. The core features:
 
 - **[[pipeline|Memory pipeline]]** — conversations are processed automatically by
   Pipeline V2, which extracts meaningful facts and decisions using a
-  local LLM (default: `qwen3:4b` via Ollama). Memories accumulate over
-  time and are recalled in future sessions.
+  configured extraction backend. The safe intended setups are Claude
+  Code on Haiku, Codex on GPT Mini, or local Ollama with at least
+  `qwen3:4b`. Set the extraction provider to `none` if you want Signet
+  without background extraction. Memories accumulate over time and are
+  recalled in future sessions.
 - **Hybrid search** — recall combines semantic and keyword search so
   you find relevant memories even when phrasing varies.
 - **Connectors** — platform adapters for Claude Code, OpenCode, and

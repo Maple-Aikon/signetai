@@ -140,6 +140,14 @@ Non-interactive behavior:
 - extraction provider must be explicitly provided via `--extraction-provider`
 - git: enabled unless `--skip-git` is passed
 
+Extraction safety note:
+
+- intended usage is `claude-code` on Haiku, `codex` on GPT Mini with a
+  Pro/Max subscription, or local `ollama` with at least `qwen3:4b`
+- set `--extraction-provider none` on a VPS if you do not want
+  background extraction
+- remote API extraction can create extreme usage fees fast
+
 Wizard steps:
 
 1. **Agent Name** - What to call your agent

@@ -446,14 +446,28 @@ switch back to `team` mode.
 
 ### Pipeline not processing
 
-The memory extraction pipeline requires Ollama running locally with the
-extraction model pulled. Confirm:
+First check whether extraction is intentionally disabled:
+
+```yaml
+memory:
+  pipelineV2:
+    enabled: false
+    extraction:
+      provider: none
+```
+
+If `provider: none` is set, or `enabled: false`, the pipeline staying
+idle is expected. This is the recommended configuration for VPS installs
+that should not make background LLM calls.
+
+If extraction is enabled and using Ollama, confirm the server is
+running and the model is pulled:
 
 ```bash
 curl -s http://localhost:11434/api/tags | jq '.models[].name'
 ```
 
-The default model is `qwen3:4b`. If it is not listed:
+The recommended local floor is `qwen3:4b`. If it is not listed:
 
 ```bash
 ollama pull qwen3:4b
@@ -471,6 +485,11 @@ memory:
 `shadowMode: true` means the pipeline extracts but does not write to the
 database — useful for testing, but memories will not persist. Set it to
 `false` for production operation.
+
+Cost warning: the intended extraction setups are Claude Code on Haiku,
+Codex CLI on GPT Mini with a Pro/Max subscription, or local Ollama.
+Remote API extraction can create extreme fees quickly if left running in
+the background.
 
 ### High memory usage
 
