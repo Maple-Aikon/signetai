@@ -734,6 +734,14 @@ export class KvCacheManager {
 	 * decompressing the compressed region and concatenating with
 	 * the residual window.
 	 *
+	 * **Memory trade-off:** The reconstructed tensor is full float32
+	 * for the forward pass. TurboQuant's savings come from the
+	 * *persistent* compressed storage between steps (~4 bits/coord),
+	 * not the transient reconstruction buffer. Peak memory per step
+	 * includes one float32 reconstruction per attention layer, but
+	 * the compressed storage (which dominates for long sequences)
+	 * remains at ~4 bits/coord.
+	 *
 	 * @returns Tensors shaped [1, numHeads, totalSeqLen, headDim]
 	 */
 	reconstructLayer(
@@ -1160,6 +1168,21 @@ async function runGeneration(
 	// The prefill KV tensors for attention layers have been copied into
 	// KvCacheManager; non-attention layer KV is still referenced via pastKv.
 	disposeTensor(prefillOutput.logits);
+
+	// Respect maxTokens=0 — skip generation entirely
+	if (maxTokens <= 0) {
+		return {
+			text: "",
+			usage: {
+				inputTokens: promptLen,
+				outputTokens: 0,
+				cacheReadTokens: null,
+				cacheCreationTokens: null,
+				totalCost: null,
+				totalDurationMs: Date.now() - startTime,
+			},
+		};
+	}
 
 	let nextTokenIdx = sampleToken(lastLogits, temperature, topP);
 	let nextTokenId = BigInt(nextTokenIdx);
