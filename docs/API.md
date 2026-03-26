@@ -91,7 +91,9 @@ No authentication required. Lightweight liveness check.
 ### GET /api/status
 
 Full daemon status including pipeline config, embedding provider, and a
-composite health score derived from diagnostics.
+composite health score derived from diagnostics. Extraction provider
+runtime resolution persists startup degradation so operators can detect
+silent fallback or hard-blocked extraction after boot.
 
 **Response**
 
@@ -115,6 +117,19 @@ composite health score derived from diagnostics.
     "autonomousEnabled": false,
     "extractionModel": "qwen3:4b"
   },
+  "providerResolution": {
+    "extraction": {
+      "configured": "claude-code",
+      "resolved": "claude-code",
+      "effective": "ollama",
+      "fallbackProvider": "ollama",
+      "status": "degraded",
+      "degraded": true,
+      "fallbackApplied": true,
+      "reason": "Claude Code CLI not found during extraction startup preflight",
+      "since": "2026-03-26T06:00:00.000Z"
+    }
+  },
   "health": { "score": 0.97, "status": "healthy" },
   "embedding": {
     "provider": "ollama",
@@ -127,6 +142,8 @@ composite health score derived from diagnostics.
 
 The `bypassedSessions` field reports how many active sessions currently have
 bypass enabled (see [[#Sessions]]).
+Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
+states when the configured extraction provider is unavailable at startup.
 
 
 ### GET /api/features

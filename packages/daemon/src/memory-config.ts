@@ -41,6 +41,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	semanticContradictionTimeoutMs: 120000,
 	extraction: {
 		provider: "ollama",
+		fallbackProvider: "ollama",
 		model: "qwen3:4b",
 		strength: "low",
 		endpoint: undefined,
@@ -235,6 +236,10 @@ function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 	return typeof v === "string" && ["low", "medium", "high"].includes(v);
 }
 
+function isExtractionFallbackProvider(v: unknown): v is "ollama" | "none" {
+	return v === "ollama" || v === "none";
+}
+
 function parseOptionalUrl(raw: unknown): string | undefined {
 	if (typeof raw !== "string") return undefined;
 	const trimmed = raw.trim();
@@ -333,6 +338,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		d.extraction.timeout,
 	);
+	const resolvedFallbackProvider = isExtractionFallbackProvider(
+		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
+	)
+		? (extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider)
+		: d.extraction.fallbackProvider;
 	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
 	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
 	const resolvedSynthesisModel =
@@ -380,6 +390,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 		extraction: {
 			provider: resolvedProvider,
+			fallbackProvider: resolvedFallbackProvider,
 			model: resolvedModel,
 			strength: (() => {
 				// Flat keys win when set (dashboard writes these); nested is fallback
