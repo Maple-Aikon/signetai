@@ -67,21 +67,30 @@ impl AppState {
 
 #[derive(Default)]
 pub struct ExtractionOverloadTracker {
+    running: bool,
+    overloaded: bool,
+    load_per_cpu: Option<f64>,
     overload_since_ms: Option<i64>,
     next_tick_at_ms: Option<i64>,
 }
 
 impl ExtractionOverloadTracker {
-    pub fn update(
+    pub fn update_sample(
         &mut self,
+        running: bool,
+        load_per_cpu: Option<f64>,
         overloaded: bool,
         now_ms: i64,
         overload_backoff_ms: u64,
-    ) -> (Option<i64>, Option<u64>) {
-        if !overloaded {
+    ) {
+        self.running = running;
+        self.load_per_cpu = load_per_cpu;
+        self.overloaded = overloaded;
+
+        if !running || !overloaded {
             self.overload_since_ms = None;
             self.next_tick_at_ms = None;
-            return (None, None);
+            return;
         }
 
         if self.overload_since_ms.is_none() {
@@ -98,8 +107,33 @@ impl ExtractionOverloadTracker {
         }
 
         self.next_tick_at_ms = Some(next_tick_at);
-        let next_tick_in_ms = next_tick_at.saturating_sub(now_ms) as u64;
-        (self.overload_since_ms, Some(next_tick_in_ms))
+    }
+
+    pub fn snapshot(&self, now_ms: i64) -> ExtractionOverloadSnapshot {
+        let next_tick_in_ms = self.next_tick_at_ms.map(|at| at.saturating_sub(now_ms).max(0) as u64);
+        ExtractionOverloadSnapshot {
+            running: self.running,
+            overloaded: self.overloaded,
+            load_per_cpu: self.load_per_cpu,
+            overload_since_ms: self.overload_since_ms,
+            next_tick_in_ms,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct ExtractionOverloadSnapshot {
+    pub running: bool,
+    pub overloaded: bool,
+    pub load_per_cpu: Option<f64>,
+    pub overload_since_ms: Option<i64>,
+    pub next_tick_in_ms: Option<u64>,
+}
+
+#[cfg(test)]
+impl ExtractionOverloadTracker {
+    fn next_tick_at_ms(&self) -> Option<i64> {
+        self.next_tick_at_ms
     }
 }
 
@@ -111,34 +145,71 @@ mod tests {
     fn overload_tracker_sets_since_once_and_counts_down() {
         let mut tracker = ExtractionOverloadTracker::default();
 
-        let (since_1, next_1) = tracker.update(true, 1_000, 30_000);
-        assert_eq!(since_1, Some(1_000));
-        assert_eq!(next_1, Some(30_000));
+        tracker.update_sample(true, Some(1.5), true, 1_000, 30_000);
+        let snap_1 = tracker.snapshot(1_000);
+        assert!(snap_1.running);
+        assert!(snap_1.overloaded);
+        assert_eq!(snap_1.load_per_cpu, Some(1.5));
+        assert_eq!(snap_1.overload_since_ms, Some(1_000));
+        assert_eq!(snap_1.next_tick_in_ms, Some(30_000));
 
-        let (since_2, next_2) = tracker.update(true, 11_000, 30_000);
-        assert_eq!(since_2, Some(1_000));
-        assert_eq!(next_2, Some(20_000));
+        tracker.update_sample(true, Some(1.4), true, 11_000, 30_000);
+        let snap_2 = tracker.snapshot(11_000);
+        assert_eq!(snap_2.overload_since_ms, Some(1_000));
+        assert_eq!(snap_2.next_tick_in_ms, Some(20_000));
     }
 
     #[test]
     fn overload_tracker_rolls_forward_after_backoff_window() {
         let mut tracker = ExtractionOverloadTracker::default();
 
-        let _ = tracker.update(true, 1_000, 30_000);
-        let (since, next) = tracker.update(true, 31_500, 30_000);
+        tracker.update_sample(true, Some(1.5), true, 1_000, 30_000);
+        tracker.update_sample(true, Some(1.5), true, 31_500, 30_000);
+        let snap = tracker.snapshot(31_500);
 
-        assert_eq!(since, Some(1_000));
-        assert_eq!(next, Some(29_500));
+        assert_eq!(snap.overload_since_ms, Some(1_000));
+        assert_eq!(snap.next_tick_in_ms, Some(29_500));
     }
 
     #[test]
     fn overload_tracker_clears_when_not_overloaded() {
         let mut tracker = ExtractionOverloadTracker::default();
 
-        let _ = tracker.update(true, 1_000, 30_000);
-        let (since, next) = tracker.update(false, 2_000, 30_000);
+        tracker.update_sample(true, Some(1.5), true, 1_000, 30_000);
+        tracker.update_sample(true, Some(0.3), false, 2_000, 30_000);
+        let snap = tracker.snapshot(2_000);
 
-        assert_eq!(since, None);
-        assert_eq!(next, None);
+        assert!(snap.running);
+        assert!(!snap.overloaded);
+        assert_eq!(snap.overload_since_ms, None);
+        assert_eq!(snap.next_tick_in_ms, None);
+    }
+
+    #[test]
+    fn overload_tracker_clears_when_not_running() {
+        let mut tracker = ExtractionOverloadTracker::default();
+
+        tracker.update_sample(true, Some(1.5), true, 1_000, 30_000);
+        tracker.update_sample(false, None, false, 2_000, 30_000);
+        let snap = tracker.snapshot(2_000);
+
+        assert!(!snap.running);
+        assert!(!snap.overloaded);
+        assert_eq!(snap.load_per_cpu, None);
+        assert_eq!(snap.overload_since_ms, None);
+        assert_eq!(snap.next_tick_in_ms, None);
+    }
+
+    #[test]
+    fn snapshot_counts_down_without_mutating_tracker() {
+        let mut tracker = ExtractionOverloadTracker::default();
+
+        tracker.update_sample(true, Some(1.5), true, 1_000, 30_000);
+        let before = tracker.next_tick_at_ms();
+        let snap = tracker.snapshot(16_000);
+        let after = tracker.next_tick_at_ms();
+
+        assert_eq!(before, after);
+        assert_eq!(snap.next_tick_in_ms, Some(15_000));
     }
 }

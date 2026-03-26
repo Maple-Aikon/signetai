@@ -9,6 +9,7 @@ use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
+use tokio::time::{Duration, MissedTickBehavior};
 use tracing::info;
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
@@ -22,7 +23,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::AppState;
+use state::{AppState, ExtractionOverloadSnapshot};
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -162,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
         auth_secret,
         auth_admin_limiter,
     ));
+    let overload_probe = spawn_extraction_overload_probe(state.clone());
 
     // Build router
     let app = Router::new()
@@ -560,6 +562,7 @@ async fn main() -> anyhow::Result<()> {
     .context("server error")?;
 
     info!("shutting down");
+    overload_probe.abort();
 
     // Drop state to close DB channels, then await writer
     drop(state);
@@ -633,6 +636,44 @@ fn iso_from_epoch_ms(ms: i64) -> Option<String> {
         .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
+fn spawn_extraction_overload_probe(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let Some(pipeline) = state
+                .config
+                .manifest
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.pipeline_v2.as_ref())
+            else {
+                continue;
+            };
+
+            let running = pipeline.enabled
+                && pipeline.extraction.provider != "none"
+                && !pipeline.paused
+                && !state.pipeline_paused();
+            let load_per_cpu = if running { current_load_per_cpu() } else { None };
+            let overloaded = load_per_cpu
+                .map(|load| load.is_finite() && load > pipeline.worker.max_load_per_cpu)
+                .unwrap_or(false);
+            let now_ms = current_epoch_ms();
+            if let Ok(mut tracker) = state.extraction_overload.lock() {
+                tracker.update_sample(
+                    running,
+                    load_per_cpu,
+                    overloaded,
+                    now_ms,
+                    pipeline.worker.overload_backoff_ms,
+                );
+            }
+        }
+    })
+}
+
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
     let pipeline = state
@@ -663,29 +704,20 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         })
     });
     let extraction_worker = pipeline.map(|pipeline| {
-        let running = pipeline.enabled
-            && pipeline.extraction.provider != "none"
-            && !pipeline.paused
-            && !state.pipeline_paused();
-        let load_per_cpu = current_load_per_cpu();
-        let overloaded = load_per_cpu
-            .map(|load| load.is_finite() && load > pipeline.worker.max_load_per_cpu)
-            .unwrap_or(false);
-        let now_ms = current_epoch_ms();
-        let (overload_since_ms, next_tick_in_ms) = state
+        let snapshot = state
             .extraction_overload
             .lock()
-            .map(|mut tracker| tracker.update(overloaded, now_ms, pipeline.worker.overload_backoff_ms))
-            .unwrap_or((None, None));
-        let overload_since = overload_since_ms.and_then(iso_from_epoch_ms);
+            .map(|tracker| tracker.snapshot(current_epoch_ms()))
+            .unwrap_or_else(|_| ExtractionOverloadSnapshot::default());
+        let overload_since = snapshot.overload_since_ms.and_then(iso_from_epoch_ms);
         serde_json::json!({
-            "running": running,
-            "overloaded": overloaded,
-            "loadPerCpu": load_per_cpu,
+            "running": snapshot.running,
+            "overloaded": snapshot.overloaded,
+            "loadPerCpu": snapshot.load_per_cpu,
             "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
             "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
             "overloadSince": overload_since,
-            "nextTickInMs": next_tick_in_ms,
+            "nextTickInMs": snapshot.next_tick_in_ms,
         })
     });
     let db_stats = state
