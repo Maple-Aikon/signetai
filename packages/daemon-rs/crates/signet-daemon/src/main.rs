@@ -608,7 +608,7 @@ async fn shutdown_signal() {
 /// Perform startup preflight checks on the extraction provider, mirroring the
 /// JS daemon's startup-resolution contract. Updates `extraction_state` with
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
-async fn preflight_extraction(state: &AppState) {
+pub(crate) async fn preflight_extraction(state: &AppState) {
     let pipeline = match state
         .config
         .manifest

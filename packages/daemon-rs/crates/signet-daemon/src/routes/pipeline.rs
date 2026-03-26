@@ -194,6 +194,22 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
     state.pipeline_paused.store(paused, Ordering::SeqCst);
     let next = if paused { None } else { build_embedding(state) };
     *state.embedding.write().await = next;
+
+    // Update extraction runtime state on pause/resume transitions,
+    // mirroring the JS daemon's restartPipelineRuntime behavior.
+    if paused {
+        // Mark extraction as paused
+        let mut guard = state.extraction_state.write().await;
+        if let Some(es) = guard.as_mut() {
+            if es.status != "disabled" && es.status != "blocked" {
+                es.status = "paused".to_string();
+            }
+        }
+    } else {
+        // On resume, re-run preflight to validate provider availability
+        // (provider may have become unavailable while paused).
+        crate::preflight_extraction(state).await;
+    }
 }
 
 fn guard_admin(
