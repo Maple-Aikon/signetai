@@ -78,12 +78,20 @@ export const DEFAULT_KV_CACHE_COMPRESSION: KvCacheCompressionOption = {
 // Math utilities — seeded PRNG, QR, matrix ops
 // ---------------------------------------------------------------------------
 
+/** splitmix32 for seed expansion (Fix C). */
+function splitmix32(s: number): number {
+	let t = (s + 0x9e3779b9) | 0;
+	t = Math.imul(t ^ (t >>> 16), 0x21f0aaad);
+	t = Math.imul(t ^ (t >>> 15), 0x735a2d97);
+	return (t ^ (t >>> 15)) >>> 0;
+}
+
 /** Seeded xoshiro128** PRNG returning values in [0, 1). */
 function createRng(seed: number): () => number {
-	let s0 = seed >>> 0;
-	let s1 = (seed * 1597334677) >>> 0;
-	let s2 = (seed * 2654435761) >>> 0;
-	let s3 = (seed * 668265263) >>> 0;
+	let s0 = splitmix32(seed);
+	let s1 = splitmix32(s0);
+	let s2 = splitmix32(s1);
+	let s3 = splitmix32(s2);
 
 	for (let i = 0; i < 20; i++) {
 		const t = s1 << 9;
@@ -96,8 +104,9 @@ function createRng(seed: number): () => number {
 	}
 
 	return (): number => {
-		const result = Math.imul(s1 * 5, 1) >>> 0;
-		const rot = ((result << 7) | (result >>> 25)) >>> 0;
+		const mul5 = Math.imul(s1, 5);
+		const rotl7 = ((mul5 << 7) | (mul5 >>> 25)) >>> 0;
+		const result = Math.imul(rotl7, 9) >>> 0;
 		const t = s1 << 9;
 		s2 ^= s0;
 		s3 ^= s1;
@@ -105,7 +114,7 @@ function createRng(seed: number): () => number {
 		s0 ^= s3;
 		s2 ^= t;
 		s3 = (s3 << 11) | (s3 >>> 21);
-		return (rot >>> 0) / 4294967296;
+		return result / 4294967296;
 	};
 }
 
@@ -186,6 +195,101 @@ function matTVecMul(m: Float32Array, v: Float32Array, rows: number, cols: number
 		for (let c = 0; c < cols; c++) result[c] += m[off + c] * vi;
 	}
 	return result;
+}
+
+// ---------------------------------------------------------------------------
+// Bit packing utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Pack an array of centroid indices into a compact Uint8Array.
+ * For 4-bit: two indices per byte (high nibble, low nibble).
+ * For other bit widths: generic bit-stream packing.
+ */
+function packIndices(indices: Uint8Array, bits: number): Uint8Array {
+	const totalBits = indices.length * bits;
+	const packed = new Uint8Array(Math.ceil(totalBits / 8));
+
+	if (bits === 4) {
+		// Fast path: two indices per byte
+		for (let i = 0; i < indices.length - 1; i += 2) {
+			packed[i >>> 1] = (indices[i] << 4) | indices[i + 1];
+		}
+		if (indices.length % 2 !== 0) {
+			packed[packed.length - 1] = indices[indices.length - 1] << 4;
+		}
+		return packed;
+	}
+
+	// Generic bit-stream packing for 1, 2, 3 bit widths
+	let bitPos = 0;
+	for (let i = 0; i < indices.length; i++) {
+		const val = indices[i];
+		const byteIdx = bitPos >>> 3;
+		const bitOffset = bitPos & 7;
+		packed[byteIdx] |= (val << bitOffset) & 0xff;
+		if (bitOffset + bits > 8) {
+			packed[byteIdx + 1] |= val >>> (8 - bitOffset);
+		}
+		bitPos += bits;
+	}
+	return packed;
+}
+
+/**
+ * Unpack centroid indices from a compact Uint8Array.
+ * Inverse of packIndices.
+ */
+function unpackIndices(packed: Uint8Array, dim: number, bits: number): Uint8Array {
+	const indices = new Uint8Array(dim);
+	const mask = (1 << bits) - 1;
+
+	if (bits === 4) {
+		// Fast path: two indices per byte
+		for (let i = 0; i < dim - 1; i += 2) {
+			const byte = packed[i >>> 1];
+			indices[i] = (byte >>> 4) & 0xf;
+			indices[i + 1] = byte & 0xf;
+		}
+		if (dim % 2 !== 0) {
+			indices[dim - 1] = (packed[packed.length - 1] >>> 4) & 0xf;
+		}
+		return indices;
+	}
+
+	// Generic bit-stream unpacking for 1, 2, 3 bit widths
+	let bitPos = 0;
+	for (let i = 0; i < dim; i++) {
+		const byteIdx = bitPos >>> 3;
+		const bitOffset = bitPos & 7;
+		let val = (packed[byteIdx] >>> bitOffset) & mask;
+		if (bitOffset + bits > 8) {
+			val |= (packed[byteIdx + 1] << (8 - bitOffset)) & mask;
+		}
+		indices[i] = val;
+		bitPos += bits;
+	}
+	return indices;
+}
+
+// ---------------------------------------------------------------------------
+// Binary search for nearest centroid (Fix D)
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the nearest centroid index using binary search on a sorted codebook.
+ * The codebook must be sorted ascending (which TurboQuant codebooks are).
+ */
+function findNearestCentroid(value: number, codebook: Float32Array): number {
+	let lo = 0;
+	let hi = codebook.length - 1;
+	while (lo < hi) {
+		const mid = (lo + hi) >>> 1;
+		const boundary = (codebook[mid] + codebook[mid + 1]) / 2;
+		if (value <= boundary) hi = mid;
+		else lo = mid + 1;
+	}
+	return lo;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,10 +427,14 @@ function computeCodebook(dim: number, bits: number): Float32Array {
 
 /** A single compressed KV vector (one head, one token). */
 export interface CompressedKvEntry {
-	/** Quantization indices per coordinate. */
-	readonly indices: Uint8Array;
+	/** Bit-packed quantization codes. */
+	readonly packedCodes: Uint8Array;
 	/** Original L2 norm of the vector. */
 	readonly norm: number;
+	/** Original dimension (needed for unpacking). */
+	readonly dim: number;
+	/** Bit width used for packing. */
+	readonly bits: number;
 }
 
 /** Per-layer, per-head compressed KV cache. */
@@ -335,6 +443,16 @@ export interface CompressedKvLayer {
 	readonly keys: readonly CompressedKvEntry[];
 	/** Compressed value vectors (one per token outside residual window). */
 	readonly values: readonly CompressedKvEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// Mutable internal storage type (Fix B)
+// ---------------------------------------------------------------------------
+
+/** Mutable internal representation for efficient append. */
+interface MutableCompressedKvLayer {
+	keys: CompressedKvEntry[];
+	values: CompressedKvEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -365,8 +483,8 @@ export class TurboQuantKvCache {
 	private readonly _codebook: Float32Array;
 	private readonly _numCentroids: number;
 
-	/** Compressed KV entries per layer → per head. */
-	private readonly _layers: Map<number, Map<number, CompressedKvLayer>>;
+	/** Compressed KV entries per layer → per head (mutable internal storage). */
+	private readonly _layers: Map<number, Map<number, MutableCompressedKvLayer>>;
 	/** Current sequence position (tokens seen). */
 	private _seqLen: number;
 
@@ -441,10 +559,12 @@ export class TurboQuantKvCache {
 	 * 1. Compute and store the L2 norm
 	 * 2. Normalize to unit vector
 	 * 3. Apply random rotation
-	 * 4. Find nearest codebook centroid per coordinate
+	 * 4. Find nearest codebook centroid per coordinate (binary search)
+	 * 5. Pack indices into compact bit representation
 	 */
 	compressVector(vector: Float32Array): CompressedKvEntry {
 		const dim = this._config.headDim;
+		const bits = this._config.bits;
 		if (vector.length !== dim) {
 			throw new Error(`Vector length ${String(vector.length)} != headDim ${String(dim)}`);
 		}
@@ -462,39 +582,38 @@ export class TurboQuantKvCache {
 		// Rotate: y = rotation @ unit
 		const rotated = matVecMul(this._rotation, unit, dim, dim);
 
-		// Quantize: find nearest centroid per coordinate
+		// Quantize: find nearest centroid per coordinate using binary search
 		const indices = new Uint8Array(dim);
 		for (let i = 0; i < dim; i++) {
-			let bestIdx = 0;
-			let bestDist = Math.abs(rotated[i] - this._codebook[0]);
-			for (let c = 1; c < this._numCentroids; c++) {
-				const dist = Math.abs(rotated[i] - this._codebook[c]);
-				if (dist < bestDist) {
-					bestDist = dist;
-					bestIdx = c;
-				}
-			}
-			indices[i] = bestIdx;
+			indices[i] = findNearestCentroid(rotated[i], this._codebook);
 		}
 
-		return { indices, norm };
+		// Pack indices into compact bit representation
+		const packedCodes = packIndices(indices, bits);
+
+		return { packedCodes, norm, dim, bits };
 	}
 
 	/**
 	 * Decompress a single KV vector from its compressed representation.
 	 *
 	 * Steps:
-	 * 1. Look up codebook centroids from indices
-	 * 2. Apply inverse rotation (rotation^T)
-	 * 3. Rescale by stored norm
+	 * 1. Unpack indices from packed codes
+	 * 2. Look up codebook centroids from indices
+	 * 3. Apply inverse rotation (rotation^T)
+	 * 4. Rescale by stored norm
 	 */
 	decompressVector(entry: CompressedKvEntry): Float32Array {
-		const dim = this._config.headDim;
+		const dim = entry.dim;
+		const bits = entry.bits;
+
+		// Unpack indices
+		const indices = unpackIndices(entry.packedCodes, dim, bits);
 
 		// Centroid lookup
 		const rotated = new Float32Array(dim);
 		for (let i = 0; i < dim; i++) {
-			rotated[i] = this._codebook[entry.indices[i]];
+			rotated[i] = this._codebook[indices[i]];
 		}
 
 		// Inverse rotation: x_hat = rotation^T @ rotated
@@ -519,6 +638,8 @@ export class TurboQuantKvCache {
 	 * Store a compressed KV entry for a specific layer/head/position.
 	 * This is the integration point: call after each forward pass for tokens
 	 * that fall outside the residual window.
+	 *
+	 * Uses O(1) append instead of array spread (Fix B).
 	 */
 	storeCompressed(
 		layerIdx: number,
@@ -535,10 +656,14 @@ export class TurboQuantKvCache {
 			this._layers.set(layerIdx, layerMap);
 		}
 
-		const existing = layerMap.get(headIdx);
-		const keys = existing ? [...existing.keys, compKey] : [compKey];
-		const values = existing ? [...existing.values, compValue] : [compValue];
-		layerMap.set(headIdx, { keys, values });
+		let existing = layerMap.get(headIdx);
+		if (!existing) {
+			existing = { keys: [], values: [] };
+			layerMap.set(headIdx, existing);
+		}
+
+		existing.keys.push(compKey);
+		existing.values.push(compValue);
 
 		return { key: compKey, value: compValue };
 	}
@@ -577,7 +702,7 @@ export class TurboQuantKvCache {
 		readonly compressionRatio: number;
 		readonly bitsPerElement: number;
 	} {
-		// Compressed: indices (bits per dim) + norm (f32) per head per layer per token
+		// Compressed: packed indices (bits per dim) + norm (f32) per head per layer per token
 		// For keys + values (2x)
 		const indicesPerToken = (headDim * bits) / 8;
 		const normPerToken = 4; // float32

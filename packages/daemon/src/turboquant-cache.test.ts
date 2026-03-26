@@ -189,7 +189,6 @@ describe("compress/decompress roundtrip", () => {
 			const compressed = cache.compressVector(vec);
 			const restored = cache.decompressVector(compressed);
 			const sim = cosineSim(vec, restored);
-			// 4-bit should have > 0.99 cosine similarity for dim=64
 			expect(sim).toBeGreaterThan(0.95);
 		}
 	});
@@ -206,7 +205,6 @@ describe("compress/decompress roundtrip", () => {
 			const compressed = cache.compressVector(vec);
 			const restored = cache.decompressVector(compressed);
 			const sim = cosineSim(vec, restored);
-			// 3-bit should still be quite good
 			expect(sim).toBeGreaterThan(0.9);
 		}
 	});
@@ -222,7 +220,19 @@ describe("compress/decompress roundtrip", () => {
 		expect(compressed.norm).toBeCloseTo(l2Norm(vec), 5);
 	});
 
-	it("indices are valid (< numCentroids)", () => {
+	it("packedCodes has correct byte length for 4-bit", () => {
+		const cache = TurboQuantKvCache.create({
+			bits: 4,
+			headDim: DIM,
+			numHeads: 1,
+		});
+		const vec = randomVector(DIM, 7);
+		const compressed = cache.compressVector(vec);
+		// 4 bits * 64 dim = 256 bits = 32 bytes
+		expect(compressed.packedCodes.length).toBe(Math.ceil((DIM * 4) / 8));
+	});
+
+	it("packedCodes has correct byte length for 3-bit", () => {
 		const cache = TurboQuantKvCache.create({
 			bits: 3,
 			headDim: DIM,
@@ -230,9 +240,20 @@ describe("compress/decompress roundtrip", () => {
 		});
 		const vec = randomVector(DIM, 7);
 		const compressed = cache.compressVector(vec);
-		for (const idx of compressed.indices) {
-			expect(idx).toBeLessThan(cache.numCentroids);
-		}
+		// 3 bits * 64 dim = 192 bits = 24 bytes
+		expect(compressed.packedCodes.length).toBe(Math.ceil((DIM * 3) / 8));
+	});
+
+	it("packedCodes has correct byte length for 1-bit", () => {
+		const cache = TurboQuantKvCache.create({
+			bits: 1,
+			headDim: DIM,
+			numHeads: 1,
+		});
+		const vec = randomVector(DIM, 7);
+		const compressed = cache.compressVector(vec);
+		// 1 bit * 64 dim = 64 bits = 8 bytes
+		expect(compressed.packedCodes.length).toBe(Math.ceil((DIM * 1) / 8));
 	});
 
 	it("higher bits → lower MSE", () => {
@@ -301,7 +322,7 @@ describe("determinism", () => {
 		const r2 = c2.compressVector(vec);
 
 		expect(r1.norm).toBe(r2.norm);
-		expect(Array.from(r1.indices)).toEqual(Array.from(r2.indices));
+		expect(Array.from(r1.packedCodes)).toEqual(Array.from(r2.packedCodes));
 	});
 
 	it("different seeds produce different compression", () => {
@@ -322,12 +343,11 @@ describe("determinism", () => {
 		const r1 = c1.compressVector(vec);
 		const r2 = c2.compressVector(vec);
 
-		// Norms should match (same vector), but indices should differ
+		// Norms should match (same vector), but packed codes should differ
 		expect(r1.norm).toBeCloseTo(r2.norm, 5);
-		// Indices won't be identical with different rotation matrices
 		let anyDifferent = false;
-		for (let i = 0; i < r1.indices.length; i++) {
-			if (r1.indices[i] !== r2.indices[i]) {
+		for (let i = 0; i < r1.packedCodes.length; i++) {
+			if (r1.packedCodes[i] !== r2.packedCodes[i]) {
 				anyDifferent = true;
 				break;
 			}
@@ -386,8 +406,9 @@ describe("storeCompressed / getCompressedLayer", () => {
 		const v = randomVector(32, 2);
 
 		const result = cache.storeCompressed(0, 0, k, v);
-		expect(result.key.indices.length).toBe(32);
-		expect(result.value.indices.length).toBe(32);
+		// 4 bits * 32 dim = 128 bits = 16 bytes
+		expect(result.key.packedCodes.length).toBe(Math.ceil((32 * 4) / 8));
+		expect(result.value.packedCodes.length).toBe(Math.ceil((32 * 4) / 8));
 
 		const layer = cache.getCompressedLayer(0, 0);
 		expect(layer).toBeDefined();
@@ -395,7 +416,7 @@ describe("storeCompressed / getCompressedLayer", () => {
 		expect(layer?.values.length).toBe(1);
 	});
 
-	it("accumulates entries across calls", () => {
+	it("accumulates entries across calls (O(1) push, no copying)", () => {
 		const cache = TurboQuantKvCache.create({
 			bits: 4,
 			headDim: 32,
@@ -593,7 +614,6 @@ describe("quality at typical model dimensions", () => {
 			totalMse += mse(vec, restored);
 		}
 		const avgMse = totalMse / trials;
-		// At dim=128, 4-bit should be very accurate
 		expect(avgMse).toBeLessThan(0.01);
 	});
 
