@@ -13,6 +13,9 @@ napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 sha2 = "0.10"
 
+# No new deps needed — RaBitQ uses a hand-rolled xoshiro128** PRNG
+# matching the TS implementation for bit-exact determinism.
+
 [build-dependencies]
 napi-build = "2"
 
