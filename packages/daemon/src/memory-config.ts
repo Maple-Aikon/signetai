@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
-	DEFAULT_PIPELINE_TIMEOUT_MS,
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
@@ -222,6 +222,8 @@ export interface ResolvedMemoryConfig {
 	auth: AuthConfig;
 }
 
+class MemoryConfigValidationError extends Error {}
+
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(min, Math.min(max, raw));
@@ -238,6 +240,14 @@ function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 
 function isExtractionFallbackProvider(v: unknown): v is "ollama" | "none" {
 	return v === "ollama" || v === "none";
+}
+
+function resolveExtractionFallbackProvider(raw: unknown, fallback: "ollama" | "none"): "ollama" | "none" {
+	if (raw === undefined || raw === null) return fallback;
+	if (isExtractionFallbackProvider(raw)) return raw;
+	throw new MemoryConfigValidationError(
+		`Invalid extraction fallbackProvider "${String(raw)}"; expected "ollama" or "none"`,
+	);
 }
 
 function parseOptionalUrl(raw: unknown): string | undefined {
@@ -338,11 +348,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		d.extraction.timeout,
 	);
-	const resolvedFallbackProvider = isExtractionFallbackProvider(
+	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
 		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
-	)
-		? (extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider)
-		: d.extraction.fallbackProvider;
+		d.extraction.fallbackProvider,
+	);
 	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
 	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
 	const resolvedSynthesisModel =
@@ -362,9 +371,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
 	);
 	const resolvedSynthesisEnabled =
-		resolvedSynthesisProvider === "none"
-			? false
-			: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
+		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -868,7 +875,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 
 			break;
-		} catch {
+		} catch (error) {
+			if (error instanceof MemoryConfigValidationError) {
+				throw error;
+			}
 			// ignore parse errors, try next file
 		}
 	}

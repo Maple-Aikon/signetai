@@ -269,6 +269,35 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.extraction.fallbackProvider).toBe("none");
 	});
 
+	it("rejects invalid extraction fallbackProvider values", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							fallbackProvider: "codex",
+						},
+					},
+				},
+			}),
+		).toThrow('Invalid extraction fallbackProvider "codex"');
+	});
+
+	it("propagates invalid extraction fallbackProvider from agent config files", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: codex
+`,
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow('Invalid extraction fallbackProvider "codex"');
+	});
+
 	it("loads openrouter extraction settings from agent.yaml", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(

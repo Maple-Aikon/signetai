@@ -107,8 +107,21 @@ fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> Ag
     let Some(pipeline) = memory.pipeline_v2.as_mut() else {
         return manifest;
     };
-    normalize_pipeline_synthesis(pipeline, raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2")));
+    let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
+    normalize_pipeline_extraction(pipeline, raw_pipeline);
+    normalize_pipeline_synthesis(pipeline, raw_pipeline);
     manifest
+}
+
+fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let fallback = raw
+        .and_then(|value| raw_child(value, "extraction"))
+        .and_then(|value| raw_string(value, "fallbackProvider"))
+        .or_else(|| raw.and_then(|value| raw_string(value, "extractionFallbackProvider")));
+
+    if let Some(value) = fallback.filter(|value| is_extraction_fallback_provider(value)) {
+        pipeline.extraction.fallback_provider = value.to_string();
+    }
 }
 
 fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
@@ -182,6 +195,10 @@ fn is_pipeline_provider(value: &str) -> bool {
         value,
         "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter"
     )
+}
+
+fn is_extraction_fallback_provider(value: &str) -> bool {
+    matches!(value, "ollama" | "none")
 }
 
 fn default_pipeline_model(provider: &str) -> &'static str {
@@ -422,6 +439,60 @@ memory:
         assert_eq!(pipeline.synthesis.provider, "codex");
         assert_eq!(pipeline.synthesis.model, "gpt-5-codex-mini");
     }
+
+    #[test]
+    fn extraction_fallback_provider_defaults_to_ollama() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.extraction.fallback_provider, "ollama");
+    }
+
+    #[test]
+    fn extraction_fallback_provider_loads_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: none
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(nested_pipeline.extraction.fallback_provider, "none");
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extractionProvider: claude-code
+    extractionFallbackProvider: none
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(flat_pipeline.extraction.fallback_provider, "none");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -569,6 +640,7 @@ impl Default for PipelineV2Config {
 #[serde(default, rename_all = "camelCase")]
 pub struct ExtractionConfig {
     pub provider: String,
+    pub fallback_provider: String,
     pub model: String,
     pub strength: String,
     pub endpoint: Option<String>,
@@ -581,6 +653,7 @@ impl Default for ExtractionConfig {
     fn default() -> Self {
         Self {
             provider: "ollama".to_string(),
+            fallback_provider: "ollama".to_string(),
             model: "qwen3:4b".to_string(),
             strength: "medium".to_string(),
             endpoint: None,

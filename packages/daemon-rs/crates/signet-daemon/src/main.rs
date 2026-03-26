@@ -603,6 +603,33 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
+    let pipeline = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref());
+    let extraction = pipeline.map(|pipeline| {
+        let extraction = &pipeline.extraction;
+        let status = if !pipeline.enabled || extraction.provider == "none" {
+            "disabled"
+        } else if pipeline.paused || state.pipeline_paused() {
+            "paused"
+        } else {
+            "active"
+        };
+        serde_json::json!({
+            "configured": extraction.provider,
+            "resolved": extraction.provider,
+            "effective": extraction.provider,
+            "fallbackProvider": extraction.fallback_provider,
+            "status": status,
+            "degraded": false,
+            "fallbackApplied": false,
+            "reason": serde_json::Value::Null,
+            "since": serde_json::Value::Null,
+        })
+    });
     let db_stats = state
         .pool
         .read(|conn| {
@@ -640,5 +667,8 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "networkMode": network_mode_from_bind(bind),
         "db": db_stats,
         "agent": state.config.manifest.agent.name,
+        "providerResolution": {
+            "extraction": extraction,
+        },
     }))
 }
