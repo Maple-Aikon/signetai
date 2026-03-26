@@ -632,8 +632,8 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     });
     let extraction_worker = pipeline.map(|pipeline| {
         serde_json::json!({
-            "running": false,
-            "overloaded": false,
+            "running": serde_json::Value::Null,
+            "overloaded": serde_json::Value::Null,
             "loadPerCpu": serde_json::Value::Null,
             "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
             "overloadBackoffMs": pipeline.worker.overload_backoff_ms,

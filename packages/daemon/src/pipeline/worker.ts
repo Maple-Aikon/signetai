@@ -1504,6 +1504,7 @@ export function startWorker(
 	function scheduleTick(): void {
 		if (!running) return;
 		const loadPerCpu = runtime.getLoadPerCpu();
+		lastAttempt = runtime.now();
 		lastLoadPerCpu = loadPerCpu;
 		const overloadedNow =
 			loadPerCpu !== null && Number.isFinite(loadPerCpu) && loadPerCpu > pipelineCfg.worker.maxLoadPerCpu;
@@ -1558,6 +1559,8 @@ export function startWorker(
 	// Uses lastSuccess (not lastAttempt) so failure loops still trigger it.
 	watchdog = setInterval(() => {
 		if (!running) return;
+		// Intentional load-shedding is not a stall.
+		if (overloaded) return;
 		if (runtime.now() - lastSuccess < STALL_THRESHOLD) return;
 
 		let pending = 0;
@@ -1587,12 +1590,8 @@ export function startWorker(
 		// in-progress tick will call scheduleTick() on completion.
 		if (inflight) return;
 		if (pollTimer) clearTimeout(pollTimer);
-		pollTimer = setTimeout(async () => {
-			inflight = tick();
-			await inflight;
-			inflight = null;
-			scheduleTick();
-		}, 0);
+		// Re-enter normal scheduling so overload checks still apply.
+		scheduleTick();
 	}, WATCHDOG_INTERVAL);
 
 	// Start the tick loop
