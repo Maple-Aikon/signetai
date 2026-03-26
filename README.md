@@ -396,7 +396,17 @@ cd packages/daemon && bun run dev        # Daemon dev (watch mode)
 cd packages/cli/dashboard && bun run dev # Dashboard dev
 ```
 
-Requirements: Node.js 18+, Bun, Ollama (recommended) or OpenAI API key. macOS or Linux.
+Requirements:
+
+- Node.js 18+ or Bun
+- A supported AI coding harness (Claude Code, Codex, OpenCode, or OpenClaw)
+- macOS or Linux
+
+Embeddings (choose one):
+
+- **Built-in** (recommended) — no extra setup, runs locally via ONNX (`nomic-embed-text-v1.5`)
+- **Ollama** — alternative local option, requires `nomic-embed-text` model
+- **OpenAI** — cloud option, requires `OPENAI_API_KEY`
 
 ## Contributing
 
