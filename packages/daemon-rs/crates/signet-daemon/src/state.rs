@@ -39,10 +39,6 @@ pub struct AppState {
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
     pub extraction_state: RwLock<Option<ExtractionRuntimeState>>,
-    /// False until extraction preflight completes. Write paths must treat
-    /// pending preflight as blocked to prevent queuing work that may need
-    /// to be dead-lettered.
-    pub extraction_preflight_done: AtomicBool,
     pub harness_last_seen: RwLock<HashMap<String, String>>,
 }
 
@@ -72,16 +68,12 @@ impl AppState {
             .and_then(|m| m.pipeline_v2.as_ref())
             .map(|pipeline| {
                 let extraction = &pipeline.extraction;
-                // Use "pending" for providers that need preflight validation.
-                // Disabled/paused are known immediately; everything else waits
-                // for preflight to resolve the actual status. This prevents
-                // /api/status from reporting false "active" during startup.
                 let status = if !pipeline.enabled || extraction.provider == "none" {
                     "disabled"
                 } else if paused {
                     "paused"
                 } else {
-                    "pending"
+                    "active"
                 };
                 ExtractionRuntimeState {
                     configured: Some(extraction.provider.clone()),
@@ -109,7 +101,6 @@ impl AppState {
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
             extraction_state: RwLock::new(extraction_state),
-            extraction_preflight_done: AtomicBool::new(false),
             harness_last_seen: RwLock::new(HashMap::new()),
         }
     }
@@ -118,14 +109,9 @@ impl AppState {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
 
-    /// Check whether extraction is definitively blocked. Returns true only
-    /// when preflight has completed AND determined extraction is blocked.
-    /// During preflight, returns false — memories are created normally and
-    /// the preflight itself dead-letters pending jobs if it ends in blocked.
+    /// Check whether extraction is blocked. Preflight runs synchronously
+    /// before the server accepts requests, so this is always accurate.
     pub async fn is_extraction_blocked(&self) -> bool {
-        if !self.extraction_preflight_done.load(Ordering::SeqCst) {
-            return false; // Preflight pending — don't pre-emptively dead-letter
-        }
         self.extraction_state
             .read()
             .await

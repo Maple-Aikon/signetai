@@ -162,16 +162,10 @@ async fn main() -> anyhow::Result<()> {
         auth_admin_limiter,
     ));
 
-    // Run extraction preflight asynchronously so /health and /api/status
-    // are available immediately. Writes are race-safe: is_extraction_blocked()
-    // returns true until extraction_preflight_done is set, so no extraction
-    // work is queued during the probe window.
-    {
-        let preflight_state = Arc::clone(&state);
-        tokio::spawn(async move {
-            preflight_extraction(&preflight_state).await;
-        });
-    }
+    // Run extraction preflight synchronously before serving requests.
+    // This matches the JS daemon's startup behavior and eliminates any
+    // race between writes and provider validation.
+    preflight_extraction(&state).await;
 
     // Build router
     let app = Router::new()
@@ -610,17 +604,6 @@ async fn shutdown_signal() {
 /// JS daemon's startup-resolution contract. Updates `extraction_state` with
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
 pub(crate) async fn preflight_extraction(state: &AppState) {
-    preflight_extraction_inner(state).await;
-    // Set done flag AFTER state is resolved but BEFORE dead-letter sweep.
-    // This ensures is_extraction_blocked() starts returning true (if blocked)
-    // so any concurrent writes are caught by the remember route guard, while
-    // the sweep catches jobs created during the preflight window.
-    state
-        .extraction_preflight_done
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-async fn preflight_extraction_inner(state: &AppState) {
     let pipeline = match state
         .config
         .manifest
