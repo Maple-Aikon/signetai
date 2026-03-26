@@ -129,22 +129,16 @@ impl WorkerRuntimeStats {
 
         if !overloaded {
             self.overload_since_ms = None;
-            self.next_tick_at_ms = None;
             return;
         }
 
         if self.overload_since_ms.is_none() {
             self.overload_since_ms = Some(now_ms);
         }
+    }
 
-        let backoff_ms = self.overload_backoff_ms as i64;
-        let mut next_tick_at = self
-            .next_tick_at_ms
-            .unwrap_or_else(|| now_ms.saturating_add(backoff_ms));
-        while next_tick_at <= now_ms {
-            next_tick_at = next_tick_at.saturating_add(backoff_ms);
-        }
-        self.next_tick_at_ms = Some(next_tick_at);
+    fn record_next_delay(&mut self, now_ms: i64, delay_ms: u64) {
+        self.next_tick_at_ms = Some(now_ms.saturating_add(delay_ms as i64));
     }
 
     pub fn snapshot(&self, now_ms: i64) -> WorkerRuntimeSnapshot {
@@ -300,6 +294,11 @@ async fn worker_loop(
                 base_delay
             }
         };
+
+        {
+            let mut guard = stats.lock().await;
+            guard.record_next_delay(now_ms, delay.as_millis() as u64);
+        }
 
         // Wait with shutdown check
         tokio::select! {
@@ -527,6 +526,7 @@ mod tests {
         let mut stats = WorkerRuntimeStats::new(0.8, 30_000);
         stats.mark_running(true);
         stats.record_poll_state(Some(1.4), true, 1_000);
+        stats.record_next_delay(1_000, 30_000);
         let snap_1 = stats.snapshot(1_000);
         assert!(snap_1.running);
         assert!(snap_1.overloaded);
@@ -534,6 +534,7 @@ mod tests {
         assert_eq!(snap_1.next_tick_in_ms, Some(30_000));
 
         stats.record_poll_state(Some(1.2), true, 11_000);
+        stats.record_next_delay(11_000, 20_000);
         let snap_2 = stats.snapshot(11_000);
         assert_eq!(snap_2.overload_since_ms, Some(1_000));
         assert_eq!(snap_2.next_tick_in_ms, Some(20_000));
@@ -544,15 +545,18 @@ mod tests {
         let mut stats = WorkerRuntimeStats::new(0.8, 30_000);
         stats.mark_running(true);
         stats.record_poll_state(Some(1.3), true, 1_000);
+        stats.record_next_delay(1_000, 30_000);
         stats.record_poll_state(Some(0.2), false, 2_000);
+        stats.record_next_delay(2_000, 2_000);
         let snap = stats.snapshot(2_000);
         assert!(!snap.overloaded);
         assert_eq!(snap.overload_since_ms, None);
-        assert_eq!(snap.next_tick_in_ms, None);
+        assert_eq!(snap.next_tick_in_ms, Some(2_000));
 
         stats.mark_running(false);
         let snap = stats.snapshot(3_000);
         assert!(!snap.running);
         assert_eq!(snap.load_per_cpu, None);
+        assert_eq!(snap.next_tick_in_ms, None);
     }
 }

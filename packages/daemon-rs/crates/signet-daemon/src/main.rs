@@ -204,17 +204,12 @@ async fn main() -> anyhow::Result<()> {
                     other => {
                         degraded = true;
                         reason = Some(format!(
-                            "Extraction provider '{other}' is not implemented in daemon-rs runtime"
+                            "Extraction provider '{other}' is not implemented in daemon-rs runtime; using ollama fallback"
                         ));
                         since = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
-                        if fallback_provider == "ollama" {
-                            effective = "ollama".to_string();
-                            status = "degraded";
-                            fallback_applied = true;
-                        } else {
-                            effective = "none".to_string();
-                            status = "blocked";
-                        }
+                        effective = "ollama".to_string();
+                        status = "degraded";
+                        fallback_applied = true;
                     }
                 }
             }
@@ -816,7 +811,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "maxLoadPerCpu": snapshot.max_load_per_cpu,
             "overloadBackoffMs": snapshot.overload_backoff_ms,
             "overloadSince": overload_since,
-            "nextTickInMs": if overloaded { snapshot.next_tick_in_ms } else { None },
+            "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
         }))
     } else {
         None
