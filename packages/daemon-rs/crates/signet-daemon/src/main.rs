@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
+use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
@@ -623,6 +624,15 @@ fn current_load_per_cpu() -> Option<f64> {
     }
 }
 
+fn current_epoch_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+fn iso_from_epoch_ms(ms: i64) -> Option<String> {
+    chrono::DateTime::<Utc>::from_timestamp_millis(ms)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
     let pipeline = state
@@ -661,14 +671,21 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         let overloaded = load_per_cpu
             .map(|load| load.is_finite() && load > pipeline.worker.max_load_per_cpu)
             .unwrap_or(false);
+        let now_ms = current_epoch_ms();
+        let (overload_since_ms, next_tick_in_ms) = state
+            .extraction_overload
+            .lock()
+            .map(|mut tracker| tracker.update(overloaded, now_ms, pipeline.worker.overload_backoff_ms))
+            .unwrap_or((None, None));
+        let overload_since = overload_since_ms.and_then(iso_from_epoch_ms);
         serde_json::json!({
             "running": running,
             "overloaded": overloaded,
             "loadPerCpu": load_per_cpu,
             "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
             "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
-            "overloadSince": serde_json::Value::Null,
-            "nextTickInMs": if overloaded { serde_json::json!(pipeline.worker.overload_backoff_ms) } else { serde_json::Value::Null },
+            "overloadSince": overload_since,
+            "nextTickInMs": next_tick_in_ms,
         })
     });
     let db_stats = state
