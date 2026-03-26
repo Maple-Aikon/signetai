@@ -206,9 +206,10 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
             }
         }
     } else {
-        // On resume, re-run preflight to validate provider availability
-        // (provider may have become unavailable while paused).
-        crate::preflight_extraction(state).await;
+        // On resume, re-check provider availability and update status,
+        // but do NOT dead-letter pending jobs — backlog accumulated during
+        // an intentional pause should be preserved for draining.
+        crate::resume_extraction_check(state).await;
     }
 }
 

@@ -604,6 +604,17 @@ async fn shutdown_signal() {
 /// JS daemon's startup-resolution contract. Updates `extraction_state` with
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
 pub(crate) async fn preflight_extraction(state: &AppState) {
+    extraction_probe(state, true).await;
+}
+
+/// Re-check extraction provider availability on resume. Updates status but
+/// does NOT dead-letter pending jobs — backlog from an intentional pause
+/// should be preserved for draining when the provider becomes available.
+pub(crate) async fn resume_extraction_check(state: &AppState) {
+    extraction_probe(state, false).await;
+}
+
+async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let pipeline = match state
         .config
         .manifest
@@ -692,7 +703,9 @@ pub(crate) async fn preflight_extraction(state: &AppState) {
             since: Some(now.clone()),
         };
         *state.extraction_state.write().await = Some(new_state);
-        dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+        if dead_letter_on_blocked {
+            dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+        }
         warn!("extraction blocked: primary and ollama fallback both unavailable");
         return;
     }
@@ -715,7 +728,9 @@ pub(crate) async fn preflight_extraction(state: &AppState) {
         since: Some(now.clone()),
     };
     *state.extraction_state.write().await = Some(new_state);
-    dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    if dead_letter_on_blocked {
+        dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    }
     warn!("extraction blocked: provider unavailable with no viable fallback");
 }
 

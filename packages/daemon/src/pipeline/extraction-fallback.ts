@@ -53,7 +53,17 @@ export function deadLetterExtractionJob(
 			).run(crypto.randomUUID(), memoryId, options.reason, now, now, now);
 		}
 
-		updateExtractionFailure(db, memoryId, options.extractionModel);
+		// Only mark the memory as failed if it has no remaining leased
+		// (in-flight) extract jobs — consistent with deadLetterPendingExtractionJobs.
+		const leasedCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt FROM memory_jobs
+				 WHERE memory_id = ? AND job_type = 'extract' AND status = 'leased'`,
+			)
+			.get(memoryId) as { cnt: number };
+		if (leasedCount.cnt === 0) {
+			updateExtractionFailure(db, memoryId, options.extractionModel);
+		}
 	});
 }
 
