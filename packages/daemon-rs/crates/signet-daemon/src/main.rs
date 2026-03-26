@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
-use signet_core::config::{DaemonConfig, network_mode_from_bind};
+use signet_core::config::{DaemonConfig, PipelineV2Config, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
 use tracing::info;
@@ -57,6 +57,79 @@ fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
     }
 
     rules
+}
+
+fn resolve_extraction_provider_runtime(
+    pipeline_cfg: &PipelineV2Config,
+    anthropic_key_present: bool,
+    now_iso: &str,
+) -> ExtractionProviderResolution {
+    let configured = pipeline_cfg.extraction.provider.clone();
+    let resolved = pipeline_cfg.extraction.provider.clone();
+    let fallback_provider = pipeline_cfg.extraction.fallback_provider.clone();
+
+    let mut effective = resolved.clone();
+    let mut status: &'static str = "active";
+    let mut degraded = false;
+    let mut fallback_applied = false;
+    let mut reason: Option<String> = None;
+    let mut since: Option<String> = None;
+
+    let mut apply_unavailable = |msg: String| {
+        degraded = true;
+        reason = Some(msg);
+        since = Some(now_iso.to_string());
+        if fallback_provider == "ollama" {
+            effective = "ollama".to_string();
+            status = "degraded";
+            fallback_applied = true;
+        } else {
+            effective = "none".to_string();
+            status = "blocked";
+            fallback_applied = false;
+        }
+    };
+
+    if !pipeline_cfg.enabled || resolved == "none" {
+        effective = "none".to_string();
+        status = "disabled";
+    } else if pipeline_cfg.paused {
+        effective = "none".to_string();
+        status = "paused";
+    } else {
+        match resolved.as_str() {
+            "ollama" => {}
+            "anthropic" => {
+                if !anthropic_key_present {
+                    apply_unavailable("ANTHROPIC_API_KEY not found for extraction startup".to_string());
+                }
+            }
+            "claude-code" | "codex" | "opencode" | "openrouter" => {
+                apply_unavailable(format!(
+                    "Extraction provider '{}' is not implemented in daemon-rs runtime",
+                    resolved
+                ));
+            }
+            _ => {
+                apply_unavailable(format!(
+                    "Unsupported extraction provider '{}' in daemon-rs runtime",
+                    resolved
+                ));
+            }
+        }
+    }
+
+    ExtractionProviderResolution {
+        configured,
+        resolved,
+        effective,
+        fallback_provider,
+        status,
+        degraded,
+        fallback_applied,
+        reason,
+        since,
+    }
 }
 
 #[tokio::main]
@@ -162,69 +235,14 @@ async fn main() -> anyhow::Result<()> {
 
     let (extraction_provider_resolution, extraction_worker_stats, mut extraction_worker_handle) =
         if let Some(pipeline_cfg) = pipeline_cfg.as_ref() {
-            let configured = pipeline_cfg.extraction.provider.clone();
-            let resolved = pipeline_cfg.extraction.provider.clone();
-            let fallback_provider = pipeline_cfg.extraction.fallback_provider.clone();
-
-            let mut effective = resolved.clone();
-            let mut status: &'static str = "active";
-            let mut degraded = false;
-            let mut fallback_applied = false;
-            let mut reason: Option<String> = None;
-            let mut since: Option<String> = None;
-
-            if !pipeline_cfg.enabled || resolved == "none" {
-                effective = "none".to_string();
-                status = "disabled";
-            } else if pipeline_cfg.paused {
-                effective = "none".to_string();
-                status = "paused";
-            } else {
-                match resolved.as_str() {
-                    "ollama" => {}
-                    "anthropic" => {
-                        let key_ok = std::env::var("ANTHROPIC_API_KEY")
-                            .ok()
-                            .map(|v| !v.trim().is_empty())
-                            .unwrap_or(false);
-                        if !key_ok {
-                            degraded = true;
-                            reason = Some("ANTHROPIC_API_KEY not found for extraction startup".to_string());
-                            since = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
-                            if fallback_provider == "ollama" {
-                                effective = "ollama".to_string();
-                                status = "degraded";
-                                fallback_applied = true;
-                            } else {
-                                effective = "none".to_string();
-                                status = "blocked";
-                            }
-                        }
-                    }
-                    other => {
-                        degraded = true;
-                        reason = Some(format!(
-                            "Extraction provider '{other}' is not implemented in daemon-rs runtime; using ollama fallback"
-                        ));
-                        since = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
-                        effective = "ollama".to_string();
-                        status = "degraded";
-                        fallback_applied = true;
-                    }
-                }
-            }
-
-            let resolution = ExtractionProviderResolution {
-                configured,
-                resolved,
-                effective: effective.clone(),
-                fallback_provider,
-                status,
-                degraded,
-                fallback_applied,
-                reason,
-                since,
-            };
+            let anthropic_key_present = std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let now_iso = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+            let resolution =
+                resolve_extraction_provider_runtime(pipeline_cfg, anthropic_key_present, &now_iso);
+            let effective = resolution.effective.clone();
 
             if effective != "none" {
                 let llm_cfg = signet_pipeline::provider::LlmProviderConfig {
@@ -860,4 +878,45 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "extraction": extraction,
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_extraction_provider_runtime;
+    use signet_core::config::PipelineV2Config;
+
+    fn base_pipeline(provider: &str, fallback: &str) -> PipelineV2Config {
+        let mut cfg = PipelineV2Config::default();
+        cfg.enabled = true;
+        cfg.paused = false;
+        cfg.extraction.provider = provider.to_string();
+        cfg.extraction.fallback_provider = fallback.to_string();
+        cfg
+    }
+
+    #[test]
+    fn unsupported_provider_respects_fallback_none() {
+        let cfg = base_pipeline("codex", "none");
+        let resolution =
+            resolve_extraction_provider_runtime(&cfg, false, "2026-03-26T00:00:00.000Z");
+
+        assert_eq!(resolution.effective, "none");
+        assert_eq!(resolution.status, "blocked");
+        assert!(resolution.degraded);
+        assert!(!resolution.fallback_applied);
+        assert!(resolution.reason.is_some());
+        assert!(resolution.since.is_some());
+    }
+
+    #[test]
+    fn unsupported_provider_respects_fallback_ollama() {
+        let cfg = base_pipeline("codex", "ollama");
+        let resolution =
+            resolve_extraction_provider_runtime(&cfg, false, "2026-03-26T00:00:00.000Z");
+
+        assert_eq!(resolution.effective, "ollama");
+        assert_eq!(resolution.status, "degraded");
+        assert!(resolution.degraded);
+        assert!(resolution.fallback_applied);
+    }
 }
