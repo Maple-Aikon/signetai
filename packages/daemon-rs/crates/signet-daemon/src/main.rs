@@ -644,9 +644,11 @@ async fn preflight_extraction(state: &AppState) {
     let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
     info!(provider, "extraction provider unavailable, attempting fallback resolution");
 
-    // Try fallback to ollama if configured
+    // Try fallback to ollama if configured — use the configured endpoint
+    // (mirrors JS daemon which resolves Ollama base URL from config)
+    let ollama_fallback_endpoint = extraction.endpoint.as_deref();
     if fallback_provider == "ollama" && provider != "ollama" {
-        let ollama_ok = check_ollama_health(None).await;
+        let ollama_ok = check_ollama_health(ollama_fallback_endpoint).await;
         if ollama_ok {
             let new_state = ExtractionRuntimeState {
                 configured: Some(extraction.provider.clone()),
@@ -752,18 +754,41 @@ fn which_exists(name: &str) -> bool {
 
 /// Dead-letter pending extraction jobs when extraction is blocked at startup.
 /// Only targets 'pending' jobs — 'failed' and 'leased' are preserved for their
-/// respective retry/recovery flows.
+/// respective retry/recovery flows. Also marks affected memories as failed
+/// (matching the JS daemon's `updateExtractionFailure` behavior).
 async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now: &str) {
     let reason = reason.to_string();
     let now = now.to_string();
     let result = state
         .pool
         .write(signet_core::db::Priority::Low, move |conn| {
+            // Collect affected memory IDs before updating jobs
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT memory_id FROM memory_jobs
+                 WHERE job_type = 'extract' AND status = 'pending'",
+            )?;
+            let memory_ids: Vec<String> = stmt
+                .query_map([], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Dead-letter the pending jobs
             let count = conn.execute(
                 "UPDATE memory_jobs SET status = 'dead', error = ?1, failed_at = ?2, updated_at = ?2
                  WHERE job_type = 'extract' AND status = 'pending'",
                 rusqlite::params![reason, now],
             )?;
+
+            // Mark affected memories as failed (parity with JS daemon)
+            if !memory_ids.is_empty() {
+                let mut update_mem = conn.prepare(
+                    "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
+                )?;
+                for mid in &memory_ids {
+                    let _ = update_mem.execute(rusqlite::params![mid]);
+                }
+            }
+
             Ok(serde_json::json!({ "changes": count }))
         })
         .await;
