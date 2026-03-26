@@ -33,7 +33,7 @@ export function deadLetterExtractionJob(
 			.prepare(
 				`SELECT id FROM memory_jobs
 				 WHERE memory_id = ? AND job_type = 'extract'
-				   AND status IN ('pending', 'failed', 'leased')
+				   AND status = 'pending'
 				 ORDER BY created_at ASC`,
 			)
 			.all(memoryId) as Array<{ id: string }>;
@@ -43,7 +43,7 @@ export function deadLetterExtractionJob(
 				`UPDATE memory_jobs
 				 SET status = 'dead', error = ?, failed_at = ?, updated_at = ?
 				 WHERE memory_id = ? AND job_type = 'extract'
-				   AND status IN ('pending', 'failed', 'leased')`,
+				   AND status = 'pending'`,
 			).run(options.reason, now, now, memoryId);
 		} else {
 			db.prepare(
@@ -68,7 +68,7 @@ export function deadLetterPendingExtractionJobs(
 				`SELECT DISTINCT memory_id
 				 FROM memory_jobs
 				 WHERE job_type = 'extract'
-				   AND status IN ('pending', 'failed', 'leased')`,
+				   AND status = 'pending'`,
 			)
 			.all() as Array<{ memory_id: string }>;
 
@@ -76,7 +76,7 @@ export function deadLetterPendingExtractionJobs(
 			`UPDATE memory_jobs
 			 SET status = 'dead', error = ?, failed_at = ?, updated_at = ?
 			 WHERE job_type = 'extract'
-			   AND status IN ('pending', 'failed', 'leased')`,
+			   AND status = 'pending'`,
 		).run(options.reason, now, now);
 
 		for (const { memory_id: memoryId } of memoryIds) {

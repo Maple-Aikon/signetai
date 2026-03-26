@@ -575,7 +575,6 @@ mod tests {
             pool,
             embedding,
             None,
-            None,
             mode,
             secret.clone(),
             AuthRateLimiter::from_rules(&rules),

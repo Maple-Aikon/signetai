@@ -6,10 +6,10 @@ use std::time::Instant;
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
-use signet_core::config::{DaemonConfig, PipelineV2Config, network_mode_from_bind};
+use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
-use tracing::info;
+use tracing::{info, warn};
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
@@ -22,7 +22,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::{AppState, ExtractionProviderResolution};
+use state::{AppState, ExtractionRuntimeState};
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -57,79 +57,6 @@ fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
     }
 
     rules
-}
-
-fn resolve_extraction_provider_runtime(
-    pipeline_cfg: &PipelineV2Config,
-    anthropic_key_present: bool,
-    now_iso: &str,
-) -> ExtractionProviderResolution {
-    let configured = pipeline_cfg.extraction.provider.clone();
-    let resolved = pipeline_cfg.extraction.provider.clone();
-    let fallback_provider = pipeline_cfg.extraction.fallback_provider.clone();
-
-    let mut effective = resolved.clone();
-    let mut status: &'static str = "active";
-    let mut degraded = false;
-    let mut fallback_applied = false;
-    let mut reason: Option<String> = None;
-    let mut since: Option<String> = None;
-
-    let mut apply_unavailable = |msg: String| {
-        degraded = true;
-        reason = Some(msg);
-        since = Some(now_iso.to_string());
-        if fallback_provider == "ollama" {
-            effective = "ollama".to_string();
-            status = "degraded";
-            fallback_applied = true;
-        } else {
-            effective = "none".to_string();
-            status = "blocked";
-            fallback_applied = false;
-        }
-    };
-
-    if !pipeline_cfg.enabled || resolved == "none" {
-        effective = "none".to_string();
-        status = "disabled";
-    } else if pipeline_cfg.paused {
-        effective = "none".to_string();
-        status = "paused";
-    } else {
-        match resolved.as_str() {
-            "ollama" => {}
-            "anthropic" => {
-                if !anthropic_key_present {
-                    apply_unavailable("ANTHROPIC_API_KEY not found for extraction startup".to_string());
-                }
-            }
-            "claude-code" | "codex" | "opencode" | "openrouter" => {
-                apply_unavailable(format!(
-                    "Extraction provider '{}' is not implemented in daemon-rs runtime",
-                    resolved
-                ));
-            }
-            _ => {
-                apply_unavailable(format!(
-                    "Unsupported extraction provider '{}' in daemon-rs runtime",
-                    resolved
-                ));
-            }
-        }
-    }
-
-    ExtractionProviderResolution {
-        configured,
-        resolved,
-        effective,
-        fallback_provider,
-        status,
-        degraded,
-        fallback_applied,
-        reason,
-        since,
-    }
 }
 
 #[tokio::main]
@@ -226,62 +153,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
-    let pipeline_cfg = config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .cloned();
-
-    let (extraction_provider_resolution, extraction_worker_stats, mut extraction_worker_handle) =
-        if let Some(pipeline_cfg) = pipeline_cfg.as_ref() {
-            let anthropic_key_present = std::env::var("ANTHROPIC_API_KEY")
-                .ok()
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
-            let now_iso = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-            let resolution =
-                resolve_extraction_provider_runtime(pipeline_cfg, anthropic_key_present, &now_iso);
-            let effective = resolution.effective.clone();
-
-            if effective != "none" {
-                let llm_cfg = signet_pipeline::provider::LlmProviderConfig {
-                    provider: effective,
-                    model: pipeline_cfg.extraction.model.clone(),
-                    base_url: pipeline_cfg.extraction.endpoint.clone(),
-                    api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
-                    timeout_ms: Some(pipeline_cfg.extraction.timeout),
-                };
-                let provider = signet_pipeline::provider::from_config(&llm_cfg);
-                let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
-                let worker_cfg = signet_pipeline::worker::WorkerConfig {
-                    poll_ms: pipeline_cfg.worker.poll_ms,
-                    max_retries: pipeline_cfg.worker.max_retries,
-                    lease_timeout_ms: pipeline_cfg.worker.lease_timeout_ms,
-                    max_load_per_cpu: pipeline_cfg.worker.max_load_per_cpu,
-                    overload_backoff_ms: pipeline_cfg.worker.overload_backoff_ms,
-                    extraction_timeout_ms: pipeline_cfg.extraction.timeout,
-                    extraction_max_tokens: 4096,
-                    min_confidence: pipeline_cfg.extraction.min_confidence,
-                    shadow_mode: pipeline_cfg.shadow_mode,
-                    graph_enabled: pipeline_cfg.graph.enabled,
-                    structural_enabled: pipeline_cfg.structural.enabled,
-                };
-                let handle = signet_pipeline::worker::start(
-                    pool.clone(),
-                    provider,
-                    semaphore,
-                    worker_cfg,
-                );
-                info!("extraction worker started");
-                (Some(resolution), Some(handle.stats_handle()), Some(handle))
-            } else {
-                info!("extraction worker disabled at startup by pipeline config");
-                (Some(resolution), None, None)
-            }
-        } else {
-            (None, None, None)
-        };
+    let extraction_worker_stats = None;
 
     // Build app state
     let state = Arc::new(AppState::new(
@@ -289,11 +161,13 @@ async fn main() -> anyhow::Result<()> {
         pool,
         embedding,
         extraction_worker_stats,
-        extraction_provider_resolution,
         auth_mode,
         auth_secret,
         auth_admin_limiter,
     ));
+
+    // Run extraction provider startup preflight (mirrors JS daemon contract)
+    preflight_extraction(&state).await;
 
     // Build router
     let app = Router::new()
@@ -692,9 +566,6 @@ async fn main() -> anyhow::Result<()> {
     .context("server error")?;
 
     info!("shutting down");
-    if let Some(worker) = extraction_worker_handle.take() {
-        worker.stop().await;
-    }
 
     // Drop state to close DB channels, then await writer
     drop(state);
@@ -727,6 +598,191 @@ async fn shutdown_signal() {
 }
 
 // ---------------------------------------------------------------------------
+// Extraction provider startup preflight
+// ---------------------------------------------------------------------------
+
+/// Perform startup preflight checks on the extraction provider, mirroring the
+/// JS daemon's startup-resolution contract. Updates `extraction_state` with
+/// degraded/blocked status and dead-letters pending extraction jobs when blocked.
+async fn preflight_extraction(state: &AppState) {
+    let pipeline = match state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+    {
+        Some(p) => p,
+        None => return,
+    };
+
+    let extraction = &pipeline.extraction;
+
+    // Skip preflight if pipeline is disabled, paused, or provider is "none"
+    if !pipeline.enabled || extraction.provider == "none" || pipeline.paused || state.pipeline_paused() {
+        return;
+    }
+
+    let provider = extraction.provider.as_str();
+    let fallback_provider = extraction.fallback_provider.as_str();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Check provider availability
+    let available = match provider {
+        "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
+        "claude-code" => which_exists("claude"),
+        "codex" => which_exists("codex"),
+        "anthropic" => std::env::var("ANTHROPIC_API_KEY").map_or(false, |k| !k.is_empty()),
+        "openrouter" => std::env::var("OPENROUTER_API_KEY").map_or(false, |k| !k.is_empty()),
+        "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
+        _ => {
+            warn!(provider, "unknown extraction provider, assuming unavailable");
+            false
+        }
+    };
+
+    if available {
+        return; // Provider is healthy, initial state from AppState::new is correct
+    }
+
+    let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
+    info!(provider, "extraction provider unavailable, attempting fallback resolution");
+
+    // Try fallback to ollama if configured
+    if fallback_provider == "ollama" && provider != "ollama" {
+        let ollama_ok = check_ollama_health(None).await;
+        if ollama_ok {
+            let new_state = ExtractionRuntimeState {
+                configured: Some(extraction.provider.clone()),
+                resolved: extraction.provider.clone(),
+                effective: "ollama".to_string(),
+                fallback_provider: fallback_provider.to_string(),
+                status: "degraded".to_string(),
+                degraded: true,
+                fallback_applied: true,
+                reason: Some(reason_prefix),
+                since: Some(now),
+            };
+            *state.extraction_state.write().await = Some(new_state);
+            warn!("extraction provider degraded, fell back to ollama");
+            return;
+        }
+        // Ollama fallback also failed → blocked
+        let new_state = ExtractionRuntimeState {
+            configured: Some(extraction.provider.clone()),
+            resolved: extraction.provider.clone(),
+            effective: "none".to_string(),
+            fallback_provider: fallback_provider.to_string(),
+            status: "blocked".to_string(),
+            degraded: true,
+            fallback_applied: false,
+            reason: Some(format!("{reason_prefix}; ollama fallback startup preflight failed")),
+            since: Some(now.clone()),
+        };
+        *state.extraction_state.write().await = Some(new_state);
+        dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+        warn!("extraction blocked: primary and ollama fallback both unavailable");
+        return;
+    }
+
+    // No fallback or fallback is "none" → blocked
+    let reason = if fallback_provider == "none" {
+        format!("{reason_prefix}; fallbackProvider is none")
+    } else {
+        reason_prefix
+    };
+    let new_state = ExtractionRuntimeState {
+        configured: Some(extraction.provider.clone()),
+        resolved: extraction.provider.clone(),
+        effective: "none".to_string(),
+        fallback_provider: fallback_provider.to_string(),
+        status: "blocked".to_string(),
+        degraded: true,
+        fallback_applied: false,
+        reason: Some(reason.clone()),
+        since: Some(now.clone()),
+    };
+    *state.extraction_state.write().await = Some(new_state);
+    dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    warn!("extraction blocked: provider unavailable with no viable fallback");
+}
+
+/// Check if the ollama HTTP server is reachable.
+async fn check_ollama_health(endpoint: Option<&str>) -> bool {
+    let base = endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http://127.0.0.1:11434");
+    let url = format!("{}/api/tags", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check if the OpenCode HTTP server is reachable.
+async fn check_opencode_health(endpoint: Option<&str>) -> bool {
+    let base = endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http://127.0.0.1:4096");
+    let url = format!("{}/health", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check if a CLI binary exists on PATH.
+fn which_exists(name: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Dead-letter pending extraction jobs when extraction is blocked at startup.
+/// Only targets 'pending' jobs — 'failed' and 'leased' are preserved for their
+/// respective retry/recovery flows.
+async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now: &str) {
+    let reason = reason.to_string();
+    let now = now.to_string();
+    let result = state
+        .pool
+        .write(signet_core::db::Priority::Low, move |conn| {
+            let count = conn.execute(
+                "UPDATE memory_jobs SET status = 'dead', error = ?1, failed_at = ?2, updated_at = ?2
+                 WHERE job_type = 'extract' AND status = 'pending'",
+                rusqlite::params![reason, now],
+            )?;
+            Ok(serde_json::json!({ "changes": count }))
+        })
+        .await;
+    match result {
+        Ok(val) => {
+            let count = val["changes"].as_u64().unwrap_or(0);
+            if count > 0 {
+                info!(count, "dead-lettered pending extraction jobs at startup");
+            }
+        }
+        Err(e) => warn!(%e, "failed to dead-letter pending extraction jobs"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
@@ -754,52 +810,27 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         .memory
         .as_ref()
         .and_then(|memory| memory.pipeline_v2.as_ref());
-    let extraction = pipeline.map(|pipeline| {
-        if let Some(resolution) = state.extraction_provider_resolution.as_ref() {
-            let paused = pipeline.paused || state.pipeline_paused();
-            let status = if paused && resolution.status != "disabled" && resolution.status != "blocked" {
+    let extraction = {
+        let guard = state.extraction_state.read().await;
+        guard.as_ref().map(|es| {
+            let status = if state.pipeline_paused() && es.status == "active" {
                 "paused"
             } else {
-                resolution.status
-            };
-            let effective = if status == "paused" {
-                "none".to_string()
-            } else {
-                resolution.effective.clone()
+                es.status.as_str()
             };
             serde_json::json!({
-                "configured": resolution.configured.clone(),
-                "resolved": resolution.resolved.clone(),
-                "effective": effective,
-                "fallbackProvider": resolution.fallback_provider.clone(),
+                "configured": es.configured,
+                "resolved": es.resolved,
+                "effective": es.effective,
+                "fallbackProvider": es.fallback_provider,
                 "status": status,
-                "degraded": if status == "paused" { false } else { resolution.degraded },
-                "fallbackApplied": if status == "paused" { false } else { resolution.fallback_applied },
-                "reason": if status == "paused" { serde_json::Value::Null } else { resolution.reason.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null) },
-                "since": if status == "paused" { serde_json::Value::Null } else { resolution.since.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null) },
+                "degraded": es.degraded,
+                "fallbackApplied": es.fallback_applied,
+                "reason": es.reason,
+                "since": es.since,
             })
-        } else {
-            let extraction = &pipeline.extraction;
-            let status = if !pipeline.enabled || extraction.provider == "none" {
-                "disabled"
-            } else if pipeline.paused || state.pipeline_paused() {
-                "paused"
-            } else {
-                "active"
-            };
-            serde_json::json!({
-                "configured": extraction.provider,
-                "resolved": extraction.provider,
-                "effective": extraction.provider,
-                "fallbackProvider": extraction.fallback_provider,
-                "status": status,
-                "degraded": false,
-                "fallbackApplied": false,
-                "reason": serde_json::Value::Null,
-                "since": serde_json::Value::Null,
-            })
-        }
-    });
+        })
+    };
     let extraction_worker = if let Some(pipeline) = pipeline {
         let snapshot = if let Some(stats) = state.extraction_worker_stats.as_ref() {
             stats.lock().await.snapshot(current_epoch_ms())
@@ -878,45 +909,4 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "extraction": extraction,
         },
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve_extraction_provider_runtime;
-    use signet_core::config::PipelineV2Config;
-
-    fn base_pipeline(provider: &str, fallback: &str) -> PipelineV2Config {
-        let mut cfg = PipelineV2Config::default();
-        cfg.enabled = true;
-        cfg.paused = false;
-        cfg.extraction.provider = provider.to_string();
-        cfg.extraction.fallback_provider = fallback.to_string();
-        cfg
-    }
-
-    #[test]
-    fn unsupported_provider_respects_fallback_none() {
-        let cfg = base_pipeline("codex", "none");
-        let resolution =
-            resolve_extraction_provider_runtime(&cfg, false, "2026-03-26T00:00:00.000Z");
-
-        assert_eq!(resolution.effective, "none");
-        assert_eq!(resolution.status, "blocked");
-        assert!(resolution.degraded);
-        assert!(!resolution.fallback_applied);
-        assert!(resolution.reason.is_some());
-        assert!(resolution.since.is_some());
-    }
-
-    #[test]
-    fn unsupported_provider_respects_fallback_ollama() {
-        let cfg = base_pipeline("codex", "ollama");
-        let resolution =
-            resolve_extraction_provider_runtime(&cfg, false, "2026-03-26T00:00:00.000Z");
-
-        assert_eq!(resolution.effective, "ollama");
-        assert_eq!(resolution.status, "degraded");
-        assert!(resolution.degraded);
-        assert!(resolution.fallback_applied);
-    }
 }
