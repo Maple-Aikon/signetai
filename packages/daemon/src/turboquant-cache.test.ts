@@ -189,6 +189,7 @@ describe("compress/decompress roundtrip", () => {
 			const compressed = cache.compressVector(vec);
 			const restored = cache.decompressVector(compressed);
 			const sim = cosineSim(vec, restored);
+			// 4-bit should have > 0.99 cosine similarity for dim=64
 			expect(sim).toBeGreaterThan(0.95);
 		}
 	});
@@ -205,6 +206,7 @@ describe("compress/decompress roundtrip", () => {
 			const compressed = cache.compressVector(vec);
 			const restored = cache.decompressVector(compressed);
 			const sim = cosineSim(vec, restored);
+			// 3-bit should still be quite good
 			expect(sim).toBeGreaterThan(0.9);
 		}
 	});
@@ -230,6 +232,8 @@ describe("compress/decompress roundtrip", () => {
 		const compressed = cache.compressVector(vec);
 		// 4 bits * 64 dim = 256 bits = 32 bytes
 		expect(compressed.packedCodes.length).toBe(Math.ceil((DIM * 4) / 8));
+		expect(compressed.dim).toBe(DIM);
+		expect(compressed.bits).toBe(4);
 	});
 
 	it("packedCodes has correct byte length for 3-bit", () => {
@@ -242,6 +246,18 @@ describe("compress/decompress roundtrip", () => {
 		const compressed = cache.compressVector(vec);
 		// 3 bits * 64 dim = 192 bits = 24 bytes
 		expect(compressed.packedCodes.length).toBe(Math.ceil((DIM * 3) / 8));
+	});
+
+	it("packedCodes has correct byte length for 2-bit", () => {
+		const cache = TurboQuantKvCache.create({
+			bits: 2,
+			headDim: DIM,
+			numHeads: 1,
+		});
+		const vec = randomVector(DIM, 7);
+		const compressed = cache.compressVector(vec);
+		// 2 bits * 64 dim = 128 bits = 16 bytes
+		expect(compressed.packedCodes.length).toBe(Math.ceil((DIM * 2) / 8));
 	});
 
 	it("packedCodes has correct byte length for 1-bit", () => {
@@ -345,6 +361,7 @@ describe("determinism", () => {
 
 		// Norms should match (same vector), but packed codes should differ
 		expect(r1.norm).toBeCloseTo(r2.norm, 5);
+		// Packed codes won't be identical with different rotation matrices
 		let anyDifferent = false;
 		for (let i = 0; i < r1.packedCodes.length; i++) {
 			if (r1.packedCodes[i] !== r2.packedCodes[i]) {
@@ -416,7 +433,7 @@ describe("storeCompressed / getCompressedLayer", () => {
 		expect(layer?.values.length).toBe(1);
 	});
 
-	it("accumulates entries across calls (O(1) push, no copying)", () => {
+	it("accumulates entries across calls", () => {
 		const cache = TurboQuantKvCache.create({
 			bits: 4,
 			headDim: 32,
@@ -614,6 +631,7 @@ describe("quality at typical model dimensions", () => {
 			totalMse += mse(vec, restored);
 		}
 		const avgMse = totalMse / trials;
+		// At dim=128, 4-bit should be very accurate
 		expect(avgMse).toBeLessThan(0.01);
 	});
 
