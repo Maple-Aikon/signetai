@@ -162,15 +162,12 @@ async fn main() -> anyhow::Result<()> {
         auth_admin_limiter,
     ));
 
-    // Run extraction provider startup preflight asynchronously after server
-    // starts, so /health and /api/status are available immediately during boot.
-    // The preflight updates extraction_state in place once complete.
-    {
-        let preflight_state = Arc::clone(&state);
-        tokio::spawn(async move {
-            preflight_extraction(&preflight_state).await;
-        });
-    }
+    // Run extraction provider startup preflight before serving requests.
+    // This blocks boot briefly (up to ~5s per provider probe) but ensures
+    // extraction_state is accurate before any writes arrive — matching the
+    // JS daemon's synchronous startup behavior. Without this, writes
+    // during the race window would bypass the blocked-extraction guard.
+    preflight_extraction(&state).await;
 
     // Build router
     let app = Router::new()
@@ -646,7 +643,18 @@ pub(crate) async fn preflight_extraction(state: &AppState) {
     };
 
     if available {
-        return; // Provider is healthy, initial state from AppState::new is correct
+        // Provider is healthy — explicitly restore active state in case this
+        // is a resume after a prior blocked/degraded state.
+        let mut guard = state.extraction_state.write().await;
+        if let Some(es) = guard.as_mut() {
+            es.status = "active".to_string();
+            es.effective = extraction.provider.clone();
+            es.degraded = false;
+            es.fallback_applied = false;
+            es.reason = None;
+            es.since = None;
+        }
+        return;
     }
 
     let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
