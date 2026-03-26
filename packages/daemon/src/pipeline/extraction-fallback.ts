@@ -27,7 +27,11 @@ export function deadLetterExtractionJob(
 			.prepare("SELECT extraction_status FROM memories WHERE id = ? LIMIT 1")
 			.get(memoryId) as { extraction_status: string | null } | undefined;
 		if (!memory) return;
-		if (memory.extraction_status === "complete" || memory.extraction_status === "completed") return;
+		if (
+			memory.extraction_status === "complete" ||
+			memory.extraction_status === "completed" ||
+			memory.extraction_status === "done"
+		) return;
 
 		const liveJobs = db
 			.prepare(
