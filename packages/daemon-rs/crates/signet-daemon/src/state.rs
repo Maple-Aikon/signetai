@@ -72,12 +72,16 @@ impl AppState {
             .and_then(|m| m.pipeline_v2.as_ref())
             .map(|pipeline| {
                 let extraction = &pipeline.extraction;
+                // Use "pending" for providers that need preflight validation.
+                // Disabled/paused are known immediately; everything else waits
+                // for preflight to resolve the actual status. This prevents
+                // /api/status from reporting false "active" during startup.
                 let status = if !pipeline.enabled || extraction.provider == "none" {
                     "disabled"
                 } else if paused {
                     "paused"
                 } else {
-                    "active"
+                    "pending"
                 };
                 ExtractionRuntimeState {
                     configured: Some(extraction.provider.clone()),
