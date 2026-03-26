@@ -216,6 +216,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
       }
     }
     if (d.type === 'signet:action') {
+      console.log('[bridge] signet:action received:', d.action);
       if (d.action === 'refresh') {
         // Dispatch DOM event for any listener, then trigger full re-fetch
         window.dispatchEvent(new CustomEvent('signet:refresh', { detail: d.data }));
@@ -230,6 +231,7 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
       }
       if (d.action === 'cursor') {
         var cursorData = d.data || {};
+        console.log('[bridge] cursor action received, steps:', (cursorData.steps || d.steps || []).length);
         runCursorSequence(cursorData.steps || d.steps || []);
       }
       if (d.action === 'highlight') {
@@ -413,14 +415,21 @@ export const WIDGET_BRIDGE_SCRIPT = `(function() {
   }
 
   async function runCursorSequence(steps) {
+    console.log('[bridge] runCursorSequence starting with', steps.length, 'steps');
     // Wait for the widget DOM to be ready before starting
     await new Promise(function(r) { setTimeout(r, 500); });
+    // Position cursor at center of viewport before showing
+    cursor.style.left = (window.innerWidth / 2) + 'px';
+    cursor.style.top = (window.innerHeight / 2) + 'px';
     showCursor();
+    console.log('[bridge] cursor shown at center');
     for (var s = 0; s < steps.length; s++) {
       var step = steps[s];
+      console.log('[bridge] step', s, ':', step.action, step.target || step.text || step.ms || '');
       if (step.action === 'move' && step.target) {
         // Wait up to 3 seconds for the element to appear
         var found = await waitForElement(step.target, 3000);
+        console.log('[bridge] find', step.target, '->', found ? 'found at ' + found.x + ',' + found.y : 'NOT FOUND');
         if (found) {
           await moveCursorTo(found.x, found.y);
           if (step.click) {
