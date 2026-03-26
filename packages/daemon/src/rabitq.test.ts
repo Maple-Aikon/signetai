@@ -211,7 +211,7 @@ describe("quantize + dequantize", () => {
 	const seed = 42;
 	const bits = 4;
 
-	test("round-trip preserves vector direction (cosine > 0.7)", () => {
+	test("round-trip preserves vector direction (cosine > 0.85)", () => {
 		const R = generateRotationMatrix(dim, seed);
 		const cb = computeCodebook(bits, dim);
 		const rng = makeRng(100);
@@ -230,8 +230,8 @@ describe("quantize + dequantize", () => {
 
 		for (let i = 0; i < vectors.length; i++) {
 			const sim = cosine(vectors[i], restored[i]);
-			// Quantization introduces error; cosine > 0.7 is reasonable for 4-bit
-			expect(sim).toBeGreaterThan(0.7);
+			// With stored maxDev, 4-bit round-trip cosine should be > 0.85
+			expect(sim).toBeGreaterThan(0.85);
 		}
 	});
 
@@ -300,8 +300,8 @@ describe("quantize + dequantize", () => {
 
 		// Original: numVectors × dim × 4 bytes
 		const originalBytes = numVectors * dim * 4;
-		// Compressed: numVectors × (bytesPerVector + 8 bytes for norm+mean)
-		const compressedBytes = numVectors * (Math.ceil(dim / 2) + 8);
+		// Compressed: numVectors × (bytesPerVector + 12 bytes for norm+mean+maxDev)
+		const compressedBytes = numVectors * (Math.ceil(dim / 2) + 12);
 		// Plus rotation matrix and codebook (amortized)
 		const overhead = R.byteLength + cb.byteLength;
 
@@ -367,7 +367,7 @@ describe("compressedSearch", () => {
 		}
 	});
 
-	test("recall@10 vs brute force is reasonable (> 0.3 for 64-dim)", () => {
+	test("recall@10 vs brute force is reasonable (> 0.4 for 64-dim)", () => {
 		const R = generateRotationMatrix(dim, seed);
 		const cb = computeCodebook(bits, dim);
 		const rng = makeRng(700);
@@ -403,8 +403,8 @@ describe("compressedSearch", () => {
 		}
 
 		const avgRecall = totalRecall / numQueries;
-		// For 64-dim 4-bit quantization, recall@10 should be > 0.3
-		expect(avgRecall).toBeGreaterThan(0.3);
+		// With stored maxDev, 64-dim 4-bit quantization recall@10 should be > 0.4
+		expect(avgRecall).toBeGreaterThan(0.4);
 	});
 
 	test("finds exact match when query is one of the vectors", () => {
@@ -596,9 +596,9 @@ describe("performance", () => {
 		// Original: numVectors × dim × 4 bytes (Float32)
 		const originalBytes = numVectors * dim * 4; // 3,072,000 bytes (~3MB)
 
-		// Compressed: numVectors × (dim/2 bytes + 8 bytes for norm+mean)
-		const compressedPerVector = Math.ceil(dim / 2) + 8; // 392 bytes
-		const compressedBytes = numVectors * compressedPerVector; // 392,000 bytes
+		// Compressed: numVectors × (dim/2 bytes + 12 bytes for norm+mean+maxDev)
+		const compressedPerVector = Math.ceil(dim / 2) + 12; // 396 bytes
+		const compressedBytes = numVectors * compressedPerVector; // 396,000 bytes
 
 		// Overhead: rotation matrix + codebook (shared, amortized)
 		const overheadBytes = dim * dim * 4 + (1 << bits) * 4; // ~2.36MB (rotation is big)
@@ -666,7 +666,7 @@ describe("higher-dimensional quality", () => {
 		const avgRecall = totalRecall / numQueries;
 		console.log(`  Recall@${topK} (${dim}-dim, ${numVectors} vectors): ${(avgRecall * 100).toFixed(1)}%`);
 
-		// Higher dimensions should give better recall due to concentration of measure
-		expect(avgRecall).toBeGreaterThan(0.2);
+		// With stored maxDev, higher dimensions should give better recall
+		expect(avgRecall).toBeGreaterThan(0.3);
 	});
 });

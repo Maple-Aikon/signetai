@@ -8,6 +8,13 @@
  * The index is built once at daemon startup and cached in memory. When new
  * embeddings are inserted, the index is rebuilt on next search (lazy
  * invalidation via row-count check).
+ *
+ * Rotation matrix overhead:
+ * For dim=768 the rotation matrix is dim × dim × 4 bytes ≈ 2.36 MB.
+ * Each compressed vector is only ~392 bytes (384 code bytes + 8 metadata),
+ * so the fixed overhead only pays for itself at roughly 5 000+ vectors.
+ * Below ~1 000 vectors the compression ratio is actually worse than raw
+ * Float32 storage, so we skip building the index for very small sets.
  */
 
 import { getDbAccessor } from "./db-accessor";
@@ -196,16 +203,28 @@ function getEmbeddingFingerprint(): { count: number; hash: string } {
 /**
  * Ensure the compressed index is built and up-to-date.
  *
- * Lazily rebuilds when the embedding count changes. Thread-safe via
- * build-in-progress flag (skips if another build is running).
+ * Lazily rebuilds when the embedding count changes. Single-threaded guard
+ * via build-in-progress flag (not thread-safe across workers — skips if
+ * another build is running in the same thread).
  *
  * @param config - RaBitQ configuration
  * @returns The current compressed index, or null if unavailable
  */
+/** Minimum vector count to justify the rotation matrix overhead (~2.36 MB for dim=768). */
+const MIN_VECTORS_FOR_INDEX = 1000;
+
 export function ensureIndex(config: RaBitQConfig): CompressedIndex | null {
 	if (!config.enabled) return null;
 
 	const { count: currentCount, hash: currentHash } = getEmbeddingFingerprint();
+
+	if (currentCount < MIN_VECTORS_FOR_INDEX) {
+		logger.info(
+			"memory",
+			`RaBitQ: skipping index build — only ${currentCount} vectors (need ≥${MIN_VECTORS_FOR_INDEX} to justify rotation matrix overhead)`,
+		);
+		return null;
+	}
 
 	// Check if cached index is still valid (count + content fingerprint + config params)
 	if (
