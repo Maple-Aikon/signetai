@@ -8,7 +8,7 @@ use axum::{Router, extract::State, response::Json, routing::get};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
-use tracing::info;
+use tracing::{info, warn};
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
@@ -21,7 +21,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::AppState;
+use state::{AppState, ExtractionRuntimeState};
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -161,6 +161,9 @@ async fn main() -> anyhow::Result<()> {
         auth_secret,
         auth_admin_limiter,
     ));
+
+    // Run extraction provider startup preflight (mirrors JS daemon contract)
+    preflight_extraction(&state).await;
 
     // Build router
     let app = Router::new()
@@ -587,6 +590,191 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => info!("received ctrl+c"),
         () = terminate => info!("received SIGTERM"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extraction provider startup preflight
+// ---------------------------------------------------------------------------
+
+/// Perform startup preflight checks on the extraction provider, mirroring the
+/// JS daemon's startup-resolution contract. Updates `extraction_state` with
+/// degraded/blocked status and dead-letters pending extraction jobs when blocked.
+async fn preflight_extraction(state: &AppState) {
+    let pipeline = match state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+    {
+        Some(p) => p,
+        None => return,
+    };
+
+    let extraction = &pipeline.extraction;
+
+    // Skip preflight if pipeline is disabled, paused, or provider is "none"
+    if !pipeline.enabled || extraction.provider == "none" || pipeline.paused || state.pipeline_paused() {
+        return;
+    }
+
+    let provider = extraction.provider.as_str();
+    let fallback_provider = extraction.fallback_provider.as_str();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Check provider availability
+    let available = match provider {
+        "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
+        "claude-code" => which_exists("claude"),
+        "codex" => which_exists("codex"),
+        "anthropic" => std::env::var("ANTHROPIC_API_KEY").map_or(false, |k| !k.is_empty()),
+        "openrouter" => std::env::var("OPENROUTER_API_KEY").map_or(false, |k| !k.is_empty()),
+        "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
+        _ => {
+            warn!(provider, "unknown extraction provider, assuming unavailable");
+            false
+        }
+    };
+
+    if available {
+        return; // Provider is healthy, initial state from AppState::new is correct
+    }
+
+    let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
+    info!(provider, "extraction provider unavailable, attempting fallback resolution");
+
+    // Try fallback to ollama if configured
+    if fallback_provider == "ollama" && provider != "ollama" {
+        let ollama_ok = check_ollama_health(None).await;
+        if ollama_ok {
+            let new_state = ExtractionRuntimeState {
+                configured: Some(extraction.provider.clone()),
+                resolved: extraction.provider.clone(),
+                effective: "ollama".to_string(),
+                fallback_provider: fallback_provider.to_string(),
+                status: "degraded".to_string(),
+                degraded: true,
+                fallback_applied: true,
+                reason: Some(reason_prefix),
+                since: Some(now),
+            };
+            *state.extraction_state.write().await = Some(new_state);
+            warn!("extraction provider degraded, fell back to ollama");
+            return;
+        }
+        // Ollama fallback also failed → blocked
+        let new_state = ExtractionRuntimeState {
+            configured: Some(extraction.provider.clone()),
+            resolved: extraction.provider.clone(),
+            effective: "none".to_string(),
+            fallback_provider: fallback_provider.to_string(),
+            status: "blocked".to_string(),
+            degraded: true,
+            fallback_applied: false,
+            reason: Some(format!("{reason_prefix}; ollama fallback startup preflight failed")),
+            since: Some(now.clone()),
+        };
+        *state.extraction_state.write().await = Some(new_state);
+        dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+        warn!("extraction blocked: primary and ollama fallback both unavailable");
+        return;
+    }
+
+    // No fallback or fallback is "none" → blocked
+    let reason = if fallback_provider == "none" {
+        format!("{reason_prefix}; fallbackProvider is none")
+    } else {
+        reason_prefix
+    };
+    let new_state = ExtractionRuntimeState {
+        configured: Some(extraction.provider.clone()),
+        resolved: extraction.provider.clone(),
+        effective: "none".to_string(),
+        fallback_provider: fallback_provider.to_string(),
+        status: "blocked".to_string(),
+        degraded: true,
+        fallback_applied: false,
+        reason: Some(reason.clone()),
+        since: Some(now.clone()),
+    };
+    *state.extraction_state.write().await = Some(new_state);
+    dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    warn!("extraction blocked: provider unavailable with no viable fallback");
+}
+
+/// Check if the ollama HTTP server is reachable.
+async fn check_ollama_health(endpoint: Option<&str>) -> bool {
+    let base = endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http://127.0.0.1:11434");
+    let url = format!("{}/api/tags", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check if the OpenCode HTTP server is reachable.
+async fn check_opencode_health(endpoint: Option<&str>) -> bool {
+    let base = endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http://127.0.0.1:4096");
+    let url = format!("{}/health", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check if a CLI binary exists on PATH.
+fn which_exists(name: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Dead-letter pending extraction jobs when extraction is blocked at startup.
+/// Only targets 'pending' jobs — 'failed' and 'leased' are preserved for their
+/// respective retry/recovery flows.
+async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now: &str) {
+    let reason = reason.to_string();
+    let now = now.to_string();
+    let result = state
+        .pool
+        .write(signet_core::db::Priority::Low, move |conn| {
+            let count = conn.execute(
+                "UPDATE memory_jobs SET status = 'dead', error = ?1, failed_at = ?2, updated_at = ?2
+                 WHERE job_type = 'extract' AND status = 'pending'",
+                rusqlite::params![reason, now],
+            )?;
+            Ok(serde_json::json!({ "changes": count }))
+        })
+        .await;
+    match result {
+        Ok(val) => {
+            let count = val["changes"].as_u64().unwrap_or(0);
+            if count > 0 {
+                info!(count, "dead-lettered pending extraction jobs at startup");
+            }
+        }
+        Err(e) => warn!(%e, "failed to dead-letter pending extraction jobs"),
     }
 }
 
