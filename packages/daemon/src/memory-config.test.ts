@@ -807,6 +807,38 @@ describe("loadPipelineConfig", () => {
 		expect(result.worker.overloadBackoffMs).toBe(45000);
 	});
 
+	it("loads worker load-shedding config fields from flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerMaxLoadPerCpu: 0.55,
+					workerOverloadBackoffMs: 42000,
+				},
+			},
+		});
+
+		expect(result.worker.maxLoadPerCpu).toBe(0.55);
+		expect(result.worker.overloadBackoffMs).toBe(42000);
+	});
+
+	it("prefers nested worker load-shedding config over flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					worker: {
+						maxLoadPerCpu: 0.7,
+						overloadBackoffMs: 38000,
+					},
+					workerMaxLoadPerCpu: 0.5,
+					workerOverloadBackoffMs: 60000,
+				},
+			},
+		});
+
+		expect(result.worker.maxLoadPerCpu).toBe(0.7);
+		expect(result.worker.overloadBackoffMs).toBe(38000);
+	});
+
 	it("uses worker load-shedding defaults when absent", () => {
 		const result = loadPipelineConfig({
 			memory: { pipelineV2: { enabled: true } },

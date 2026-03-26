@@ -117,6 +117,17 @@ silent fallback or hard-blocked extraction after boot.
     "autonomousEnabled": false,
     "extractionModel": "qwen3:4b"
   },
+  "pipeline": {
+    "extraction": {
+      "running": true,
+      "overloaded": false,
+      "loadPerCpu": 0.42,
+      "maxLoadPerCpu": 0.8,
+      "overloadBackoffMs": 30000,
+      "overloadSince": null,
+      "nextTickInMs": 1200
+    }
+  },
   "providerResolution": {
     "extraction": {
       "configured": "claude-code",
@@ -144,6 +155,8 @@ The `bypassedSessions` field reports how many active sessions currently have
 bypass enabled (see [[#Sessions]]).
 Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
 states when the configured extraction provider is unavailable at startup.
+When `pipeline.extraction.overloaded` is `true`, the extraction worker is
+intentionally backing off for `overloadBackoffMs` between polls.
 
 
 ### GET /api/features
