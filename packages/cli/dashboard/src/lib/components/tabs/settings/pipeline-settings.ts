@@ -1,4 +1,5 @@
 import {
+	DEFAULT_PIPELINE_TIMEOUT_MS,
 	type PipelineProviderChoice,
 	defaultPipelineModel,
 	isPipelineProvider,
@@ -88,5 +89,9 @@ export function resolveSynthesisTimeout(agent: unknown): number {
 	const explicit = readNumber(pipeline, "synthesis", "timeout");
 	if (explicit !== undefined) return explicit;
 	if (hasExplicitSynthesisProvider(agent)) return 120000;
-	return readNumber(pipeline, "extraction", "timeout") ?? readNumber(pipeline, "extractionTimeout") ?? 90000;
+	return (
+		readNumber(pipeline, "extraction", "timeout") ??
+		readNumber(pipeline, "extractionTimeout") ??
+		DEFAULT_PIPELINE_TIMEOUT_MS
+	);
 }

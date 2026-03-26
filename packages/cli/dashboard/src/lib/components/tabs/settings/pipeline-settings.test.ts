@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from "bun:test";
+import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
@@ -90,5 +91,15 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("codex");
 		expect(resolveSynthesisModel(agent)).toBe("gpt-5-codex-mini");
+	});
+
+	it("uses the shared pipeline timeout default when synthesis and extraction timeouts are both implicit", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {},
+			},
+		};
+
+		expect(resolveSynthesisTimeout(agent)).toBe(DEFAULT_PIPELINE_TIMEOUT_MS);
 	});
 });

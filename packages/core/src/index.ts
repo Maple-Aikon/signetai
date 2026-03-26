@@ -78,6 +78,13 @@ export type {
 	PipelineHintsConfig,
 	ModelRegistryEntry,
 } from "./types";
+export {
+	DEFAULT_PIPELINE_TIMEOUT_MS,
+	PIPELINE_PROVIDER_CHOICES,
+	defaultPipelineModel,
+	isPipelineProvider,
+} from "./pipeline-providers";
+export type { PipelineProviderChoice } from "./pipeline-providers";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
@@ -89,12 +96,6 @@ export {
 	resolveNetworkBinding,
 } from "./network";
 export type { NetworkMode } from "./network";
-export {
-	PIPELINE_PROVIDER_CHOICES,
-	defaultPipelineModel,
-	isPipelineProvider,
-} from "./pipeline-providers";
-export type { PipelineProviderChoice } from "./pipeline-providers";
 export {
 	search,
 	vectorSearch,

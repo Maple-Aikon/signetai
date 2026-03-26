@@ -10,6 +10,8 @@ export const PIPELINE_PROVIDER_CHOICES = [
 
 export type PipelineProviderChoice = (typeof PIPELINE_PROVIDER_CHOICES)[number];
 
+export const DEFAULT_PIPELINE_TIMEOUT_MS = 90000;
+
 const MODEL_DEFAULTS = {
 	none: "",
 	ollama: "qwen3:4b",

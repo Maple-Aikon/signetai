@@ -4,6 +4,7 @@ import {
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
+	DEFAULT_PIPELINE_TIMEOUT_MS,
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
@@ -43,7 +44,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		model: "qwen3:4b",
 		strength: "low",
 		endpoint: undefined,
-		timeout: 90000,
+		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
 		minConfidence: 0.7,
 		escalation: {
 			maxNewEntitiesPerChunk: 10,
