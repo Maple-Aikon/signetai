@@ -874,15 +874,27 @@ async function ensureInitialized(modelId?: NativeModelId): Promise<void> {
 			`Hot-swapping from ${activeModelConfig.displayName} to ${targetConfig.displayName}`,
 		);
 		await shutdownNativeGenerationProvider();
-		pendingModelId = null;
 	}
 
 	// If already initialized with the correct model, done.
 	if (model && tokenizer && activeModelConfig?.id === targetConfig.id) return;
 
-	// If an init is already in progress for this same model, join it.
-	if (initPromise && pendingModelId === targetConfig.id) {
-		return initPromise;
+	// If an init is already in progress, either join it or wait for it
+	// to finish before starting a new one (prevents concurrent doInit).
+	if (initPromise) {
+		if (pendingModelId === targetConfig.id) {
+			// Same model — join the existing init.
+			return initPromise;
+		}
+		// Different model is initializing — wait for it to finish
+		// (or fail), then shut it down and start the new one.
+		try {
+			await initPromise;
+		} catch {
+			// The pending init failed — that's fine, we'll start fresh.
+		}
+		// Shut down whatever the previous init loaded (if anything).
+		await shutdownNativeGenerationProvider();
 	}
 
 	// Start a new init.
@@ -1288,6 +1300,11 @@ async function runGeneration(
 					);
 
 					kvManager.appendAndCompress(layerIdx, lastKeyTensor, lastValTensor);
+
+					// Dispose the temporary single-token tensors — appendAndCompress
+					// has already .slice()'d the data it needs into owned copies.
+					disposeTensor(lastKeyTensor);
+					disposeTensor(lastValTensor);
 				}
 			}
 
