@@ -822,6 +822,28 @@ fn current_epoch_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
+fn current_load_per_cpu() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let mut loads = [0.0f64; 1];
+        // SAFETY: `loads` points to writable storage for one f64 sample.
+        let rc = unsafe { libc::getloadavg(loads.as_mut_ptr(), 1) };
+        if rc < 1 {
+            return None;
+        }
+        let cpus = std::thread::available_parallelism().ok()?.get() as f64;
+        if cpus <= 0.0 {
+            return None;
+        }
+        return Some(loads[0] / cpus);
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 fn iso_from_epoch_ms(ms: i64) -> Option<String> {
     chrono::DateTime::<Utc>::from_timestamp_millis(ms)
         .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
@@ -862,35 +884,72 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         })
     };
     let extraction_worker = if let Some(pipeline) = pipeline {
-        let snapshot = if let Some(stats) = state.extraction_worker_stats.as_ref() {
-            stats.lock().await.snapshot(current_epoch_ms())
-        } else {
-            signet_pipeline::worker::WorkerRuntimeSnapshot {
-                running: false,
-                overloaded: false,
-                load_per_cpu: None,
-                overload_since_ms: None,
-                next_tick_in_ms: None,
-                max_load_per_cpu: pipeline.worker.max_load_per_cpu,
-                overload_backoff_ms: pipeline.worker.overload_backoff_ms,
-            }
-        };
         let paused = pipeline.paused || state.pipeline_paused();
-        let running = snapshot.running && !paused;
-        let overloaded = running && snapshot.overloaded;
-        let overload_since = if overloaded {
-            snapshot.overload_since_ms.and_then(iso_from_epoch_ms)
-        } else {
-            None
-        };
+        let (running, overloaded, load_per_cpu, overload_since, max_load_per_cpu, overload_backoff_ms, next_tick_in_ms) =
+            if let Some(stats) = state.extraction_worker_stats.as_ref() {
+                let snapshot = stats.lock().await.snapshot(current_epoch_ms());
+                let running = snapshot.running && !paused;
+                let overloaded = running && snapshot.overloaded;
+                let overload_since = if overloaded {
+                    snapshot.overload_since_ms.and_then(iso_from_epoch_ms)
+                } else {
+                    None
+                };
+                (
+                    running,
+                    overloaded,
+                    if running { snapshot.load_per_cpu } else { None },
+                    overload_since,
+                    snapshot.max_load_per_cpu,
+                    snapshot.overload_backoff_ms,
+                    if running { snapshot.next_tick_in_ms } else { None },
+                )
+            } else {
+                let extraction_running = {
+                    let guard = state.extraction_state.read().await;
+                    guard
+                        .as_ref()
+                        .map(|es| es.status == "active" || es.status == "degraded")
+                        .unwrap_or(false)
+                };
+                let running = extraction_running && !paused;
+                let load_per_cpu = if running { current_load_per_cpu() } else { None };
+                let overloaded = running
+                    && load_per_cpu
+                        .map(|load| load.is_finite() && load > pipeline.worker.max_load_per_cpu)
+                        .unwrap_or(false);
+                let overload_since = if overloaded {
+                    Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true))
+                } else {
+                    None
+                };
+                let next_tick_in_ms = if running {
+                    Some(if overloaded {
+                        pipeline.worker.overload_backoff_ms
+                    } else {
+                        pipeline.worker.poll_ms
+                    })
+                } else {
+                    None
+                };
+                (
+                    running,
+                    overloaded,
+                    load_per_cpu,
+                    overload_since,
+                    pipeline.worker.max_load_per_cpu,
+                    pipeline.worker.overload_backoff_ms,
+                    next_tick_in_ms,
+                )
+            };
         Some(serde_json::json!({
             "running": running,
             "overloaded": overloaded,
-            "loadPerCpu": if running { snapshot.load_per_cpu } else { None },
-            "maxLoadPerCpu": snapshot.max_load_per_cpu,
-            "overloadBackoffMs": snapshot.overload_backoff_ms,
+            "loadPerCpu": load_per_cpu,
+            "maxLoadPerCpu": max_load_per_cpu,
+            "overloadBackoffMs": overload_backoff_ms,
             "overloadSince": overload_since,
-            "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
+            "nextTickInMs": next_tick_in_ms,
         }))
     } else {
         None
