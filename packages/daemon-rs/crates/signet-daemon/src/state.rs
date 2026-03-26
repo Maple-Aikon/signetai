@@ -19,6 +19,7 @@ pub struct AppState {
     pub pipeline_paused: AtomicBool,
     pub pipeline_transition: AtomicBool,
     pub extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
+    pub extraction_provider_resolution: Option<ExtractionProviderResolution>,
     pub auth_mode: AuthMode,
     pub auth_secret: Option<Vec<u8>>,
     pub auth_admin_limiter: AuthRateLimiter,
@@ -33,6 +34,7 @@ impl AppState {
         pool: DbPool,
         embedding: Option<Arc<dyn EmbeddingProvider>>,
         extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
+        extraction_provider_resolution: Option<ExtractionProviderResolution>,
         auth_mode: AuthMode,
         auth_secret: Option<Vec<u8>>,
         auth_admin_limiter: AuthRateLimiter,
@@ -52,6 +54,7 @@ impl AppState {
             pipeline_paused: AtomicBool::new(paused),
             pipeline_transition: AtomicBool::new(false),
             extraction_worker_stats,
+            extraction_provider_resolution,
             auth_mode,
             auth_secret,
             auth_admin_limiter,
@@ -64,4 +67,17 @@ impl AppState {
     pub fn pipeline_paused(&self) -> bool {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtractionProviderResolution {
+    pub configured: String,
+    pub resolved: String,
+    pub effective: String,
+    pub fallback_provider: String,
+    pub status: &'static str, // active | degraded | blocked | disabled
+    pub degraded: bool,
+    pub fallback_applied: bool,
+    pub reason: Option<String>,
+    pub since: Option<String>,
 }

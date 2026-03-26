@@ -22,7 +22,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::AppState;
+use state::{AppState, ExtractionProviderResolution};
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -160,14 +160,80 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|m| m.pipeline_v2.as_ref())
         .cloned();
 
-    let (extraction_worker_stats, mut extraction_worker_handle) =
+    let (extraction_provider_resolution, extraction_worker_stats, mut extraction_worker_handle) =
         if let Some(pipeline_cfg) = pipeline_cfg.as_ref() {
-            if pipeline_cfg.enabled
-                && !pipeline_cfg.paused
-                && pipeline_cfg.extraction.provider != "none"
-            {
+            let configured = pipeline_cfg.extraction.provider.clone();
+            let resolved = pipeline_cfg.extraction.provider.clone();
+            let fallback_provider = pipeline_cfg.extraction.fallback_provider.clone();
+
+            let mut effective = resolved.clone();
+            let mut status: &'static str = "active";
+            let mut degraded = false;
+            let mut fallback_applied = false;
+            let mut reason: Option<String> = None;
+            let mut since: Option<String> = None;
+
+            if !pipeline_cfg.enabled || resolved == "none" {
+                effective = "none".to_string();
+                status = "disabled";
+            } else if pipeline_cfg.paused {
+                effective = "none".to_string();
+                status = "paused";
+            } else {
+                match resolved.as_str() {
+                    "ollama" => {}
+                    "anthropic" => {
+                        let key_ok = std::env::var("ANTHROPIC_API_KEY")
+                            .ok()
+                            .map(|v| !v.trim().is_empty())
+                            .unwrap_or(false);
+                        if !key_ok {
+                            degraded = true;
+                            reason = Some("ANTHROPIC_API_KEY not found for extraction startup".to_string());
+                            since = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+                            if fallback_provider == "ollama" {
+                                effective = "ollama".to_string();
+                                status = "degraded";
+                                fallback_applied = true;
+                            } else {
+                                effective = "none".to_string();
+                                status = "blocked";
+                            }
+                        }
+                    }
+                    other => {
+                        degraded = true;
+                        reason = Some(format!(
+                            "Extraction provider '{other}' is not implemented in daemon-rs runtime"
+                        ));
+                        since = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+                        if fallback_provider == "ollama" {
+                            effective = "ollama".to_string();
+                            status = "degraded";
+                            fallback_applied = true;
+                        } else {
+                            effective = "none".to_string();
+                            status = "blocked";
+                        }
+                    }
+                }
+            }
+
+            let resolution = ExtractionProviderResolution {
+                configured,
+                resolved,
+                effective: effective.clone(),
+                fallback_provider,
+                status,
+                degraded,
+                fallback_applied,
+                reason,
+                since,
+            };
+
+            if effective != "none" {
                 let llm_cfg = signet_pipeline::provider::LlmProviderConfig {
-                    provider: pipeline_cfg.extraction.provider.clone(),
+                    provider: effective,
                     model: pipeline_cfg.extraction.model.clone(),
                     base_url: pipeline_cfg.extraction.endpoint.clone(),
                     api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
@@ -195,13 +261,13 @@ async fn main() -> anyhow::Result<()> {
                     worker_cfg,
                 );
                 info!("extraction worker started");
-                (Some(handle.stats_handle()), Some(handle))
+                (Some(resolution), Some(handle.stats_handle()), Some(handle))
             } else {
                 info!("extraction worker disabled at startup by pipeline config");
-                (None, None)
+                (Some(resolution), None, None)
             }
         } else {
-            (None, None)
+            (None, None, None)
         };
 
     // Build app state
@@ -210,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
         pool,
         embedding,
         extraction_worker_stats,
+        extraction_provider_resolution,
         auth_mode,
         auth_secret,
         auth_admin_limiter,
@@ -675,25 +742,50 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         .as_ref()
         .and_then(|memory| memory.pipeline_v2.as_ref());
     let extraction = pipeline.map(|pipeline| {
-        let extraction = &pipeline.extraction;
-        let status = if !pipeline.enabled || extraction.provider == "none" {
-            "disabled"
-        } else if pipeline.paused || state.pipeline_paused() {
-            "paused"
+        if let Some(resolution) = state.extraction_provider_resolution.as_ref() {
+            let paused = pipeline.paused || state.pipeline_paused();
+            let status = if paused && resolution.status != "disabled" && resolution.status != "blocked" {
+                "paused"
+            } else {
+                resolution.status
+            };
+            let effective = if status == "paused" {
+                "none".to_string()
+            } else {
+                resolution.effective.clone()
+            };
+            serde_json::json!({
+                "configured": resolution.configured.clone(),
+                "resolved": resolution.resolved.clone(),
+                "effective": effective,
+                "fallbackProvider": resolution.fallback_provider.clone(),
+                "status": status,
+                "degraded": if status == "paused" { false } else { resolution.degraded },
+                "fallbackApplied": if status == "paused" { false } else { resolution.fallback_applied },
+                "reason": if status == "paused" { serde_json::Value::Null } else { resolution.reason.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null) },
+                "since": if status == "paused" { serde_json::Value::Null } else { resolution.since.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null) },
+            })
         } else {
-            "active"
-        };
-        serde_json::json!({
-            "configured": extraction.provider,
-            "resolved": extraction.provider,
-            "effective": extraction.provider,
-            "fallbackProvider": extraction.fallback_provider,
-            "status": status,
-            "degraded": false,
-            "fallbackApplied": false,
-            "reason": serde_json::Value::Null,
-            "since": serde_json::Value::Null,
-        })
+            let extraction = &pipeline.extraction;
+            let status = if !pipeline.enabled || extraction.provider == "none" {
+                "disabled"
+            } else if pipeline.paused || state.pipeline_paused() {
+                "paused"
+            } else {
+                "active"
+            };
+            serde_json::json!({
+                "configured": extraction.provider,
+                "resolved": extraction.provider,
+                "effective": extraction.provider,
+                "fallbackProvider": extraction.fallback_provider,
+                "status": status,
+                "degraded": false,
+                "fallbackApplied": false,
+                "reason": serde_json::Value::Null,
+                "since": serde_json::Value::Null,
+            })
+        }
     });
     let extraction_worker = if let Some(pipeline) = pipeline {
         let snapshot = if let Some(stats) = state.extraction_worker_stats.as_ref() {
