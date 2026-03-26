@@ -351,6 +351,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
 	);
+	const resolvedSynthesisEnabled =
+		resolvedSynthesisProvider === "none"
+			? false
+			: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -622,7 +626,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		},
 
 		synthesis: {
-			enabled: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled),
+			enabled: resolvedSynthesisEnabled,
 			provider: (() => {
 				const p = synthesisRaw?.provider;
 				if (isPipelineProvider(p)) {

@@ -155,6 +155,9 @@ fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&se
             extraction.timeout
         }
     });
+    if pipeline.synthesis.provider == "none" {
+        pipeline.synthesis.enabled = false;
+    }
 }
 
 fn raw_child<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a serde_yml::Value> {
@@ -351,6 +354,49 @@ memory:
             Some("http://127.0.0.1:11434")
         );
         assert_eq!(pipeline.synthesis.timeout, 75_000);
+    }
+
+    #[test]
+    fn inherited_none_provider_disables_synthesis() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: none
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.synthesis.provider, "none");
+        assert!(!pipeline.synthesis.enabled);
+    }
+
+    #[test]
+    fn explicit_none_provider_disables_synthesis() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    synthesis:
+      enabled: true
+      provider: none
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.synthesis.provider, "none");
+        assert!(!pipeline.synthesis.enabled);
     }
 
     #[test]

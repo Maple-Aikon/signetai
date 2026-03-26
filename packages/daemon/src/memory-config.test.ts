@@ -398,6 +398,35 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
 	});
 
+	it("disables inherited synthesis when extraction resolves to none", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "none",
+				},
+			},
+		});
+
+		expect(result.synthesis.provider).toBe("none");
+		expect(result.synthesis.enabled).toBe(false);
+	});
+
+	it("disables explicit synthesis when provider is none", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					synthesis: {
+						enabled: true,
+						provider: "none",
+					},
+				},
+			},
+		});
+
+		expect(result.synthesis.provider).toBe("none");
+		expect(result.synthesis.enabled).toBe(false);
+	});
+
 	it("keeps inheriting extraction values when synthesis only sets enabled", () => {
 		const result = loadPipelineConfig({
 			memory: {
