@@ -81,6 +81,14 @@ Managed installs place the binary in `~/.config/signet/bin`. Add that directory 
 Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64.
 On other platforms, install Forge from source or use a local standalone build.
 
+Install/update commands prompt for an explicit development warning
+acknowledgement. For automation:
+
+```bash
+signet forge install --yes
+signet forge update --yes
+```
+
 ### Runtime role
 
 - first-party native harness

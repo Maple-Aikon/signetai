@@ -18,7 +18,7 @@ use forge_signet::secrets::{
 };
 use forge_signet::SignetClient;
 use forge_tui::App;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -76,6 +76,10 @@ struct Cli {
     /// Agent name (uses per-agent identity files from ~/.agents/agents/<name>/)
     #[arg(long)]
     agent: Option<String>,
+
+    /// Acknowledge Forge development warning and continue without prompt
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 #[tokio::main]
@@ -115,6 +119,11 @@ async fn main() -> Result<()> {
         if cli.auth_only {
             return Ok(());
         }
+    }
+
+    // Safety warning gate for entering the interactive harness.
+    if cli.prompt.is_none() && !confirm_forge_launch_warning(cli.yes)? {
+        return Ok(());
     }
 
     // Signet onboarding — check install, run setup, start daemon
@@ -487,6 +496,94 @@ async fn ensure_signet(daemon_url: &str) {
     }
 
     eprintln!();
+}
+
+fn print_forge_warning() {
+    eprintln!();
+    eprintln!("  {}", "Forge Development Warning".bold());
+    eprintln!();
+    eprintln!(
+        "  Forge is {} and is currently used strictly for {}.",
+        "under active development".yellow(),
+        "Signet bug testing".yellow()
+    );
+    eprintln!(
+        "  It should {}.",
+        "not replace your active harness".yellow()
+    );
+    eprintln!(
+        "  You may run into {} while using it.",
+        "bugs or issues".yellow()
+    );
+    eprintln!();
+}
+
+fn confirm_forge_launch_warning(accepted_via_flag: bool) -> Result<bool> {
+    if accepted_via_flag {
+        return Ok(true);
+    }
+
+    print_forge_warning();
+
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        anyhow::bail!("Non-interactive launch requires explicit acknowledgement. Re-run with: forge --yes");
+    }
+
+    loop {
+        eprint!("  Continue to launch Forge? [yes/no]: ");
+        let _ = std::io::stderr().flush();
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            return Ok(false);
+        }
+
+        if let Some(accept) = parse_yes_no_answer(&input) {
+            if accept {
+                return Ok(true);
+            }
+            eprintln!("  Launch cancelled.");
+            return Ok(false);
+        }
+        eprintln!("  Please answer yes or no.");
+    }
+}
+
+fn parse_yes_no_answer(input: &str) -> Option<bool> {
+    let normalized = input.trim().to_lowercase();
+    if normalized == "yes" || normalized == "y" {
+        return Some(true);
+    }
+    if normalized == "no" || normalized == "n" {
+        return Some(false);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_yes_no_answer;
+
+    #[test]
+    fn parse_yes_variants() {
+        assert_eq!(parse_yes_no_answer("yes"), Some(true));
+        assert_eq!(parse_yes_no_answer("Y"), Some(true));
+        assert_eq!(parse_yes_no_answer("  YeS  "), Some(true));
+    }
+
+    #[test]
+    fn parse_no_variants() {
+        assert_eq!(parse_yes_no_answer("no"), Some(false));
+        assert_eq!(parse_yes_no_answer("N"), Some(false));
+        assert_eq!(parse_yes_no_answer("  No  "), Some(false));
+    }
+
+    #[test]
+    fn parse_unknown_variants() {
+        assert_eq!(parse_yes_no_answer(""), None);
+        assert_eq!(parse_yes_no_answer("maybe"), None);
+        assert_eq!(parse_yes_no_answer("1"), None);
+    }
 }
 
 /// Determine which provider and model to use based on CLI args and available keys

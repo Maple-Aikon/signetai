@@ -36,6 +36,14 @@ Managed installs place the binary in `~/.config/signet/bin`. Add that directory 
 
 Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64. On other platforms, build Forge from source or use a local standalone install.
 
+`signet forge install` and `signet forge update` require an explicit
+development warning acknowledgement. For automation/non-interactive runs:
+
+```bash
+signet forge install --yes
+signet forge update --yes
+```
+
 ### Update from source
 
 ```bash
@@ -50,6 +58,13 @@ Start Forge:
 
 ```bash
 forge
+```
+
+Forge launch shows a development warning and asks for `[yes]/[no]`
+before opening the interactive harness. For non-interactive launch flows:
+
+```bash
+forge --yes
 ```
 
 Open the auth flow:

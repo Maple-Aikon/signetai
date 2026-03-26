@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { findSignetForgeBinary, isSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
 import chalk from "chalk";
@@ -31,6 +32,7 @@ export interface ForgeStatusOptions {
 
 export interface ForgeInstallOptions {
 	version?: string;
+	yes?: boolean;
 }
 
 interface ForgeRelease {
@@ -575,7 +577,70 @@ function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStat
 	};
 }
 
+function printForgeDevelopmentWarning(context: "install" | "update"): void {
+	console.log();
+	console.log(chalk.bold("Forge Development Warning"));
+	console.log();
+	console.log(
+		`  Forge is ${chalk.yellow("under active development")} and is currently used strictly for ${chalk.yellow("Signet bug testing")}.`,
+	);
+	console.log(`  It should ${chalk.yellow("not replace your active harness")}.`);
+	console.log(`  You may run into ${chalk.yellow("bugs or issues")} while using it.`);
+	console.log();
+	console.log(chalk.dim(`  Action requested: signet forge ${context}`));
+	console.log();
+}
+
+export function parseYesNoAnswer(input: string): boolean | null {
+	const normalized = input.trim().toLowerCase();
+	if (normalized === "yes" || normalized === "y") return true;
+	if (normalized === "no" || normalized === "n") return false;
+	return null;
+}
+
+async function promptYesNo(question: string): Promise<boolean> {
+	const rl = createInterface({
+		input: process.stdin,
+		output: process.stderr,
+	});
+	try {
+		while (true) {
+			const parsed = parseYesNoAnswer(await rl.question(question));
+			if (parsed !== null) return parsed;
+			console.log("Please answer yes or no.");
+		}
+	} finally {
+		rl.close();
+	}
+}
+
+async function requireForgeWarningAcceptance(
+	context: "install" | "update",
+	options: ForgeInstallOptions,
+): Promise<"accepted" | "cancelled" | "missing-ack"> {
+	if (options.yes === true) return "accepted";
+
+	printForgeDevelopmentWarning(context);
+	if (!process.stdin.isTTY || !process.stderr.isTTY) {
+		return "missing-ack";
+	}
+
+	return (await promptYesNo("  Continue? [yes/no]: ")) ? "accepted" : "cancelled";
+}
+
 export async function installForge(options: ForgeInstallOptions, deps: ForgeDeps): Promise<void> {
+	const warning = await requireForgeWarningAcceptance("install", options);
+	if (warning === "missing-ack") {
+		console.error(chalk.red("Non-interactive mode requires explicit acknowledgement."));
+		console.error(chalk.dim("Re-run with: signet forge install --yes"));
+		process.exitCode = 1;
+		return;
+	}
+	if (warning === "cancelled") {
+		console.log(chalk.yellow("Forge install cancelled."));
+		return;
+	}
+
 	const manifest = loadForgeManifest(deps.getTemplatesDir);
 	const result = await installForgeBinary(deps, manifest, options.version);
 	console.log(chalk.green(`✓ Forge ${result.version} installed`));
@@ -585,6 +650,18 @@ export async function installForge(options: ForgeInstallOptions, deps: ForgeDeps
 }
 
 export async function updateForge(options: ForgeInstallOptions, deps: ForgeDeps): Promise<void> {
+	const warning = await requireForgeWarningAcceptance("update", options);
+	if (warning === "missing-ack") {
+		console.error(chalk.red("Non-interactive mode requires explicit acknowledgement."));
+		console.error(chalk.dim("Re-run with: signet forge update --yes"));
+		process.exitCode = 1;
+		return;
+	}
+	if (warning === "cancelled") {
+		console.log(chalk.yellow("Forge update cancelled."));
+		return;
+	}
+
 	const manifest = loadForgeManifest(deps.getTemplatesDir);
 	const status = buildStatusPayload(deps, manifest);
 	if (!status.managedRecord) {
