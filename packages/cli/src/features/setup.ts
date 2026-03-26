@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { NETWORK_MODES, type NetworkMode, type SetupDetection, parseSimpleYaml, readNetworkMode } from "@signet/core";
+import { NETWORK_MODES, type NetworkMode, parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
@@ -12,6 +12,8 @@ import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
 import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
 import {
+	DEPLOYMENT_TYPE_CHOICES,
+	type DeploymentTypeChoice,
 	EMBEDDING_PROVIDER_CHOICES,
 	EXTRACTION_PROVIDER_CHOICES,
 	type EmbeddingProviderChoice,
@@ -20,9 +22,12 @@ import {
 	OPENCLAW_RUNTIME_CHOICES,
 	type OpenClawRuntimeChoice,
 	SETUP_HARNESS_CHOICES,
+	defaultEmbeddingProviderForDeployment,
+	defaultExtractionProviderForDeployment,
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
 	formatDetectionSummary,
+	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
 	hasExistingAgentState,
 	hasExistingIdentityFiles,
@@ -89,11 +94,42 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingMemory = readRecord(existingConfig.memory);
 	const existingPipeline = readRecord(existingMemory.pipelineV2);
 	const existingExtraction = readRecord(existingPipeline.extraction);
+	const rawDeploymentType = deps.normalizeStringValue(options.deploymentType);
+	const requestedDeploymentType = deps.normalizeChoice(rawDeploymentType, DEPLOYMENT_TYPE_CHOICES);
+	const rawEmbeddingProvider = deps.normalizeStringValue(options.embeddingProvider);
+	const requestedEmbeddingProvider = deps.normalizeChoice(rawEmbeddingProvider, EMBEDDING_PROVIDER_CHOICES);
+	const rawExtractionProvider = deps.normalizeStringValue(options.extractionProvider);
+	const requestedExtractionProvider = deps.normalizeChoice(rawExtractionProvider, EXTRACTION_PROVIDER_CHOICES);
 	const existingName = readString(existingConfig.name) ?? readString(existingAgent.name) ?? "My Agent";
 	const existingDesc =
 		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
 	const existingHarnesses = readHarnesses(existingConfig.harnesses);
 	const existingNetworkMode = readNetworkMode(existingConfig);
+	const detectedProvider: ExtractionProviderChoice = hasCommand("claude")
+		? "claude-code"
+		: hasCommand("codex")
+			? "codex"
+			: hasCommand("ollama")
+				? "ollama"
+				: hasCommand("opencode")
+					? "opencode"
+					: "none";
+
+	if (nonInteractive && rawDeploymentType && !requestedDeploymentType) {
+		failNonInteractiveSetup(
+			`Unknown --deployment-type value: ${rawDeploymentType}. Valid choices: ${DEPLOYMENT_TYPE_CHOICES.join(", ")}.`,
+		);
+	}
+	if (nonInteractive && rawEmbeddingProvider && !requestedEmbeddingProvider) {
+		failNonInteractiveSetup(
+			`Unknown --embedding-provider value: ${rawEmbeddingProvider}. Valid choices: ${EMBEDDING_PROVIDER_CHOICES.join(", ")}.`,
+		);
+	}
+	if (nonInteractive && rawExtractionProvider && !requestedExtractionProvider) {
+		failNonInteractiveSetup(
+			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
+		);
+	}
 
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
@@ -178,18 +214,19 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 
 		if (nonInteractive) {
-			const migrationEmbeddingProvider = deps.normalizeChoice(options.embeddingProvider, EMBEDDING_PROVIDER_CHOICES);
-			const migrationExtractionProvider = deps.normalizeChoice(options.extractionProvider, EXTRACTION_PROVIDER_CHOICES);
-			if (!migrationEmbeddingProvider) {
-				failNonInteractiveSetup(
-					"Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).",
-				);
-			}
-			if (!migrationExtractionProvider) {
-				failNonInteractiveSetup(
-					"Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, openrouter, or none).",
-				);
-			}
+			const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
+			const existingEmbeddingProvider = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
+			const existingExtractionProvider =
+				deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
+				deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
+			const migrationEmbeddingProvider =
+				requestedEmbeddingProvider ??
+				existingEmbeddingProvider ??
+				defaultEmbeddingProviderForDeployment(deploymentType);
+			const migrationExtractionProvider =
+				requestedExtractionProvider ??
+				existingExtractionProvider ??
+				defaultExtractionProviderForDeployment(deploymentType, detectedProvider);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -386,23 +423,27 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		});
 	}
 
-	const requestedEmbeddingProvider = deps.normalizeChoice(options.embeddingProvider, EMBEDDING_PROVIDER_CHOICES);
-	const requestedExtractionProvider = deps.normalizeChoice(options.extractionProvider, EXTRACTION_PROVIDER_CHOICES);
-
-	if (nonInteractive && !requestedEmbeddingProvider) {
-		failNonInteractiveSetup("Non-interactive setup requires --embedding-provider (native, ollama, openai, or none).");
-	}
-
-	if (nonInteractive && !requestedExtractionProvider) {
-		failNonInteractiveSetup(
-			"Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, openrouter, or none).",
-		);
+	let deploymentType: DeploymentTypeChoice;
+	if (nonInteractive) {
+		deploymentType = requestedDeploymentType ?? "local";
+	} else {
+		console.log();
+		deploymentType = await select({
+			message: "Where is Signet running?",
+			choices: [
+				{ value: "local", name: "Local machine (dev / personal)" },
+				{ value: "vps", name: "VPS or cloud server (shared / constrained resources)" },
+				{ value: "server", name: "Self-hosted server (dedicated hardware)" },
+			],
+			default: "local",
+		});
 	}
 
 	let embeddingProvider: EmbeddingProviderChoice;
 	if (nonInteractive) {
 		const providerFromConfig = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
-		embeddingProvider = requestedEmbeddingProvider ?? providerFromConfig ?? "none";
+		embeddingProvider =
+			requestedEmbeddingProvider ?? providerFromConfig ?? defaultEmbeddingProviderForDeployment(deploymentType);
 	} else {
 		console.log();
 		embeddingProvider = await select({
@@ -475,23 +516,21 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				],
 			});
 
-	const detectedProvider: ExtractionProviderChoice = hasCommand("claude")
-		? "claude-code"
-		: hasCommand("codex")
-			? "codex"
-			: hasCommand("ollama")
-				? "ollama"
-				: hasCommand("opencode")
-					? "opencode"
-					: "none";
-
 	let extractionProvider: ExtractionProviderChoice;
 	if (nonInteractive) {
 		const providerFromConfig =
 			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-		extractionProvider = requestedExtractionProvider ?? providerFromConfig ?? detectedProvider;
+		extractionProvider =
+			requestedExtractionProvider ??
+			providerFromConfig ??
+			defaultExtractionProviderForDeployment(deploymentType, detectedProvider);
 	} else {
+		console.log();
+		console.log(chalk.cyan("  Deployment guidance:"));
+		for (const line of getDeploymentExtractionGuidance(deploymentType)) {
+			console.log(chalk.dim(`    ${line}`));
+		}
 		console.log();
 		console.log(chalk.yellow(`  Warning: ${EXTRACTION_SAFETY_WARNING}`));
 		console.log();

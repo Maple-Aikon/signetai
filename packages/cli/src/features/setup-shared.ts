@@ -6,6 +6,7 @@ export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "codex" | 
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
 export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
+export type DeploymentTypeChoice = "local" | "vps" | "server";
 
 export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"claude-code",
@@ -24,6 +25,7 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 	"none",
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
+export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
 
 interface PathDeps {
 	readonly detectExistingSetup: (basePath: string) => SetupDetection;
@@ -113,7 +115,9 @@ export function normalizeHarnessList(rawValues: readonly string[] | undefined, d
 
 export function failNonInteractiveSetup(message: string): never {
 	console.error(chalk.red(`  ${message}`));
-	console.error(chalk.dim("  Ask the user for explicit provider choices and pass them as CLI flags."));
+	console.error(
+		chalk.dim("  Provide explicit CLI values, or pass --deployment-type to use inferred provider defaults."),
+	);
 	process.exit(1);
 }
 
@@ -129,6 +133,41 @@ export function getEmbeddingDimensions(model: string): number {
 			return 1536;
 		default:
 			return 768;
+	}
+}
+
+export function defaultEmbeddingProviderForDeployment(_deploymentType: DeploymentTypeChoice): EmbeddingProviderChoice {
+	return "native";
+}
+
+export function defaultExtractionProviderForDeployment(
+	deploymentType: DeploymentTypeChoice,
+	detectedProvider: ExtractionProviderChoice,
+): ExtractionProviderChoice {
+	if (deploymentType === "vps") {
+		return "claude-code";
+	}
+	return detectedProvider;
+}
+
+export function getDeploymentExtractionGuidance(deploymentType: DeploymentTypeChoice): string[] {
+	switch (deploymentType) {
+		case "vps":
+			return [
+				"VPS/cloud hosts with shared or constrained CPU should avoid local Ollama extraction.",
+				"Use Built-in (native) embeddings for lower overhead than running an Ollama server.",
+				"Safest default is extraction: none. If you enable extraction, prefer offloaded providers (claude-code/openrouter).",
+			];
+		case "server":
+			return [
+				"Dedicated self-hosted servers can run local providers if you have CPU/RAM headroom.",
+				"Built-in (native) embeddings are still the lightest default for embeddings.",
+			];
+		default:
+			return [
+				"Local machines can use local providers, but monitor CPU if running background extraction with Ollama.",
+				"Built-in (native) embeddings are recommended unless you need a specific external provider.",
+			];
 	}
 }
 
