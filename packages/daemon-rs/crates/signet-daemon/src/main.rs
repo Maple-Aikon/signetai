@@ -631,10 +631,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         })
     });
     let extraction_worker = pipeline.map(|pipeline| {
-        let running = pipeline.enabled
-            && pipeline.extraction.provider != "none"
-            && !pipeline.paused
-            && !state.pipeline_paused();
+        // Rust daemon does not expose extraction worker runtime liveness yet.
+        // Report a conservative runtime value to avoid config-derived false positives.
+        let running = false;
         serde_json::json!({
             "running": running,
             "overloaded": false,
