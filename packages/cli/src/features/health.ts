@@ -21,6 +21,15 @@ interface DaemonStatus {
 	readonly host: string | null;
 	readonly bindHost: string | null;
 	readonly networkMode: string | null;
+	readonly extraction: {
+		readonly configured: string | null;
+		readonly effective: string | null;
+		readonly fallbackProvider: string | null;
+		readonly status: string | null;
+		readonly degraded: boolean;
+		readonly reason: string | null;
+		readonly since: string | null;
+	} | null;
 }
 
 interface DbReport {
@@ -189,6 +198,13 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
 			console.log(chalk.dim(`    ${line}`));
 		}
+		const extractionNotice = getExtractionStatusNotice(report.daemon);
+		if (extractionNotice) {
+			const icon = extractionNotice.level === "error" ? chalk.red("✗") : chalk.yellow("⚠");
+			const colorize = extractionNotice.level === "error" ? chalk.red : chalk.yellow;
+			console.log(colorize(`    ${icon} ${extractionNotice.title}`));
+			console.log(chalk.dim(`      ${extractionNotice.detail}`));
+		}
 	} else {
 		console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
 	}
@@ -224,6 +240,31 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 	console.log();
 	console.log(chalk.dim(`  Path: ${report.basePath}`));
 	console.log();
+}
+
+export function getExtractionStatusNotice(
+	daemon: DaemonStatus,
+): { level: "warn" | "error"; title: string; detail: string } | null {
+	const extraction = daemon.extraction;
+	if (!extraction || !daemon.running) return null;
+
+	if (extraction.status === "degraded") {
+		return {
+			level: "warn",
+			title: "Extraction degraded",
+			detail: `configured: ${extraction.configured ?? "unknown"}, effective: ${extraction.effective ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
+		};
+	}
+
+	if (extraction.status === "blocked") {
+		return {
+			level: "error",
+			title: "Extraction blocked",
+			detail: `configured: ${extraction.configured ?? "unknown"}, fallback: ${extraction.fallbackProvider ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
+		};
+	}
+
+	return null;
 }
 
 export async function showDoctor(options: { path?: string; json?: boolean }, deps: StatusDeps): Promise<void> {

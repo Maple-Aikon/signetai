@@ -238,6 +238,37 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.extraction.model).toBe("gpt-5.3-codex");
 	});
 
+	it("loads extraction fallbackProvider from nested config", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: none
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.extraction.provider).toBe("claude-code");
+		expect(cfg.pipelineV2.extraction.fallbackProvider).toBe("none");
+	});
+
+	it("loads extractionFallbackProvider from flat config", () => {
+		const cfg = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "claude-code",
+					extractionFallbackProvider: "none",
+				},
+			},
+		});
+
+		expect(cfg.extraction.provider).toBe("claude-code");
+		expect(cfg.extraction.fallbackProvider).toBe("none");
+	});
+
 	it("loads openrouter extraction settings from agent.yaml", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(

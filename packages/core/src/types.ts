@@ -184,6 +184,7 @@ export interface PipelineEscalationConfig {
 
 export interface PipelineExtractionConfig {
 	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter";
+	readonly fallbackProvider: "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;

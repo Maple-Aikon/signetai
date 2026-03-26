@@ -31,6 +31,15 @@ interface DaemonInstance {
 	readonly host: string | null;
 	readonly bindHost: string | null;
 	readonly networkMode: string | null;
+	readonly extraction: {
+		readonly configured: string | null;
+		readonly effective: string | null;
+		readonly fallbackProvider: string | null;
+		readonly status: string | null;
+		readonly degraded: boolean;
+		readonly reason: string | null;
+		readonly since: string | null;
+	} | null;
 }
 
 interface DaemonProbeDeps {
@@ -104,7 +113,19 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						host?: string;
 						bindHost?: string;
 						networkMode?: string;
+						providerResolution?: {
+							extraction?: {
+								configured?: string | null;
+								effective?: string | null;
+								fallbackProvider?: string | null;
+								status?: string | null;
+								degraded?: boolean;
+								reason?: string | null;
+								since?: string | null;
+							};
+						};
 					};
+					const extraction = data.providerResolution?.extraction;
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -113,6 +134,17 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						host: data.host ?? null,
 						bindHost: data.bindHost ?? null,
 						networkMode: data.networkMode ?? null,
+						extraction: extraction
+							? {
+									configured: extraction.configured ?? null,
+									effective: extraction.effective ?? null,
+									fallbackProvider: extraction.fallbackProvider ?? null,
+									status: extraction.status ?? null,
+									degraded: extraction.degraded === true,
+									reason: extraction.reason ?? null,
+									since: extraction.since ?? null,
+								}
+							: null,
 					};
 				}
 			} catch {
@@ -127,6 +159,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				host: null,
 				bindHost: null,
 				networkMode: null,
+				extraction: null,
 			};
 		}),
 	);
@@ -213,6 +246,7 @@ export async function getDaemonStatus(): Promise<{
 	host: string | null;
 	bindHost: string | null;
 	networkMode: string | null;
+	extraction: DaemonInstance["extraction"];
 }> {
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
@@ -225,6 +259,7 @@ export async function getDaemonStatus(): Promise<{
 			host: preferred.host,
 			bindHost: preferred.bindHost,
 			networkMode: preferred.networkMode,
+			extraction: preferred.extraction,
 		};
 	}
 
@@ -236,6 +271,7 @@ export async function getDaemonStatus(): Promise<{
 		host: null,
 		bindHost: null,
 		networkMode: null,
+		extraction: null,
 	};
 }
 
