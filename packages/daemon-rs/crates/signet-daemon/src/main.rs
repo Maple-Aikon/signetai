@@ -702,9 +702,10 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
             reason: Some(format!("{reason_prefix}; ollama fallback startup preflight failed")),
             since: Some(now.clone()),
         };
+        let full_reason = format!("{reason_prefix}; ollama fallback startup preflight failed");
         *state.extraction_state.write().await = Some(new_state);
         if dead_letter_on_blocked {
-            dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+            dead_letter_pending_extraction_jobs(state, &full_reason, &now).await;
         }
         warn!("extraction blocked: primary and ollama fallback both unavailable");
         return;

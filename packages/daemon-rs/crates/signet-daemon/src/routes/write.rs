@@ -187,7 +187,7 @@ pub async fn remember(
                             .extraction_block_reason()
                             .await
                             .unwrap_or_else(|| "Extraction provider unavailable".into());
-                        let _ = state
+                        if let Err(e) = state
                             .pool
                             .write(Priority::Low, move |conn| {
                                 conn.execute(
@@ -202,7 +202,10 @@ pub async fn remember(
                                 )?;
                                 Ok(serde_json::json!({}))
                             })
-                            .await;
+                            .await
+                        {
+                            warn!(err = %e, "failed to dead-letter extraction for blocked memory");
+                        }
                     }
                 }
             }

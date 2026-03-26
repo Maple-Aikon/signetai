@@ -25,7 +25,7 @@ impl DaemonConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| dirs_home().join(".agents"));
 
-        let manifest = load_manifest(&base).unwrap_or_default();
+        let manifest = load_manifest(&base, true).unwrap_or_default();
         let (cfg_host, cfg_bind) = resolve_network_binding(
             manifest
                 .network
@@ -88,10 +88,24 @@ fn dirs_home() -> PathBuf {
         })
 }
 
-fn load_manifest(base: &Path) -> Option<AgentManifest> {
+fn load_manifest(base: &Path, strict: bool) -> Option<AgentManifest> {
     let path = base.join("agent.yaml");
-    let content = std::fs::read_to_string(&path).ok()?;
-    parse_manifest(&content)
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return None, // No file — use defaults
+    };
+    match parse_manifest(&content) {
+        Some(m) => Some(m),
+        None if strict => {
+            // File exists but failed validation — hard error
+            eprintln!(
+                "signet: fatal: agent.yaml at {} contains invalid configuration — daemon cannot start",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+        None => None,
+    }
 }
 
 fn parse_manifest(content: &str) -> Option<AgentManifest> {
