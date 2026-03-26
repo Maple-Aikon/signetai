@@ -17,6 +17,12 @@ import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { FTS_STOP } from "./pipeline/stop-words";
+import {
+	type CompressedSearchFilters,
+	DEFAULT_RABITQ_CONFIG,
+	type RaBitQConfig,
+	compressedVectorSearchWithRerank,
+} from "./rabitq-index";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -377,28 +383,74 @@ export async function hybridRecall(
 		logger.warn("memory", "Embedding failed", { error: String(e) });
 	}
 
-	// --- Vector search via sqlite-vec ---
+	// --- Vector search via sqlite-vec (or compressed pre-filter) ---
 	// sqlite-vec cannot pre-filter by scope, so scoped queries over-fetch
 	// (2x top_k) and rely on hydration-time scope filtering (line ~685).
 	// This ensures scoped queries still benefit from vector similarity
 	// when graph traversal yields no focal entities.
+	//
+	// When compressed_vector_enabled is true, use RaBitQ compressed search
+	// as a fast pre-filter (approximate top-50) then exact re-rank (top-10).
+	// Falls back to sqlite-vec if the compressed index is unavailable.
 	const vectorMap = new Map<string, number>();
 	if (queryVecF32) {
+		// Try compressed vector search first (if enabled)
 		const vecLimit = scoped ? cfg.search.top_k * 2 : cfg.search.top_k;
-		try {
-			getDbAccessor().withReadDb((db) => {
-				const vecResults = vectorSearch(db as any, queryVecF32!, {
-					limit: vecLimit,
+		const rabitqConfig: RaBitQConfig = {
+			...DEFAULT_RABITQ_CONFIG,
+			enabled: cfg.search.compressed_vector_enabled === true,
+			// Use the active embedding dimension so compressed index is built
+			// at the correct size for the configured embedding provider.
+			// Without this override, buildIndex() silently skips all rows on
+			// any non-768-dim provider (e.g. text-embedding-3-small at 1536).
+			dimensions: cfg.embedding.dimensions ?? DEFAULT_RABITQ_CONFIG.dimensions,
+		};
+		let usedCompressed = false;
+
+		if (rabitqConfig.enabled) {
+			try {
+				const filters: CompressedSearchFilters = {
 					type: params.type as "fact" | "preference" | "decision" | undefined,
-				});
-				for (const r of vecResults) {
-					vectorMap.set(r.id, r.score);
+					scope: params.scope,
+					project: params.project,
+					agentId: params.agentId,
+					readPolicy: params.readPolicy,
+					policyGroup: params.policyGroup,
+					limit: vecLimit,
+					prefilterLimit: vecLimit * 3,
+				};
+				const compressedResults = compressedVectorSearchWithRerank(queryVecF32, rabitqConfig, filters);
+				if (compressedResults.length > 0) {
+					for (const r of compressedResults) {
+						vectorMap.set(r.id, r.score);
+					}
+					usedCompressed = true;
+					logger.info("memory", `RaBitQ compressed search returned ${compressedResults.length} results`);
 				}
-			});
-		} catch (e) {
-			logger.warn("memory", "Vector search failed, using keyword only", {
-				error: String(e),
-			});
+			} catch (e) {
+				logger.warn("memory", "RaBitQ compressed search failed, falling back to sqlite-vec", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
+
+		// Fallback to sqlite-vec if compressed search was not used or failed
+		if (!usedCompressed) {
+			try {
+				getDbAccessor().withReadDb((db) => {
+					const vecResults = vectorSearch(db as any, queryVecF32!, {
+						limit: vecLimit,
+						type: params.type as "fact" | "preference" | "decision" | undefined,
+					});
+					for (const r of vecResults) {
+						vectorMap.set(r.id, r.score);
+					}
+				});
+			} catch (e) {
+				logger.warn("memory", "Vector search failed, using keyword only", {
+					error: String(e),
+				});
+			}
 		}
 	}
 

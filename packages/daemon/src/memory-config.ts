@@ -26,6 +26,8 @@ export interface MemorySearchConfig {
 	rehearsal_enabled: boolean;
 	rehearsal_weight: number;
 	rehearsal_half_life_days: number;
+	/** Enable RaBitQ compressed vector pre-filter (default: false). */
+	compressed_vector_enabled: boolean;
 }
 
 export { PIPELINE_FLAGS };
@@ -795,6 +797,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			rehearsal_enabled: true,
 			rehearsal_weight: 0.1,
 			rehearsal_half_life_days: 30,
+			compressed_vector_enabled: false,
 		},
 		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
 		auth: parseAuthConfig(undefined, agentsDir),
@@ -811,7 +814,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				((yaml.memory as Record<string, unknown> | undefined)?.embeddings as Record<string, unknown> | undefined) ??
 				(yaml.embeddings as Record<string, unknown> | undefined) ??
 				{};
-			const srch = (yaml.search as Record<string, unknown> | undefined) ?? {};
+			const srch =
+				(yaml.search as Record<string, unknown> | undefined) ??
+				((yaml.memory as Record<string, unknown> | undefined)?.search as Record<string, unknown> | undefined) ??
+				{};
 
 			if (emb.provider === "none") {
 				defaults.embedding.provider = "none";
@@ -851,6 +857,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			}
 			if (typeof srch.rehearsal_half_life_days === "number") {
 				defaults.search.rehearsal_half_life_days = Math.max(1, srch.rehearsal_half_life_days);
+			}
+			if (srch.compressed_vector_enabled !== undefined) {
+				defaults.search.compressed_vector_enabled = srch.compressed_vector_enabled === true;
 			}
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
