@@ -708,16 +708,14 @@ pub async fn session_end(
     state.dedup.clear_session_start(&sk);
     state.dedup.clear(&sk);
 
-    // Phase 5 will enqueue transcript extraction here. For now, report
-    // whether extraction is blocked so callers know the pipeline state.
-    let extraction_blocked = state.is_extraction_blocked().await;
+    // Phase 5 will enqueue transcript extraction here. When it does,
+    // check state.is_extraction_blocked() and dead-letter if blocked.
 
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "memoriesSaved": 0,
             "queued": false,
-            "extractionBlocked": extraction_blocked,
         })),
     )
         .into_response()

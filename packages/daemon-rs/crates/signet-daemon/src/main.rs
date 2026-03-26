@@ -611,6 +611,10 @@ async fn shutdown_signal() {
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
 pub(crate) async fn preflight_extraction(state: &AppState) {
     preflight_extraction_inner(state).await;
+    // Set done flag AFTER state is resolved but BEFORE dead-letter sweep.
+    // This ensures is_extraction_blocked() starts returning true (if blocked)
+    // so any concurrent writes are caught by the remember route guard, while
+    // the sweep catches jobs created during the preflight window.
     state
         .extraction_preflight_done
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -637,8 +641,7 @@ async fn preflight_extraction_inner(state: &AppState) {
 
     let provider = extraction.provider.as_str();
     let fallback_provider = extraction.fallback_provider.as_str();
-    let preflight_start = chrono::Utc::now().to_rfc3339();
-    let now = preflight_start.clone();
+    let now = chrono::Utc::now().to_rfc3339();
 
     // Check provider availability
     let available = match provider {
@@ -707,7 +710,6 @@ async fn preflight_extraction_inner(state: &AppState) {
         };
         *state.extraction_state.write().await = Some(new_state);
         dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
-        fail_orphaned_memories(state, &reason_prefix, &now, &preflight_start).await;
         warn!("extraction blocked: primary and ollama fallback both unavailable");
         return;
     }
@@ -731,7 +733,6 @@ async fn preflight_extraction_inner(state: &AppState) {
     };
     *state.extraction_state.write().await = Some(new_state);
     dead_letter_pending_extraction_jobs(state, &reason, &now).await;
-    fail_orphaned_memories(state, &reason, &now, &preflight_start).await;
     warn!("extraction blocked: provider unavailable with no viable fallback");
 }
 
@@ -871,65 +872,6 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             }
         }
         Err(e) => warn!(%e, "failed to dead-letter pending extraction jobs"),
-    }
-}
-
-/// Mark orphaned memories as failed when extraction is blocked. Scoped to
-/// memories created on or after `since` (preflight start) to avoid touching
-/// older legitimate 'none'/'queued' memories from disabled/paused states.
-async fn fail_orphaned_memories(state: &AppState, reason: &str, now: &str, since: &str) {
-    let reason = reason.to_string();
-    let now = now.to_string();
-    let since = since.to_string();
-    let result = state
-        .pool
-        .write(signet_core::db::Priority::Low, move |conn| {
-            // Only target memories created during the preflight window
-            let count = conn.execute(
-                "UPDATE memories SET extraction_status = 'failed'
-                 WHERE extraction_status IN ('none', 'queued')
-                   AND created_at >= ?1
-                   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_jobs WHERE memory_id IS NOT NULL AND job_type = 'extract')",
-                rusqlite::params![since],
-            )?;
-
-            // Insert dead jobs for consistency
-            if count > 0 {
-                let mut stmt = conn.prepare(
-                    "SELECT id FROM memories
-                     WHERE extraction_status = 'failed'
-                       AND created_at >= ?1
-                       AND id NOT IN (SELECT DISTINCT memory_id FROM memory_jobs WHERE memory_id IS NOT NULL AND job_type = 'extract')",
-                )?;
-                let orphan_ids: Vec<String> = stmt
-                    .query_map(rusqlite::params![since], |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                let mut insert = conn.prepare(
-                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
-                     VALUES (?1, ?2, 'extract', 'dead', ?3, 0, 3, ?4, ?4, ?4)",
-                )?;
-                for mid in &orphan_ids {
-                    let _ = insert.execute(rusqlite::params![
-                        uuid::Uuid::new_v4().to_string(),
-                        mid,
-                        reason,
-                        now,
-                    ]);
-                }
-            }
-
-            Ok(serde_json::json!({ "orphans": count }))
-        })
-        .await;
-    match result {
-        Ok(val) => {
-            let count = val["orphans"].as_u64().unwrap_or(0);
-            if count > 0 {
-                info!(count, "marked orphaned memories as failed (created during preflight)");
-            }
-        }
-        Err(e) => warn!(%e, "failed to mark orphaned memories"),
     }
 }
 
