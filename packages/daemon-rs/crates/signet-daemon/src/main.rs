@@ -601,6 +601,28 @@ async fn health() -> Json<serde_json::Value> {
     }))
 }
 
+fn current_load_per_cpu() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let mut loads = [0.0f64; 1];
+        // SAFETY: `loads` points to valid writable memory for one f64 element.
+        let rc = unsafe { libc::getloadavg(loads.as_mut_ptr(), 1) };
+        if rc < 1 {
+            return None;
+        }
+        let cpus = std::thread::available_parallelism().ok()?.get() as f64;
+        if cpus <= 0.0 {
+            return None;
+        }
+        return Some(loads[0] / cpus);
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
     let pipeline = state
@@ -631,17 +653,22 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         })
     });
     let extraction_worker = pipeline.map(|pipeline| {
-        // Rust daemon does not expose extraction worker runtime liveness yet.
-        // Report a conservative runtime value to avoid config-derived false positives.
-        let running = false;
+        let running = pipeline.enabled
+            && pipeline.extraction.provider != "none"
+            && !pipeline.paused
+            && !state.pipeline_paused();
+        let load_per_cpu = current_load_per_cpu();
+        let overloaded = load_per_cpu
+            .map(|load| load.is_finite() && load > pipeline.worker.max_load_per_cpu)
+            .unwrap_or(false);
         serde_json::json!({
             "running": running,
-            "overloaded": false,
-            "loadPerCpu": serde_json::Value::Null,
+            "overloaded": overloaded,
+            "loadPerCpu": load_per_cpu,
             "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
             "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
             "overloadSince": serde_json::Value::Null,
-            "nextTickInMs": serde_json::Value::Null,
+            "nextTickInMs": if overloaded { serde_json::json!(pipeline.worker.overload_backoff_ms) } else { serde_json::Value::Null },
         })
     });
     let db_stats = state
