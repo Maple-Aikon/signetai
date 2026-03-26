@@ -162,12 +162,16 @@ async fn main() -> anyhow::Result<()> {
         auth_admin_limiter,
     ));
 
-    // Run extraction provider startup preflight before serving requests.
-    // This blocks boot briefly (up to ~5s per provider probe) but ensures
-    // extraction_state is accurate before any writes arrive — matching the
-    // JS daemon's synchronous startup behavior. Without this, writes
-    // during the race window would bypass the blocked-extraction guard.
-    preflight_extraction(&state).await;
+    // Run extraction preflight asynchronously so /health and /api/status
+    // are available immediately. Writes are race-safe: is_extraction_blocked()
+    // returns true until extraction_preflight_done is set, so no extraction
+    // work is queued during the probe window.
+    {
+        let preflight_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            preflight_extraction(&preflight_state).await;
+        });
+    }
 
     // Build router
     let app = Router::new()
@@ -606,6 +610,13 @@ async fn shutdown_signal() {
 /// JS daemon's startup-resolution contract. Updates `extraction_state` with
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
 pub(crate) async fn preflight_extraction(state: &AppState) {
+    preflight_extraction_inner(state).await;
+    state
+        .extraction_preflight_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+async fn preflight_extraction_inner(state: &AppState) {
     let pipeline = match state
         .config
         .manifest
@@ -757,15 +768,17 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a CLI binary exists on PATH.
+/// Check if a CLI binary exists on PATH using native lookup (no shell-out).
 fn which_exists(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Dead-letter pending extraction jobs when extraction is blocked at startup.

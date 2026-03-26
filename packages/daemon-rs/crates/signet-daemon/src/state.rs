@@ -39,6 +39,10 @@ pub struct AppState {
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
     pub extraction_state: RwLock<Option<ExtractionRuntimeState>>,
+    /// False until extraction preflight completes. Write paths must treat
+    /// pending preflight as blocked to prevent queuing work that may need
+    /// to be dead-lettered.
+    pub extraction_preflight_done: AtomicBool,
     pub harness_last_seen: RwLock<HashMap<String, String>>,
 }
 
@@ -101,6 +105,7 @@ impl AppState {
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
             extraction_state: RwLock::new(extraction_state),
+            extraction_preflight_done: AtomicBool::new(false),
             harness_last_seen: RwLock::new(HashMap::new()),
         }
     }
@@ -109,11 +114,14 @@ impl AppState {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
 
-    /// Check whether extraction is currently blocked. Equivalent to the JS
-    /// daemon's `providerRuntimeResolution.extraction.status === "blocked"`
-    /// guard in `queueExtractionJob()`. Any code path that enqueues extraction
-    /// jobs MUST call this first and dead-letter instead of enqueuing when true.
+    /// Check whether extraction is currently blocked. Returns true when:
+    /// - extraction_state.status == "blocked", OR
+    /// - extraction preflight has not yet completed (race-safe gate)
+    /// Any code path that enqueues extraction jobs MUST call this first.
     pub async fn is_extraction_blocked(&self) -> bool {
+        if !self.extraction_preflight_done.load(Ordering::SeqCst) {
+            return true;
+        }
         self.extraction_state
             .read()
             .await
