@@ -819,9 +819,13 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let extraction = {
         let guard = state.extraction_state.read().await;
         guard.as_ref().map(|es| {
-            // If pipeline was paused at runtime (not just at startup), reflect that.
-            let status = if state.pipeline_paused() && es.status == "active" {
+            // Reflect runtime pause/resume transitions bidirectionally.
+            let paused = state.pipeline_paused();
+            let status = if paused && es.status != "disabled" && es.status != "blocked" {
                 "paused"
+            } else if !paused && es.status == "paused" {
+                // Pipeline was resumed — revert to the underlying state.
+                if es.degraded { "degraded" } else { "active" }
             } else {
                 es.status.as_str()
             };

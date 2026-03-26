@@ -354,6 +354,8 @@ pub async fn session_end(
     state.dedup.clear(&sk);
 
     // TODO: Phase 5 — transcript extraction, summary worker queueing
+    // IMPORTANT: when enqueuing extraction jobs, check state.is_extraction_blocked()
+    // first and dead-letter immediately if blocked (mirrors JS queueExtractionJob guard)
 
     (
         StatusCode::OK,
