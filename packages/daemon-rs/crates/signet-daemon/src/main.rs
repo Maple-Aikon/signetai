@@ -603,33 +603,28 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
-    let pipeline = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|memory| memory.pipeline_v2.as_ref());
-    let extraction = pipeline.map(|pipeline| {
-        let extraction = &pipeline.extraction;
-        let status = if !pipeline.enabled || extraction.provider == "none" {
-            "disabled"
-        } else if pipeline.paused || state.pipeline_paused() {
-            "paused"
-        } else {
-            "active"
-        };
-        serde_json::json!({
-            "configured": extraction.provider,
-            "resolved": extraction.provider,
-            "effective": extraction.provider,
-            "fallbackProvider": extraction.fallback_provider,
-            "status": status,
-            "degraded": false,
-            "fallbackApplied": false,
-            "reason": serde_json::Value::Null,
-            "since": serde_json::Value::Null,
+    let extraction = {
+        let guard = state.extraction_state.read().await;
+        guard.as_ref().map(|es| {
+            // If pipeline was paused at runtime (not just at startup), reflect that.
+            let status = if state.pipeline_paused() && es.status == "active" {
+                "paused"
+            } else {
+                es.status.as_str()
+            };
+            serde_json::json!({
+                "configured": es.configured,
+                "resolved": es.resolved,
+                "effective": es.effective,
+                "fallbackProvider": es.fallback_provider,
+                "status": status,
+                "degraded": es.degraded,
+                "fallbackApplied": es.fallback_applied,
+                "reason": es.reason,
+                "since": es.since,
+            })
         })
-    });
+    };
     let db_stats = state
         .pool
         .read(|conn| {

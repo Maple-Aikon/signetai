@@ -10,6 +10,20 @@ use tokio::sync::RwLock;
 use crate::auth::rate_limiter::AuthRateLimiter;
 use crate::auth::types::AuthMode;
 
+/// Runtime extraction provider resolution state, matching the JS daemon contract.
+#[derive(Debug, Clone)]
+pub struct ExtractionRuntimeState {
+    pub configured: Option<String>,
+    pub resolved: String,
+    pub effective: String,
+    pub fallback_provider: String,
+    pub status: String,
+    pub degraded: bool,
+    pub fallback_applied: bool,
+    pub reason: Option<String>,
+    pub since: Option<String>,
+}
+
 /// Shared application state passed to all route handlers.
 pub struct AppState {
     pub config: DaemonConfig,
@@ -23,6 +37,7 @@ pub struct AppState {
     pub sessions: SessionTracker,
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
+    pub extraction_state: RwLock<Option<ExtractionRuntimeState>>,
 }
 
 impl AppState {
@@ -42,6 +57,35 @@ impl AppState {
             .map(|p| p.paused)
             .unwrap_or(false);
 
+        // Derive initial extraction runtime state from config, mirroring
+        // the JS daemon's startup resolution contract.
+        let extraction_state = config
+            .manifest
+            .memory
+            .as_ref()
+            .and_then(|m| m.pipeline_v2.as_ref())
+            .map(|pipeline| {
+                let extraction = &pipeline.extraction;
+                let status = if !pipeline.enabled || extraction.provider == "none" {
+                    "disabled"
+                } else if paused {
+                    "paused"
+                } else {
+                    "active"
+                };
+                ExtractionRuntimeState {
+                    configured: Some(extraction.provider.clone()),
+                    resolved: extraction.provider.clone(),
+                    effective: extraction.provider.clone(),
+                    fallback_provider: extraction.fallback_provider.clone(),
+                    status: status.to_string(),
+                    degraded: false,
+                    fallback_applied: false,
+                    reason: None,
+                    since: None,
+                }
+            });
+
         Self {
             config,
             pool,
@@ -54,6 +98,7 @@ impl AppState {
             sessions: SessionTracker::new(),
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
+            extraction_state: RwLock::new(extraction_state),
         }
     }
 

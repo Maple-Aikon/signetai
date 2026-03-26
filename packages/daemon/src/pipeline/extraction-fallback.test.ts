@@ -70,6 +70,32 @@ describe("extraction fallback helpers", () => {
 		expect(memory.extraction_model).toBe("haiku");
 	});
 
+	it("does not dead-letter failed or leased extraction jobs", () => {
+		const now = new Date().toISOString();
+		db.prepare("INSERT INTO memories (id, extraction_status) VALUES (?, ?)").run("mem-f", "queued");
+		db.prepare("INSERT INTO memories (id, extraction_status) VALUES (?, ?)").run("mem-l", "queued");
+		db.prepare(
+			`INSERT INTO memory_jobs
+			 (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES (?, ?, 'extract', 'failed', 2, 3, ?, ?)`,
+		).run("job-failed", "mem-f", now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs
+			 (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES (?, ?, 'extract', 'leased', 1, 3, ?, ?)`,
+		).run("job-leased", "mem-l", now, now);
+
+		const changes = deadLetterPendingExtractionJobs(accessor, {
+			reason: "provider unavailable",
+		});
+
+		expect(changes).toBe(0);
+		const failedJob = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get("job-failed") as { status: string };
+		const leasedJob = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get("job-leased") as { status: string };
+		expect(failedJob.status).toBe("failed");
+		expect(leasedJob.status).toBe("leased");
+	});
+
 	it("creates a dead extraction job when blocking a newly queued memory", () => {
 		db.prepare("INSERT INTO memories (id, extraction_status) VALUES (?, ?)").run("mem-2", "queued");
 
