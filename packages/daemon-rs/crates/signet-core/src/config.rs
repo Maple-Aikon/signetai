@@ -123,10 +123,12 @@ fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&s
         if is_extraction_fallback_provider(value) {
             pipeline.extraction.fallback_provider = value.to_string();
         } else {
-            panic!(
-                "invalid extraction fallbackProvider '{}': must be 'ollama' or 'none'",
+            eprintln!(
+                "signet: invalid extraction fallbackProvider '{}': must be 'ollama' or 'none' — using default 'ollama'",
                 value
             );
+            // Reset to default — serde may have already set the invalid value.
+            pipeline.extraction.fallback_provider = "ollama".to_string();
         }
     }
 }
@@ -502,9 +504,8 @@ memory:
     }
 
     #[test]
-    #[should_panic(expected = "invalid extraction fallbackProvider")]
-    fn invalid_extraction_fallback_provider_is_rejected() {
-        parse_manifest(
+    fn invalid_extraction_fallback_provider_keeps_default() {
+        let manifest = parse_manifest(
             r#"
 agent:
   name: test-agent
@@ -516,6 +517,12 @@ memory:
 "#,
         )
         .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|m| m.pipeline_v2)
+            .expect("pipeline");
+        // Invalid value is rejected, default "ollama" is preserved
+        assert_eq!(pipeline.extraction.fallback_provider, "ollama");
     }
 }
 
