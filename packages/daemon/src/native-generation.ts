@@ -1223,18 +1223,16 @@ async function runGeneration(
 			(stepInput as Record<string, unknown>).past_key_values = reconstructed;
 		}
 
-		// Dispose the reconstructed attention KV tensors from the input —
-		// they were created by us in reconstructLayer() and are consumed
-		// by the forward pass.  Non-attention entries are still owned by
-		// the previous pastKv reference.
+		// Capture the reconstructed KV tensors we created so we can
+		// dispose them AFTER the forward pass consumes them.
+		const reconstructedToDispose: OnnxTensor[] = [];
 		if ("past_key_values" in (stepInput as Record<string, unknown>)) {
 			const inputKv = (stepInput as Record<string, unknown>).past_key_values as PastKeyValues;
 			if (inputKv) {
 				for (let i = 0; i < inputKv.length; i++) {
 					if (kvManager.isAttentionLayer(i) && isKvEntry(inputKv[i])) {
 						const kv = inputKv[i] as { key: OnnxTensor; value: OnnxTensor };
-						disposeTensor(kv.key);
-						disposeTensor(kv.value);
+						reconstructedToDispose.push(kv.key, kv.value);
 					}
 				}
 			}
@@ -1242,6 +1240,12 @@ async function runGeneration(
 
 		// Forward pass
 		const stepOutput = await model(stepInput);
+
+		// NOW dispose the reconstructed input tensors — the forward pass
+		// has consumed them and produced new outputs.
+		for (const t of reconstructedToDispose) {
+			disposeTensor(t);
+		}
 
 		// Update KV cache from the new output
 		if (stepOutput.past_key_values) {
@@ -1455,8 +1459,8 @@ export function createNativeGenerationProvider(
 
 		async available(): Promise<boolean> {
 			try {
-				const status = await checkNativeGenerationProvider();
-				return status.available;
+				await ensureInitialized(modelId);
+				return true;
 			} catch {
 				return false;
 			}

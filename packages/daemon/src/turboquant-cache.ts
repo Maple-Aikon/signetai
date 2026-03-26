@@ -515,11 +515,21 @@ export class TurboQuantKvCache {
 			throw new Error(`numHeads must be >= 1, got ${String(config.numHeads)}`);
 		}
 
+		// Validate residualWindowSize if provided
+		const rawWindow = config.residualWindowSize;
+		if (rawWindow !== undefined) {
+			if (!Number.isFinite(rawWindow) || rawWindow < 0 || !Number.isInteger(rawWindow)) {
+				throw new Error(
+					`residualWindowSize must be a non-negative integer, got ${String(rawWindow)}`,
+				);
+			}
+		}
+
 		const resolved: Required<TurboQuantKvCacheConfig> = {
 			bits: config.bits,
 			headDim: config.headDim,
 			numHeads: config.numHeads,
-			residualWindowSize: config.residualWindowSize ?? 128,
+			residualWindowSize: rawWindow ?? 128,
 			seed: config.seed ?? 42,
 		};
 
@@ -647,6 +657,11 @@ export class TurboQuantKvCache {
 		key: Float32Array,
 		value: Float32Array,
 	): { readonly key: CompressedKvEntry; readonly value: CompressedKvEntry } {
+		if (headIdx < 0 || headIdx >= this._config.numHeads) {
+			throw new Error(
+				`headIdx ${String(headIdx)} out of range [0, ${String(this._config.numHeads)})`,
+			);
+		}
 		const compKey = this.compressVector(key);
 		const compValue = this.compressVector(value);
 
@@ -675,6 +690,9 @@ export class TurboQuantKvCache {
 
 	/** Advance the sequence position counter. */
 	advanceSequence(count = 1): void {
+		if (!Number.isFinite(count) || count < 0) {
+			throw new Error(`advanceSequence count must be a non-negative finite number, got ${String(count)}`);
+		}
 		this._seqLen += count;
 	}
 
