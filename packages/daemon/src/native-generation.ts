@@ -832,6 +832,12 @@ let initError: string | null = null;
 let modelCached = false;
 /** Tracks which model config is currently loaded. */
 let activeModelConfig: NativeModelConfig | null = null;
+/**
+ * Refcount of in-flight generation calls.  Hot-swapping is blocked
+ * while any generation is active to prevent swapping the model out
+ * from under an in-progress `runGeneration()`.
+ */
+let activeGenerations = 0;
 
 // ---------------------------------------------------------------------------
 // Cache directory
@@ -868,7 +874,14 @@ async function ensureInitialized(modelId?: NativeModelId): Promise<void> {
 	const targetConfig = resolveModelConfig(modelId);
 
 	// If a different model is fully loaded, shut down first (hot-swap).
+	// Block if there are in-flight generations using the current model.
 	if (activeModelConfig && activeModelConfig.id !== targetConfig.id) {
+		if (activeGenerations > 0) {
+			throw new Error(
+				`Cannot hot-swap from ${activeModelConfig.displayName} to ${targetConfig.displayName}: ` +
+					`${activeGenerations} generation(s) in progress. Wait for them to complete first.`,
+			);
+		}
 		logger.info(
 			"native-generation",
 			`Hot-swapping from ${activeModelConfig.displayName} to ${targetConfig.displayName}`,
@@ -1085,6 +1098,7 @@ async function runGeneration(
 	/** Running position counter for position_ids across decode steps. */
 	let currentPosition = promptLen;
 
+	activeGenerations++;
 	try {  // Ensure cleanup of pastKv + kvManager even on errors
 
 	// --- Step 1: Prefill ---
@@ -1392,6 +1406,7 @@ async function runGeneration(
 	} finally {
 		// Guaranteed cleanup — dispose remaining KV tensors and reset
 		// manager even if a forward pass or tensor operation throws.
+		activeGenerations = Math.max(0, activeGenerations - 1);
 		disposePastKv(pastKv);
 		pastKv = undefined;
 		kvManager.reset();
@@ -1508,22 +1523,16 @@ export function createNemotronProvider(
  * the model is loaded.
  */
 export async function checkNativeGenerationProvider(): Promise<NativeGenerationStatus> {
-	const currentId = activeModelConfig?.onnxId ?? resolveModelConfig().onnxId;
-	try {
-		await ensureInitialized();
-		return {
-			available: true,
-			modelId: currentId,
-			modelCached,
-		};
-	} catch {
-		return {
-			available: false,
-			error: initError ?? "Native generation provider not ready",
-			modelId: currentId,
-			modelCached: false,
-		};
-	}
+	// Passive check — does NOT call ensureInitialized() to avoid
+	// accidentally hot-swapping the active model just by probing status.
+	const currentId = activeModelConfig?.id ?? DEFAULT_MODEL_ID;
+	const isReady = model !== null && tokenizer !== null;
+	return {
+		available: isReady,
+		error: isReady ? undefined : (initError ?? "Native generation provider not initialized"),
+		modelId: currentId,
+		modelCached,
+	};
 }
 
 /**
@@ -1546,6 +1555,7 @@ export async function shutdownNativeGenerationProvider(): Promise<void> {
 		modelCached = false;
 		activeModelConfig = null;
 		pendingModelId = null;
+		activeGenerations = 0;
 		logger.info("native-generation", "Provider shut down");
 	}
 }
