@@ -119,8 +119,15 @@ fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&s
         .and_then(|value| raw_string(value, "fallbackProvider"))
         .or_else(|| raw.and_then(|value| raw_string(value, "extractionFallbackProvider")));
 
-    if let Some(value) = fallback.filter(|value| is_extraction_fallback_provider(value)) {
-        pipeline.extraction.fallback_provider = value.to_string();
+    if let Some(value) = &fallback {
+        if is_extraction_fallback_provider(value) {
+            pipeline.extraction.fallback_provider = value.to_string();
+        } else {
+            panic!(
+                "invalid extraction fallbackProvider '{}': must be 'ollama' or 'none'",
+                value
+            );
+        }
     }
 }
 
@@ -492,6 +499,23 @@ memory:
             .and_then(|memory| memory.pipeline_v2)
             .expect("pipeline config");
         assert_eq!(flat_pipeline.extraction.fallback_provider, "none");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid extraction fallbackProvider")]
+    fn invalid_extraction_fallback_provider_is_rejected() {
+        parse_manifest(
+            r#"
+agent:
+  name: test-agent
+memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      fallbackProvider: typo-value
+"#,
+        )
+        .expect("parse manifest");
     }
 }
 
