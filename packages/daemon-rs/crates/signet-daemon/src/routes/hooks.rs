@@ -105,6 +105,7 @@ pub async fn session_start(
         )
             .into_response();
     };
+    state.stamp_harness(harness).await;
 
     let session_key = body
         .session_key
@@ -278,13 +279,14 @@ pub async fn prompt_submit(
     headers: HeaderMap,
     Json(body): Json<PromptSubmitBody>,
 ) -> axum::response::Response {
-    let Some(_harness) = body.harness.as_deref() else {
+    let Some(harness) = body.harness.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "harness is required"})),
         )
             .into_response();
     };
+    state.stamp_harness(harness).await;
 
     let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
 
@@ -652,13 +654,14 @@ pub async fn session_end(
     headers: HeaderMap,
     Json(body): Json<SessionEndBody>,
 ) -> axum::response::Response {
-    let Some(_harness) = body.harness.as_deref() else {
+    let Some(harness) = body.harness.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "harness is required"})),
         )
             .into_response();
     };
+    state.stamp_harness(harness).await;
 
     // Resolve session key (sessionKey preferred, sessionId as fallback)
     let session_key = body

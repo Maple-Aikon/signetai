@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{collections::HashMap, time::SystemTime};
 
 use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub sessions: SessionTracker,
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
+    pub harness_last_seen: RwLock<HashMap<String, String>>,
 }
 
 impl AppState {
@@ -54,10 +56,36 @@ impl AppState {
             sessions: SessionTracker::new(),
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
+            harness_last_seen: RwLock::new(HashMap::new()),
         }
     }
 
     pub fn pipeline_paused(&self) -> bool {
         self.pipeline_paused.load(Ordering::SeqCst)
+    }
+
+    fn normalize_harness_id(harness: &str) -> Option<&'static str> {
+        match harness.trim().to_ascii_lowercase().as_str() {
+            "claude" | "claude-code" => Some("claude-code"),
+            "opencode" => Some("opencode"),
+            "openclaw" => Some("openclaw"),
+            "forge" => Some("forge"),
+            _ => None,
+        }
+    }
+
+    pub async fn stamp_harness(&self, harness: &str) {
+        let Some(harness) = Self::normalize_harness_id(harness) else {
+            return;
+        };
+        let timestamp = chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339();
+        self.harness_last_seen
+            .write()
+            .await
+            .insert(harness.to_string(), timestamp);
+    }
+
+    pub async fn harness_last_seen(&self, harness: &str) -> Option<String> {
+        self.harness_last_seen.read().await.get(harness).cloned()
     }
 }
