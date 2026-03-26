@@ -7,6 +7,7 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
+import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
@@ -142,6 +143,24 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			db.close();
 		}
 
+		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {
+			if (!managedForgeInstallSupportedOnCurrentPlatform()) {
+				throw new Error(
+					`Forge is selected, but Signet-managed Forge binaries are only available on macOS/Linux arm64/x64. Install Forge separately on ${process.platform} ${process.arch}, then rerun ${chalk.cyan("signet setup")}.`,
+				);
+			}
+			spinner.text = "Installing Forge...";
+			await installForge(
+				{},
+				{
+					agentsDir: cfg.basePath,
+					defaultPort: deps.DEFAULT_PORT,
+					getTemplatesDir: deps.getTemplatesDir,
+					isDaemonRunning: deps.isDaemonRunning,
+				},
+			);
+		}
+
 		spinner.text = "Configuring harness hooks...";
 		const configuredHarnesses: string[] = [];
 		for (const harness of cfg.harnesses) {
@@ -179,7 +198,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		if (configuredHarnesses.length > 0) {
 			console.log();
-			console.log(chalk.dim("  Hooks configured for:"));
+			console.log(chalk.dim("  Harnesses configured:"));
 			for (const harness of configuredHarnesses) {
 				console.log(chalk.dim(`    ✓ ${harness}`));
 			}

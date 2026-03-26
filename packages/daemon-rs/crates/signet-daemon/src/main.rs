@@ -162,8 +162,15 @@ async fn main() -> anyhow::Result<()> {
         auth_admin_limiter,
     ));
 
-    // Run extraction provider startup preflight (mirrors JS daemon contract)
-    preflight_extraction(&state).await;
+    // Run extraction provider startup preflight asynchronously after server
+    // starts, so /health and /api/status are available immediately during boot.
+    // The preflight updates extraction_state in place once complete.
+    {
+        let preflight_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            preflight_extraction(&preflight_state).await;
+        });
+    }
 
     // Build router
     let app = Router::new()
@@ -214,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/config",
             get(routes::config::get_config).post(routes::config::save_config),
         )
+        .route("/api/harnesses", get(routes::harnesses::list))
         .route("/api/identity", get(routes::config::identity))
         .route("/api/features", get(routes::config::features))
         // Hook lifecycle routes

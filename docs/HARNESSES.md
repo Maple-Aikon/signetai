@@ -7,7 +7,10 @@ section: "Reference"
 
 # Harnesses
 
-Harnesses are the AI platforms and tools that Signet integrates with. Signet syncs your agent identity and [[memory]] to each one via the [[connectors|connector framework]].
+Harnesses are the AI platforms and tools that Signet integrates with.
+Some are external platforms reached through connectors. Forge is the
+first-party native harness and the reference runtime implementation for
+the Signet runtime contract.
 
 > **Path note:** `$SIGNET_WORKSPACE` means your active Signet workspace path.
 > Default is `~/.agents`, configurable via `signet workspace set <path>`.
@@ -47,6 +50,64 @@ You can also trigger a manual re-sync:
 ```bash
 curl -X POST http://localhost:3850/api/harnesses/regenerate
 ```
+
+---
+
+## Forge
+
+Forge is Signet's native terminal harness. Unlike external harness
+integrations, it does not need hook/config patching because it speaks to
+the daemon directly as the host runtime.
+
+### Management surface
+
+Forge remains a separate product command:
+
+```bash
+forge
+```
+
+Signet can also manage Forge installs directly:
+
+```bash
+signet forge install
+signet forge update
+signet forge status
+signet forge doctor
+```
+
+Managed installs place the binary in `~/.config/signet/bin`. Add that directory to your `PATH` if you want `forge` available in a normal shell.
+
+Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64.
+On other platforms, install Forge from source or use a local standalone build.
+
+### Runtime role
+
+- first-party native harness
+- reference implementation of the Signet runtime contract
+- direct daemon client for memory, hooks, skills, secrets, and MCP
+
+Forge is still represented as a harness id (`forge`) in Signet config,
+setup detection, and dashboard surfaces.
+
+
+## Lossless Working Memory Fidelity (Closure Wave)
+
+This matrix is the source of truth for closure-wave fidelity and degraded
+mode expectations across harness paths.
+
+| Harness path | Prompt retrieval order | Thread-head continuity | Compaction artifact persistence | Forced post-event MEMORY refresh |
+|---|---|---|---|---|
+| TS daemon (primary) | hybrid -> temporal-fallback -> transcript-fallback | yes | yes | yes (session-summary + compaction-complete) |
+| daemon-rs shadow | hybrid-style scoped recall with temporal/transcript fallback | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
+
+Degraded mode rules:
+
+- When a harness/runtime path cannot emit every lifecycle event, Signet must
+  document the missing surface explicitly instead of implying full parity.
+- Compaction/session-summary forced-refresh guarantees are currently full in
+  TS daemon and degraded in daemon-rs shadow path.
+- Prompt-time anti-bleed scoping remains mandatory across all paths.
 
 ---
 

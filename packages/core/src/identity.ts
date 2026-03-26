@@ -6,19 +6,45 @@
  * that form the cross-harness identity standard.
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
+
+const FORGE_BINARY_NAME = "forge";
+const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
+const SIGNET_FORGE_FALLBACK_MARKERS = [
+	"Signet daemon URL",
+	"SIGNET_TOKEN",
+	"signet-token",
+	"signet-dark",
+	"Starting Signet daemon",
+	"Signet provides memory, identity, and extraction for Forge",
+];
+const COMPATIBLE_FORGE_MARKER_GROUPS = [
+	[SIGNET_FORGE_PRIMARY_MARKER, "Forge — First Run", "Forge — Provider auth needed", "Forge TUI starting — model:"],
+	[
+		"FORGE_SIGNET_TOKEN",
+		"SIGNET_AUTH_TOKEN",
+		"SIGNET_TOKEN",
+		"Signet daemon URL",
+		"Signet provides memory, identity, and extraction for Forge",
+	],
+	[
+		"signet-dark",
+		"Dashboard (Ctrl+D)",
+		"/forge-usage",
+		"Switch theme (signet-dark, signet-light, midnight, amber)",
+		"Open main dashboard in browser",
+	],
+] as const;
 
 /**
  * Returns the base path for agent-specific files.
  * The 'default' agent maps to the workspace root; all others map to
  * `{workspaceDir}/agents/{agentName}`.
  */
-export function resolveAgentBasePath(
-	agentName: string,
-	workspaceDir: string,
-): string {
+export function resolveAgentBasePath(agentName: string, workspaceDir: string): string {
 	if (agentName === "default") return workspaceDir;
 	return join(workspaceDir, "agents", agentName);
 }
@@ -156,16 +182,138 @@ export interface SetupDetection {
 		openclaw: boolean;
 		opencode: boolean;
 		codex: boolean;
+		forge: boolean;
 	};
+}
+
+function forgeBinaryFilename(binaryName = FORGE_BINARY_NAME): string {
+	return process.platform === "win32" ? `${binaryName}.exe` : binaryName;
+}
+
+export function resolveSignetForgeManagedPath(home = homedir()): string {
+	return join(home, ".config", "signet", "bin", forgeBinaryFilename());
+}
+
+function signetForgeCandidatePaths(home: string): string[] {
+	const binary = forgeBinaryFilename();
+	return [
+		resolveSignetForgeManagedPath(home),
+		join(home, ".cargo", "bin", binary),
+		join(home, ".local", "bin", binary),
+		"/usr/local/bin/forge",
+		"/opt/homebrew/bin/forge",
+	];
+}
+
+function workspaceForgeCandidatePaths(agentsDir?: string): string[] {
+	if (!agentsDir) return [];
+	const binary = forgeBinaryFilename();
+	return [
+		join(agentsDir, binary),
+		join(agentsDir, "target", "release", binary),
+		join(agentsDir, "target", "debug", binary),
+		join(agentsDir, "packages", "forge", "target", "release", binary),
+		join(agentsDir, "packages", "forge", "target", "debug", binary),
+	];
+}
+
+interface SignetForgeInstallRecord {
+	readonly managed?: boolean;
+	readonly binaryPath?: string;
+}
+
+function signetManagedInstallDir(home = homedir()): string {
+	return join(home, ".config", "signet", "bin");
+}
+
+function readSignetForgeInstallRecord(home = homedir()): SignetForgeInstallRecord | null {
+	const recordPath = join(signetManagedInstallDir(home), ".forge-install.json");
+	if (!existsSync(recordPath)) return null;
+	try {
+		return JSON.parse(readFileSync(recordPath, "utf8")) as SignetForgeInstallRecord;
+	} catch {
+		return null;
+	}
+}
+
+function isExecutableFile(filePath: string): boolean {
+	try {
+		const stats = statSync(filePath);
+		if (!stats.isFile()) return false;
+		if (process.platform === "win32") return true;
+		return (stats.mode & 0o111) !== 0;
+	} catch {
+		return false;
+	}
+}
+
+export function isSignetForgeBinary(binaryPath: string): boolean {
+	if (!existsSync(binaryPath)) return false;
+	if (!isExecutableFile(binaryPath)) return false;
+	try {
+		const binary = readFileSync(binaryPath);
+		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
+		let matches = 0;
+		for (const marker of SIGNET_FORGE_FALLBACK_MARKERS) {
+			if (binary.includes(Buffer.from(marker))) matches += 1;
+			if (matches >= 2) return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
+export function isCompatibleForgeBinary(binaryPath: string): boolean {
+	if (!existsSync(binaryPath)) return false;
+	if (!isExecutableFile(binaryPath)) return false;
+	try {
+		const binary = readFileSync(binaryPath);
+		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
+		return COMPATIBLE_FORGE_MARKER_GROUPS.every((group) =>
+			group.some((marker) => binary.includes(Buffer.from(marker))),
+		);
+	} catch {
+		return false;
+	}
+}
+
+export function findSignetForgeBinary(_agentsDir?: string, home = homedir()): string | null {
+	const candidates = [...workspaceForgeCandidatePaths(_agentsDir), ...signetForgeCandidatePaths(home)];
+	const record = readSignetForgeInstallRecord(home);
+	if (record?.binaryPath) {
+		candidates.unshift(record.binaryPath);
+	}
+	for (const candidate of [...new Set(candidates)]) {
+		if (isCompatibleForgeBinary(candidate)) return candidate;
+	}
+	try {
+		const lookup = process.platform === "win32" ? "where" : "which";
+		const output = execFileSync(lookup, [FORGE_BINARY_NAME], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		})
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean);
+		for (const candidate of output) {
+			if (isCompatibleForgeBinary(candidate)) return candidate;
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+function isForgeInstalled(agentsDir: string, home: string): boolean {
+	return findSignetForgeBinary(agentsDir, home) !== null;
 }
 
 /**
  * Detect existing identity setup at a given path
  */
 export function detectExistingSetup(basePath: string): SetupDetection {
-	const identityFileNames = Object.values(IDENTITY_FILES).map(
-		(spec) => spec.path,
-	);
+	const identityFileNames = Object.values(IDENTITY_FILES).map((spec) => spec.path);
 
 	// Check for identity files
 	const foundFiles: string[] = [];
@@ -182,9 +330,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		try {
 			const { readdirSync } = require("node:fs");
 			const files = readdirSync(memoryDir);
-			memoryLogCount = files.filter(
-				(f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE"),
-			).length;
+			memoryLogCount = files.filter((f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE")).length;
 		} catch {
 			// Ignore errors
 		}
@@ -208,12 +354,11 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		harnesses: {
 			claudeCode: existsSync(join(home, ".claude", "settings.json")),
 			openclaw:
-				existsSync(join(home, ".openclaw", "openclaw.json")) ||
-				existsSync(join(home, ".clawdbot", "clawdbot.json")),
+				existsSync(join(home, ".openclaw", "openclaw.json")) || existsSync(join(home, ".clawdbot", "clawdbot.json")),
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
 			codex:
-				existsSync(join(home, ".codex", "config.toml")) ||
-				existsSync(join(home, ".config", "signet", "bin", "codex")),
+				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
+			forge: isForgeInstalled(basePath, home),
 		},
 	};
 }
@@ -221,9 +366,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 /**
  * Load all identity files from a directory
  */
-export async function loadIdentityFiles(
-	basePath: string,
-): Promise<IdentityMap> {
+export async function loadIdentityFiles(basePath: string): Promise<IdentityMap> {
 	const result: IdentityMap = {};
 
 	for (const [key, spec] of Object.entries(IDENTITY_FILES)) {
@@ -372,10 +515,7 @@ export function summarizeIdentity(identity: IdentityMap): string {
 	const fileCount = Object.keys(identity).length;
 	parts.push(`Files: ${fileCount} identity files loaded`);
 
-	const totalSize = Object.values(identity).reduce(
-		(sum, file) => sum + (file?.size || 0),
-		0,
-	);
+	const totalSize = Object.values(identity).reduce((sum, file) => sum + (file?.size || 0), 0);
 	parts.push(`Size: ${totalSize} bytes`);
 
 	return parts.join("\n");
