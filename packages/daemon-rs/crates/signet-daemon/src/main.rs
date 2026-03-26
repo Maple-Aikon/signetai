@@ -706,6 +706,7 @@ async fn preflight_extraction_inner(state: &AppState) {
         };
         *state.extraction_state.write().await = Some(new_state);
         dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+        fail_orphaned_memories(state, &reason_prefix, &now).await;
         warn!("extraction blocked: primary and ollama fallback both unavailable");
         return;
     }
@@ -729,6 +730,7 @@ async fn preflight_extraction_inner(state: &AppState) {
     };
     *state.extraction_state.write().await = Some(new_state);
     dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    fail_orphaned_memories(state, &reason, &now).await;
     warn!("extraction blocked: provider unavailable with no viable fallback");
 }
 
@@ -847,6 +849,62 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             }
         }
         Err(e) => warn!(%e, "failed to dead-letter pending extraction jobs"),
+    }
+}
+
+/// Mark orphaned memories as failed when extraction is blocked. These are
+/// memories created during the async preflight window that have no extraction
+/// job (extraction_status still 'none' or 'queued') and no in-flight work.
+async fn fail_orphaned_memories(state: &AppState, reason: &str, now: &str) {
+    let reason = reason.to_string();
+    let now = now.to_string();
+    let result = state
+        .pool
+        .write(signet_core::db::Priority::Low, move |conn| {
+            // Find memories with no extraction jobs at all (orphans from preflight window)
+            let count = conn.execute(
+                "UPDATE memories SET extraction_status = 'failed'
+                 WHERE extraction_status IN ('none', 'queued')
+                   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_jobs WHERE memory_id IS NOT NULL AND job_type = 'extract')",
+                [],
+            )?;
+
+            // Insert dead jobs for the orphaned memories so the state is consistent
+            if count > 0 {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM memories
+                     WHERE extraction_status = 'failed'
+                       AND id NOT IN (SELECT DISTINCT memory_id FROM memory_jobs WHERE memory_id IS NOT NULL AND job_type = 'extract')",
+                )?;
+                let orphan_ids: Vec<String> = stmt
+                    .query_map([], |row| row.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                let mut insert = conn.prepare(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+                     VALUES (?1, ?2, 'extract', 'dead', ?3, 0, 3, ?4, ?4, ?4)",
+                )?;
+                for mid in &orphan_ids {
+                    let _ = insert.execute(rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        mid,
+                        reason,
+                        now,
+                    ]);
+                }
+            }
+
+            Ok(serde_json::json!({ "orphans": count }))
+        })
+        .await;
+    match result {
+        Ok(val) => {
+            let count = val["orphans"].as_u64().unwrap_or(0);
+            if count > 0 {
+                info!(count, "marked orphaned memories as failed (created during preflight)");
+            }
+        }
+        Err(e) => warn!(%e, "failed to mark orphaned memories"),
     }
 }
 
