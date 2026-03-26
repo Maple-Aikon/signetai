@@ -4,6 +4,7 @@ import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
+	resolveSynthesisEnabled,
 	resolveSynthesisEndpoint,
 	resolveSynthesisModel,
 	resolveSynthesisProvider,
@@ -28,6 +29,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(resolveSynthesisModel(agent)).toBe("qwen3.5:4b");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:11434");
 		expect(resolveSynthesisTimeout(agent)).toBe(75000);
+		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 
 	it("keeps inheriting extraction values when synthesis only sets enabled", () => {
@@ -51,6 +53,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(resolveSynthesisModel(agent)).toBe("qwen3.5:4b");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:11434");
 		expect(resolveSynthesisTimeout(agent)).toBe(75000);
+		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 
 	it("keeps explicit synthesis separate from extraction", () => {
@@ -75,6 +78,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(resolveSynthesisModel(agent)).toBe("haiku");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:9999");
 		expect(resolveSynthesisTimeout(agent)).toBe(180000);
+		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 
 	it("uses provider defaults for explicit synthesis blocks without a model", () => {
@@ -91,6 +95,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("codex");
 		expect(resolveSynthesisModel(agent)).toBe("gpt-5-codex-mini");
+		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 
 	it("uses the shared pipeline timeout default when synthesis and extraction timeouts are both implicit", () => {
@@ -101,5 +106,18 @@ describe("pipeline-settings synthesis resolution", () => {
 		};
 
 		expect(resolveSynthesisTimeout(agent)).toBe(DEFAULT_PIPELINE_TIMEOUT_MS);
+	});
+
+	it("shows inherited synthesis as disabled when extraction resolves to none", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {
+					extractionProvider: "none",
+				},
+			},
+		};
+
+		expect(resolveSynthesisProvider(agent)).toBe("none");
+		expect(resolveSynthesisEnabled(agent)).toBe(false);
 	});
 });

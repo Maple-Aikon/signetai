@@ -169,6 +169,7 @@ import {
 	resolveDefaultOllamaFallbackMaxContextTokens,
 	stopOpenCodeServer,
 } from "./pipeline/provider";
+import { resolveRuntimeModel } from "./pipeline/provider-resolution";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
@@ -11242,10 +11243,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	// When falling back to ollama, reset model so ollama uses its own default
 	// instead of inheriting an anthropic-specific alias like "haiku".
-	let effectiveExtractionModel: string | undefined = memoryCfg.pipelineV2.extraction.model;
-	if (effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama") {
-		effectiveExtractionModel = undefined;
-	}
+	const effectiveExtractionModel = resolveRuntimeModel(
+		effectiveExtractionProvider,
+		memoryCfg.pipelineV2.extraction.provider,
+		memoryCfg.pipelineV2.extraction.model,
+	);
 	const usingExtractionOllamaFallback =
 		effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama";
 	providerRuntimeResolution.extraction = {
@@ -11508,10 +11510,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		});
 
 		// When falling back to ollama, reset model so ollama uses its own default
-		let effectiveSynthesisModel: string | undefined = memoryCfg.pipelineV2.synthesis.model;
-		if (effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama") {
-			effectiveSynthesisModel = undefined;
-		}
+		const effectiveSynthesisModel = resolveRuntimeModel(
+			effectiveSynthesisProvider,
+			memoryCfg.pipelineV2.synthesis.provider,
+			memoryCfg.pipelineV2.synthesis.model,
+		);
 		const usingSynthesisOllamaFallback =
 			effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama";
 

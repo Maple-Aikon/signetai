@@ -17,13 +17,14 @@ import {
 	st,
 } from "$lib/stores/settings.svelte";
 import { defaultPipelineModel } from "@signet/core/pipeline-providers";
-	import {
-		hasExplicitSynthesisConfig,
-		hasExplicitSynthesisProvider,
-		resolveSynthesisEndpoint,
-		resolveSynthesisModel,
-		resolveSynthesisProvider,
-		resolveSynthesisTimeout,
+import {
+	hasExplicitSynthesisConfig,
+	hasExplicitSynthesisProvider,
+	resolveSynthesisEnabled,
+	resolveSynthesisEndpoint,
+	resolveSynthesisModel,
+	resolveSynthesisProvider,
+	resolveSynthesisTimeout,
 } from "./pipeline-settings";
 
 const selectTriggerClass =
@@ -237,10 +238,7 @@ function synthesisTimeout(): number {
 }
 
 function synthesisDisabled(): boolean {
-	return (
-		(synthesisExplicit() && st.aBool(["memory", "pipelineV2", "synthesis", "enabled"]) === false) ||
-		synthesisProvider() === "none"
-	);
+	return !resolveSynthesisEnabled(st.agent);
 }
 
 function synthesisExplicit(): boolean {
@@ -452,7 +450,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 						<span class="text-[11px] text-[var(--sig-text-bright)]">enabled</span>
 						<span class="text-[9px] uppercase tracking-wider text-[var(--sig-text-muted)]">summary-worker and widget synthesis</span>
 					</div>
-					<Switch checked={synthesisExplicit() ? st.aBool(["memory", "pipelineV2", "synthesis", "enabled"]) : true} onCheckedChange={setBool(["memory", "pipelineV2", "synthesis", "enabled"])} />
+					<Switch checked={resolveSynthesisEnabled(st.agent)} onCheckedChange={setBool(["memory", "pipelineV2", "synthesis", "enabled"])} />
 				</div>
 
 				{#if !synthesisProviderExplicit()}

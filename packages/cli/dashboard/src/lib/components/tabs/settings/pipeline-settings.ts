@@ -37,6 +37,16 @@ function readNumber(root: Record<string, unknown> | null, ...path: string[]): nu
 	return typeof node === "number" && Number.isFinite(node) ? node : undefined;
 }
 
+function readBoolean(root: Record<string, unknown> | null, ...path: string[]): boolean | undefined {
+	let node: unknown = root;
+	for (const part of path) {
+		const record = toRecord(node);
+		if (!record) return undefined;
+		node = record[part];
+	}
+	return typeof node === "boolean" ? node : undefined;
+}
+
 export function hasExplicitSynthesisConfig(agent: unknown): boolean {
 	return toRecord(readPipeline(agent)?.synthesis) !== null;
 }
@@ -94,4 +104,10 @@ export function resolveSynthesisTimeout(agent: unknown): number {
 		readNumber(pipeline, "extractionTimeout") ??
 		DEFAULT_PIPELINE_TIMEOUT_MS
 	);
+}
+
+export function resolveSynthesisEnabled(agent: unknown): boolean {
+	const pipeline = readPipeline(agent);
+	if (resolveSynthesisProvider(agent) === "none") return false;
+	return readBoolean(pipeline, "synthesis", "enabled") ?? true;
 }
