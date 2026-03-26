@@ -637,13 +637,14 @@ async fn preflight_extraction_inner(state: &AppState) {
 
     let provider = extraction.provider.as_str();
     let fallback_provider = extraction.fallback_provider.as_str();
-    let now = chrono::Utc::now().to_rfc3339();
+    let preflight_start = chrono::Utc::now().to_rfc3339();
+    let now = preflight_start.clone();
 
     // Check provider availability
     let available = match provider {
         "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
-        "claude-code" => which_exists("claude"),
-        "codex" => which_exists("codex"),
+        "claude-code" => cli_preflight("claude").await,
+        "codex" => cli_preflight("codex").await,
         "anthropic" => std::env::var("ANTHROPIC_API_KEY").map_or(false, |k| !k.is_empty()),
         "openrouter" => std::env::var("OPENROUTER_API_KEY").map_or(false, |k| !k.is_empty()),
         "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
@@ -706,7 +707,7 @@ async fn preflight_extraction_inner(state: &AppState) {
         };
         *state.extraction_state.write().await = Some(new_state);
         dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
-        fail_orphaned_memories(state, &reason_prefix, &now).await;
+        fail_orphaned_memories(state, &reason_prefix, &now, &preflight_start).await;
         warn!("extraction blocked: primary and ollama fallback both unavailable");
         return;
     }
@@ -730,7 +731,7 @@ async fn preflight_extraction_inner(state: &AppState) {
     };
     *state.extraction_state.write().await = Some(new_state);
     dead_letter_pending_extraction_jobs(state, &reason, &now).await;
-    fail_orphaned_memories(state, &reason, &now).await;
+    fail_orphaned_memories(state, &reason, &now, &preflight_start).await;
     warn!("extraction blocked: provider unavailable with no viable fallback");
 }
 
@@ -770,9 +771,30 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a CLI binary exists on PATH using native lookup (no shell-out).
+/// Check if a CLI binary exists on PATH AND can run `--version` successfully.
+/// Matches the JS daemon's startup preflight which spawns the binary to verify
+/// it's not a broken wrapper or non-executable file.
+async fn cli_preflight(name: &str) -> bool {
+    let Some(path) = which_find(name) else {
+        return false;
+    };
+    // Verify the binary actually runs (mirrors JS daemon's --version check)
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&path)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Find a CLI binary on PATH using native lookup (no shell-out).
 /// On Windows, also checks for .cmd/.exe/.bat wrappers (matching Bun.which behavior).
-fn which_exists(name: &str) -> bool {
+fn which_find(name: &str) -> Option<std::path::PathBuf> {
     let extensions: &[&str] = if cfg!(windows) {
         &["", ".exe", ".cmd", ".bat"]
     } else {
@@ -783,12 +805,12 @@ fn which_exists(name: &str) -> bool {
             for ext in extensions {
                 let candidate = dir.join(format!("{name}{ext}"));
                 if candidate.is_file() {
-                    return true;
+                    return Some(candidate);
                 }
             }
         }
     }
-    false
+    None
 }
 
 /// Dead-letter pending extraction jobs when extraction is blocked at startup.
@@ -852,32 +874,35 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
     }
 }
 
-/// Mark orphaned memories as failed when extraction is blocked. These are
-/// memories created during the async preflight window that have no extraction
-/// job (extraction_status still 'none' or 'queued') and no in-flight work.
-async fn fail_orphaned_memories(state: &AppState, reason: &str, now: &str) {
+/// Mark orphaned memories as failed when extraction is blocked. Scoped to
+/// memories created on or after `since` (preflight start) to avoid touching
+/// older legitimate 'none'/'queued' memories from disabled/paused states.
+async fn fail_orphaned_memories(state: &AppState, reason: &str, now: &str, since: &str) {
     let reason = reason.to_string();
     let now = now.to_string();
+    let since = since.to_string();
     let result = state
         .pool
         .write(signet_core::db::Priority::Low, move |conn| {
-            // Find memories with no extraction jobs at all (orphans from preflight window)
+            // Only target memories created during the preflight window
             let count = conn.execute(
                 "UPDATE memories SET extraction_status = 'failed'
                  WHERE extraction_status IN ('none', 'queued')
+                   AND created_at >= ?1
                    AND id NOT IN (SELECT DISTINCT memory_id FROM memory_jobs WHERE memory_id IS NOT NULL AND job_type = 'extract')",
-                [],
+                rusqlite::params![since],
             )?;
 
-            // Insert dead jobs for the orphaned memories so the state is consistent
+            // Insert dead jobs for consistency
             if count > 0 {
                 let mut stmt = conn.prepare(
                     "SELECT id FROM memories
                      WHERE extraction_status = 'failed'
+                       AND created_at >= ?1
                        AND id NOT IN (SELECT DISTINCT memory_id FROM memory_jobs WHERE memory_id IS NOT NULL AND job_type = 'extract')",
                 )?;
                 let orphan_ids: Vec<String> = stmt
-                    .query_map([], |row| row.get(0))?
+                    .query_map(rusqlite::params![since], |row| row.get(0))?
                     .filter_map(|r| r.ok())
                     .collect();
                 let mut insert = conn.prepare(
