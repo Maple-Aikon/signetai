@@ -7,6 +7,7 @@ import {
 	loadForgeManifest,
 	managedForgeAssetNameForPlatform,
 	managedForgeInstallSupportedForPlatform,
+	parseYesNoAnswer,
 	readForgeVersionFromBinaryMetadata,
 	selectLatestStableForgeRelease,
 	withManagedForgeInstallLock,
@@ -256,5 +257,25 @@ describe("Forge version metadata parsing", () => {
 		} finally {
 			rmSync(tempHome, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("parseYesNoAnswer", () => {
+	it("accepts yes variants", () => {
+		expect(parseYesNoAnswer("yes")).toBe(true);
+		expect(parseYesNoAnswer("Y")).toBe(true);
+		expect(parseYesNoAnswer("  YeS  ")).toBe(true);
+	});
+
+	it("accepts no variants", () => {
+		expect(parseYesNoAnswer("no")).toBe(false);
+		expect(parseYesNoAnswer("N")).toBe(false);
+		expect(parseYesNoAnswer("  No  ")).toBe(false);
+	});
+
+	it("rejects unknown answers", () => {
+		expect(parseYesNoAnswer("")).toBeNull();
+		expect(parseYesNoAnswer("maybe")).toBeNull();
+		expect(parseYesNoAnswer("1")).toBeNull();
 	});
 });
