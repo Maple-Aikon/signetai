@@ -97,23 +97,26 @@ fn load_manifest(base: &Path) -> Option<AgentManifest> {
 fn parse_manifest(content: &str) -> Option<AgentManifest> {
     let raw: serde_yml::Value = serde_yml::from_str(content).ok()?;
     let manifest: AgentManifest = serde_yml::from_str(content).ok()?;
-    Some(normalize_manifest(manifest, &raw))
+    normalize_manifest(manifest, &raw)
 }
 
-fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> AgentManifest {
+fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> Option<AgentManifest> {
     let Some(memory) = manifest.memory.as_mut() else {
-        return manifest;
+        return Some(manifest);
     };
     let Some(pipeline) = memory.pipeline_v2.as_mut() else {
-        return manifest;
+        return Some(manifest);
     };
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
-    normalize_pipeline_extraction(pipeline, raw_pipeline);
+    if !normalize_pipeline_extraction(pipeline, raw_pipeline) {
+        return None; // Config validation failed
+    }
     normalize_pipeline_synthesis(pipeline, raw_pipeline);
-    manifest
+    Some(manifest)
 }
 
-fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+/// Returns false if config validation fails (invalid fallbackProvider).
+fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) -> bool {
     let fallback = raw
         .and_then(|value| raw_child(value, "extraction"))
         .and_then(|value| raw_string(value, "fallbackProvider"))
@@ -124,13 +127,13 @@ fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&s
             pipeline.extraction.fallback_provider = value.to_string();
         } else {
             eprintln!(
-                "signet: invalid extraction fallbackProvider '{}': must be 'ollama' or 'none' — using default 'ollama'",
+                "signet: invalid extraction fallbackProvider '{}': must be 'ollama' or 'none'",
                 value
             );
-            // Reset to default — serde may have already set the invalid value.
-            pipeline.extraction.fallback_provider = "ollama".to_string();
+            return false; // Reject invalid config (matches JS daemon throw)
         }
     }
+    true
 }
 
 fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
@@ -504,8 +507,8 @@ memory:
     }
 
     #[test]
-    fn invalid_extraction_fallback_provider_keeps_default() {
-        let manifest = parse_manifest(
+    fn invalid_extraction_fallback_provider_rejects_config() {
+        let result = parse_manifest(
             r#"
 agent:
   name: test-agent
@@ -515,14 +518,9 @@ memory:
       provider: ollama
       fallbackProvider: typo-value
 "#,
-        )
-        .expect("parse manifest");
-        let pipeline = manifest
-            .memory
-            .and_then(|m| m.pipeline_v2)
-            .expect("pipeline");
-        // Invalid value is rejected, default "ollama" is preserved
-        assert_eq!(pipeline.extraction.fallback_provider, "ollama");
+        );
+        // Invalid fallbackProvider causes config to be rejected (returns None)
+        assert!(result.is_none());
     }
 }
 

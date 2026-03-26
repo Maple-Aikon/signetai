@@ -741,7 +741,7 @@ async fn check_ollama_health(endpoint: Option<&str>) -> bool {
         .unwrap_or("http://127.0.0.1:11434");
     let url = format!("{}/api/tags", base.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(2))
         .build();
     let Ok(client) = client else { return false };
     client
@@ -759,7 +759,7 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
         .unwrap_or("http://127.0.0.1:4096");
     let url = format!("{}/health", base.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(2))
         .build();
     let Ok(client) = client else { return false };
     client
