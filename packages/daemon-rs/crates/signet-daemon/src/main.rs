@@ -9,7 +9,6 @@ use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
-use tokio::time::{Duration, MissedTickBehavior};
 use tracing::info;
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
@@ -23,7 +22,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::{AppState, ExtractionOverloadSnapshot};
+use state::AppState;
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -154,16 +153,67 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
+    let pipeline_cfg = config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .cloned();
+
+    let (extraction_worker_stats, mut extraction_worker_handle) =
+        if let Some(pipeline_cfg) = pipeline_cfg.as_ref() {
+            if pipeline_cfg.enabled
+                && !pipeline_cfg.paused
+                && pipeline_cfg.extraction.provider != "none"
+            {
+                let llm_cfg = signet_pipeline::provider::LlmProviderConfig {
+                    provider: pipeline_cfg.extraction.provider.clone(),
+                    model: pipeline_cfg.extraction.model.clone(),
+                    base_url: pipeline_cfg.extraction.endpoint.clone(),
+                    api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+                    timeout_ms: Some(pipeline_cfg.extraction.timeout),
+                };
+                let provider = signet_pipeline::provider::from_config(&llm_cfg);
+                let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+                let worker_cfg = signet_pipeline::worker::WorkerConfig {
+                    poll_ms: pipeline_cfg.worker.poll_ms,
+                    max_retries: pipeline_cfg.worker.max_retries,
+                    lease_timeout_ms: pipeline_cfg.worker.lease_timeout_ms,
+                    max_load_per_cpu: pipeline_cfg.worker.max_load_per_cpu,
+                    overload_backoff_ms: pipeline_cfg.worker.overload_backoff_ms,
+                    extraction_timeout_ms: pipeline_cfg.extraction.timeout,
+                    extraction_max_tokens: 4096,
+                    min_confidence: pipeline_cfg.extraction.min_confidence,
+                    shadow_mode: pipeline_cfg.shadow_mode,
+                    graph_enabled: pipeline_cfg.graph.enabled,
+                    structural_enabled: pipeline_cfg.structural.enabled,
+                };
+                let handle = signet_pipeline::worker::start(
+                    pool.clone(),
+                    provider,
+                    semaphore,
+                    worker_cfg,
+                );
+                info!("extraction worker started");
+                (Some(handle.stats_handle()), Some(handle))
+            } else {
+                info!("extraction worker disabled at startup by pipeline config");
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
     // Build app state
     let state = Arc::new(AppState::new(
         config.clone(),
         pool,
         embedding,
+        extraction_worker_stats,
         auth_mode,
         auth_secret,
         auth_admin_limiter,
     ));
-    let overload_probe = spawn_extraction_overload_probe(state.clone());
 
     // Build router
     let app = Router::new()
@@ -562,7 +612,9 @@ async fn main() -> anyhow::Result<()> {
     .context("server error")?;
 
     info!("shutting down");
-    overload_probe.abort();
+    if let Some(worker) = extraction_worker_handle.take() {
+        worker.stop().await;
+    }
 
     // Drop state to close DB channels, then await writer
     drop(state);
@@ -605,28 +657,6 @@ async fn health() -> Json<serde_json::Value> {
     }))
 }
 
-fn current_load_per_cpu() -> Option<f64> {
-    #[cfg(unix)]
-    {
-        let mut loads = [0.0f64; 1];
-        // SAFETY: `loads` points to valid writable memory for one f64 element.
-        let rc = unsafe { libc::getloadavg(loads.as_mut_ptr(), 1) };
-        if rc < 1 {
-            return None;
-        }
-        let cpus = std::thread::available_parallelism().ok()?.get() as f64;
-        if cpus <= 0.0 {
-            return None;
-        }
-        return Some(loads[0] / cpus);
-    }
-
-    #[cfg(not(unix))]
-    {
-        None
-    }
-}
-
 fn current_epoch_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
@@ -634,44 +664,6 @@ fn current_epoch_ms() -> i64 {
 fn iso_from_epoch_ms(ms: i64) -> Option<String> {
     chrono::DateTime::<Utc>::from_timestamp_millis(ms)
         .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
-}
-
-fn spawn_extraction_overload_probe(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let Some(pipeline) = state
-                .config
-                .manifest
-                .memory
-                .as_ref()
-                .and_then(|memory| memory.pipeline_v2.as_ref())
-            else {
-                continue;
-            };
-
-            let running = pipeline.enabled
-                && pipeline.extraction.provider != "none"
-                && !pipeline.paused
-                && !state.pipeline_paused();
-            let load_per_cpu = if running { current_load_per_cpu() } else { None };
-            let overloaded = load_per_cpu
-                .map(|load| load.is_finite() && load > pipeline.worker.max_load_per_cpu)
-                .unwrap_or(false);
-            let now_ms = current_epoch_ms();
-            if let Ok(mut tracker) = state.extraction_overload.lock() {
-                tracker.update_sample(
-                    running,
-                    load_per_cpu,
-                    overloaded,
-                    now_ms,
-                    pipeline.worker.overload_backoff_ms,
-                );
-            }
-        }
-    })
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -703,23 +695,40 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "since": serde_json::Value::Null,
         })
     });
-    let extraction_worker = pipeline.map(|pipeline| {
-        let snapshot = state
-            .extraction_overload
-            .lock()
-            .map(|tracker| tracker.snapshot(current_epoch_ms()))
-            .unwrap_or_else(|_| ExtractionOverloadSnapshot::default());
-        let overload_since = snapshot.overload_since_ms.and_then(iso_from_epoch_ms);
-        serde_json::json!({
-            "running": snapshot.running,
-            "overloaded": snapshot.overloaded,
-            "loadPerCpu": snapshot.load_per_cpu,
-            "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
-            "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
+    let extraction_worker = if let Some(pipeline) = pipeline {
+        let snapshot = if let Some(stats) = state.extraction_worker_stats.as_ref() {
+            stats.lock().await.snapshot(current_epoch_ms())
+        } else {
+            signet_pipeline::worker::WorkerRuntimeSnapshot {
+                running: false,
+                overloaded: false,
+                load_per_cpu: None,
+                overload_since_ms: None,
+                next_tick_in_ms: None,
+                max_load_per_cpu: pipeline.worker.max_load_per_cpu,
+                overload_backoff_ms: pipeline.worker.overload_backoff_ms,
+            }
+        };
+        let paused = pipeline.paused || state.pipeline_paused();
+        let running = snapshot.running && !paused;
+        let overloaded = running && snapshot.overloaded;
+        let overload_since = if overloaded {
+            snapshot.overload_since_ms.and_then(iso_from_epoch_ms)
+        } else {
+            None
+        };
+        Some(serde_json::json!({
+            "running": running,
+            "overloaded": overloaded,
+            "loadPerCpu": if running { snapshot.load_per_cpu } else { None },
+            "maxLoadPerCpu": snapshot.max_load_per_cpu,
+            "overloadBackoffMs": snapshot.overload_backoff_ms,
             "overloadSince": overload_since,
-            "nextTickInMs": snapshot.next_tick_in_ms,
-        })
-    });
+            "nextTickInMs": if overloaded { snapshot.next_tick_in_ms } else { None },
+        }))
+    } else {
+        None
+    };
     let db_stats = state
         .pool
         .read(|conn| {
