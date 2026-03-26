@@ -176,7 +176,38 @@ pub async fn remember(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Ok(val) => {
+            // If extraction is blocked, immediately mark the new memory as
+            // failed (mirrors JS daemon's queueExtractionJob guard).
+            if val.get("status").and_then(|s| s.as_str()) == Some("created") {
+                if let Some(id) = val.get("id").and_then(|v| v.as_str()) {
+                    if state.is_extraction_blocked().await {
+                        let id = id.to_string();
+                        let reason = state
+                            .extraction_block_reason()
+                            .await
+                            .unwrap_or_else(|| "Extraction provider unavailable".into());
+                        let _ = state
+                            .pool
+                            .write(Priority::Low, move |conn| {
+                                conn.execute(
+                                    "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
+                                    rusqlite::params![id],
+                                )?;
+                                let now = chrono::Utc::now().to_rfc3339();
+                                conn.execute(
+                                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+                                     VALUES (?1, ?2, 'extract', 'dead', ?3, 0, 3, ?4, ?4, ?4)",
+                                    rusqlite::params![uuid::Uuid::new_v4().to_string(), id, reason, now],
+                                )?;
+                                Ok(serde_json::json!({}))
+                            })
+                            .await;
+                    }
+                }
+            }
+            (StatusCode::OK, Json(val)).into_response()
+        }
         Err(e) => {
             warn!(err = %e, "remember failed");
             (

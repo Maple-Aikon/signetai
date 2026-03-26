@@ -80,7 +80,18 @@ export function deadLetterPendingExtractionJobs(
 		).run(options.reason, now, now);
 
 		for (const { memory_id: memoryId } of memoryIds) {
-			updateExtractionFailure(db, memoryId, options.extractionModel);
+			// Only mark the memory as failed if it has no remaining leased
+			// (in-flight) extract jobs — a leased job may still complete
+			// successfully and should not be pre-empted.
+			const leasedCount = db
+				.prepare(
+					`SELECT COUNT(*) as cnt FROM memory_jobs
+					 WHERE memory_id = ? AND job_type = 'extract' AND status = 'leased'`,
+				)
+				.get(memoryId) as { cnt: number };
+			if (leasedCount.cnt === 0) {
+				updateExtractionFailure(db, memoryId, options.extractionModel);
+			}
 		}
 
 		return result.changes;

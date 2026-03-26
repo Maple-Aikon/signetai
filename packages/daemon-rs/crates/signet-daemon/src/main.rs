@@ -779,13 +779,23 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
                 rusqlite::params![reason, now],
             )?;
 
-            // Mark affected memories as failed (parity with JS daemon)
+            // Mark affected memories as failed — but only if they have no
+            // remaining leased (in-flight) extract jobs that may still complete.
             if !memory_ids.is_empty() {
+                let mut check_leased = conn.prepare(
+                    "SELECT COUNT(*) FROM memory_jobs
+                     WHERE memory_id = ?1 AND job_type = 'extract' AND status = 'leased'",
+                )?;
                 let mut update_mem = conn.prepare(
                     "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
                 )?;
                 for mid in &memory_ids {
-                    let _ = update_mem.execute(rusqlite::params![mid]);
+                    let leased: i64 = check_leased
+                        .query_row(rusqlite::params![mid], |row| row.get(0))
+                        .unwrap_or(0);
+                    if leased == 0 {
+                        let _ = update_mem.execute(rusqlite::params![mid]);
+                    }
                 }
             }
 
