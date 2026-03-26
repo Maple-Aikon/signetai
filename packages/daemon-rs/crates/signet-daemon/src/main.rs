@@ -630,6 +630,17 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "since": serde_json::Value::Null,
         })
     });
+    let extraction_worker = pipeline.map(|pipeline| {
+        serde_json::json!({
+            "running": false,
+            "overloaded": false,
+            "loadPerCpu": serde_json::Value::Null,
+            "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
+            "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
+            "overloadSince": serde_json::Value::Null,
+            "nextTickInMs": serde_json::Value::Null,
+        })
+    });
     let db_stats = state
         .pool
         .read(|conn| {
@@ -667,6 +678,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "networkMode": network_mode_from_bind(bind),
         "db": db_stats,
         "agent": state.config.manifest.agent.name,
+        "pipeline": {
+            "extraction": extraction_worker,
+        },
         "providerResolution": {
             "extraction": extraction,
         },

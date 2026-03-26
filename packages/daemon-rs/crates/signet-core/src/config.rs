@@ -688,6 +688,8 @@ pub struct WorkerConfig {
     pub poll_ms: u64,
     pub max_retries: u32,
     pub lease_timeout_ms: u64,
+    pub max_load_per_cpu: f64,
+    pub overload_backoff_ms: u64,
 }
 
 impl Default for WorkerConfig {
@@ -696,6 +698,8 @@ impl Default for WorkerConfig {
             poll_ms: 2_000,
             max_retries: 3,
             lease_timeout_ms: 60_000,
+            max_load_per_cpu: 0.8,
+            overload_backoff_ms: 30_000,
         }
     }
 }

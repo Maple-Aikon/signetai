@@ -30,6 +30,15 @@ interface DaemonStatus {
 		readonly reason: string | null;
 		readonly since: string | null;
 	} | null;
+	readonly extractionWorker: {
+		readonly running: boolean;
+		readonly overloaded: boolean;
+		readonly loadPerCpu: number | null;
+		readonly maxLoadPerCpu: number | null;
+		readonly overloadBackoffMs: number | null;
+		readonly overloadSince: string | null;
+		readonly nextTickInMs: number | null;
+	} | null;
 }
 
 interface DbReport {
@@ -245,6 +254,22 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 export function getExtractionStatusNotice(
 	daemon: DaemonStatus,
 ): { level: "warn" | "error"; title: string; detail: string } | null {
+	const extractionWorker = daemon.extractionWorker;
+	if (extractionWorker && daemon.running && extractionWorker.running && extractionWorker.overloaded) {
+		const load = typeof extractionWorker.loadPerCpu === "number" ? extractionWorker.loadPerCpu.toFixed(2) : "unknown";
+		const threshold =
+			typeof extractionWorker.maxLoadPerCpu === "number" ? extractionWorker.maxLoadPerCpu.toFixed(2) : "unknown";
+		const nextTickSecs =
+			typeof extractionWorker.nextTickInMs === "number"
+				? Math.max(0, Math.ceil(extractionWorker.nextTickInMs / 1000))
+				: null;
+		return {
+			level: "warn",
+			title: "Pipeline load-shedding",
+			detail: `load/core ${load} > threshold ${threshold}${nextTickSecs !== null ? ` — next tick in ${nextTickSecs}s` : ""}`,
+		};
+	}
+
 	const extraction = daemon.extraction;
 	if (!extraction || !daemon.running) return null;
 
