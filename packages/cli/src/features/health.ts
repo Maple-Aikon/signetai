@@ -254,6 +254,23 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 export function getExtractionStatusNotice(
 	daemon: DaemonStatus,
 ): { level: "warn" | "error"; title: string; detail: string } | null {
+	const extraction = daemon.extraction;
+	if (extraction && daemon.running && extraction.status === "blocked") {
+		return {
+			level: "error",
+			title: "Extraction blocked",
+			detail: `configured: ${extraction.configured ?? "unknown"}, fallback: ${extraction.fallbackProvider ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
+		};
+	}
+
+	if (extraction && daemon.running && extraction.status === "degraded") {
+		return {
+			level: "warn",
+			title: "Extraction degraded",
+			detail: `configured: ${extraction.configured ?? "unknown"}, effective: ${extraction.effective ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
+		};
+	}
+
 	const extractionWorker = daemon.extractionWorker;
 	if (extractionWorker && daemon.running && extractionWorker.running && extractionWorker.overloaded) {
 		const load = typeof extractionWorker.loadPerCpu === "number" ? extractionWorker.loadPerCpu.toFixed(2) : "unknown";
@@ -267,25 +284,6 @@ export function getExtractionStatusNotice(
 			level: "warn",
 			title: "Pipeline load-shedding",
 			detail: `load/core ${load} > threshold ${threshold}${nextTickSecs !== null ? ` — next tick in ${nextTickSecs}s` : ""}`,
-		};
-	}
-
-	const extraction = daemon.extraction;
-	if (!extraction || !daemon.running) return null;
-
-	if (extraction.status === "degraded") {
-		return {
-			level: "warn",
-			title: "Extraction degraded",
-			detail: `configured: ${extraction.configured ?? "unknown"}, effective: ${extraction.effective ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
-		};
-	}
-
-	if (extraction.status === "blocked") {
-		return {
-			level: "error",
-			title: "Extraction blocked",
-			detail: `configured: ${extraction.configured ?? "unknown"}, fallback: ${extraction.fallbackProvider ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
 		};
 	}
 
