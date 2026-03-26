@@ -769,12 +769,20 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
 }
 
 /// Check if a CLI binary exists on PATH using native lookup (no shell-out).
+/// On Windows, also checks for .cmd/.exe/.bat wrappers (matching Bun.which behavior).
 fn which_exists(name: &str) -> bool {
+    let extensions: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
     if let Some(path_var) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return true;
+            for ext in extensions {
+                let candidate = dir.join(format!("{name}{ext}"));
+                if candidate.is_file() {
+                    return true;
+                }
             }
         }
     }

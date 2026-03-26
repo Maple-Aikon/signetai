@@ -114,13 +114,13 @@ impl AppState {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
 
-    /// Check whether extraction is currently blocked. Returns true when:
-    /// - extraction_state.status == "blocked", OR
-    /// - extraction preflight has not yet completed (race-safe gate)
-    /// Any code path that enqueues extraction jobs MUST call this first.
+    /// Check whether extraction is definitively blocked. Returns true only
+    /// when preflight has completed AND determined extraction is blocked.
+    /// During preflight, returns false — memories are created normally and
+    /// the preflight itself dead-letters pending jobs if it ends in blocked.
     pub async fn is_extraction_blocked(&self) -> bool {
         if !self.extraction_preflight_done.load(Ordering::SeqCst) {
-            return true;
+            return false; // Preflight pending — don't pre-emptively dead-letter
         }
         self.extraction_state
             .read()
