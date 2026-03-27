@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::constants::{DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HYBRID_ALPHA, DEFAULT_PORT};
 
@@ -20,12 +21,39 @@ pub struct DaemonConfig {
 }
 
 impl DaemonConfig {
-    pub fn from_env() -> Self {
-        let base = std::env::var("SIGNET_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| dirs_home().join(".agents"));
+    pub fn try_from_env() -> Result<Self, ManifestLoadError> {
+        let base = base_path_from_env();
+        let manifest = load_manifest(&base)?.unwrap_or_default();
+        Ok(Self::with_base_and_manifest(base, manifest))
+    }
 
-        let manifest = load_manifest(&base).unwrap_or_default();
+    pub fn from_env() -> Self {
+        match Self::try_from_env() {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to load agent manifest; using defaults");
+                Self::with_base_and_manifest(base_path_from_env(), AgentManifest::default())
+            }
+        }
+    }
+
+    pub fn memory_dir(&self) -> PathBuf {
+        self.base_path.join("memory")
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.base_path.join(".daemon").join("logs")
+    }
+
+    pub fn secrets_dir(&self) -> PathBuf {
+        self.base_path.join(".secrets")
+    }
+
+    pub fn skills_dir(&self) -> PathBuf {
+        self.base_path.join("skills")
+    }
+
+    fn with_base_and_manifest(base: PathBuf, manifest: AgentManifest) -> Self {
         let (cfg_host, cfg_bind) = resolve_network_binding(
             manifest
                 .network
@@ -58,22 +86,22 @@ impl DaemonConfig {
             manifest,
         }
     }
+}
 
-    pub fn memory_dir(&self) -> PathBuf {
-        self.base_path.join("memory")
-    }
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ManifestLoadError {
+    #[error("invalid extraction fallbackProvider '{value}': must be 'ollama' or 'none'")]
+    InvalidExtractionFallbackProvider { value: String },
+    #[error("invalid extraction fallbackProvider type at '{key}': expected a string ('ollama' or 'none')")]
+    InvalidExtractionFallbackProviderType { key: &'static str },
+    #[error("failed to parse agent.yaml: {message}")]
+    Parse { message: String },
+}
 
-    pub fn logs_dir(&self) -> PathBuf {
-        self.base_path.join(".daemon").join("logs")
-    }
-
-    pub fn secrets_dir(&self) -> PathBuf {
-        self.base_path.join(".secrets")
-    }
-
-    pub fn skills_dir(&self) -> PathBuf {
-        self.base_path.join("skills")
-    }
+fn base_path_from_env() -> PathBuf {
+    std::env::var("SIGNET_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dirs_home().join(".agents"))
 }
 
 fn dirs_home() -> PathBuf {
@@ -88,27 +116,89 @@ fn dirs_home() -> PathBuf {
         })
 }
 
-fn load_manifest(base: &Path) -> Option<AgentManifest> {
+fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, ManifestLoadError> {
     let path = base.join("agent.yaml");
-    let content = std::fs::read_to_string(&path).ok()?;
-    parse_manifest(&content)
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Ok(None),
+    };
+    parse_manifest(&content).map(Some)
 }
 
-fn parse_manifest(content: &str) -> Option<AgentManifest> {
-    let raw: serde_yml::Value = serde_yml::from_str(content).ok()?;
-    let manifest: AgentManifest = serde_yml::from_str(content).ok()?;
-    Some(normalize_manifest(manifest, &raw))
+fn parse_manifest(content: &str) -> Result<AgentManifest, ManifestLoadError> {
+    let raw: serde_yml::Value =
+        serde_yml::from_str(content).map_err(|error| ManifestLoadError::Parse {
+            message: error.to_string(),
+        })?;
+    let mut manifest: AgentManifest =
+        serde_yml::from_str(content).map_err(|error| ManifestLoadError::Parse {
+            message: error.to_string(),
+        })?;
+    normalize_manifest(&mut manifest, &raw)?;
+    Ok(manifest)
 }
 
-fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> AgentManifest {
+fn normalize_manifest(
+    manifest: &mut AgentManifest,
+    raw: &serde_yml::Value,
+) -> Result<(), ManifestLoadError> {
     let Some(memory) = manifest.memory.as_mut() else {
-        return manifest;
+        return Ok(());
     };
     let Some(pipeline) = memory.pipeline_v2.as_mut() else {
-        return manifest;
+        return Ok(());
     };
-    normalize_pipeline_synthesis(pipeline, raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2")));
-    manifest
+    let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
+    normalize_pipeline_extraction(pipeline, raw_pipeline)?;
+    normalize_pipeline_worker(pipeline, raw_pipeline);
+    normalize_pipeline_synthesis(pipeline, raw_pipeline);
+    Ok(())
+}
+
+fn normalize_pipeline_extraction(
+    pipeline: &mut PipelineV2Config,
+    raw: Option<&serde_yml::Value>,
+) -> Result<(), ManifestLoadError> {
+    let nested_fallback = raw
+        .and_then(|value| raw_child(value, "extraction"))
+        .map(|value| raw_optional_string_strict(value, "fallbackProvider"))
+        .transpose()?
+        .flatten();
+    let flat_fallback = raw
+        .map(|value| raw_optional_string_strict(value, "extractionFallbackProvider"))
+        .transpose()?
+        .flatten();
+    let fallback = nested_fallback.or(flat_fallback);
+
+    if let Some(value) = &fallback {
+        if is_extraction_fallback_provider(value) {
+            pipeline.extraction.fallback_provider = value.to_string();
+        } else {
+            return Err(ManifestLoadError::InvalidExtractionFallbackProvider {
+                value: value.to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let max_load_per_cpu = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_f64(value, "maxLoadPerCpu"))
+        .or_else(|| raw.and_then(|value| raw_f64(value, "workerMaxLoadPerCpu")));
+    if let Some(value) = max_load_per_cpu {
+        pipeline.worker.max_load_per_cpu = value.clamp(0.1, 8.0);
+    }
+
+    let overload_backoff_ms = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_u64(value, "overloadBackoffMs"))
+        .or_else(|| raw.and_then(|value| raw_u64(value, "workerOverloadBackoffMs")));
+    if let Some(value) = overload_backoff_ms {
+        pipeline.worker.overload_backoff_ms = value.clamp(1_000, 300_000);
+    }
 }
 
 fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
@@ -173,8 +263,29 @@ fn raw_string<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+fn raw_optional_string_strict<'a>(
+    value: &'a serde_yml::Value,
+    key: &'static str,
+) -> Result<Option<&'a str>, ManifestLoadError> {
+    let Some(raw) = raw_child(value, key) else {
+        return Ok(None);
+    };
+    let as_str = raw
+        .as_str()
+        .ok_or(ManifestLoadError::InvalidExtractionFallbackProviderType { key })?;
+    let trimmed = as_str.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed))
+}
+
 fn raw_u64(value: &serde_yml::Value, key: &str) -> Option<u64> {
     raw_child(value, key)?.as_u64()
+}
+
+fn raw_f64(value: &serde_yml::Value, key: &str) -> Option<f64> {
+    raw_child(value, key)?.as_f64()
 }
 
 fn is_pipeline_provider(value: &str) -> bool {
@@ -182,6 +293,10 @@ fn is_pipeline_provider(value: &str) -> bool {
         value,
         "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter"
     )
+}
+
+fn is_extraction_fallback_provider(value: &str) -> bool {
+    matches!(value, "ollama" | "none")
 }
 
 fn default_pipeline_model(provider: &str) -> &'static str {
@@ -422,6 +537,136 @@ memory:
         assert_eq!(pipeline.synthesis.provider, "codex");
         assert_eq!(pipeline.synthesis.model, "gpt-5-codex-mini");
     }
+
+    #[test]
+    fn extraction_fallback_provider_defaults_to_ollama() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.extraction.fallback_provider, "ollama");
+    }
+
+    #[test]
+    fn extraction_fallback_provider_loads_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: none
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(nested_pipeline.extraction.fallback_provider, "none");
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extractionProvider: claude-code
+    extractionFallbackProvider: none
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(flat_pipeline.extraction.fallback_provider, "none");
+    }
+
+    #[test]
+    fn worker_load_shedding_fields_load_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    worker:
+      maxLoadPerCpu: 0.6
+      overloadBackoffMs: 45000
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(nested_pipeline.worker.max_load_per_cpu, 0.6);
+        assert_eq!(nested_pipeline.worker.overload_backoff_ms, 45_000);
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    workerMaxLoadPerCpu: 0.55
+    workerOverloadBackoffMs: 42000
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(flat_pipeline.worker.max_load_per_cpu, 0.55);
+        assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
+    }
+
+    #[test]
+    fn extraction_fallback_provider_rejects_invalid_string_values() {
+        let error = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: maybe
+"#,
+        )
+        .expect_err("invalid fallbackProvider should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid extraction fallbackProvider 'maybe'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn extraction_fallback_provider_rejects_non_string_values() {
+        let error = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: 1
+"#,
+        )
+        .expect_err("non-string fallbackProvider should fail");
+
+        assert!(
+            error.to_string().contains("invalid extraction fallbackProvider type"),
+            "unexpected error: {error}"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -569,6 +814,7 @@ impl Default for PipelineV2Config {
 #[serde(default, rename_all = "camelCase")]
 pub struct ExtractionConfig {
     pub provider: String,
+    pub fallback_provider: String,
     pub model: String,
     pub strength: String,
     pub endpoint: Option<String>,
@@ -581,6 +827,7 @@ impl Default for ExtractionConfig {
     fn default() -> Self {
         Self {
             provider: "ollama".to_string(),
+            fallback_provider: "ollama".to_string(),
             model: "qwen3:4b".to_string(),
             strength: "medium".to_string(),
             endpoint: None,
@@ -615,6 +862,8 @@ pub struct WorkerConfig {
     pub poll_ms: u64,
     pub max_retries: u32,
     pub lease_timeout_ms: u64,
+    pub max_load_per_cpu: f64,
+    pub overload_backoff_ms: u64,
 }
 
 impl Default for WorkerConfig {
@@ -623,6 +872,8 @@ impl Default for WorkerConfig {
             poll_ms: 2_000,
             max_retries: 3,
             lease_timeout_ms: 60_000,
+            max_load_per_cpu: 0.8,
+            overload_backoff_ms: 30_000,
         }
     }
 }

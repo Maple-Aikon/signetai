@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
+use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
-use tracing::info;
+use tracing::{info, warn};
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
@@ -21,7 +22,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::AppState;
+use state::{AppState, ExtractionRuntimeState};
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -64,7 +65,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Service management subcommands (no logging needed)
     if args.iter().any(|a| a == "--install-service") {
-        let config = DaemonConfig::from_env();
+        let config = DaemonConfig::try_from_env()
+            .map_err(|error| anyhow::anyhow!("invalid daemon config: {error}"))?;
         service::install(config.port)?;
         println!("signet service installed (port {})", config.port);
         return Ok(());
@@ -91,7 +93,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Load config
-    let config = DaemonConfig::from_env();
+    let config = DaemonConfig::try_from_env()
+        .map_err(|error| anyhow::anyhow!("invalid daemon config: {error}"))?;
 
     // --check-migrations: open DB, run migrations, exit (for benchmarking startup)
     if args.iter().any(|a| a == "--check-migrations") {
@@ -152,15 +155,27 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
+    let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
+
     // Build app state
     let state = Arc::new(AppState::new(
         config.clone(),
         pool,
         embedding,
+        extraction_worker_stats,
         auth_mode,
         auth_secret,
         auth_admin_limiter,
     ));
+
+    // Run extraction preflight synchronously before serving requests.
+    // This matches the JS daemon's startup behavior and eliminates any
+    // race between writes and provider validation.
+    preflight_extraction(&state).await;
+
+    // Start extraction worker and wire its live runtime-stats handle into
+    // AppState so /api/status reports real worker state.
+    let _ = start_extraction_worker(state.as_ref()).await;
 
     // Build router
     let app = Router::new()
@@ -565,6 +580,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutting down");
 
+    stop_extraction_worker(state.as_ref()).await;
+
     // Drop state to close DB channels, then await writer
     drop(state);
     let _ = writer_handle.await;
@@ -596,6 +613,518 @@ async fn shutdown_signal() {
 }
 
 // ---------------------------------------------------------------------------
+// Extraction provider startup preflight
+// ---------------------------------------------------------------------------
+
+/// Perform startup preflight checks on the extraction provider, mirroring the
+/// JS daemon's startup-resolution contract. Updates `extraction_state` with
+/// degraded/blocked status and dead-letters pending extraction jobs when blocked.
+pub(crate) async fn preflight_extraction(state: &AppState) {
+    extraction_probe(state, true).await;
+}
+
+/// Re-check extraction provider availability on resume. Updates status but
+/// does NOT dead-letter pending jobs — backlog from an intentional pause
+/// should be preserved for draining when the provider becomes available.
+pub(crate) async fn resume_extraction_check(state: &AppState) {
+    extraction_probe(state, false).await;
+}
+
+const DEFAULT_OLLAMA_EXTRACTION_MODEL: &str = "qwen3:4b";
+
+fn resolve_runtime_extraction_model(
+    effective_provider: &str,
+    configured_provider: &str,
+    configured_model: &str,
+) -> String {
+    if effective_provider == "ollama" && configured_provider != "ollama" {
+        DEFAULT_OLLAMA_EXTRACTION_MODEL.to_string()
+    } else {
+        configured_model.to_string()
+    }
+}
+
+fn resolve_runtime_extraction_endpoint(
+    effective_provider: &str,
+    configured_provider: &str,
+    configured_endpoint: Option<&str>,
+) -> Option<String> {
+    if effective_provider == "ollama" && configured_provider != "ollama" {
+        return None;
+    }
+    configured_endpoint
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+}
+
+fn worker_supports_extraction_provider(provider: &str) -> bool {
+    matches!(provider, "ollama" | "anthropic")
+}
+
+pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
+    {
+        let handle = state.extraction_worker_handle.lock().await;
+        if handle.is_some() {
+            return true;
+        }
+    }
+
+    let Some(pipeline) = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+    else {
+        return false;
+    };
+
+    if !pipeline.enabled || pipeline.paused || state.pipeline_paused() {
+        return false;
+    }
+
+    let effective_provider = {
+        let guard = state.extraction_state.read().await;
+        guard
+            .as_ref()
+            .map(|s| s.effective.clone())
+            .unwrap_or_else(|| pipeline.extraction.provider.clone())
+    };
+
+    if effective_provider == "none" {
+        return false;
+    }
+
+    if !worker_supports_extraction_provider(&effective_provider) {
+        warn!(
+            provider = %effective_provider,
+            "extraction worker not started: provider not supported by daemon-rs worker"
+        );
+        return false;
+    }
+
+    let api_key = if effective_provider == "anthropic" {
+        std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+    } else {
+        None
+    };
+
+    if effective_provider == "anthropic" && api_key.is_none() {
+        warn!("extraction worker not started: ANTHROPIC_API_KEY is missing");
+        return false;
+    }
+
+    let runtime_model = resolve_runtime_extraction_model(
+        &effective_provider,
+        &pipeline.extraction.provider,
+        &pipeline.extraction.model,
+    );
+    let runtime_endpoint = resolve_runtime_extraction_endpoint(
+        &effective_provider,
+        &pipeline.extraction.provider,
+        pipeline.extraction.endpoint.as_deref(),
+    );
+    let provider_cfg = signet_pipeline::provider::LlmProviderConfig {
+        provider: effective_provider.clone(),
+        model: runtime_model,
+        base_url: runtime_endpoint,
+        api_key,
+        timeout_ms: Some(pipeline.extraction.timeout),
+    };
+    let provider = signet_pipeline::provider::from_config(&provider_cfg);
+    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let worker_config = signet_pipeline::worker::WorkerConfig {
+        poll_ms: pipeline.worker.poll_ms,
+        max_retries: pipeline.worker.max_retries,
+        lease_timeout_ms: pipeline.worker.lease_timeout_ms,
+        max_load_per_cpu: pipeline.worker.max_load_per_cpu,
+        overload_backoff_ms: pipeline.worker.overload_backoff_ms,
+        extraction_timeout_ms: pipeline.extraction.timeout,
+        extraction_max_tokens: 4096,
+        min_confidence: pipeline.extraction.min_confidence,
+        shadow_mode: pipeline.shadow_mode,
+        graph_enabled: pipeline.graph.enabled,
+        structural_enabled: pipeline.structural.enabled,
+    };
+
+    let handle = signet_pipeline::worker::start(
+        state.pool.clone(),
+        provider,
+        semaphore,
+        worker_config,
+    );
+    let stats = handle.stats_handle();
+    *state.extraction_worker_stats.write().await = Some(stats);
+    let mut slot = state.extraction_worker_handle.lock().await;
+    if slot.is_none() {
+        *slot = Some(handle);
+        true
+    } else {
+        drop(slot);
+        handle.stop().await;
+        true
+    }
+}
+
+pub(crate) async fn stop_extraction_worker(state: &AppState) {
+    let handle = {
+        let mut slot = state.extraction_worker_handle.lock().await;
+        slot.take()
+    };
+
+    if let Some(handle) = handle {
+        handle.stop().await;
+    }
+
+    *state.extraction_worker_stats.write().await = None;
+}
+
+async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
+    let pipeline = match state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+    {
+        Some(p) => p,
+        None => return,
+    };
+
+    let extraction = &pipeline.extraction;
+
+    // Skip preflight if pipeline is disabled, paused, or provider is "none"
+    if !pipeline.enabled || extraction.provider == "none" || pipeline.paused || state.pipeline_paused() {
+        return;
+    }
+
+    let provider = extraction.provider.as_str();
+    let fallback_provider = extraction.fallback_provider.as_str();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Check provider availability
+    let mut available = match provider {
+        "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
+        "claude-code" => cli_preflight("claude").await,
+        "codex" => cli_preflight("codex").await,
+        "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
+        "openrouter" => check_openrouter_health(extraction.endpoint.as_deref()).await,
+        "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
+        _ => {
+            warn!(provider, "unknown extraction provider, assuming unavailable");
+            false
+        }
+    };
+    let mut unavailability_reason: Option<String> = None;
+    if available && !worker_supports_extraction_provider(provider) {
+        available = false;
+        unavailability_reason = Some(format!(
+            "{provider} is not supported by daemon-rs extraction worker"
+        ));
+        warn!(
+            provider,
+            "extraction preflight forcing fallback/block: provider unsupported by daemon-rs worker"
+        );
+    }
+
+    if available {
+        // Provider is healthy — explicitly restore active state in case this
+        // is a resume after a prior blocked/degraded state.
+        let mut guard = state.extraction_state.write().await;
+        if let Some(es) = guard.as_mut() {
+            es.status = "active".to_string();
+            es.effective = extraction.provider.clone();
+            es.degraded = false;
+            es.fallback_applied = false;
+            es.reason = None;
+            es.since = None;
+        }
+        return;
+    }
+
+    let reason_prefix = unavailability_reason
+        .unwrap_or_else(|| format!("{provider} unavailable during extraction startup preflight"));
+    info!(provider, "extraction provider unavailable, attempting fallback resolution");
+
+    // Try fallback to ollama if configured — use the configured endpoint
+    // (mirrors JS daemon which resolves Ollama base URL from config)
+    let ollama_fallback_endpoint = resolve_runtime_extraction_endpoint(
+        "ollama",
+        provider,
+        extraction.endpoint.as_deref(),
+    );
+    if fallback_provider == "ollama" && provider != "ollama" {
+        let ollama_ok = check_ollama_health(ollama_fallback_endpoint.as_deref()).await;
+        if ollama_ok {
+            let new_state = ExtractionRuntimeState {
+                configured: Some(extraction.provider.clone()),
+                resolved: extraction.provider.clone(),
+                effective: "ollama".to_string(),
+                fallback_provider: fallback_provider.to_string(),
+                status: "degraded".to_string(),
+                degraded: true,
+                fallback_applied: true,
+                reason: Some(reason_prefix),
+                since: Some(now),
+            };
+            *state.extraction_state.write().await = Some(new_state);
+            warn!("extraction provider degraded, fell back to ollama");
+            return;
+        }
+        // Ollama fallback also failed → blocked
+        let new_state = ExtractionRuntimeState {
+            configured: Some(extraction.provider.clone()),
+            resolved: extraction.provider.clone(),
+            effective: "none".to_string(),
+            fallback_provider: fallback_provider.to_string(),
+            status: "blocked".to_string(),
+            degraded: true,
+            fallback_applied: false,
+            reason: Some(format!("{reason_prefix}; ollama fallback startup preflight failed")),
+            since: Some(now.clone()),
+        };
+        let full_reason = format!("{reason_prefix}; ollama fallback startup preflight failed");
+        *state.extraction_state.write().await = Some(new_state);
+        if dead_letter_on_blocked {
+            dead_letter_pending_extraction_jobs(state, &full_reason, &now).await;
+        }
+        warn!("extraction blocked: primary and ollama fallback both unavailable");
+        return;
+    }
+
+    // No fallback or fallback is "none" → blocked
+    let reason = if fallback_provider == "none" {
+        format!("{reason_prefix}; fallbackProvider is none")
+    } else {
+        reason_prefix
+    };
+    let new_state = ExtractionRuntimeState {
+        configured: Some(extraction.provider.clone()),
+        resolved: extraction.provider.clone(),
+        effective: "none".to_string(),
+        fallback_provider: fallback_provider.to_string(),
+        status: "blocked".to_string(),
+        degraded: true,
+        fallback_applied: false,
+        reason: Some(reason.clone()),
+        since: Some(now.clone()),
+    };
+    *state.extraction_state.write().await = Some(new_state);
+    if dead_letter_on_blocked {
+        dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    }
+    warn!("extraction blocked: provider unavailable with no viable fallback");
+}
+
+/// Check if the ollama HTTP server is reachable.
+async fn check_ollama_health(endpoint: Option<&str>) -> bool {
+    let base = endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http://127.0.0.1:11434");
+    let url = format!("{}/api/tags", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check if the OpenCode HTTP server is reachable.
+async fn check_opencode_health(endpoint: Option<&str>) -> bool {
+    let base = endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http://127.0.0.1:4096");
+    let url = format!("{}/health", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+fn normalize_endpoint_base(endpoint: Option<&str>, default_base: &str) -> String {
+    endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_base)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn append_api_path(base: &str, v1_path: &str, no_v1_path: &str) -> String {
+    if base.ends_with("/v1") {
+        format!("{base}{no_v1_path}")
+    } else {
+        format!("{base}{v1_path}")
+    }
+}
+
+/// Check Anthropic API reachability with credential validation.
+async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
+    let Some(api_key) = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    else {
+        return false;
+    };
+
+    let base = normalize_endpoint_base(endpoint, "https://api.anthropic.com");
+    let url = append_api_path(&base, "/v1/models", "/models");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check OpenRouter API reachability with credential validation.
+async fn check_openrouter_health(endpoint: Option<&str>) -> bool {
+    let Some(api_key) = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    else {
+        return false;
+    };
+
+    let base = normalize_endpoint_base(endpoint, "https://openrouter.ai/api/v1");
+    let url = append_api_path(&base, "/api/v1/models", "/models");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .header("authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check if a CLI binary exists on PATH AND can run `--version` successfully.
+/// Matches the JS daemon's startup preflight which spawns the binary to verify
+/// it's not a broken wrapper or non-executable file.
+async fn cli_preflight(name: &str) -> bool {
+    let Some(path) = which_find(name) else {
+        return false;
+    };
+    // Verify the binary actually runs (mirrors JS daemon's --version check)
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&path)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Find a CLI binary on PATH using native lookup (no shell-out).
+/// On Windows, also checks for .cmd/.exe/.bat wrappers (matching Bun.which behavior).
+fn which_find(name: &str) -> Option<std::path::PathBuf> {
+    let extensions: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for ext in extensions {
+                let candidate = dir.join(format!("{name}{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Dead-letter pending extraction jobs when extraction is blocked at startup.
+/// Only targets 'pending' jobs — 'failed' and 'leased' are preserved for their
+/// respective retry/recovery flows. Also marks affected memories as failed
+/// (matching the JS daemon's `updateExtractionFailure` behavior).
+async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now: &str) {
+    let reason = reason.to_string();
+    let now = now.to_string();
+    let result = state
+        .pool
+        .write(signet_core::db::Priority::Low, move |conn| {
+            // Collect affected memory IDs before updating jobs
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT memory_id FROM memory_jobs
+                 WHERE job_type IN ('extract', 'extraction') AND status = 'pending'",
+            )?;
+            let memory_ids: Vec<String> = stmt
+                .query_map([], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Dead-letter the pending jobs
+            let count = conn.execute(
+                "UPDATE memory_jobs SET status = 'dead', error = ?1, failed_at = ?2, updated_at = ?2
+                 WHERE job_type IN ('extract', 'extraction') AND status = 'pending'",
+                rusqlite::params![reason, now],
+            )?;
+
+            // Mark affected memories as failed — but only if they have no
+            // remaining leased (in-flight) extract jobs that may still complete.
+            if !memory_ids.is_empty() {
+                let mut check_leased = conn.prepare(
+                    "SELECT COUNT(*) FROM memory_jobs
+                     WHERE memory_id = ?1 AND job_type IN ('extract', 'extraction') AND status = 'leased'",
+                )?;
+                let mut update_mem = conn.prepare(
+                    "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
+                )?;
+                for mid in &memory_ids {
+                    let leased: i64 = check_leased
+                        .query_row(rusqlite::params![mid], |row| row.get(0))
+                        .unwrap_or(0);
+                    if leased == 0 {
+                        let _ = update_mem.execute(rusqlite::params![mid]);
+                    }
+                }
+            }
+
+            Ok(serde_json::json!({ "changes": count }))
+        })
+        .await;
+    match result {
+        Ok(val) => {
+            let count = val["changes"].as_u64().unwrap_or(0);
+            if count > 0 {
+                info!(count, "dead-lettered pending extraction jobs at startup");
+            }
+        }
+        Err(e) => warn!(%e, "failed to dead-letter pending extraction jobs"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
@@ -606,8 +1135,74 @@ async fn health() -> Json<serde_json::Value> {
     }))
 }
 
+fn current_epoch_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+fn iso_from_epoch_ms(ms: i64) -> Option<String> {
+    chrono::DateTime::<Utc>::from_timestamp_millis(ms)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
+    let pipeline = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref());
+    let extraction = {
+        let guard = state.extraction_state.read().await;
+        guard.as_ref().map(|es| {
+            serde_json::json!({
+                "configured": es.configured,
+                "resolved": es.resolved,
+                "effective": es.effective,
+                "fallbackProvider": es.fallback_provider,
+                "status": es.status,
+                "degraded": es.degraded,
+                "fallbackApplied": es.fallback_applied,
+                "reason": es.reason,
+                "since": es.since,
+            })
+        })
+    };
+    let extraction_worker_stats = state.extraction_worker_stats.read().await.clone();
+    let extraction_worker = if let Some(pipeline) = pipeline {
+        let paused = pipeline.paused || state.pipeline_paused();
+        if let Some(stats) = extraction_worker_stats.as_ref() {
+            let snapshot = stats.lock().await.snapshot(current_epoch_ms());
+            let running = snapshot.running && !paused;
+            let overloaded = running && snapshot.overloaded;
+            let overload_since = if overloaded {
+                snapshot.overload_since_ms.and_then(iso_from_epoch_ms)
+            } else {
+                None
+            };
+            Some(serde_json::json!({
+                "running": running,
+                "overloaded": overloaded,
+                "loadPerCpu": if running { snapshot.load_per_cpu } else { None },
+                "maxLoadPerCpu": snapshot.max_load_per_cpu,
+                "overloadBackoffMs": snapshot.overload_backoff_ms,
+                "overloadSince": overload_since,
+                "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
+            }))
+        } else {
+            Some(serde_json::json!({
+                "running": false,
+                "overloaded": false,
+                "loadPerCpu": None::<f64>,
+                "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
+                "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
+                "overloadSince": None::<String>,
+                "nextTickInMs": None::<u64>,
+            }))
+        }
+    } else {
+        None
+    };
     let db_stats = state
         .pool
         .read(|conn| {
@@ -645,5 +1240,187 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "networkMode": network_mode_from_bind(bind),
         "db": db_stats,
         "agent": state.config.manifest.agent.name,
+        "pipeline": {
+            "extraction": extraction_worker,
+        },
+        "providerResolution": {
+            "extraction": extraction,
+        },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::extract::State;
+    use signet_core::config::{
+        AgentIdentity, AgentManifest, AuthConfig as ManifestAuthConfig, DaemonConfig,
+        EmbeddingConfig, MemoryManifestConfig, PipelineV2Config, RateLimitConfig,
+    };
+    use signet_core::db::DbPool;
+    use tempfile::tempdir;
+
+    use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
+    use crate::auth::types::AuthMode;
+    use crate::state::AppState;
+
+    use super::{
+        append_api_path, normalize_endpoint_base, resolve_runtime_extraction_endpoint,
+        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
+    };
+
+    fn test_state() -> Arc<AppState> {
+        let dir = tempdir().expect("tempdir").keep();
+        let db = dir.join("memory").join("memories.db");
+        std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
+
+        let mut limits = HashMap::new();
+        limits.insert(
+            "admin".to_string(),
+            RateLimitConfig {
+                window_ms: Some(60_000),
+                max: Some(10),
+            },
+        );
+
+        let manifest = AgentManifest {
+            agent: AgentIdentity {
+                name: "test-agent".to_string(),
+                description: None,
+                created: None,
+                updated: None,
+            },
+            embedding: Some(EmbeddingConfig::default()),
+            memory: Some(MemoryManifestConfig {
+                database: None,
+                vectors: None,
+                session_budget: None,
+                decay_rate: None,
+                pipeline_v2: Some(PipelineV2Config::default()),
+            }),
+            auth: Some(ManifestAuthConfig {
+                method: "token".to_string(),
+                chain_id: None,
+                mode: Some("local".to_string()),
+                rate_limits: Some(limits),
+            }),
+            ..Default::default()
+        };
+
+        let (pool, _writer) = DbPool::open(&db).expect("open db");
+        let mut rules = default_limits();
+        if let Some(rule) = rules.get_mut("admin") {
+            rule.max = 10;
+        }
+
+        Arc::new(AppState::new(
+            DaemonConfig {
+                base_path: dir,
+                db_path: db,
+                port: 3850,
+                host: "127.0.0.1".to_string(),
+                bind: Some("127.0.0.1".to_string()),
+                manifest,
+            },
+            pool,
+            Some(signet_pipeline::embedding::from_config(
+                &EmbeddingConfig::default(),
+                None,
+            )),
+            Some(signet_pipeline::worker::new_runtime_stats_handle(0.8, 30_000)),
+            AuthMode::Local,
+            None,
+            AuthRateLimiter::from_rules(&rules),
+        ))
+    }
+
+    #[tokio::test]
+    async fn status_includes_worker_runtime_fields_with_configured_bounds() {
+        let state = test_state();
+        let axum::response::Json(body) = status(State(state)).await;
+        assert_eq!(body["pipeline"]["extraction"]["running"], false);
+        assert_eq!(body["pipeline"]["extraction"]["overloaded"], false);
+        assert_eq!(body["pipeline"]["extraction"]["maxLoadPerCpu"], 0.8);
+        assert_eq!(body["pipeline"]["extraction"]["overloadBackoffMs"], 30000);
+    }
+
+    #[test]
+    fn append_api_path_handles_v1_and_non_v1_bases() {
+        assert_eq!(
+            append_api_path("https://api.anthropic.com", "/v1/models", "/models"),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            append_api_path("https://api.anthropic.com/v1", "/v1/models", "/models"),
+            "https://api.anthropic.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_base_uses_trimmed_endpoint_or_default() {
+        assert_eq!(
+            normalize_endpoint_base(Some("https://openrouter.ai/api/v1/"), "https://default"),
+            "https://openrouter.ai/api/v1"
+        );
+        assert_eq!(
+            normalize_endpoint_base(None, "https://default/"),
+            "https://default"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_model_drops_non_ollama_model_on_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_model("ollama", "codex", "gpt-5-codex-mini"),
+            "qwen3:4b"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_model_keeps_model_when_provider_matches() {
+        assert_eq!(
+            resolve_runtime_extraction_model("ollama", "ollama", "qwen3.5:4b"),
+            "qwen3.5:4b"
+        );
+        assert_eq!(
+            resolve_runtime_extraction_model("codex", "codex", "gpt-5-codex-mini"),
+            "gpt-5-codex-mini"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_endpoint_drops_non_ollama_endpoint_on_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_endpoint(
+                "ollama",
+                "openrouter",
+                Some("https://openrouter.ai/api/v1")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_endpoint_keeps_configured_endpoint_when_not_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_endpoint("ollama", "ollama", Some("http://127.0.0.1:11434")),
+            Some("http://127.0.0.1:11434".to_string())
+        );
+        assert_eq!(
+            resolve_runtime_extraction_endpoint("anthropic", "anthropic", Some("https://api.anthropic.com")),
+            Some("https://api.anthropic.com".to_string())
+        );
+    }
+
+    #[test]
+    fn worker_supports_only_ollama_and_anthropic_providers() {
+        assert!(worker_supports_extraction_provider("ollama"));
+        assert!(worker_supports_extraction_provider("anthropic"));
+        assert!(!worker_supports_extraction_provider("claude-code"));
+        assert!(!worker_supports_extraction_provider("codex"));
+        assert!(!worker_supports_extraction_provider("opencode"));
+        assert!(!worker_supports_extraction_provider("openrouter"));
+    }
 }

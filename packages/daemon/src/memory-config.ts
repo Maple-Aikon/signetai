@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
-	DEFAULT_PIPELINE_TIMEOUT_MS,
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
@@ -41,6 +41,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	semanticContradictionTimeoutMs: 120000,
 	extraction: {
 		provider: "ollama",
+		fallbackProvider: "ollama",
 		model: "qwen3:4b",
 		strength: "low",
 		endpoint: undefined,
@@ -56,6 +57,8 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		pollMs: 2000,
 		maxRetries: 3,
 		leaseTimeoutMs: 300000,
+		maxLoadPerCpu: 0.8,
+		overloadBackoffMs: 30000,
 	},
 	graph: {
 		enabled: true,
@@ -221,6 +224,8 @@ export interface ResolvedMemoryConfig {
 	auth: AuthConfig;
 }
 
+class MemoryConfigValidationError extends Error {}
+
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(min, Math.min(max, raw));
@@ -233,6 +238,18 @@ function clampFraction(raw: unknown, fallback: number): number {
 
 function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 	return typeof v === "string" && ["low", "medium", "high"].includes(v);
+}
+
+function isExtractionFallbackProvider(v: unknown): v is "ollama" | "none" {
+	return v === "ollama" || v === "none";
+}
+
+function resolveExtractionFallbackProvider(raw: unknown, fallback: "ollama" | "none"): "ollama" | "none" {
+	if (raw === undefined || raw === null) return fallback;
+	if (isExtractionFallbackProvider(raw)) return raw;
+	throw new MemoryConfigValidationError(
+		`Invalid extraction fallbackProvider "${String(raw)}"; expected "ollama" or "none"`,
+	);
 }
 
 function parseOptionalUrl(raw: unknown): string | undefined {
@@ -333,6 +350,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		d.extraction.timeout,
 	);
+	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
+		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
+		d.extraction.fallbackProvider,
+	);
 	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
 	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
 	const resolvedSynthesisModel =
@@ -352,9 +373,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
 	);
 	const resolvedSynthesisEnabled =
-		resolvedSynthesisProvider === "none"
-			? false
-			: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
+		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -380,6 +399,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 		extraction: {
 			provider: resolvedProvider,
+			fallbackProvider: resolvedFallbackProvider,
 			model: resolvedModel,
 			strength: (() => {
 				// Flat keys win when set (dashboard writes these); nested is fallback
@@ -422,6 +442,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				10000,
 				600000,
 				d.worker.leaseTimeoutMs,
+			),
+			maxLoadPerCpu: clampPositive(workerRaw?.maxLoadPerCpu ?? raw.workerMaxLoadPerCpu, 0.1, 8, d.worker.maxLoadPerCpu),
+			overloadBackoffMs: clampPositive(
+				workerRaw?.overloadBackoffMs ?? raw.workerOverloadBackoffMs,
+				1000,
+				300000,
+				d.worker.overloadBackoffMs,
 			),
 		},
 
@@ -857,7 +884,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 
 			break;
-		} catch {
+		} catch (error) {
+			if (error instanceof MemoryConfigValidationError) {
+				throw error;
+			}
 			// ignore parse errors, try next file
 		}
 	}

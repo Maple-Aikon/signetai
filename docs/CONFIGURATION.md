@@ -364,9 +364,13 @@ control.
 | `pollMs` | `2000` | 100-60000 ms | How often the worker polls for pending jobs |
 | `maxRetries` | `3` | 1-10 | Max retry attempts before a job goes to dead-letter |
 | `leaseTimeoutMs` | `300000` | 10000-600000 ms | Time before an uncompleted job lease expires |
+| `maxLoadPerCpu` | `0.8` | 0.1-8.0 | Load-per-CPU threshold above which extraction polling is deferred |
+| `overloadBackoffMs` | `30000` | 1000-300000 ms | Delay between poll attempts while host load stays above threshold |
 
 A job that exceeds `maxRetries` moves to dead-letter status and is
 eventually purged by the retention worker.
+Legacy flat keys `workerMaxLoadPerCpu` and `workerOverloadBackoffMs` are
+still accepted for backward compatibility.
 
 
 ### Knowledge Graph (`graph`)
