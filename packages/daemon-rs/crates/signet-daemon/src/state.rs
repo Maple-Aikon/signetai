@@ -42,6 +42,37 @@ pub struct AppState {
     pub harness_last_seen: RwLock<HashMap<String, String>>,
 }
 
+fn derive_initial_extraction_state(
+    provider: &str,
+    fallback_provider: &str,
+    pipeline_enabled: bool,
+    paused: bool,
+) -> ExtractionRuntimeState {
+    let status = if !pipeline_enabled || provider == "none" {
+        "disabled"
+    } else if paused {
+        "paused"
+    } else {
+        "active"
+    };
+    let effective = if status == "disabled" || status == "paused" {
+        "none"
+    } else {
+        provider
+    };
+    ExtractionRuntimeState {
+        configured: Some(provider.to_string()),
+        resolved: provider.to_string(),
+        effective: effective.to_string(),
+        fallback_provider: fallback_provider.to_string(),
+        status: status.to_string(),
+        degraded: false,
+        fallback_applied: false,
+        reason: None,
+        since: None,
+    }
+}
+
 impl AppState {
     pub fn new(
         config: DaemonConfig,
@@ -68,24 +99,12 @@ impl AppState {
             .and_then(|m| m.pipeline_v2.as_ref())
             .map(|pipeline| {
                 let extraction = &pipeline.extraction;
-                let status = if !pipeline.enabled || extraction.provider == "none" {
-                    "disabled"
-                } else if paused {
-                    "paused"
-                } else {
-                    "active"
-                };
-                ExtractionRuntimeState {
-                    configured: Some(extraction.provider.clone()),
-                    resolved: extraction.provider.clone(),
-                    effective: extraction.provider.clone(),
-                    fallback_provider: extraction.fallback_provider.clone(),
-                    status: status.to_string(),
-                    degraded: false,
-                    fallback_applied: false,
-                    reason: None,
-                    since: None,
-                }
+                derive_initial_extraction_state(
+                    &extraction.provider,
+                    &extraction.fallback_provider,
+                    pipeline.enabled,
+                    paused,
+                )
             });
 
         Self {
@@ -160,5 +179,42 @@ impl AppState {
 
     pub async fn harness_last_seen(&self, harness: &str) -> Option<String> {
         self.harness_last_seen.read().await.get(harness).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_initial_extraction_state;
+
+    #[test]
+    fn paused_starts_with_effective_none() {
+        let state = derive_initial_extraction_state("claude-code", "ollama", true, true);
+        assert_eq!(state.status, "paused");
+        assert_eq!(state.resolved, "claude-code");
+        assert_eq!(state.effective, "none");
+    }
+
+    #[test]
+    fn disabled_starts_with_effective_none_when_pipeline_disabled() {
+        let state = derive_initial_extraction_state("claude-code", "ollama", false, false);
+        assert_eq!(state.status, "disabled");
+        assert_eq!(state.resolved, "claude-code");
+        assert_eq!(state.effective, "none");
+    }
+
+    #[test]
+    fn disabled_starts_with_effective_none_when_provider_none() {
+        let state = derive_initial_extraction_state("none", "ollama", true, false);
+        assert_eq!(state.status, "disabled");
+        assert_eq!(state.resolved, "none");
+        assert_eq!(state.effective, "none");
+    }
+
+    #[test]
+    fn active_keeps_effective_provider() {
+        let state = derive_initial_extraction_state("claude-code", "ollama", true, false);
+        assert_eq!(state.status, "active");
+        assert_eq!(state.resolved, "claude-code");
+        assert_eq!(state.effective, "claude-code");
     }
 }
