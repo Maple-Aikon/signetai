@@ -94,6 +94,31 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
     }
 }
 
+fn dead_letter_blocked_extraction_memory(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+    reason: &str,
+    max_attempts: i64,
+) -> Result<(), rusqlite::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
+        rusqlite::params![memory_id],
+    )?;
+    conn.execute(
+        "INSERT INTO memory_jobs (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+         VALUES (?1, ?2, 'extract', 'dead', ?3, 0, ?4, ?5, ?5, ?5)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            memory_id,
+            reason,
+            max_attempts,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
 pub async fn remember(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RememberBody>,
@@ -136,10 +161,28 @@ pub async fn remember(
         _ => "global",
     }
     .to_string();
+    let blocked_extraction_reason = if state.is_extraction_blocked().await {
+        Some(
+            state
+                .extraction_block_reason()
+                .await
+                .unwrap_or_else(|| "Extraction provider unavailable".to_string()),
+        )
+    } else {
+        None
+    };
+    let extraction_max_attempts = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| i64::from(pipeline.worker.max_retries.max(1)))
+        .unwrap_or(3);
 
     let result = state
         .pool
-        .write(Priority::High, move |conn| {
+        .write_tx(Priority::High, move |conn| {
             let r = transactions::ingest(
                 conn,
                 &transactions::IngestInput {
@@ -161,6 +204,17 @@ pub async fn remember(
                 },
             )?;
 
+            if r.duplicate_of.is_none() {
+                if let Some(reason) = blocked_extraction_reason.as_deref() {
+                    dead_letter_blocked_extraction_memory(
+                        conn,
+                        &r.id,
+                        reason,
+                        extraction_max_attempts,
+                    )?;
+                }
+            }
+
             let status = if r.duplicate_of.is_some() {
                 "duplicate"
             } else {
@@ -176,41 +230,7 @@ pub async fn remember(
         .await;
 
     match result {
-        Ok(val) => {
-            // If extraction is blocked, immediately mark the new memory as
-            // failed (mirrors JS daemon's queueExtractionJob guard).
-            if val.get("status").and_then(|s| s.as_str()) == Some("created") {
-                if let Some(id) = val.get("id").and_then(|v| v.as_str()) {
-                    if state.is_extraction_blocked().await {
-                        let id = id.to_string();
-                        let reason = state
-                            .extraction_block_reason()
-                            .await
-                            .unwrap_or_else(|| "Extraction provider unavailable".into());
-                        if let Err(e) = state
-                            .pool
-                            .write(Priority::Low, move |conn| {
-                                conn.execute(
-                                    "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
-                                    rusqlite::params![id],
-                                )?;
-                                let now = chrono::Utc::now().to_rfc3339();
-                                conn.execute(
-                                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
-                                     VALUES (?1, ?2, 'extract', 'dead', ?3, 0, 3, ?4, ?4, ?4)",
-                                    rusqlite::params![uuid::Uuid::new_v4().to_string(), id, reason, now],
-                                )?;
-                                Ok(serde_json::json!({}))
-                            })
-                            .await
-                        {
-                            warn!(err = %e, "failed to dead-letter extraction for blocked memory");
-                        }
-                    }
-                }
-            }
-            (StatusCode::OK, Json(val)).into_response()
-        }
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
         Err(e) => {
             warn!(err = %e, "remember failed");
             (
@@ -224,7 +244,8 @@ pub async fn remember(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_remember_tags;
+    use super::{dead_letter_blocked_extraction_memory, parse_remember_tags};
+    use rusqlite::Connection;
     use serde_json::json;
 
     #[test]
@@ -246,6 +267,64 @@ mod tests {
 
         let err = parse_remember_tags(Some(json!(["alpha", 42]))).unwrap_err();
         assert_eq!(err, "tags must be a string, string array, or null");
+    }
+
+    #[test]
+    fn dead_letter_blocked_extraction_marks_memory_failed_and_uses_configured_attempts() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE memories (
+              id TEXT PRIMARY KEY,
+              extraction_status TEXT
+            );
+            CREATE TABLE memory_jobs (
+              id TEXT PRIMARY KEY,
+              memory_id TEXT,
+              job_type TEXT,
+              status TEXT,
+              error TEXT,
+              attempts INTEGER,
+              max_attempts INTEGER,
+              failed_at TEXT,
+              created_at TEXT,
+              updated_at TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, extraction_status) VALUES (?1, 'queued')",
+            rusqlite::params!["mem-1"],
+        )
+        .unwrap();
+
+        dead_letter_blocked_extraction_memory(
+            &conn,
+            "mem-1",
+            "Configured extraction provider unavailable",
+            7,
+        )
+        .unwrap();
+
+        let extraction_status: String = conn
+            .query_row(
+                "SELECT extraction_status FROM memories WHERE id = ?1",
+                rusqlite::params!["mem-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(extraction_status, "failed");
+
+        let (status, max_attempts): (String, i64) = conn
+            .query_row(
+                "SELECT status, max_attempts FROM memory_jobs WHERE memory_id = ?1",
+                rusqlite::params!["mem-1"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "dead");
+        assert_eq!(max_attempts, 7);
     }
 }
 
