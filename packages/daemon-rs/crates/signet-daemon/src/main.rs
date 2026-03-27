@@ -657,6 +657,10 @@ fn resolve_runtime_extraction_endpoint(
         .map(|v| v.to_string())
 }
 
+fn worker_supports_extraction_provider(provider: &str) -> bool {
+    matches!(provider, "ollama" | "anthropic")
+}
+
 pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
     {
         let handle = state.extraction_worker_handle.lock().await;
@@ -691,7 +695,7 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
         return false;
     }
 
-    if effective_provider != "ollama" && effective_provider != "anthropic" {
+    if !worker_supports_extraction_provider(&effective_provider) {
         warn!(
             provider = %effective_provider,
             "extraction worker not started: provider not supported by daemon-rs worker"
@@ -801,7 +805,7 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let now = chrono::Utc::now().to_rfc3339();
 
     // Check provider availability
-    let available = match provider {
+    let mut available = match provider {
         "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
         "claude-code" => cli_preflight("claude").await,
         "codex" => cli_preflight("codex").await,
@@ -813,6 +817,17 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
             false
         }
     };
+    let mut unavailability_reason: Option<String> = None;
+    if available && !worker_supports_extraction_provider(provider) {
+        available = false;
+        unavailability_reason = Some(format!(
+            "{provider} is not supported by daemon-rs extraction worker"
+        ));
+        warn!(
+            provider,
+            "extraction preflight forcing fallback/block: provider unsupported by daemon-rs worker"
+        );
+    }
 
     if available {
         // Provider is healthy — explicitly restore active state in case this
@@ -829,7 +844,8 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
         return;
     }
 
-    let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
+    let reason_prefix = unavailability_reason
+        .unwrap_or_else(|| format!("{provider} unavailable during extraction startup preflight"));
     info!(provider, "extraction provider unavailable, attempting fallback resolution");
 
     // Try fallback to ollama if configured — use the configured endpoint
@@ -1252,7 +1268,7 @@ mod tests {
 
     use super::{
         append_api_path, normalize_endpoint_base, resolve_runtime_extraction_endpoint,
-        resolve_runtime_extraction_model, status,
+        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
     };
 
     fn test_state() -> Arc<AppState> {
@@ -1396,5 +1412,15 @@ mod tests {
             resolve_runtime_extraction_endpoint("anthropic", "anthropic", Some("https://api.anthropic.com")),
             Some("https://api.anthropic.com".to_string())
         );
+    }
+
+    #[test]
+    fn worker_supports_only_ollama_and_anthropic_providers() {
+        assert!(worker_supports_extraction_provider("ollama"));
+        assert!(worker_supports_extraction_provider("anthropic"));
+        assert!(!worker_supports_extraction_provider("claude-code"));
+        assert!(!worker_supports_extraction_provider("codex"));
+        assert!(!worker_supports_extraction_provider("opencode"));
+        assert!(!worker_supports_extraction_provider("openrouter"));
     }
 }
