@@ -28,10 +28,10 @@ impl DaemonConfig {
         let manifest = match load_manifest(&base) {
             Ok(Some(manifest)) => manifest,
             Ok(None) => AgentManifest::default(),
-            Err(error) => {
-                if should_fail_startup_for_manifest_error(&error) {
-                    return Err(format!("Invalid agent.yaml: {error}"));
-                }
+            Err(ManifestLoadError::Fatal(error)) => {
+                return Err(format!("Invalid agent.yaml: {error}"));
+            }
+            Err(ManifestLoadError::Recoverable(error)) => {
                 tracing::warn!(
                     error = %error,
                     "invalid or unreadable agent.yaml; falling back to default manifest"
@@ -101,24 +101,51 @@ fn dirs_home() -> PathBuf {
         })
 }
 
-fn should_fail_startup_for_manifest_error(error: &str) -> bool {
-    error.contains("memory.pipelineV2.extraction.command")
+enum ManifestLoadError {
+    Recoverable(String),
+    Fatal(String),
+}
+
+fn should_fail_fast_for_manifest_error_context(raw: &serde_yml::Value, error: &str) -> bool {
+    let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
+    let extraction_provider = raw_pipeline
+        .and_then(|value| raw_child(value, "extraction"))
+        .and_then(|value| raw_string(value, "provider"))
+        .or_else(|| raw_pipeline.and_then(|value| raw_string(value, "extractionProvider")));
+    let synthesis_provider = raw_pipeline
+        .and_then(|value| raw_child(value, "synthesis"))
+        .and_then(|value| raw_string(value, "provider"))
+        .or_else(|| raw_pipeline.and_then(|value| raw_string(value, "synthesisProvider")));
+
+    extraction_provider.is_some_and(|provider| provider == "command")
+        || synthesis_provider.is_some_and(|provider| provider == "command")
+        || error.contains("memory.pipelineV2.extraction.command")
         || error.contains("memory.pipelineV2.synthesis.provider='command'")
 }
 
-fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, String> {
+fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, ManifestLoadError> {
     let path = base.join("agent.yaml");
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(format!(
+            return Err(ManifestLoadError::Recoverable(format!(
                 "failed to read {}: {err}",
                 path.to_string_lossy()
-            ))
+            )))
         }
     };
-    parse_manifest_result(&content).map(Some)
+    let raw: serde_yml::Value = serde_yml::from_str(&content)
+        .map_err(|err| ManifestLoadError::Recoverable(format!("YAML parse error: {err}")))?;
+    parse_manifest_from_raw(&content, &raw)
+        .map(Some)
+        .map_err(|error| {
+            if should_fail_fast_for_manifest_error_context(&raw, &error) {
+                ManifestLoadError::Fatal(error)
+            } else {
+                ManifestLoadError::Recoverable(error)
+            }
+        })
 }
 
 #[cfg(test)]
@@ -126,12 +153,20 @@ fn parse_manifest(content: &str) -> Option<AgentManifest> {
     parse_manifest_result(content).ok()
 }
 
+#[cfg(test)]
 fn parse_manifest_result(content: &str) -> Result<AgentManifest, String> {
     let raw: serde_yml::Value =
         serde_yml::from_str(content).map_err(|err| format!("YAML parse error: {err}"))?;
+    parse_manifest_from_raw(content, &raw)
+}
+
+fn parse_manifest_from_raw(
+    content: &str,
+    raw: &serde_yml::Value,
+) -> Result<AgentManifest, String> {
     let manifest: AgentManifest =
         serde_yml::from_str(content).map_err(|err| format!("manifest shape error: {err}"))?;
-    normalize_manifest(manifest, &raw)
+    normalize_manifest(manifest, raw)
 }
 
 fn normalize_manifest(
@@ -464,7 +499,7 @@ impl Default for EmbeddingConfig {
 mod tests {
     use super::{
         network_mode_from_bind, parse_manifest, resolve_network_binding,
-        should_fail_startup_for_manifest_error, PipelineV2Config,
+        should_fail_fast_for_manifest_error_context, PipelineV2Config,
     };
 
     #[test]
@@ -734,14 +769,39 @@ memory:
 
     #[test]
     fn startup_fail_fast_scopes_to_command_provider_manifest_errors() {
-        assert!(should_fail_startup_for_manifest_error(
-            "memory.pipelineV2.extraction.command is required when extraction.provider='command'"
+        let extraction_command_raw: serde_yml::Value = serde_yml::from_str(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: command
+      command: []
+"#,
+        )
+        .expect("raw parse");
+        assert!(should_fail_fast_for_manifest_error_context(
+            &extraction_command_raw,
+            "manifest shape error: invalid type: sequence, expected struct ExtractionCommandConfig"
         ));
-        assert!(should_fail_startup_for_manifest_error(
-            "memory.pipelineV2.synthesis.provider='command' is not supported. Use extraction.provider='command' instead."
+
+        let synthesis_command_raw: serde_yml::Value = serde_yml::from_str(
+            r#"
+memory:
+  pipelineV2:
+    synthesis:
+      provider: command
+"#,
+        )
+        .expect("raw parse");
+        assert!(should_fail_fast_for_manifest_error_context(
+            &synthesis_command_raw,
+            "memory.pipelineV2.synthesis.provider='command' is not supported"
         ));
-        assert!(!should_fail_startup_for_manifest_error("YAML parse error: invalid type"));
-        assert!(!should_fail_startup_for_manifest_error(
+
+        let generic_raw: serde_yml::Value =
+            serde_yml::from_str("agent:\n  name: default\n").expect("raw parse");
+        assert!(!should_fail_fast_for_manifest_error_context(
+            &generic_raw,
             "manifest shape error: missing field `agent`"
         ));
     }
