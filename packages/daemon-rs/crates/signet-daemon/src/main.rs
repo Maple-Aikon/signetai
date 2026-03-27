@@ -618,14 +618,14 @@ async fn shutdown_signal() {
 /// JS daemon's startup-resolution contract. Updates `extraction_state` with
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
 pub(crate) async fn preflight_extraction(state: &AppState) {
-    extraction_probe(state, true).await;
+    extraction_probe(state, true, false).await;
 }
 
 /// Re-check extraction provider availability on resume. Updates status but
 /// does NOT dead-letter pending jobs — backlog from an intentional pause
 /// should be preserved for draining when the provider becomes available.
 pub(crate) async fn resume_extraction_check(state: &AppState) {
-    extraction_probe(state, false).await;
+    extraction_probe(state, false, true).await;
 }
 
 const DEFAULT_OLLAMA_EXTRACTION_MODEL: &str = "qwen3:4b";
@@ -868,7 +868,11 @@ pub(crate) async fn stop_extraction_worker(state: &AppState) {
     *state.extraction_worker_stats.write().await = None;
 }
 
-async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
+async fn extraction_probe(
+    state: &AppState,
+    dead_letter_on_blocked: bool,
+    treat_worker_unsupported_as_unavailable: bool,
+) {
     let pipeline = match state
         .config
         .manifest
@@ -902,7 +906,10 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let now = chrono::Utc::now().to_rfc3339();
 
     let mut unavailability_reason: Option<String> = None;
-    let available = if provider_is_unsupported_for_daemon_startup_preflight(provider) {
+    let available = if provider_is_unsupported_for_daemon_startup_preflight(provider)
+        || (treat_worker_unsupported_as_unavailable
+            && !worker_supports_extraction_provider(provider))
+    {
         unavailability_reason = Some(format!(
             "{provider} is not supported by daemon-rs extraction worker"
         ));
@@ -1420,7 +1427,8 @@ mod tests {
         preflight_extraction, resolve_runtime_extraction_endpoint,
         resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
         provider_is_unsupported_for_daemon_startup_preflight, dead_letter_pending_extraction_jobs,
-        start_extraction_worker, start_extraction_worker_inner, stop_extraction_worker,
+        resume_extraction_check, start_extraction_worker, start_extraction_worker_inner,
+        stop_extraction_worker,
     };
 
     fn test_state_with_pipeline_config(
@@ -1903,6 +1911,36 @@ mod tests {
         assert_eq!(body["providerResolution"]["extraction"]["resolved"], "claude-code");
         assert_eq!(body["providerResolution"]["extraction"]["effective"], "none");
         assert_eq!(body["providerResolution"]["extraction"]["reason"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn resume_check_blocks_worker_unsupported_provider_before_publishing_active() {
+        let state = test_state_with_extraction("claude-code", "none", None);
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "none".to_string(),
+                fallback_provider: "none".to_string(),
+                status: "paused".to_string(),
+                degraded: false,
+                fallback_applied: false,
+                reason: None,
+                since: None,
+            });
+        }
+
+        resume_extraction_check(state.as_ref()).await;
+
+        let extraction = state.extraction_state.read().await.clone().expect("state");
+        assert_eq!(extraction.status, "blocked");
+        assert_eq!(extraction.effective, "none");
+        assert_eq!(
+            extraction.reason.as_deref(),
+            Some("claude-code is not supported by daemon-rs extraction worker; fallbackProvider is none")
+        );
     }
 
     #[test]
