@@ -520,6 +520,56 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.model).toBe("gpt-5.3-codex");
 	});
 
+	it("accepts command extraction provider with argv-safe command config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						provider: "command",
+						command: {
+							bin: "node",
+							args: ["script.mjs", "--transcript", "$TRANSCRIPT"],
+							cwd: "/tmp/signet",
+							env: {
+								SIGNET_MODE: "pipeline",
+								"NOT VALID": "skip-me",
+							},
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.provider).toBe("command");
+		expect(result.extraction.command).toEqual({
+			bin: "node",
+			args: ["script.mjs", "--transcript", "$TRANSCRIPT"],
+			cwd: "/tmp/signet",
+			env: {
+				SIGNET_MODE: "pipeline",
+			},
+		});
+		// synthesis inherits extraction provider when not explicitly configured
+		expect(result.synthesis.provider).toBe("command");
+	});
+
+	it("parses legacy extraction.command string into argv", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "command",
+					extractionCommand: 'node ./extract.mjs --transcript "$TRANSCRIPT" --session "$SESSION_KEY"',
+				},
+			},
+		});
+
+		expect(result.extraction.provider).toBe("command");
+		expect(result.extraction.command).toEqual({
+			bin: "node",
+			args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"],
+		});
+	});
+
 	it("loads all flags correctly when all set to true (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {

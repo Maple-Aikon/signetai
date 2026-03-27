@@ -306,10 +306,11 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"ollama"` | — | `"none"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, or `"openrouter"` |
+| `provider` | `"ollama"` | — | `"none"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
-| `timeout` | `45000` | 5000-300000 ms | Extraction call timeout |
+| `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
+| `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) |
 
 For safety, the intended extraction setups are:
 
@@ -331,6 +332,33 @@ When using `ollama`, the model must be available locally. When using
 Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
+
+For `provider: command`, the summary worker executes
+`memory.pipelineV2.extraction.command` in the summary job queue
+control-plane path. The transcript is written to a temporary file and
+its path is substituted into command arguments:
+
+- `$TRANSCRIPT` (alias `$TRANSCRIPT_PATH`) — temp transcript file path
+- `$SESSION_KEY` — session key (or empty string)
+- `$PROJECT` — project path (or empty string)
+- `$SIGNET_PATH` — active Signet workspace path
+
+Example:
+
+```yaml
+memory:
+  pipelineV2:
+    extraction:
+      provider: command
+      command:
+        bin: node
+        args:
+          - ./scripts/custom-extractor.mjs
+          - --transcript
+          - $TRANSCRIPT
+          - --session
+          - $SESSION_KEY
+```
 
 
 ### Session synthesis (`synthesis`)

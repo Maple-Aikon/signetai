@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "@signet/core";
@@ -11,6 +11,7 @@ import {
 	insertSummaryFacts,
 	recoverSummaryJobs,
 	resolveSummaryProvider,
+	runSummaryCommandProvider,
 	startSummaryWorker,
 } from "./summary-worker";
 
@@ -208,6 +209,100 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+});
+
+describe("runSummaryCommandProvider", () => {
+	it("executes argv-safe command mode with token substitution and temp cleanup", async () => {
+		const marker = join(tmpdir(), `signet-summary-marker-${Date.now()}-${Math.random()}.txt`);
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: command\n");
+		const scriptPath = join(dir, "summary-command-success.mjs");
+		writeFileSync(
+			scriptPath,
+			`import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const [transcriptPath, sessionKey, project, markerPath] = process.argv.slice(2);
+if (!existsSync(transcriptPath)) process.exit(11);
+const text = readFileSync(transcriptPath, "utf8");
+if (!text.includes("hello command provider")) process.exit(12);
+if (sessionKey !== "session-123") process.exit(13);
+if (project !== "/tmp/project") process.exit(14);
+writeFileSync(markerPath, transcriptPath, "utf8");
+`,
+			"utf8",
+		);
+
+		const cfg = loadMemoryConfig(dir);
+		const commandCfg = {
+			...cfg,
+			pipelineV2: {
+				...cfg.pipelineV2,
+				extraction: {
+					...cfg.pipelineV2.extraction,
+					provider: "command",
+					command: {
+						bin: "node",
+						args: [scriptPath, "$TRANSCRIPT", "$SESSION_KEY", "$PROJECT", marker],
+					},
+				},
+			},
+		};
+		await runSummaryCommandProvider(
+			{
+				id: "job-1",
+				session_key: "session-123",
+				harness: "codex",
+				project: "/tmp/project",
+				agent_id: "default",
+				transcript: "hello command provider",
+				attempts: 1,
+				max_attempts: 3,
+				created_at: new Date().toISOString(),
+			},
+			commandCfg,
+		);
+
+		const transcriptPath = readFileSync(marker, "utf8").trim();
+		expect(transcriptPath.length).toBeGreaterThan(0);
+		expect(existsSync(transcriptPath)).toBe(false);
+		rmSync(marker, { force: true });
+	});
+
+	it("throws when command exits non-zero", async () => {
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: command\n");
+		const scriptPath = join(dir, "summary-command-fail.mjs");
+		writeFileSync(scriptPath, "process.exit(7);\n", "utf8");
+
+		const cfg = loadMemoryConfig(dir);
+		const commandCfg = {
+			...cfg,
+			pipelineV2: {
+				...cfg.pipelineV2,
+				extraction: {
+					...cfg.pipelineV2.extraction,
+					provider: "command",
+					command: {
+						bin: "node",
+						args: [scriptPath],
+					},
+				},
+			},
+		};
+		await expect(
+			runSummaryCommandProvider(
+				{
+					id: "job-2",
+					session_key: "session-xyz",
+					harness: "codex",
+					project: "/tmp/project",
+					agent_id: "default",
+					transcript: "test",
+					attempts: 1,
+					max_attempts: 3,
+					created_at: new Date().toISOString(),
+				},
+				commandCfg,
+			),
+		).rejects.toThrow("summary command exited with code 7");
 	});
 });
 

@@ -419,15 +419,18 @@ type RuntimeProviderName =
 	| "opencode"
 	| "codex"
 	| "anthropic"
-	| "openrouter";
+	| "openrouter"
+	| "command";
 
 type RuntimeSynthesisProviderName =
 	| "none"
 	| "ollama"
 	| "claude-code"
+	| "codex"
 	| "opencode"
 	| "anthropic"
-	| "openrouter";
+	| "openrouter"
+	| "command";
 
 interface ProviderRuntimeResolution {
 	extraction: {
@@ -11274,8 +11277,26 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
-	const validExtractionProviders = new Set(["none", "ollama", "claude-code", "opencode", "codex", "anthropic", "openrouter"]);
-	const validSynthesisProviders = new Set(["none", "ollama", "claude-code", "codex", "opencode", "anthropic", "openrouter"]);
+	const validExtractionProviders = new Set([
+		"none",
+		"ollama",
+		"claude-code",
+		"opencode",
+		"codex",
+		"anthropic",
+		"openrouter",
+		"command",
+	]);
+	const validSynthesisProviders = new Set([
+		"none",
+		"ollama",
+		"claude-code",
+		"codex",
+		"opencode",
+		"anthropic",
+		"openrouter",
+		"command",
+	]);
 
 	providerRuntimeResolution.extraction = {
 		configured: providerHints.extraction,
@@ -11328,6 +11349,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		effectiveExtractionProvider = "none";
 	} else if (effectiveExtractionProvider === "none") {
 		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
+	} else if (effectiveExtractionProvider === "command") {
+		logger.info("config", "Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command");
 	} else if (effectiveExtractionProvider === "opencode") {
 		if (extractionOpenCodeShouldManage) {
 			const serverReady = await ensureOpenCodeServer(4096);

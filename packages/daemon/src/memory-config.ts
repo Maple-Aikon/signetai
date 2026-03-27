@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
-	DEFAULT_PIPELINE_TIMEOUT_MS,
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
@@ -46,6 +46,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		endpoint: undefined,
 		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
 		minConfidence: 0.7,
+		command: undefined,
 		escalation: {
 			maxNewEntitiesPerChunk: 10,
 			maxNewAttributesPerEntity: 20,
@@ -241,6 +242,62 @@ function parseOptionalUrl(raw: unknown): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCommandArgv(raw: string): { bin: string; args: string[] } | null {
+	const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
+	if (!tokens || tokens.length === 0) return null;
+	const argv = tokens.map((token) => token.replace(/^["']|["']$/g, "")).filter((token) => token.length > 0);
+	if (argv.length === 0) return null;
+	return {
+		bin: argv[0],
+		args: argv.slice(1),
+	};
+}
+
+function parseCommandConfig(raw: unknown): PipelineV2Config["extraction"]["command"] | undefined {
+	if (typeof raw === "string") {
+		const parsed = parseCommandArgv(raw);
+		if (!parsed) return undefined;
+		return {
+			bin: parsed.bin,
+			args: parsed.args,
+		};
+	}
+
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+
+	const record = raw;
+	const candidateBin =
+		typeof record.bin === "string" ? record.bin : typeof record.command === "string" ? record.command : "";
+	const bin = candidateBin.trim();
+	if (bin.length === 0) return undefined;
+
+	const args = Array.isArray(record.args) ? record.args.filter((item): item is string => typeof item === "string") : [];
+	const cwd = typeof record.cwd === "string" && record.cwd.trim().length > 0 ? record.cwd.trim() : undefined;
+
+	let env: Record<string, string> | undefined;
+	if (typeof record.env === "object" && record.env !== null && !Array.isArray(record.env)) {
+		for (const [key, value] of Object.entries(record.env)) {
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+			if (typeof value !== "string") continue;
+			if (!env) env = {};
+			env[key] = value;
+		}
+	}
+
+	return {
+		bin,
+		args,
+		cwd,
+		env,
+	};
+}
+
 /**
  * Load pipeline config from YAML, supporting both nested and flat key formats.
  * Flat extraction keys (dashboard-written) take precedence over nested keys.
@@ -352,9 +409,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
 	);
 	const resolvedSynthesisEnabled =
-		resolvedSynthesisProvider === "none"
-			? false
-			: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
+		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -392,6 +447,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
 			),
+			command: parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand),
 			escalation: {
 				maxNewEntitiesPerChunk: clampPositive(
 					escalationRaw?.maxNewEntitiesPerChunk,

@@ -11,8 +11,9 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
@@ -306,37 +307,161 @@ function parseLlmResponse(raw: string): LlmSummaryResult | null {
 // Core processing
 // ---------------------------------------------------------------------------
 
-async function processJob(
+function passesSignificanceGate(
 	accessor: DbAccessor,
-	provider: LlmProvider,
 	job: SummaryJobRow,
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
-): Promise<void> {
-	// --- Significance gate ---
+): boolean {
 	const significanceCfg: SignificanceConfig = memoryCfg.pipelineV2.significance ?? {
 		enabled: true,
 		minTurns: 5,
 		minEntityOverlap: 1,
 		noveltyThreshold: 0.15,
 	};
+	if (!significanceCfg.enabled) return true;
 
-	if (significanceCfg.enabled) {
-		const assessment = accessor.withReadDb((db) =>
-			assessSignificance(job.transcript, db, job.agent_id, significanceCfg),
-		);
+	const assessment = accessor.withReadDb((db) => assessSignificance(job.transcript, db, job.agent_id, significanceCfg));
 
-		if (!assessment.significant) {
-			logger.info("summary-worker", "Session below significance threshold — skipping extraction", {
-				sessionKey: job.session_key,
-				project: job.project,
-				scores: assessment.scores,
-				reason: assessment.reason,
-			});
-			// Job row and transcript are preserved (lossless retention).
-			// processJob caller marks it completed.
-			return;
+	if (assessment.significant) return true;
+
+	logger.info("summary-worker", "Session below significance threshold — skipping extraction", {
+		sessionKey: job.session_key,
+		project: job.project,
+		scores: assessment.scores,
+		reason: assessment.reason,
+	});
+	return false;
+}
+
+function substituteCommandTokens(input: string, replacements: Record<string, string>): string {
+	let output = input;
+	for (const [token, value] of Object.entries(replacements)) {
+		output = output.split(token).join(value);
+	}
+	return output;
+}
+
+function trimOutput(value: string, maxChars: number): string {
+	if (value.length <= maxChars) return value;
+	return `${value.slice(0, maxChars)}…`;
+}
+
+export async function runSummaryCommandProvider(
+	job: SummaryJobRow,
+	cfg: ReturnType<typeof loadMemoryConfig>,
+): Promise<void> {
+	const command = cfg.pipelineV2.extraction.command;
+	if (!command) {
+		throw new Error("pipelineV2.extraction.command is required when extraction.provider is 'command'");
+	}
+
+	const tempDir = mkdtempSync(join(tmpdir(), "signet-summary-command-"));
+	const transcriptPath = join(tempDir, "transcript.txt");
+	writeFileSync(transcriptPath, job.transcript, "utf-8");
+
+	const replacements: Record<string, string> = {
+		$TRANSCRIPT: transcriptPath,
+		$TRANSCRIPT_PATH: transcriptPath,
+		$SESSION_KEY: job.session_key ?? "",
+		$PROJECT: job.project ?? "",
+		$SIGNET_PATH: AGENTS_DIR,
+	};
+	const bin = substituteCommandTokens(command.bin, replacements).trim();
+	if (bin.length === 0) {
+		throw new Error("pipelineV2.extraction.command.bin resolved to an empty value");
+	}
+	const args = command.args.map((arg) => substituteCommandTokens(arg, replacements));
+	const timeoutMs = Math.max(5000, Math.min(300000, cfg.pipelineV2.extraction.timeout));
+	const cwd = command.cwd ? substituteCommandTokens(command.cwd, replacements).trim() : undefined;
+	const envFromConfig: Record<string, string> = {};
+	if (command.env) {
+		for (const [key, value] of Object.entries(command.env)) {
+			envFromConfig[key] = substituteCommandTokens(value, replacements);
 		}
 	}
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const child = nodeSpawn(bin, args, {
+				cwd: cwd && cwd.length > 0 ? cwd : undefined,
+				env: {
+					...process.env,
+					...envFromConfig,
+					SIGNET_PATH: AGENTS_DIR,
+				},
+				stdio: ["ignore", "pipe", "pipe"],
+				windowsHide: true,
+			});
+
+			let stdout = "";
+			let stderr = "";
+			const MAX_CAPTURE_CHARS = 4000;
+
+			child.stdout?.on("data", (chunk: Buffer) => {
+				if (stdout.length >= MAX_CAPTURE_CHARS) return;
+				stdout += chunk.toString("utf-8").slice(0, MAX_CAPTURE_CHARS - stdout.length);
+			});
+			child.stderr?.on("data", (chunk: Buffer) => {
+				if (stderr.length >= MAX_CAPTURE_CHARS) return;
+				stderr += chunk.toString("utf-8").slice(0, MAX_CAPTURE_CHARS - stderr.length);
+			});
+
+			let settled = false;
+			const timeout = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				child.kill("SIGTERM");
+				setTimeout(() => {
+					try {
+						child.kill("SIGKILL");
+					} catch {
+						// Child is already gone.
+					}
+				}, 2000);
+				reject(new Error(`summary command timed out after ${timeoutMs}ms`));
+			}, timeoutMs);
+
+			child.on("error", (err) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				reject(err);
+			});
+
+			child.on("close", (code) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				const exitCode = code ?? 1;
+				if (exitCode !== 0) {
+					const detail = stderr.trim().length > 0 ? stderr.trim() : stdout.trim();
+					reject(new Error(`summary command exited with code ${exitCode}: ${trimOutput(detail, 500)}`));
+					return;
+				}
+
+				if (stdout.trim().length > 0 || stderr.trim().length > 0) {
+					logger.info("summary-worker", "Summary command completed", {
+						sessionKey: job.session_key,
+						project: job.project,
+						stdout: trimOutput(stdout.trim(), 500),
+						stderr: trimOutput(stderr.trim(), 500),
+					});
+				}
+				resolve();
+			});
+		});
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
+async function processJob(
+	accessor: DbAccessor,
+	provider: LlmProvider,
+	job: SummaryJobRow,
+	memoryCfg: ReturnType<typeof loadMemoryConfig>,
+): Promise<void> {
+	if (!passesSignificanceGate(accessor, job, memoryCfg)) return;
 
 	const today = new Date().toISOString().slice(0, 10);
 	const genOpts = {
@@ -1183,6 +1308,12 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 			logger.warn("summary-worker", "Codex CLI not available for summary worker — falling back to ollama");
 			return fallback();
 		}
+		case "command":
+			logger.warn(
+				"summary-worker",
+				"synthesis.provider='command' is not used by the summary worker; use extraction.provider='command' instead. Falling back to ollama",
+			);
+			return fallback();
 		case "opencode":
 			return createOpenCodeProvider({
 				model: model || "anthropic/claude-haiku-4-5-20251001",
@@ -1281,19 +1412,25 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				project: job.project,
 			});
 
-			// Cache provider across jobs — re-resolve on config change, env
-			// key rotation, or TTL expiry. Env-var key changes invalidate
-			// immediately; secrets-store-only rotations rely on the 5-min TTL.
-			const envKey = process.env.ANTHROPIC_API_KEY ?? "";
-			const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
-			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
-			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
-			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
-				cachedProvider = await resolveSummaryProvider(cfg);
-				cachedProviderKey = providerKey;
-				cachedProviderAt = Date.now();
+			if (cfg.pipelineV2.extraction.provider === "command") {
+				if (passesSignificanceGate(accessor, job, cfg)) {
+					await runSummaryCommandProvider(job, cfg);
+				}
+			} else {
+				// Cache provider across jobs — re-resolve on config change, env
+				// key rotation, or TTL expiry. Env-var key changes invalidate
+				// immediately; secrets-store-only rotations rely on the 5-min TTL.
+				const envKey = process.env.ANTHROPIC_API_KEY ?? "";
+				const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
+				const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
+				const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
+				if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
+					cachedProvider = await resolveSummaryProvider(cfg);
+					cachedProviderKey = providerKey;
+					cachedProviderAt = Date.now();
+				}
+				await processJob(accessor, cachedProvider, job, cfg);
 			}
-			await processJob(accessor, cachedProvider, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {

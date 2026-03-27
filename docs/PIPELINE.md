@@ -970,10 +970,14 @@ Extraction safety note:
 
 ```yaml
 extraction:
-  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
   model: qwen3:4b
-  timeout: 45000                 # ms, range 5000–300000
+  timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
+  command:                       # only used when provider: command
+    bin: node
+    args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"]
+    # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $SIGNET_PATH
 
 synthesis:
   enabled: true

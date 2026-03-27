@@ -180,13 +180,14 @@ fn raw_u64(value: &serde_yml::Value, key: &str) -> Option<u64> {
 fn is_pipeline_provider(value: &str) -> bool {
     matches!(
         value,
-        "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter"
+        "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command"
     )
 }
 
 fn default_pipeline_model(provider: &str) -> &'static str {
     match provider {
         "none" => "",
+        "command" => "",
         "claude-code" | "anthropic" => "haiku",
         "codex" => "gpt-5-codex-mini",
         "opencode" => "anthropic/claude-haiku-4-5-20251001",
@@ -422,6 +423,56 @@ memory:
         assert_eq!(pipeline.synthesis.provider, "codex");
         assert_eq!(pipeline.synthesis.model, "gpt-5-codex-mini");
     }
+
+    #[test]
+    fn extraction_command_provider_parses_command_block() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: command
+      command:
+        bin: node
+        args:
+          - script.mjs
+          - --transcript
+          - $TRANSCRIPT
+        cwd: /tmp/signet
+        env:
+          SIGNET_MODE: pipeline
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.extraction.provider, "command");
+        let command = pipeline
+            .extraction
+            .command
+            .expect("command config should parse");
+        assert_eq!(command.bin, "node");
+        assert_eq!(
+            command.args,
+            vec![
+                "script.mjs".to_string(),
+                "--transcript".to_string(),
+                "$TRANSCRIPT".to_string()
+            ]
+        );
+        assert_eq!(command.cwd.as_deref(), Some("/tmp/signet"));
+        assert_eq!(
+            command
+                .env
+                .and_then(|env| env.get("SIGNET_MODE").cloned())
+                .as_deref(),
+            Some("pipeline")
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -574,7 +625,28 @@ pub struct ExtractionConfig {
     pub endpoint: Option<String>,
     pub timeout: u64,
     pub min_confidence: f64,
+    pub command: Option<ExtractionCommandConfig>,
     pub escalation: Option<EscalationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ExtractionCommandConfig {
+    pub bin: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+}
+
+impl Default for ExtractionCommandConfig {
+    fn default() -> Self {
+        Self {
+            bin: String::new(),
+            args: Vec::new(),
+            cwd: None,
+            env: None,
+        }
+    }
 }
 
 impl Default for ExtractionConfig {
@@ -586,6 +658,7 @@ impl Default for ExtractionConfig {
             endpoint: None,
             timeout: 30_000,
             min_confidence: 0.5,
+            command: None,
             escalation: Some(EscalationConfig::default()),
         }
     }
