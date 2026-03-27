@@ -269,8 +269,15 @@ pub async fn remember(
                     warn!(
                         memory_id = %id,
                         err = %error,
-                        "failed to dead-letter blocked extraction for remembered memory"
+                        "failed to enforce blocked extraction invariant for remembered memory"
                     );
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": "Failed to enforce blocked extraction invariant"
+                        })),
+                    )
+                        .into_response();
                 }
             }
             let status = if duplicate_of.is_some() {

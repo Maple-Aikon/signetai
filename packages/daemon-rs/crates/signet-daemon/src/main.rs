@@ -766,11 +766,12 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
         semaphore,
         worker_config,
     );
-    let stats = handle.stats_handle();
-    *state.extraction_worker_stats.write().await = Some(stats);
     let mut slot = state.extraction_worker_handle.lock().await;
     if slot.is_none() {
+        let stats = handle.stats_handle();
         *slot = Some(handle);
+        drop(slot);
+        *state.extraction_worker_stats.write().await = Some(stats);
         true
     } else {
         drop(slot);
