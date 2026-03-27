@@ -110,28 +110,42 @@ fn dead_letter_blocked_extraction_memory(
              updated_at = ?3
          WHERE memory_id = ?4
            AND job_type IN ('extract', 'extraction')
-           AND status IN ('pending', 'leased')",
+           AND status = 'pending'",
         rusqlite::params![reason, max_attempts, now, memory_id],
     )?;
+
+    let leased_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_jobs
+         WHERE memory_id = ?1
+           AND job_type IN ('extract', 'extraction')
+           AND status = 'leased'",
+        rusqlite::params![memory_id],
+        |row| row.get(0),
+    )?;
+
     if updated == 0 {
-        conn.execute(
-            "INSERT INTO memory_jobs
-             (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
-             VALUES (?1, ?2, 'extract', 'dead', ?3, 0, ?4, ?5, ?5, ?5)",
-            rusqlite::params![
-                uuid::Uuid::new_v4().to_string(),
-                memory_id,
-                reason,
-                max_attempts,
-                now
-            ],
-        )?;
+        if leased_count == 0 {
+            conn.execute(
+                "INSERT INTO memory_jobs
+                 (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+                 VALUES (?1, ?2, 'extract', 'dead', ?3, 0, ?4, ?5, ?5, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    memory_id,
+                    reason,
+                    max_attempts,
+                    now
+                ],
+            )?;
+        }
     }
 
-    conn.execute(
-        "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
-        rusqlite::params![memory_id],
-    )?;
+    if leased_count == 0 {
+        conn.execute(
+            "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
+            rusqlite::params![memory_id],
+        )?;
+    }
     Ok(())
 }
 
@@ -442,6 +456,65 @@ mod tests {
         assert_eq!(status, "dead");
         assert_eq!(max_attempts, 9);
         assert_eq!(error.as_deref(), Some("Extraction unavailable"));
+    }
+
+    #[test]
+    fn dead_letter_blocked_extraction_preserves_leased_jobs_and_memory_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE memories (
+              id TEXT PRIMARY KEY,
+              extraction_status TEXT
+            );
+            CREATE TABLE memory_jobs (
+              id TEXT PRIMARY KEY,
+              memory_id TEXT,
+              job_type TEXT,
+              status TEXT,
+              error TEXT,
+              attempts INTEGER,
+              max_attempts INTEGER,
+              failed_at TEXT,
+              created_at TEXT,
+              updated_at TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, extraction_status) VALUES (?1, 'queued')",
+            rusqlite::params!["mem-3"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_jobs
+             (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+             VALUES (?1, ?2, 'extract', 'leased', NULL, 0, 3, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            rusqlite::params!["job-leased", "mem-3"],
+        )
+        .unwrap();
+
+        dead_letter_blocked_extraction_memory(&conn, "mem-3", "Extraction unavailable", 9).unwrap();
+
+        let extraction_status: String = conn
+            .query_row(
+                "SELECT extraction_status FROM memories WHERE id = ?1",
+                rusqlite::params!["mem-3"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(extraction_status, "queued");
+
+        let (status, error): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, error FROM memory_jobs WHERE id = ?1",
+                rusqlite::params!["job-leased"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "leased");
+        assert_eq!(error, None);
     }
 }
 

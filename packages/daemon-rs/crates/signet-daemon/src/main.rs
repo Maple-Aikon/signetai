@@ -995,9 +995,29 @@ fn is_loopback_host(host: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn host_matches_trusted_override(host: &str, candidate: &str) -> bool {
+    let candidate = candidate.trim().to_ascii_lowercase();
+    if candidate.is_empty() {
+        return false;
+    }
+    let host = host.to_ascii_lowercase();
+    if let Some(suffix) = candidate.strip_prefix("*.") {
+        return host.len() > suffix.len()
+            && host.ends_with(suffix)
+            && host.as_bytes()[host.len() - suffix.len() - 1] == b'.';
+    }
+    host == candidate
+}
+
+fn host_in_trusted_override_list(host: &str, overrides_csv: Option<&str>) -> bool {
+    overrides_csv
+        .map(|csv| csv.split(',').any(|entry| host_matches_trusted_override(host, entry)))
+        .unwrap_or(false)
+}
+
 /// Restrict credential-bearing startup probes to trusted provider hosts.
-/// For untrusted/custom endpoints we skip auth headers and only probe
-/// reachability without secrets.
+/// Non-loopback custom hosts must be explicitly allowlisted via
+/// SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS before credentials are sent.
 fn provider_endpoint_is_trusted_for_secret_probe(provider: &str, base: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(base) else {
         return false;
@@ -1014,11 +1034,18 @@ fn provider_endpoint_is_trusted_for_secret_probe(provider: &str, base: &str) -> 
         return false;
     }
 
-    match provider {
+    (match provider {
         "anthropic" => host.eq_ignore_ascii_case("api.anthropic.com"),
         "openrouter" => host.eq_ignore_ascii_case("openrouter.ai"),
         _ => false,
-    }
+    }) || host_in_trusted_override_list(
+        host,
+        std::env::var("SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS").ok().as_deref(),
+    )
+}
+
+fn provider_endpoint_allowlist_hint() -> &'static str {
+    "set SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS to a comma-separated host allowlist (supports '*.example.com')"
 }
 
 /// Check Anthropic API reachability with credential validation.
@@ -1036,6 +1063,7 @@ async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
     if !provider_endpoint_is_trusted_for_secret_probe("anthropic", &base) {
         warn!(
             endpoint = %base,
+            hint = provider_endpoint_allowlist_hint(),
             "refusing anthropic startup probe for untrusted endpoint"
         );
         return false;
@@ -1069,6 +1097,7 @@ async fn check_openrouter_health(endpoint: Option<&str>) -> bool {
     if !provider_endpoint_is_trusted_for_secret_probe("openrouter", &base) {
         warn!(
             endpoint = %base,
+            hint = provider_endpoint_allowlist_hint(),
             "refusing openrouter startup probe for untrusted endpoint"
         );
         return false;
@@ -1332,7 +1361,8 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        append_api_path, normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
+        append_api_path, host_in_trusted_override_list, host_matches_trusted_override,
+        normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
         resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
         worker_supports_extraction_provider,
     };
@@ -1477,6 +1507,39 @@ mod tests {
         assert!(!provider_endpoint_is_trusted_for_secret_probe(
             "anthropic",
             "https://openrouter.ai/api/v1"
+        ));
+    }
+
+    #[test]
+    fn trusted_host_override_supports_exact_and_wildcard_matches() {
+        assert!(host_matches_trusted_override(
+            "proxy.company.net",
+            "proxy.company.net"
+        ));
+        assert!(host_matches_trusted_override(
+            "anthropic.gateway.company.net",
+            "*.company.net"
+        ));
+        assert!(!host_matches_trusted_override("company.net", "*.company.net"));
+        assert!(!host_matches_trusted_override(
+            "proxy.company.net",
+            "*.other.net"
+        ));
+    }
+
+    #[test]
+    fn trusted_host_override_list_parses_csv_entries() {
+        assert!(host_in_trusted_override_list(
+            "proxy.company.net",
+            Some(" proxy.company.net , *.example.org ")
+        ));
+        assert!(host_in_trusted_override_list(
+            "api.example.org",
+            Some("proxy.company.net,*.example.org")
+        ));
+        assert!(!host_in_trusted_override_list(
+            "api.example.org",
+            Some("proxy.company.net")
         ));
     }
 
