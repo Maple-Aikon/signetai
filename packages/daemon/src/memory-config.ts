@@ -57,6 +57,8 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		pollMs: 2000,
 		maxRetries: 3,
 		leaseTimeoutMs: 300000,
+		maxLoadPerCpu: 0.8,
+		overloadBackoffMs: 30000,
 	},
 	graph: {
 		enabled: true,
@@ -440,6 +442,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				10000,
 				600000,
 				d.worker.leaseTimeoutMs,
+			),
+			maxLoadPerCpu: clampPositive(workerRaw?.maxLoadPerCpu ?? raw.workerMaxLoadPerCpu, 0.1, 8, d.worker.maxLoadPerCpu),
+			overloadBackoffMs: clampPositive(
+				workerRaw?.overloadBackoffMs ?? raw.workerOverloadBackoffMs,
+				1000,
+				300000,
+				d.worker.overloadBackoffMs,
 			),
 		},
 

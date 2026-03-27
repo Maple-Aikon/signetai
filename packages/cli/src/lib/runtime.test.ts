@@ -33,6 +33,17 @@ describe("getDaemonStatus", () => {
 							since: "2026-03-26T00:00:00.000Z",
 						},
 					},
+					pipeline: {
+						extraction: {
+							running: true,
+							overloaded: true,
+							loadPerCpu: 1.82,
+							maxLoadPerCpu: 0.8,
+							overloadBackoffMs: 30000,
+							overloadSince: "2026-03-26T00:00:02.000Z",
+							nextTickInMs: 28000,
+						},
+					},
 				});
 			}
 			return new Response("not found", { status: 404 });
@@ -48,6 +59,15 @@ describe("getDaemonStatus", () => {
 			degraded: true,
 			reason: "Claude Code CLI not found during extraction startup preflight",
 			since: "2026-03-26T00:00:00.000Z",
+		});
+		expect(status.extractionWorker).toEqual({
+			running: true,
+			overloaded: true,
+			loadPerCpu: 1.82,
+			maxLoadPerCpu: 0.8,
+			overloadBackoffMs: 30000,
+			overloadSince: "2026-03-26T00:00:02.000Z",
+			nextTickInMs: 28000,
 		});
 	});
 });

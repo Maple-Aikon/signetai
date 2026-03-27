@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
+use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
@@ -152,11 +153,14 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
+    let extraction_worker_stats = None;
+
     // Build app state
     let state = Arc::new(AppState::new(
         config.clone(),
         pool,
         embedding,
+        extraction_worker_stats,
         auth_mode,
         auth_secret,
         auth_admin_limiter,
@@ -885,8 +889,23 @@ async fn health() -> Json<serde_json::Value> {
     }))
 }
 
+fn current_epoch_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+fn iso_from_epoch_ms(ms: i64) -> Option<String> {
+    chrono::DateTime::<Utc>::from_timestamp_millis(ms)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let bind = state.config.bind.as_deref().unwrap_or(&state.config.host);
+    let pipeline = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref());
     let extraction = {
         let guard = state.extraction_state.read().await;
         guard.as_ref().map(|es| {
@@ -912,6 +931,32 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
                 "since": es.since,
             })
         })
+    };
+    let extraction_worker = if let Some(pipeline) = pipeline {
+        let paused = pipeline.paused || state.pipeline_paused();
+        if let Some(stats) = state.extraction_worker_stats.as_ref() {
+            let snapshot = stats.lock().await.snapshot(current_epoch_ms());
+            let running = snapshot.running && !paused;
+            let overloaded = running && snapshot.overloaded;
+            let overload_since = if overloaded {
+                snapshot.overload_since_ms.and_then(iso_from_epoch_ms)
+            } else {
+                None
+            };
+            Some(serde_json::json!({
+                "running": running,
+                "overloaded": overloaded,
+                "loadPerCpu": if running { snapshot.load_per_cpu } else { None },
+                "maxLoadPerCpu": snapshot.max_load_per_cpu,
+                "overloadBackoffMs": snapshot.overload_backoff_ms,
+                "overloadSince": overload_since,
+                "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
     };
     let db_stats = state
         .pool
@@ -950,6 +995,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "networkMode": network_mode_from_bind(bind),
         "db": db_stats,
         "agent": state.config.manifest.agent.name,
+        "pipeline": {
+            "extraction": extraction_worker,
+        },
         "providerResolution": {
             "extraction": extraction,
         },

@@ -110,6 +110,7 @@ fn normalize_manifest(manifest: &mut AgentManifest, raw: &serde_yml::Value) {
     };
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
     normalize_pipeline_extraction(pipeline, raw_pipeline);
+    normalize_pipeline_worker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline);
 }
 
@@ -132,6 +133,24 @@ fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&s
             );
             std::process::exit(1);
         }
+    }
+}
+
+fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let max_load_per_cpu = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_f64(value, "maxLoadPerCpu"))
+        .or_else(|| raw.and_then(|value| raw_f64(value, "workerMaxLoadPerCpu")));
+    if let Some(value) = max_load_per_cpu {
+        pipeline.worker.max_load_per_cpu = value.clamp(0.1, 8.0);
+    }
+
+    let overload_backoff_ms = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_u64(value, "overloadBackoffMs"))
+        .or_else(|| raw.and_then(|value| raw_u64(value, "workerOverloadBackoffMs")));
+    if let Some(value) = overload_backoff_ms {
+        pipeline.worker.overload_backoff_ms = value.clamp(1_000, 300_000);
     }
 }
 
@@ -199,6 +218,10 @@ fn raw_string<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a str> {
 
 fn raw_u64(value: &serde_yml::Value, key: &str) -> Option<u64> {
     raw_child(value, key)?.as_u64()
+}
+
+fn raw_f64(value: &serde_yml::Value, key: &str) -> Option<f64> {
+    raw_child(value, key)?.as_f64()
 }
 
 fn is_pipeline_provider(value: &str) -> bool {
@@ -505,6 +528,42 @@ memory:
         assert_eq!(flat_pipeline.extraction.fallback_provider, "none");
     }
 
+    #[test]
+    fn worker_load_shedding_fields_load_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    worker:
+      maxLoadPerCpu: 0.6
+      overloadBackoffMs: 45000
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(nested_pipeline.worker.max_load_per_cpu, 0.6);
+        assert_eq!(nested_pipeline.worker.overload_backoff_ms, 45_000);
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    workerMaxLoadPerCpu: 0.55
+    workerOverloadBackoffMs: 42000
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(flat_pipeline.worker.max_load_per_cpu, 0.55);
+        assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
+    }
+
     // Invalid fallbackProvider calls process::exit(1) which cannot be
     // tested in-process. The validation is exercised by the eprintln
     // message and exit call in normalize_pipeline_extraction.
@@ -704,6 +763,8 @@ pub struct WorkerConfig {
     pub poll_ms: u64,
     pub max_retries: u32,
     pub lease_timeout_ms: u64,
+    pub max_load_per_cpu: f64,
+    pub overload_backoff_ms: u64,
 }
 
 impl Default for WorkerConfig {
@@ -712,6 +773,8 @@ impl Default for WorkerConfig {
             poll_ms: 2_000,
             max_retries: 3,
             lease_timeout_ms: 60_000,
+            max_load_per_cpu: 0.8,
+            overload_backoff_ms: 30_000,
         }
     }
 }

@@ -197,6 +197,8 @@ export interface PipelineWorkerConfig {
 	readonly pollMs: number;
 	readonly maxRetries: number;
 	readonly leaseTimeoutMs: number;
+	readonly maxLoadPerCpu: number;
+	readonly overloadBackoffMs: number;
 }
 
 export interface PipelineGraphConfig {

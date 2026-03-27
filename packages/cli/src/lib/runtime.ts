@@ -40,6 +40,15 @@ interface DaemonInstance {
 		readonly reason: string | null;
 		readonly since: string | null;
 	} | null;
+	readonly extractionWorker: {
+		readonly running: boolean;
+		readonly overloaded: boolean;
+		readonly loadPerCpu: number | null;
+		readonly maxLoadPerCpu: number | null;
+		readonly overloadBackoffMs: number | null;
+		readonly overloadSince: string | null;
+		readonly nextTickInMs: number | null;
+	} | null;
 }
 
 interface DaemonProbeDeps {
@@ -124,8 +133,20 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 								since?: string | null;
 							};
 						};
+						pipeline?: {
+							extraction?: {
+								running?: boolean;
+								overloaded?: boolean;
+								loadPerCpu?: number | null;
+								maxLoadPerCpu?: number | null;
+								overloadBackoffMs?: number | null;
+								overloadSince?: string | null;
+								nextTickInMs?: number | null;
+							};
+						};
 					};
 					const extraction = data.providerResolution?.extraction;
+					const extractionWorker = data.pipeline?.extraction;
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -145,6 +166,20 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 									since: extraction.since ?? null,
 								}
 							: null,
+						extractionWorker: extractionWorker
+							? {
+									running: extractionWorker.running === true,
+									overloaded: extractionWorker.overloaded === true,
+									loadPerCpu: typeof extractionWorker.loadPerCpu === "number" ? extractionWorker.loadPerCpu : null,
+									maxLoadPerCpu:
+										typeof extractionWorker.maxLoadPerCpu === "number" ? extractionWorker.maxLoadPerCpu : null,
+									overloadBackoffMs:
+										typeof extractionWorker.overloadBackoffMs === "number" ? extractionWorker.overloadBackoffMs : null,
+									overloadSince: extractionWorker.overloadSince ?? null,
+									nextTickInMs:
+										typeof extractionWorker.nextTickInMs === "number" ? extractionWorker.nextTickInMs : null,
+								}
+							: null,
 					};
 				}
 			} catch {
@@ -160,6 +195,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				bindHost: null,
 				networkMode: null,
 				extraction: null,
+				extractionWorker: null,
 			};
 		}),
 	);
@@ -247,6 +283,7 @@ export async function getDaemonStatus(): Promise<{
 	bindHost: string | null;
 	networkMode: string | null;
 	extraction: DaemonInstance["extraction"];
+	extractionWorker: DaemonInstance["extractionWorker"];
 }> {
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
@@ -260,6 +297,7 @@ export async function getDaemonStatus(): Promise<{
 			bindHost: preferred.bindHost,
 			networkMode: preferred.networkMode,
 			extraction: preferred.extraction,
+			extractionWorker: preferred.extractionWorker,
 		};
 	}
 
@@ -272,6 +310,7 @@ export async function getDaemonStatus(): Promise<{
 		bindHost: null,
 		networkMode: null,
 		extraction: null,
+		extractionWorker: null,
 	};
 }
 

@@ -7457,6 +7457,8 @@ app.get("/api/tasks/:id/runs", (c) => {
 
 app.get("/api/status", (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
+	const workerStatus = getPipelineWorkerStatus();
+	const extractionWorker = workerStatus.extraction;
 	const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
 	const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
 	const datedLogFile = join(configuredLogDir, `signet-${new Date().toISOString().slice(0, 10)}.log`);
@@ -7501,6 +7503,17 @@ app.get("/api/status", (c) => {
 		agentsDir: AGENTS_DIR,
 		memoryDb: existsSync(MEMORY_DB),
 		pipelineV2: config.pipelineV2,
+		pipeline: {
+			extraction: {
+				running: extractionWorker.running,
+				overloaded: extractionWorker.stats?.overloaded ?? false,
+				loadPerCpu: extractionWorker.stats?.loadPerCpu ?? null,
+				maxLoadPerCpu: extractionWorker.stats?.maxLoadPerCpu ?? null,
+				overloadBackoffMs: extractionWorker.stats?.overloadBackoffMs ?? null,
+				overloadSince: extractionWorker.stats?.overloadSince ?? null,
+				nextTickInMs: extractionWorker.stats?.nextTickInMs ?? null,
+			},
+		},
 		providerResolution: providerRuntimeResolution,
 		logging: {
 			logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,

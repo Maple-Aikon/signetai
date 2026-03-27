@@ -5,6 +5,7 @@ use std::{collections::HashMap, time::SystemTime};
 use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
 use signet_pipeline::embedding::EmbeddingProvider;
+use signet_pipeline::worker::SharedWorkerRuntimeStats;
 use signet_services::session::{ContinuityTracker, DedupState, SessionTracker};
 use tokio::sync::RwLock;
 
@@ -32,6 +33,7 @@ pub struct AppState {
     pub embedding: RwLock<Option<Arc<dyn EmbeddingProvider>>>,
     pub pipeline_paused: AtomicBool,
     pub pipeline_transition: AtomicBool,
+    pub extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
     pub auth_mode: AuthMode,
     pub auth_secret: Option<Vec<u8>>,
     pub auth_admin_limiter: AuthRateLimiter,
@@ -78,6 +80,7 @@ impl AppState {
         config: DaemonConfig,
         pool: DbPool,
         embedding: Option<Arc<dyn EmbeddingProvider>>,
+        extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
         auth_mode: AuthMode,
         auth_secret: Option<Vec<u8>>,
         auth_admin_limiter: AuthRateLimiter,
@@ -113,6 +116,7 @@ impl AppState {
             embedding: RwLock::new(embedding),
             pipeline_paused: AtomicBool::new(paused),
             pipeline_transition: AtomicBool::new(false),
+            extraction_worker_stats,
             auth_mode,
             auth_secret,
             auth_admin_limiter,
