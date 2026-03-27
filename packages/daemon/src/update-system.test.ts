@@ -16,6 +16,7 @@ import {
 	categorizeUpdateError,
 	normalizeTargetVersion,
 	parseInstalledPackageVersion,
+	verifyInstalledVersion,
 } from "./update-system";
 
 const UPDATE_SYSTEM_SRC = readFileSync(
@@ -55,6 +56,59 @@ describe("Issue 322: verify installed version after update install", () => {
 			"Install exited cleanly but version is",
 		);
 		expect(UPDATE_SYSTEM_SRC).toContain("resolveGlobalPackagePath");
+	});
+});
+
+describe("verifyInstalledVersion", () => {
+	const noopResolver = (_family: "bun" | "npm" | "pnpm" | "yarn", _packageName: string) =>
+		undefined;
+
+	it("fails when global package path cannot be resolved", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: noopResolver,
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.1"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("could not locate global package path");
+		}
+	});
+
+	it("fails when package.json is missing", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => false,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.1"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("package manifest missing");
+		}
+	});
+
+	it("fails when installed version does not match expected target", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.0"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("version is 0.78.0, expected 0.78.1");
+		}
+	});
+
+	it("succeeds and returns installed version when verification passes", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.1"}',
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.installedVersion).toBe("0.78.1");
+		}
 	});
 });
 
@@ -149,6 +203,8 @@ describe("version parsing helpers", () => {
 		expect(normalizeTargetVersion("V2.0.0-rc.1+build.7")).toBe(
 			"2.0.0-rc.1+build.7",
 		);
+		expect(normalizeTargetVersion("latest")).toBeNull();
+		expect(normalizeTargetVersion("1.2.x")).toBeNull();
 		expect(normalizeTargetVersion("")).toBeNull();
 		expect(normalizeTargetVersion("   ")).toBeNull();
 		expect(normalizeTargetVersion("--1.2.3")).toBeNull();

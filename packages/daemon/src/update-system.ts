@@ -504,7 +504,9 @@ export function normalizeTargetVersion(targetVersion: string | undefined): strin
 	const trimmed = targetVersion.trim();
 	if (!trimmed) return null;
 	const normalized = trimmed.replace(/^v/i, "");
-	if (!/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(normalized)) return null;
+	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(normalized)) {
+		return null;
+	}
 	return normalized;
 }
 
@@ -519,12 +521,27 @@ export function parseInstalledPackageVersion(packageJsonContent: string): string
 	}
 }
 
-function verifyInstalledVersion(
+interface UpdateVerificationDeps {
+	resolveGlobalPackagePath: (
+		family: PackageManagerFamily,
+		packageName: string,
+	) => string | undefined;
+	existsSync: (path: string) => boolean;
+	readFileSync: (path: string, encoding: BufferEncoding) => string;
+}
+
+export function verifyInstalledVersion(
 	family: PackageManagerFamily,
 	packageName: string,
 	expectedVersion: string | null,
+	deps: UpdateVerificationDeps = {
+		resolveGlobalPackagePath: (family, packageName) =>
+			resolveGlobalPackagePath(family, packageName),
+		existsSync: (path) => existsSync(path),
+		readFileSync: (path, encoding) => readFileSync(path, { encoding }),
+	},
 ): { ok: true; installedVersion: string } | { ok: false; message: string } {
-	const packagePath = resolveGlobalPackagePath(family, packageName);
+	const packagePath = deps.resolveGlobalPackagePath(family, packageName);
 	if (!packagePath) {
 		return {
 			ok: false,
@@ -533,7 +550,7 @@ function verifyInstalledVersion(
 	}
 
 	const packageJsonPath = join(packagePath, "package.json");
-	if (!existsSync(packageJsonPath)) {
+	if (!deps.existsSync(packageJsonPath)) {
 		return {
 			ok: false,
 			message: `Update exited cleanly but package manifest missing at ${packageJsonPath}`,
@@ -541,7 +558,7 @@ function verifyInstalledVersion(
 	}
 
 	const installedVersion = parseInstalledPackageVersion(
-		readFileSync(packageJsonPath, "utf-8"),
+		deps.readFileSync(packageJsonPath, "utf-8"),
 	);
 	if (!installedVersion) {
 		return {
