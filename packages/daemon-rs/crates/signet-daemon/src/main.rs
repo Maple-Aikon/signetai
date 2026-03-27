@@ -155,17 +155,9 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
-    let extraction_worker_stats = config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .map(|pipeline| {
-            signet_pipeline::worker::new_runtime_stats_handle(
-                pipeline.worker.max_load_per_cpu,
-                pipeline.worker.overload_backoff_ms,
-            )
-        });
+    // Do not create a detached runtime-stats handle in daemon state.
+    // Status should read from the worker-owned handle when one exists.
+    let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
     // Build app state
     let state = Arc::new(AppState::new(
@@ -965,7 +957,15 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
                 "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
             }))
         } else {
-            None
+            Some(serde_json::json!({
+                "running": false,
+                "overloaded": false,
+                "loadPerCpu": None::<f64>,
+                "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
+                "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
+                "overloadSince": None::<String>,
+                "nextTickInMs": None::<u64>,
+            }))
         }
     } else {
         None
