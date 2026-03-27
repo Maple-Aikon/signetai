@@ -156,10 +156,8 @@ export function defaultExtractionProviderForDeployment(
 ): ExtractionProviderChoice {
 	if (deploymentType === "vps") {
 		const preferredProviders = extractionProvidersFromHarnesses(preferredHarnesses);
-		for (const provider of preferredProviders) {
-			if (availableProviders.includes(provider)) {
-				return provider;
-			}
+		if (preferredProviders.length > 0) {
+			return preferredProviders[0];
 		}
 
 		for (const provider of VPS_NON_LOCAL_EXTRACTION_PROVIDERS) {
