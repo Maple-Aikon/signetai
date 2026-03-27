@@ -11758,19 +11758,25 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		);
 	}
 
-	if (llmProvider) {
-		initLlmProvider(llmProvider);
-	} else if (extractionStatus === "blocked" && extractionReason) {
+	const startupExtractionBlocked = extractionStatus === "blocked" && extractionReason !== null;
+	if (startupExtractionBlocked && !llmProvider) {
+		const blockedReason = extractionReason ?? "Extraction provider unavailable during startup preflight";
+		// Startup preflight blocked extraction with no viable provider.
+		// Dead-letter any already-pending extraction jobs so they do not
+		// remain silently pending after boot.
 		const deadLettered = deadLetterPendingExtractionJobs(getDbAccessor(), {
-			reason: extractionReason,
+			reason: blockedReason,
 			extractionModel: effectiveExtractionModel || undefined,
 		});
 		if (deadLettered > 0) {
 			logger.warn("pipeline", "Dead-lettered pending extraction jobs at startup", {
 				count: deadLettered,
-				reason: extractionReason,
+				reason: blockedReason,
 			});
 		}
+	}
+	if (llmProvider) {
+		initLlmProvider(llmProvider);
 	}
 
 	// Initialize model registry for dynamic model discovery

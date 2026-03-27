@@ -175,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start extraction worker and wire its live runtime-stats handle into
     // AppState so /api/status reports real worker state.
-    let mut extraction_worker_handle = start_extraction_worker(state.as_ref()).await;
+    let _ = start_extraction_worker(state.as_ref()).await;
 
     // Build router
     let app = Router::new()
@@ -580,9 +580,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutting down");
 
-    if let Some(handle) = extraction_worker_handle.take() {
-        handle.stop().await;
-    }
+    stop_extraction_worker(state.as_ref()).await;
 
     // Drop state to close DB channels, then await writer
     drop(state);
@@ -632,7 +630,14 @@ pub(crate) async fn resume_extraction_check(state: &AppState) {
     extraction_probe(state, false).await;
 }
 
-async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::worker::WorkerHandle> {
+pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
+    {
+        let handle = state.extraction_worker_handle.lock().await;
+        if handle.is_some() {
+            return true;
+        }
+    }
+
     let Some(pipeline) = state
         .config
         .manifest
@@ -640,11 +645,11 @@ async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::wo
         .as_ref()
         .and_then(|m| m.pipeline_v2.as_ref())
     else {
-        return None;
+        return false;
     };
 
     if !pipeline.enabled || pipeline.paused || state.pipeline_paused() {
-        return None;
+        return false;
     }
 
     let effective_provider = {
@@ -656,7 +661,7 @@ async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::wo
     };
 
     if effective_provider == "none" {
-        return None;
+        return false;
     }
 
     if effective_provider != "ollama" && effective_provider != "anthropic" {
@@ -664,7 +669,7 @@ async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::wo
             provider = %effective_provider,
             "extraction worker not started: provider not supported by daemon-rs worker"
         );
-        return None;
+        return false;
     }
 
     let api_key = if effective_provider == "anthropic" {
@@ -677,7 +682,7 @@ async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::wo
 
     if effective_provider == "anthropic" && api_key.is_none() {
         warn!("extraction worker not started: ANTHROPIC_API_KEY is missing");
-        return None;
+        return false;
     }
 
     let provider_cfg = signet_pipeline::provider::LlmProviderConfig {
@@ -711,7 +716,28 @@ async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::wo
     );
     let stats = handle.stats_handle();
     *state.extraction_worker_stats.write().await = Some(stats);
-    Some(handle)
+    let mut slot = state.extraction_worker_handle.lock().await;
+    if slot.is_none() {
+        *slot = Some(handle);
+        true
+    } else {
+        drop(slot);
+        handle.stop().await;
+        true
+    }
+}
+
+pub(crate) async fn stop_extraction_worker(state: &AppState) {
+    let handle = {
+        let mut slot = state.extraction_worker_handle.lock().await;
+        slot.take()
+    };
+
+    if let Some(handle) = handle {
+        handle.stop().await;
+    }
+
+    *state.extraction_worker_stats.write().await = None;
 }
 
 async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {

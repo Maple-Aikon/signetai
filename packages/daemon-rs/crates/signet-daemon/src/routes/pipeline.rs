@@ -198,6 +198,8 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
     // Update extraction runtime state on pause/resume transitions,
     // mirroring the JS daemon's restartPipelineRuntime behavior.
     if paused {
+        crate::stop_extraction_worker(state).await;
+
         // Pipeline pause disables extraction execution at runtime.
         // Preserve "blocked" and "disabled" states so write routes keep the
         // startup block guard active while paused.
@@ -217,6 +219,7 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
         // but do NOT dead-letter pending jobs — backlog accumulated during
         // an intentional pause should be preserved for draining.
         crate::resume_extraction_check(state).await;
+        let _ = crate::start_extraction_worker(state).await;
     }
 }
 
@@ -860,5 +863,31 @@ mod tests {
             Some("startup preflight failed")
         );
         assert_eq!(extraction.since.as_deref(), Some("2026-03-27T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_manage_worker_handle_lifecycle() {
+        let test = build_state(AuthMode::Local, false, 10);
+        let peer = SocketAddr::from(([127, 0, 0, 1], 3850));
+
+        assert!(test.state.extraction_worker_handle.lock().await.is_none());
+        let started = crate::start_extraction_worker(test.state.as_ref()).await;
+        assert!(started);
+        assert!(test.state.extraction_worker_handle.lock().await.is_some());
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], true);
+        assert!(test.state.extraction_worker_handle.lock().await.is_none());
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/resume", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], false);
+        assert!(test.state.extraction_worker_handle.lock().await.is_some());
+
+        crate::stop_extraction_worker(test.state.as_ref()).await;
+        assert!(test.state.extraction_worker_handle.lock().await.is_none());
     }
 }
