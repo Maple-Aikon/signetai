@@ -687,7 +687,7 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
         return false;
     }
 
-    let effective_provider = {
+    let mut effective_provider = {
         let guard = state.extraction_state.read().await;
         guard
             .as_ref()
@@ -697,6 +697,78 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
 
     if effective_provider == "none" {
         return false;
+    }
+
+    if !worker_supports_extraction_provider(&effective_provider) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let reason_prefix = format!(
+            "{effective_provider} is not supported by daemon-rs extraction worker"
+        );
+        let fallback_provider = pipeline.extraction.fallback_provider.as_str();
+        let ollama_fallback_endpoint = resolve_runtime_extraction_endpoint(
+            "ollama",
+            &pipeline.extraction.provider,
+            pipeline.extraction.endpoint.as_deref(),
+        );
+        if fallback_provider == "ollama" && effective_provider != "ollama" {
+            let ollama_ok = check_ollama_health(ollama_fallback_endpoint.as_deref()).await;
+            if ollama_ok {
+                *state.extraction_state.write().await = Some(ExtractionRuntimeState {
+                    configured: Some(pipeline.extraction.provider.clone()),
+                    resolved: pipeline.extraction.provider.clone(),
+                    effective: "ollama".to_string(),
+                    fallback_provider: fallback_provider.to_string(),
+                    status: "degraded".to_string(),
+                    degraded: true,
+                    fallback_applied: true,
+                    reason: Some(reason_prefix),
+                    since: Some(now),
+                });
+                effective_provider = "ollama".to_string();
+            } else {
+                let reason = format!(
+                    "{reason_prefix}; ollama fallback startup preflight failed"
+                );
+                *state.extraction_state.write().await = Some(ExtractionRuntimeState {
+                    configured: Some(pipeline.extraction.provider.clone()),
+                    resolved: pipeline.extraction.provider.clone(),
+                    effective: "none".to_string(),
+                    fallback_provider: fallback_provider.to_string(),
+                    status: "blocked".to_string(),
+                    degraded: true,
+                    fallback_applied: false,
+                    reason: Some(reason),
+                    since: Some(now),
+                });
+                warn!(
+                    provider = %effective_provider,
+                    "extraction worker not started: provider unsupported and ollama fallback unavailable"
+                );
+                return false;
+            }
+        } else {
+            let reason = if fallback_provider == "none" {
+                format!("{reason_prefix}; fallbackProvider is none")
+            } else {
+                reason_prefix
+            };
+            *state.extraction_state.write().await = Some(ExtractionRuntimeState {
+                configured: Some(pipeline.extraction.provider.clone()),
+                resolved: pipeline.extraction.provider.clone(),
+                effective: "none".to_string(),
+                fallback_provider: fallback_provider.to_string(),
+                status: "blocked".to_string(),
+                degraded: true,
+                fallback_applied: false,
+                reason: Some(reason),
+                since: Some(now),
+            });
+            warn!(
+                provider = %effective_provider,
+                "extraction worker not started: provider unsupported by daemon-rs worker"
+            );
+            return false;
+        }
     }
 
     if !worker_supports_extraction_provider(&effective_provider) {
@@ -1315,17 +1387,21 @@ mod tests {
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
-    use crate::state::AppState;
+    use crate::state::{AppState, ExtractionRuntimeState};
 
     use super::{
         append_api_path, host_in_trusted_override_list, host_matches_trusted_override,
         normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
         resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
         worker_supports_extraction_provider, provider_is_unsupported_for_daemon_startup_preflight,
-        dead_letter_pending_extraction_jobs,
+        dead_letter_pending_extraction_jobs, start_extraction_worker, stop_extraction_worker,
     };
 
-    fn test_state() -> Arc<AppState> {
+    fn test_state_with_extraction(
+        provider: &str,
+        fallback_provider: &str,
+        endpoint: Option<&str>,
+    ) -> Arc<AppState> {
         let dir = tempdir().expect("tempdir").keep();
         let db = dir.join("memory").join("memories.db");
         std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
@@ -1338,6 +1414,11 @@ mod tests {
                 max: Some(10),
             },
         );
+
+        let mut pipeline = PipelineV2Config::default();
+        pipeline.extraction.provider = provider.to_string();
+        pipeline.extraction.fallback_provider = fallback_provider.to_string();
+        pipeline.extraction.endpoint = endpoint.map(str::to_string);
 
         let manifest = AgentManifest {
             agent: AgentIdentity {
@@ -1352,7 +1433,7 @@ mod tests {
                 vectors: None,
                 session_budget: None,
                 decay_rate: None,
-                pipeline_v2: Some(PipelineV2Config::default()),
+                pipeline_v2: Some(pipeline),
             }),
             auth: Some(ManifestAuthConfig {
                 method: "token".to_string(),
@@ -1388,6 +1469,10 @@ mod tests {
             None,
             AuthRateLimiter::from_rules(&rules),
         ))
+    }
+
+    fn test_state() -> Arc<AppState> {
+        test_state_with_extraction("ollama", "ollama", None)
     }
 
     #[tokio::test]
@@ -1600,6 +1685,64 @@ mod tests {
             .expect("read rolled back job");
 
         assert_eq!(job_status, "pending");
+    }
+
+    #[tokio::test]
+    async fn unsupported_active_provider_downgrades_to_ollama_fallback_before_worker_start() {
+        let state = test_state_with_extraction("claude-code", "ollama", None);
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "claude-code".to_string(),
+                fallback_provider: "ollama".to_string(),
+                status: "active".to_string(),
+                degraded: false,
+                fallback_applied: false,
+                reason: None,
+                since: None,
+            });
+        }
+
+        let started = start_extraction_worker(state.as_ref()).await;
+        assert!(started);
+
+        let extraction = state.extraction_state.read().await.clone().expect("state");
+        assert_eq!(extraction.effective, "ollama");
+        assert_eq!(extraction.status, "degraded");
+        assert!(extraction.fallback_applied);
+
+        stop_extraction_worker(state.as_ref()).await;
+    }
+
+    #[tokio::test]
+    async fn unsupported_active_provider_blocks_when_no_fallback_available() {
+        let state = test_state_with_extraction("claude-code", "none", None);
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "claude-code".to_string(),
+                fallback_provider: "none".to_string(),
+                status: "active".to_string(),
+                degraded: false,
+                fallback_applied: false,
+                reason: None,
+                since: None,
+            });
+        }
+
+        let started = start_extraction_worker(state.as_ref()).await;
+        assert!(!started);
+
+        let extraction = state.extraction_state.read().await.clone().expect("state");
+        assert_eq!(extraction.effective, "none");
+        assert_eq!(extraction.status, "blocked");
+        assert!(!extraction.fallback_applied);
     }
 
     #[test]
