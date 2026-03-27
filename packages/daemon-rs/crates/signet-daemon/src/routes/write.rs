@@ -101,20 +101,25 @@ fn dead_letter_blocked_extraction_memory(
     max_attempts: i64,
 ) -> Result<(), rusqlite::Error> {
     let now = chrono::Utc::now().to_rfc3339();
+    let updated = conn.execute(
+        "UPDATE memory_jobs
+         SET status = 'dead',
+             error = ?1,
+             max_attempts = ?2,
+             failed_at = ?3,
+             updated_at = ?3
+         WHERE memory_id = ?4
+           AND job_type IN ('extract', 'extraction')
+           AND status IN ('pending', 'leased')",
+        rusqlite::params![reason, max_attempts, now, memory_id],
+    )?;
+    if updated == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+
     conn.execute(
         "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
         rusqlite::params![memory_id],
-    )?;
-    conn.execute(
-        "INSERT INTO memory_jobs (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
-         VALUES (?1, ?2, 'extract', 'dead', ?3, 0, ?4, ?5, ?5, ?5)",
-        rusqlite::params![
-            uuid::Uuid::new_v4().to_string(),
-            memory_id,
-            reason,
-            max_attempts,
-            now
-        ],
     )?;
     Ok(())
 }
@@ -298,6 +303,13 @@ mod tests {
             rusqlite::params!["mem-1"],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO memory_jobs
+             (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+             VALUES (?1, ?2, 'extract', 'pending', NULL, 0, 3, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            rusqlite::params!["job-1", "mem-1"],
+        )
+        .unwrap();
 
         dead_letter_blocked_extraction_memory(
             &conn,
@@ -316,15 +328,28 @@ mod tests {
             .unwrap();
         assert_eq!(extraction_status, "failed");
 
-        let (status, max_attempts): (String, i64) = conn
+        let (status, max_attempts, error): (String, i64, Option<String>) = conn
             .query_row(
-                "SELECT status, max_attempts FROM memory_jobs WHERE memory_id = ?1",
+                "SELECT status, max_attempts, error FROM memory_jobs WHERE memory_id = ?1",
                 rusqlite::params!["mem-1"],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert_eq!(status, "dead");
         assert_eq!(max_attempts, 7);
+        assert_eq!(
+            error.as_deref(),
+            Some("Configured extraction provider unavailable")
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_jobs WHERE memory_id = ?1",
+                rusqlite::params!["mem-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
 
