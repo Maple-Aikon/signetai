@@ -821,7 +821,6 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
             "claude-code" => cli_preflight("claude").await,
             "codex" => cli_preflight("codex").await,
             "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
-            "openrouter" => check_openrouter_health(extraction.endpoint.as_deref()).await,
             "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
             _ => {
                 warn!(provider, "unknown extraction provider, assuming unavailable");
@@ -1026,7 +1025,6 @@ fn provider_endpoint_is_trusted_for_secret_probe(provider: &str, base: &str) -> 
 
     (match provider {
         "anthropic" => host.eq_ignore_ascii_case("api.anthropic.com"),
-        "openrouter" => host.eq_ignore_ascii_case("openrouter.ai"),
         _ => false,
     }) || host_in_trusted_override_list(
         host,
@@ -1066,39 +1064,6 @@ async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
         .get(&url)
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
-        .send()
-        .await
-        .map(|r: reqwest::Response| r.status().is_success())
-        .unwrap_or(false)
-}
-
-/// Check OpenRouter API reachability with credential validation.
-async fn check_openrouter_health(endpoint: Option<&str>) -> bool {
-    let Some(api_key) = std::env::var("OPENROUTER_API_KEY")
-        .ok()
-        .map(|k| k.trim().to_string())
-        .filter(|k| !k.is_empty())
-    else {
-        return false;
-    };
-
-    let base = normalize_endpoint_base(endpoint, "https://openrouter.ai/api/v1");
-    let url = append_api_path(&base, "/api/v1/models", "/models");
-    if !provider_endpoint_is_trusted_for_secret_probe("openrouter", &base) {
-        warn!(
-            endpoint = %base,
-            hint = provider_endpoint_allowlist_hint(),
-            "refusing openrouter startup probe for untrusted endpoint"
-        );
-        return false;
-    }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build();
-    let Ok(client) = client else { return false };
-    client
-        .get(&url)
-        .header("authorization", format!("Bearer {api_key}"))
         .send()
         .await
         .map(|r: reqwest::Response| r.status().is_success())
@@ -1445,8 +1410,8 @@ mod tests {
     #[test]
     fn normalize_endpoint_base_uses_trimmed_endpoint_or_default() {
         assert_eq!(
-            normalize_endpoint_base(Some("https://openrouter.ai/api/v1/"), "https://default"),
-            "https://openrouter.ai/api/v1"
+            normalize_endpoint_base(Some("https://api.anthropic.com/"), "https://default"),
+            "https://api.anthropic.com"
         );
         assert_eq!(
             normalize_endpoint_base(None, "https://default/"),
@@ -1460,10 +1425,6 @@ mod tests {
             "anthropic",
             "https://api.anthropic.com"
         ));
-        assert!(provider_endpoint_is_trusted_for_secret_probe(
-            "openrouter",
-            "https://openrouter.ai/api/v1"
-        ));
     }
 
     #[test]
@@ -1473,11 +1434,11 @@ mod tests {
             "http://127.0.0.1:8080"
         ));
         assert!(provider_endpoint_is_trusted_for_secret_probe(
-            "openrouter",
+            "anthropic",
             "http://localhost:8080"
         ));
         assert!(provider_endpoint_is_trusted_for_secret_probe(
-            "openrouter",
+            "anthropic",
             "http://[::1]:8080"
         ));
     }
@@ -1489,12 +1450,8 @@ mod tests {
             "https://proxy.example.com"
         ));
         assert!(!provider_endpoint_is_trusted_for_secret_probe(
-            "openrouter",
-            "http://openrouter.ai/api/v1"
-        ));
-        assert!(!provider_endpoint_is_trusted_for_secret_probe(
             "anthropic",
-            "https://openrouter.ai/api/v1"
+            "http://api.anthropic.com"
         ));
     }
 
