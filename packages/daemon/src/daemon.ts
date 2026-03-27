@@ -132,6 +132,7 @@ import { type RecallParams, hybridRecall } from "./memory-search";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { syncAgentWorkspaces } from "./identity-sync";
+import { createSingleFlightRunner } from "./single-flight-runner";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import { expandTemporalNode } from "./temporal-expand";
 import { upsertThreadHead } from "./thread-heads";
@@ -10451,9 +10452,16 @@ async function ensureArchitectureDoc(): Promise<void> {
 	}
 }
 
-let syncPending = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
+const syncRunner = createSingleFlightRunner(
+	async () => {
+		await syncHarnessConfigs();
+	},
+	(error) => {
+		logger.error("sync", "Harness sync failed", error);
+	},
+);
 
 function scheduleSyncHarnessConfigs() {
 	if (syncTimer) {
@@ -10461,15 +10469,11 @@ function scheduleSyncHarnessConfigs() {
 	}
 
 	syncTimer = setTimeout(async () => {
-		if (syncPending) return;
-		syncPending = true;
-		try {
-			await syncHarnessConfigs();
-		} catch (error) {
-			logger.error("sync", "Harness sync failed", error instanceof Error ? error : new Error(String(error)));
-		} finally {
-			syncPending = false;
+		if (syncRunner.running) {
+			syncRunner.requestRerun();
+			return;
 		}
+		await syncRunner.execute();
 	}, SYNC_DEBOUNCE_MS);
 }
 
@@ -11064,7 +11068,6 @@ async function cleanup() {
 		clearTimeout(syncTimer);
 		syncTimer = null;
 	}
-	syncPending = false;
 
 	// Flush telemetry before closing DB
 	if (heartbeatTimer) {
