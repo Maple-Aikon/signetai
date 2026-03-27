@@ -14,6 +14,9 @@ import {
 	MIN_UPDATE_INTERVAL_SECONDS,
 	MAX_UPDATE_INTERVAL_SECONDS,
 	categorizeUpdateError,
+	normalizeTargetVersion,
+	parseInstalledPackageVersion,
+	verifyInstalledVersion,
 } from "./update-system";
 
 const UPDATE_SYSTEM_SRC = readFileSync(
@@ -22,19 +25,117 @@ const UPDATE_SYSTEM_SRC = readFileSync(
 );
 const SERVICE_SRC = readFileSync(join(__dirname, "service.ts"), "utf-8");
 
-describe("Bug 5: pendingRestartVersion always set on success", () => {
-	it("sets pendingRestartVersion unconditionally (no targetVersion guard)", () => {
-		// The old code: `if (targetVersion) { pendingRestartVersion = targetVersion; }`
-		// The fix: `pendingRestartVersion = targetVersion ?? "unknown";`
+describe("Bug 5: pendingRestartVersion is set only after successful verification", () => {
+	it("does not gate pendingRestartVersion on targetVersion", () => {
 		const hasOldGuard = /if\s*\(\s*targetVersion\s*\)\s*\{?\s*\n?\s*pendingRestartVersion\s*=/.test(
 			UPDATE_SYSTEM_SRC,
 		);
 		expect(hasOldGuard).toBe(false);
+	});
 
-		// Verify the new unconditional assignment exists
-		const hasUnconditionalSet =
-			UPDATE_SYSTEM_SRC.includes('pendingRestartVersion = targetVersion ?? "unknown"');
-		expect(hasUnconditionalSet).toBe(true);
+	it("sets pendingRestartVersion from verified installed version", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"pendingRestartVersion = verification.installedVersion",
+		);
+	});
+});
+
+describe("Issue 322: verify installed version after update install", () => {
+	it("pins install command to targetVersion when provided", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"const installPackage = normalizedTargetVersion",
+		);
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"? `${NPM_PACKAGE}@${normalizedTargetVersion}`",
+		);
+	});
+
+	it("verifies installed package version after exit code 0", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain("verifyInstalledVersion(");
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"Install exited cleanly but version is",
+		);
+		expect(UPDATE_SYSTEM_SRC).toContain("resolveGlobalPackagePath");
+	});
+});
+
+describe("verifyInstalledVersion", () => {
+	const noopResolver = (_family: "bun" | "npm" | "pnpm" | "yarn", _packageName: string) =>
+		undefined;
+
+	it("fails when global package path cannot be resolved", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: noopResolver,
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.1"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("could not locate global package path");
+		}
+	});
+
+	it("fails when package.json is missing", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => false,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.1"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("package manifest missing");
+		}
+	});
+
+	it("fails when installed version does not match expected target", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.0"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("version is 0.78.0, expected 0.78.1");
+		}
+	});
+
+	it("fails when installed package.json version is not exact semver", () => {
+		const result = verifyInstalledVersion("bun", "signetai", null, {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"latest"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("installed package.json has no valid version");
+		}
+	});
+
+	it("fails gracefully when manifest read throws", () => {
+		const result = verifyInstalledVersion("bun", "signetai", null, {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => {
+				throw new Error("EACCES: permission denied");
+			},
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("failed to verify installed version");
+			expect(result.message).toContain("EACCES");
+		}
+	});
+
+	it("succeeds and returns installed version when verification passes", () => {
+		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"0.78.1"}',
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.installedVersion).toBe("0.78.1");
+		}
 	});
 });
 
@@ -119,6 +220,33 @@ describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 		const unitBody = unitMatch![0];
 		expect(unitBody).toContain("Restart=always");
 		expect(unitBody).not.toContain("Restart=on-failure");
+	});
+});
+
+describe("version parsing helpers", () => {
+	it("normalizeTargetVersion strips leading v and validates format", () => {
+		expect(normalizeTargetVersion("1.2.3")).toBe("1.2.3");
+		expect(normalizeTargetVersion("v1.2.3")).toBe("1.2.3");
+		expect(normalizeTargetVersion("V2.0.0-rc.1+build.7")).toBe(
+			"2.0.0-rc.1+build.7",
+		);
+		expect(normalizeTargetVersion("latest")).toBeNull();
+		expect(normalizeTargetVersion("1.2.x")).toBeNull();
+		expect(normalizeTargetVersion("")).toBeNull();
+		expect(normalizeTargetVersion("   ")).toBeNull();
+		expect(normalizeTargetVersion("--1.2.3")).toBeNull();
+		expect(normalizeTargetVersion("1.2.3 bad")).toBeNull();
+	});
+
+	it("parseInstalledPackageVersion extracts version from package.json", () => {
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"0.78.1"}')).toBe(
+			"0.78.1",
+		);
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"   "}')).toBeNull();
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"latest"}')).toBeNull();
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"1.2.x"}')).toBeNull();
+		expect(parseInstalledPackageVersion('{"name":"signetai"}')).toBeNull();
+		expect(parseInstalledPackageVersion("not-json")).toBeNull();
 	});
 });
 
