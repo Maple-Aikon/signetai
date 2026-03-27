@@ -158,9 +158,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			return requestedExtractionProvider;
 		}
 		if (preserveExisting && providerFromConfig) {
-			if (!(deploymentType === "vps" && providerFromConfig === "ollama")) {
-				return providerFromConfig;
-			}
+			return providerFromConfig;
 		}
 		if (deploymentType === "vps") {
 			return inferred;
