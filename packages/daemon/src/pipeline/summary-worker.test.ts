@@ -8,7 +8,9 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
+	hasCommandStageCompleted,
 	insertSummaryFacts,
+	markCommandStageCompleted,
 	recoverSummaryJobs,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
@@ -209,6 +211,49 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+});
+
+describe("command stage completion marker", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("persists command-stage completion so retries can skip command reruns", () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at, result)
+			 VALUES ('job-cmd-marker', NULL, 'codex', NULL, 'transcript', 'processing', 1, 3, ?, NULL)`,
+		).run(now);
+
+		expect(hasCommandStageCompleted(accessor, "job-cmd-marker")).toBe(false);
+
+		markCommandStageCompleted(accessor, "job-cmd-marker");
+
+		expect(hasCommandStageCompleted(accessor, "job-cmd-marker")).toBe(true);
+	});
+
+	it("does not mark command completion when the job is not in processing state", () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at, result)
+			 VALUES ('job-cmd-pending', NULL, 'codex', NULL, 'transcript', 'pending', 0, 3, ?, NULL)`,
+		).run(now);
+
+		markCommandStageCompleted(accessor, "job-cmd-pending");
+
+		expect(hasCommandStageCompleted(accessor, "job-cmd-pending")).toBe(false);
 	});
 });
 
