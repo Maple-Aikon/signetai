@@ -334,6 +334,10 @@ function passesSignificanceGate(
 	return false;
 }
 
+export function shouldRunSignificanceGateForJob(commandMode: boolean, commandStageCompleted: boolean): boolean {
+	return !commandMode || !commandStageCompleted;
+}
+
 function substituteCommandTokens(input: string, replacements: Record<string, string>): string {
 	let output = input;
 	for (const [token, value] of Object.entries(replacements)) {
@@ -476,10 +480,17 @@ async function processJob(
 	job: SummaryJobRow,
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
-	if (!passesSignificanceGate(accessor, job, memoryCfg)) return;
 	const commandMode = memoryCfg.pipelineV2.extraction.provider === "command";
+	const commandAlreadyCompleted = commandMode && hasCommandStageCompleted(accessor, job.id);
+
+	if (
+		shouldRunSignificanceGateForJob(commandMode, commandAlreadyCompleted) &&
+		!passesSignificanceGate(accessor, job, memoryCfg)
+	) {
+		return;
+	}
+
 	if (commandMode) {
-		const commandAlreadyCompleted = hasCommandStageCompleted(accessor, job.id);
 		if (!commandAlreadyCompleted) {
 			await runSummaryCommandProvider(job, memoryCfg);
 			markCommandStageCompleted(accessor, job.id);

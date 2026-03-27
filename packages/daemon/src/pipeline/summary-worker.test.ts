@@ -14,6 +14,7 @@ import {
 	recoverSummaryJobs,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
+	shouldRunSignificanceGateForJob,
 	startSummaryWorker,
 } from "./summary-worker";
 
@@ -211,6 +212,21 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+});
+
+describe("shouldRunSignificanceGateForJob", () => {
+	it("runs significance gate for non-command extraction jobs", () => {
+		expect(shouldRunSignificanceGateForJob(false, false)).toBe(true);
+		expect(shouldRunSignificanceGateForJob(false, true)).toBe(true);
+	});
+
+	it("runs significance gate before command stage has completed", () => {
+		expect(shouldRunSignificanceGateForJob(true, false)).toBe(true);
+	});
+
+	it("skips significance gate on retries after command stage completion", () => {
+		expect(shouldRunSignificanceGateForJob(true, true)).toBe(false);
 	});
 });
 
