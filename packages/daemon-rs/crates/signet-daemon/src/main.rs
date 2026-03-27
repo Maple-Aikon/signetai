@@ -166,7 +166,9 @@ async fn main() -> anyhow::Result<()> {
         auth_admin_limiter,
     ));
 
-    // Run extraction provider startup preflight (mirrors JS daemon contract)
+    // Run extraction preflight synchronously before serving requests.
+    // This matches the JS daemon's startup behavior and eliminates any
+    // race between writes and provider validation.
     preflight_extraction(&state).await;
 
     // Build router
@@ -218,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/config",
             get(routes::config::get_config).post(routes::config::save_config),
         )
+        .route("/api/harnesses", get(routes::harnesses::list))
         .route("/api/identity", get(routes::config::identity))
         .route("/api/features", get(routes::config::features))
         // Hook lifecycle routes
@@ -604,7 +607,18 @@ async fn shutdown_signal() {
 /// Perform startup preflight checks on the extraction provider, mirroring the
 /// JS daemon's startup-resolution contract. Updates `extraction_state` with
 /// degraded/blocked status and dead-letters pending extraction jobs when blocked.
-async fn preflight_extraction(state: &AppState) {
+pub(crate) async fn preflight_extraction(state: &AppState) {
+    extraction_probe(state, true).await;
+}
+
+/// Re-check extraction provider availability on resume. Updates status but
+/// does NOT dead-letter pending jobs — backlog from an intentional pause
+/// should be preserved for draining when the provider becomes available.
+pub(crate) async fn resume_extraction_check(state: &AppState) {
+    extraction_probe(state, false).await;
+}
+
+async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let pipeline = match state
         .config
         .manifest
@@ -630,8 +644,8 @@ async fn preflight_extraction(state: &AppState) {
     // Check provider availability
     let available = match provider {
         "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
-        "claude-code" => which_exists("claude"),
-        "codex" => which_exists("codex"),
+        "claude-code" => cli_preflight("claude").await,
+        "codex" => cli_preflight("codex").await,
         "anthropic" => std::env::var("ANTHROPIC_API_KEY").map_or(false, |k| !k.is_empty()),
         "openrouter" => std::env::var("OPENROUTER_API_KEY").map_or(false, |k| !k.is_empty()),
         "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
@@ -642,7 +656,18 @@ async fn preflight_extraction(state: &AppState) {
     };
 
     if available {
-        return; // Provider is healthy, initial state from AppState::new is correct
+        // Provider is healthy — explicitly restore active state in case this
+        // is a resume after a prior blocked/degraded state.
+        let mut guard = state.extraction_state.write().await;
+        if let Some(es) = guard.as_mut() {
+            es.status = "active".to_string();
+            es.effective = extraction.provider.clone();
+            es.degraded = false;
+            es.fallback_applied = false;
+            es.reason = None;
+            es.since = None;
+        }
+        return;
     }
 
     let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
@@ -681,8 +706,11 @@ async fn preflight_extraction(state: &AppState) {
             reason: Some(format!("{reason_prefix}; ollama fallback startup preflight failed")),
             since: Some(now.clone()),
         };
+        let full_reason = format!("{reason_prefix}; ollama fallback startup preflight failed");
         *state.extraction_state.write().await = Some(new_state);
-        dead_letter_pending_extraction_jobs(state, &reason_prefix, &now).await;
+        if dead_letter_on_blocked {
+            dead_letter_pending_extraction_jobs(state, &full_reason, &now).await;
+        }
         warn!("extraction blocked: primary and ollama fallback both unavailable");
         return;
     }
@@ -705,7 +733,9 @@ async fn preflight_extraction(state: &AppState) {
         since: Some(now.clone()),
     };
     *state.extraction_state.write().await = Some(new_state);
-    dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    if dead_letter_on_blocked {
+        dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+    }
     warn!("extraction blocked: provider unavailable with no viable fallback");
 }
 
@@ -716,7 +746,7 @@ async fn check_ollama_health(endpoint: Option<&str>) -> bool {
         .unwrap_or("http://127.0.0.1:11434");
     let url = format!("{}/api/tags", base.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(2))
         .build();
     let Ok(client) = client else { return false };
     client
@@ -734,7 +764,7 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
         .unwrap_or("http://127.0.0.1:4096");
     let url = format!("{}/health", base.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(2))
         .build();
     let Ok(client) = client else { return false };
     client
@@ -745,15 +775,46 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a CLI binary exists on PATH.
-fn which_exists(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// Check if a CLI binary exists on PATH AND can run `--version` successfully.
+/// Matches the JS daemon's startup preflight which spawns the binary to verify
+/// it's not a broken wrapper or non-executable file.
+async fn cli_preflight(name: &str) -> bool {
+    let Some(path) = which_find(name) else {
+        return false;
+    };
+    // Verify the binary actually runs (mirrors JS daemon's --version check)
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&path)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Find a CLI binary on PATH using native lookup (no shell-out).
+/// On Windows, also checks for .cmd/.exe/.bat wrappers (matching Bun.which behavior).
+fn which_find(name: &str) -> Option<std::path::PathBuf> {
+    let extensions: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for ext in extensions {
+                let candidate = dir.join(format!("{name}{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Dead-letter pending extraction jobs when extraction is blocked at startup.
@@ -783,13 +844,23 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
                 rusqlite::params![reason, now],
             )?;
 
-            // Mark affected memories as failed (parity with JS daemon)
+            // Mark affected memories as failed — but only if they have no
+            // remaining leased (in-flight) extract jobs that may still complete.
             if !memory_ids.is_empty() {
+                let mut check_leased = conn.prepare(
+                    "SELECT COUNT(*) FROM memory_jobs
+                     WHERE memory_id = ?1 AND job_type = 'extract' AND status = 'leased'",
+                )?;
                 let mut update_mem = conn.prepare(
                     "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
                 )?;
                 for mid in &memory_ids {
-                    let _ = update_mem.execute(rusqlite::params![mid]);
+                    let leased: i64 = check_leased
+                        .query_row(rusqlite::params![mid], |row| row.get(0))
+                        .unwrap_or(0);
+                    if leased == 0 {
+                        let _ = update_mem.execute(rusqlite::params![mid]);
+                    }
                 }
             }
 

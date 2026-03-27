@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{collections::HashMap, time::SystemTime};
 
 use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
@@ -40,6 +41,7 @@ pub struct AppState {
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
     pub extraction_state: RwLock<Option<ExtractionRuntimeState>>,
+    pub harness_last_seen: RwLock<HashMap<String, String>>,
 }
 
 impl AppState {
@@ -103,6 +105,7 @@ impl AppState {
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
             extraction_state: RwLock::new(extraction_state),
+            harness_last_seen: RwLock::new(HashMap::new()),
         }
     }
 
@@ -110,10 +113,8 @@ impl AppState {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
 
-    /// Check whether extraction is currently blocked. Equivalent to the JS
-    /// daemon's `providerRuntimeResolution.extraction.status === "blocked"`
-    /// guard in `queueExtractionJob()`. Any code path that enqueues extraction
-    /// jobs MUST call this first and dead-letter instead of enqueuing when true.
+    /// Check whether extraction is blocked. Preflight runs synchronously
+    /// before the server accepts requests, so this is always accurate.
     pub async fn is_extraction_blocked(&self) -> bool {
         self.extraction_state
             .read()
@@ -138,5 +139,30 @@ impl AppState {
                 None
             }
         })
+    }
+
+    fn normalize_harness_id(harness: &str) -> Option<&'static str> {
+        match harness.trim().to_ascii_lowercase().as_str() {
+            "claude" | "claude-code" => Some("claude-code"),
+            "opencode" => Some("opencode"),
+            "openclaw" => Some("openclaw"),
+            "forge" => Some("forge"),
+            _ => None,
+        }
+    }
+
+    pub async fn stamp_harness(&self, harness: &str) {
+        let Some(harness) = Self::normalize_harness_id(harness) else {
+            return;
+        };
+        let timestamp = chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339();
+        self.harness_last_seen
+            .write()
+            .await
+            .insert(harness.to_string(), timestamp);
+    }
+
+    pub async fn harness_last_seen(&self, harness: &str) -> Option<String> {
+        self.harness_last_seen.read().await.get(harness).cloned()
     }
 }

@@ -162,6 +162,7 @@ you already use. Signet handles the memory layer underneath it.
 | Harness | Status | Integration |
 |---|---|---|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | **Supported** | Hooks |
+| Forge | **First-party** | Native runtime / reference harness |
 | [OpenCode](https://github.com/sst/opencode) | **Supported** | Plugin + Hooks |
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
@@ -322,7 +323,7 @@ SDK (@signet/sdk)
   typed client, React hooks, Vercel AI SDK middleware
 
 Connectors
-  claude-code, opencode, openclaw, codex
+  claude-code, opencode, openclaw, codex, forge
 ```
 
 ## Packages
@@ -333,6 +334,7 @@ Connectors
 | [`@signet/cli`](./packages/cli) | CLI, setup wizard, dashboard |
 | [`@signet/daemon`](./packages/daemon) | API server, distillation layer, auth, analytics, diagnostics |
 | [`@signet/sdk`](./packages/sdk) | Typed client, React hooks, Vercel AI SDK middleware |
+| [`packages/forge`](./packages/forge) | Forge native terminal harness and reference runtime implementation |
 | [`@signet/connector-base`](./packages/connector-base) | Shared connector primitives and utilities |
 | [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code integration |
 | [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode integration |

@@ -96,22 +96,22 @@ fn load_manifest(base: &Path) -> Option<AgentManifest> {
 
 fn parse_manifest(content: &str) -> Option<AgentManifest> {
     let raw: serde_yml::Value = serde_yml::from_str(content).ok()?;
-    let manifest: AgentManifest = serde_yml::from_str(content).ok()?;
-    Some(normalize_manifest(manifest, &raw))
+    let mut manifest: AgentManifest = serde_yml::from_str(content).ok()?;
+    normalize_manifest(&mut manifest, &raw);
+    Some(manifest)
 }
 
-fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> AgentManifest {
+fn normalize_manifest(manifest: &mut AgentManifest, raw: &serde_yml::Value) {
     let Some(memory) = manifest.memory.as_mut() else {
-        return manifest;
+        return;
     };
     let Some(pipeline) = memory.pipeline_v2.as_mut() else {
-        return manifest;
+        return;
     };
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
     normalize_pipeline_extraction(pipeline, raw_pipeline);
     normalize_pipeline_worker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline);
-    manifest
 }
 
 fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
@@ -120,8 +120,19 @@ fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&s
         .and_then(|value| raw_string(value, "fallbackProvider"))
         .or_else(|| raw.and_then(|value| raw_string(value, "extractionFallbackProvider")));
 
-    if let Some(value) = fallback.filter(|value| is_extraction_fallback_provider(value)) {
-        pipeline.extraction.fallback_provider = value.to_string();
+    if let Some(value) = &fallback {
+        if is_extraction_fallback_provider(value) {
+            pipeline.extraction.fallback_provider = value.to_string();
+        } else {
+            // Hard-fail on invalid fallbackProvider — matches JS daemon's
+            // ConfigValidationError throw. Only this specific validation
+            // exits; generic YAML parse errors still fall through to defaults.
+            eprintln!(
+                "signet: fatal: invalid extraction fallbackProvider '{}': must be 'ollama' or 'none'",
+                value
+            );
+            std::process::exit(1);
+        }
     }
 }
 
@@ -552,6 +563,11 @@ memory:
         assert_eq!(flat_pipeline.worker.max_load_per_cpu, 0.55);
         assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
     }
+
+    // Invalid fallbackProvider calls process::exit(1) which cannot be
+    // tested in-process. The validation is exercised by the eprintln
+    // message and exit call in normalize_pipeline_extraction.
+    // Valid values are covered by the existing tests above.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
