@@ -654,13 +654,10 @@ fn resolve_runtime_extraction_model(
 }
 
 fn resolve_runtime_extraction_endpoint(
-    effective_provider: &str,
-    configured_provider: &str,
+    _effective_provider: &str,
+    _configured_provider: &str,
     configured_endpoint: Option<&str>,
 ) -> Option<String> {
-    if effective_provider == "ollama" && configured_provider != "ollama" {
-        return None;
-    }
     configured_endpoint
         .filter(|v| !v.is_empty())
         .map(|v| v.to_string())
@@ -1526,14 +1523,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_runtime_extraction_endpoint_drops_non_ollama_endpoint_on_fallback() {
+    fn resolve_runtime_extraction_endpoint_keeps_configured_endpoint_on_fallback() {
         assert_eq!(
             resolve_runtime_extraction_endpoint(
                 "ollama",
                 "openrouter",
                 Some("https://openrouter.ai/api/v1")
             ),
-            None
+            Some("https://openrouter.ai/api/v1".to_string())
         );
     }
 
