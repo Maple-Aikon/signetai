@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::constants::{DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HYBRID_ALPHA, DEFAULT_PORT};
 
@@ -20,12 +21,39 @@ pub struct DaemonConfig {
 }
 
 impl DaemonConfig {
-    pub fn from_env() -> Self {
-        let base = std::env::var("SIGNET_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| dirs_home().join(".agents"));
+    pub fn try_from_env() -> Result<Self, ManifestLoadError> {
+        let base = base_path_from_env();
+        let manifest = load_manifest(&base)?.unwrap_or_default();
+        Ok(Self::with_base_and_manifest(base, manifest))
+    }
 
-        let manifest = load_manifest(&base).unwrap_or_default();
+    pub fn from_env() -> Self {
+        match Self::try_from_env() {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to load agent manifest; using defaults");
+                Self::with_base_and_manifest(base_path_from_env(), AgentManifest::default())
+            }
+        }
+    }
+
+    pub fn memory_dir(&self) -> PathBuf {
+        self.base_path.join("memory")
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.base_path.join(".daemon").join("logs")
+    }
+
+    pub fn secrets_dir(&self) -> PathBuf {
+        self.base_path.join(".secrets")
+    }
+
+    pub fn skills_dir(&self) -> PathBuf {
+        self.base_path.join("skills")
+    }
+
+    fn with_base_and_manifest(base: PathBuf, manifest: AgentManifest) -> Self {
         let (cfg_host, cfg_bind) = resolve_network_binding(
             manifest
                 .network
@@ -58,22 +86,22 @@ impl DaemonConfig {
             manifest,
         }
     }
+}
 
-    pub fn memory_dir(&self) -> PathBuf {
-        self.base_path.join("memory")
-    }
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ManifestLoadError {
+    #[error("invalid extraction fallbackProvider '{value}': must be 'ollama' or 'none'")]
+    InvalidExtractionFallbackProvider { value: String },
+    #[error("invalid extraction fallbackProvider type at '{key}': expected a string ('ollama' or 'none')")]
+    InvalidExtractionFallbackProviderType { key: &'static str },
+    #[error("failed to parse agent.yaml: {message}")]
+    Parse { message: String },
+}
 
-    pub fn logs_dir(&self) -> PathBuf {
-        self.base_path.join(".daemon").join("logs")
-    }
-
-    pub fn secrets_dir(&self) -> PathBuf {
-        self.base_path.join(".secrets")
-    }
-
-    pub fn skills_dir(&self) -> PathBuf {
-        self.base_path.join("skills")
-    }
+fn base_path_from_env() -> PathBuf {
+    std::env::var("SIGNET_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dirs_home().join(".agents"))
 }
 
 fn dirs_home() -> PathBuf {
@@ -88,52 +116,71 @@ fn dirs_home() -> PathBuf {
         })
 }
 
-fn load_manifest(base: &Path) -> Option<AgentManifest> {
+fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, ManifestLoadError> {
     let path = base.join("agent.yaml");
-    let content = std::fs::read_to_string(&path).ok()?;
-    parse_manifest(&content)
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Ok(None),
+    };
+    parse_manifest(&content).map(Some)
 }
 
-fn parse_manifest(content: &str) -> Option<AgentManifest> {
-    let raw: serde_yml::Value = serde_yml::from_str(content).ok()?;
-    let mut manifest: AgentManifest = serde_yml::from_str(content).ok()?;
-    normalize_manifest(&mut manifest, &raw);
-    Some(manifest)
+fn parse_manifest(content: &str) -> Result<AgentManifest, ManifestLoadError> {
+    let raw: serde_yml::Value =
+        serde_yml::from_str(content).map_err(|error| ManifestLoadError::Parse {
+            message: error.to_string(),
+        })?;
+    let mut manifest: AgentManifest =
+        serde_yml::from_str(content).map_err(|error| ManifestLoadError::Parse {
+            message: error.to_string(),
+        })?;
+    normalize_manifest(&mut manifest, &raw)?;
+    Ok(manifest)
 }
 
-fn normalize_manifest(manifest: &mut AgentManifest, raw: &serde_yml::Value) {
+fn normalize_manifest(
+    manifest: &mut AgentManifest,
+    raw: &serde_yml::Value,
+) -> Result<(), ManifestLoadError> {
     let Some(memory) = manifest.memory.as_mut() else {
-        return;
+        return Ok(());
     };
     let Some(pipeline) = memory.pipeline_v2.as_mut() else {
-        return;
+        return Ok(());
     };
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
-    normalize_pipeline_extraction(pipeline, raw_pipeline);
+    normalize_pipeline_extraction(pipeline, raw_pipeline)?;
     normalize_pipeline_worker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline);
+    Ok(())
 }
 
-fn normalize_pipeline_extraction(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
-    let fallback = raw
+fn normalize_pipeline_extraction(
+    pipeline: &mut PipelineV2Config,
+    raw: Option<&serde_yml::Value>,
+) -> Result<(), ManifestLoadError> {
+    let nested_fallback = raw
         .and_then(|value| raw_child(value, "extraction"))
-        .and_then(|value| raw_string(value, "fallbackProvider"))
-        .or_else(|| raw.and_then(|value| raw_string(value, "extractionFallbackProvider")));
+        .map(|value| raw_optional_string_strict(value, "fallbackProvider"))
+        .transpose()?
+        .flatten();
+    let flat_fallback = raw
+        .map(|value| raw_optional_string_strict(value, "extractionFallbackProvider"))
+        .transpose()?
+        .flatten();
+    let fallback = nested_fallback.or(flat_fallback);
 
     if let Some(value) = &fallback {
         if is_extraction_fallback_provider(value) {
             pipeline.extraction.fallback_provider = value.to_string();
         } else {
-            // Hard-fail on invalid fallbackProvider — matches JS daemon's
-            // ConfigValidationError throw. Only this specific validation
-            // exits; generic YAML parse errors still fall through to defaults.
-            eprintln!(
-                "signet: fatal: invalid extraction fallbackProvider '{}': must be 'ollama' or 'none'",
-                value
-            );
-            std::process::exit(1);
+            return Err(ManifestLoadError::InvalidExtractionFallbackProvider {
+                value: value.to_string(),
+            });
         }
     }
+
+    Ok(())
 }
 
 fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
@@ -214,6 +261,23 @@ fn raw_string<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a str> {
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn raw_optional_string_strict<'a>(
+    value: &'a serde_yml::Value,
+    key: &'static str,
+) -> Result<Option<&'a str>, ManifestLoadError> {
+    let Some(raw) = raw_child(value, key) else {
+        return Ok(None);
+    };
+    let as_str = raw
+        .as_str()
+        .ok_or(ManifestLoadError::InvalidExtractionFallbackProviderType { key })?;
+    let trimmed = as_str.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed))
 }
 
 fn raw_u64(value: &serde_yml::Value, key: &str) -> Option<u64> {
@@ -564,10 +628,45 @@ memory:
         assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
     }
 
-    // Invalid fallbackProvider calls process::exit(1) which cannot be
-    // tested in-process. The validation is exercised by the eprintln
-    // message and exit call in normalize_pipeline_extraction.
-    // Valid values are covered by the existing tests above.
+    #[test]
+    fn extraction_fallback_provider_rejects_invalid_string_values() {
+        let error = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: maybe
+"#,
+        )
+        .expect_err("invalid fallbackProvider should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid extraction fallbackProvider 'maybe'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn extraction_fallback_provider_rejects_non_string_values() {
+        let error = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: 1
+"#,
+        )
+        .expect_err("non-string fallbackProvider should fail");
+
+        assert!(
+            error.to_string().contains("invalid extraction fallbackProvider type"),
+            "unexpected error: {error}"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
