@@ -394,6 +394,7 @@ export async function runSummaryCommandProvider(
 			});
 
 			let settled = false;
+			let timedOut = false;
 			let killTimer: ReturnType<typeof setTimeout> | null = null;
 			const clearKillTimer = (): void => {
 				if (killTimer) {
@@ -401,9 +402,10 @@ export async function runSummaryCommandProvider(
 					killTimer = null;
 				}
 			};
+			const timeoutError = new Error(`summary command timed out after ${timeoutMs}ms`);
 			const timeout = setTimeout(() => {
 				if (settled) return;
-				settled = true;
+				timedOut = true;
 				child.kill("SIGTERM");
 				killTimer = setTimeout(() => {
 					try {
@@ -412,7 +414,6 @@ export async function runSummaryCommandProvider(
 						// Child is already gone.
 					}
 				}, 2000);
-				reject(new Error(`summary command timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
 
 			child.on("error", (err) => {
@@ -420,6 +421,10 @@ export async function runSummaryCommandProvider(
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
+				if (timedOut) {
+					reject(timeoutError);
+					return;
+				}
 				reject(err);
 			});
 
@@ -428,6 +433,10 @@ export async function runSummaryCommandProvider(
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
+				if (timedOut) {
+					reject(timeoutError);
+					return;
+				}
 				const exitCode = code ?? 1;
 				if (exitCode !== 0) {
 					reject(new Error(`summary command exited with code ${exitCode}`));

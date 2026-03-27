@@ -305,6 +305,63 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 			),
 		).rejects.toThrow("summary command exited with code 7");
 	});
+
+	it("waits for process exit after timeout before rejecting", async () => {
+		const marker = join(tmpdir(), `signet-summary-timeout-${Date.now()}-${Math.random()}.txt`);
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n");
+		const scriptPath = join(dir, "summary-command-timeout.mjs");
+		writeFileSync(
+			scriptPath,
+			`import { writeFileSync } from "node:fs";
+const marker = process.argv[2];
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    writeFileSync(marker, "terminated", "utf8");
+    process.exit(0);
+  }, 150);
+});
+setInterval(() => {}, 1000);
+`,
+			"utf8",
+		);
+
+		const cfg = loadMemoryConfig(dir);
+		const commandCfg = {
+			...cfg,
+			pipelineV2: {
+				...cfg.pipelineV2,
+				extraction: {
+					...cfg.pipelineV2.extraction,
+					timeout: 5000,
+					provider: "command",
+					command: {
+						bin: "node",
+						args: [scriptPath, marker],
+					},
+				},
+			},
+		};
+
+		await expect(
+			runSummaryCommandProvider(
+				{
+					id: "job-timeout",
+					session_key: "session-timeout",
+					harness: "codex",
+					project: "/tmp/project",
+					agent_id: "default",
+					transcript: "test",
+					attempts: 1,
+					max_attempts: 3,
+					created_at: new Date().toISOString(),
+				},
+				commandCfg,
+			),
+		).rejects.toThrow("summary command timed out after 5000ms");
+
+		expect(existsSync(marker)).toBe(true);
+		rmSync(marker, { force: true });
+	}, 15_000);
 });
 
 describe("resolveSummaryProvider", () => {

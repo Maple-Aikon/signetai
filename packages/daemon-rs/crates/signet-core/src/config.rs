@@ -29,7 +29,14 @@ impl DaemonConfig {
             Ok(Some(manifest)) => manifest,
             Ok(None) => AgentManifest::default(),
             Err(error) => {
-                return Err(format!("Invalid agent.yaml: {error}"));
+                if should_fail_startup_for_manifest_error(&error) {
+                    return Err(format!("Invalid agent.yaml: {error}"));
+                }
+                tracing::warn!(
+                    error = %error,
+                    "invalid or unreadable agent.yaml; falling back to default manifest"
+                );
+                AgentManifest::default()
             }
         };
         let (cfg_host, cfg_bind) = resolve_network_binding(
@@ -92,6 +99,11 @@ fn dirs_home() -> PathBuf {
             );
             PathBuf::from(".")
         })
+}
+
+fn should_fail_startup_for_manifest_error(error: &str) -> bool {
+    error.contains("memory.pipelineV2.extraction.command")
+        || error.contains("memory.pipelineV2.synthesis.provider='command'")
 }
 
 fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, String> {
@@ -450,7 +462,10 @@ impl Default for EmbeddingConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{network_mode_from_bind, parse_manifest, resolve_network_binding, PipelineV2Config};
+    use super::{
+        network_mode_from_bind, parse_manifest, resolve_network_binding,
+        should_fail_startup_for_manifest_error, PipelineV2Config,
+    };
 
     #[test]
     fn resolves_localhost_binding_by_default() {
@@ -715,6 +730,20 @@ memory:
     fn extraction_timeout_default_matches_typescript_timeout() {
         let pipeline = PipelineV2Config::default();
         assert_eq!(pipeline.extraction.timeout, 90_000);
+    }
+
+    #[test]
+    fn startup_fail_fast_scopes_to_command_provider_manifest_errors() {
+        assert!(should_fail_startup_for_manifest_error(
+            "memory.pipelineV2.extraction.command is required when extraction.provider='command'"
+        ));
+        assert!(should_fail_startup_for_manifest_error(
+            "memory.pipelineV2.synthesis.provider='command' is not supported. Use extraction.provider='command' instead."
+        ));
+        assert!(!should_fail_startup_for_manifest_error("YAML parse error: invalid type"));
+        assert!(!should_fail_startup_for_manifest_error(
+            "manifest shape error: missing field `agent`"
+        ));
     }
 }
 
