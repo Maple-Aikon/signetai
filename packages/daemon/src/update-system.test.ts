@@ -99,6 +99,18 @@ describe("verifyInstalledVersion", () => {
 		}
 	});
 
+	it("fails when installed package.json version is not exact semver", () => {
+		const result = verifyInstalledVersion("bun", "signetai", null, {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => '{"version":"latest"}',
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("installed package.json has no valid version");
+		}
+	});
+
 	it("succeeds and returns installed version when verification passes", () => {
 		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
 			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
@@ -216,6 +228,8 @@ describe("version parsing helpers", () => {
 			"0.78.1",
 		);
 		expect(parseInstalledPackageVersion('{"name":"signetai","version":"   "}')).toBeNull();
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"latest"}')).toBeNull();
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"1.2.x"}')).toBeNull();
 		expect(parseInstalledPackageVersion('{"name":"signetai"}')).toBeNull();
 		expect(parseInstalledPackageVersion("not-json")).toBeNull();
 	});

@@ -75,6 +75,8 @@ interface GitHubReleaseResponse {
 
 const GITHUB_REPO = "Signet-AI/signetai";
 const NPM_PACKAGE = "signetai";
+const EXACT_SEMVER_PATTERN =
+	/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export const MIN_UPDATE_INTERVAL_SECONDS = 300;
 export const MAX_UPDATE_INTERVAL_SECONDS = 604800;
@@ -504,7 +506,7 @@ export function normalizeTargetVersion(targetVersion: string | undefined): strin
 	const trimmed = targetVersion.trim();
 	if (!trimmed) return null;
 	const normalized = trimmed.replace(/^v/i, "");
-	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(normalized)) {
+	if (!EXACT_SEMVER_PATTERN.test(normalized)) {
 		return null;
 	}
 	return normalized;
@@ -515,7 +517,8 @@ export function parseInstalledPackageVersion(packageJsonContent: string): string
 		const parsed = JSON.parse(packageJsonContent) as { version?: unknown };
 		if (typeof parsed.version !== "string") return null;
 		const version = parsed.version.trim();
-		return version.length > 0 ? version : null;
+		if (!version) return null;
+		return EXACT_SEMVER_PATTERN.test(version) ? version : null;
 	} catch {
 		return null;
 	}
