@@ -173,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start extraction worker and wire its live runtime-stats handle into
     // AppState so /api/status reports real worker state.
-    let _ = start_extraction_worker(state.as_ref()).await;
+    let _ = start_extraction_worker_inner(state.as_ref(), true).await;
 
     // Build router
     let app = Router::new()
@@ -665,7 +665,7 @@ fn provider_is_unsupported_for_daemon_startup_preflight(provider: &str) -> bool 
     matches!(provider, "openrouter")
 }
 
-pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
+async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked: bool) -> bool {
     {
         let handle = state.extraction_worker_handle.lock().await;
         if handle.is_some() {
@@ -729,6 +729,9 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
                 let reason = format!(
                     "{reason_prefix}; ollama fallback startup preflight failed"
                 );
+                if dead_letter_on_blocked {
+                    dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+                }
                 *state.extraction_state.write().await = Some(ExtractionRuntimeState {
                     configured: Some(pipeline.extraction.provider.clone()),
                     resolved: pipeline.extraction.provider.clone(),
@@ -752,6 +755,9 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
             } else {
                 reason_prefix
             };
+            if dead_letter_on_blocked {
+                dead_letter_pending_extraction_jobs(state, &reason, &now).await;
+            }
             *state.extraction_state.write().await = Some(ExtractionRuntimeState {
                 configured: Some(pipeline.extraction.provider.clone()),
                 resolved: pipeline.extraction.provider.clone(),
@@ -843,6 +849,10 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
         handle.stop().await;
         true
     }
+}
+
+pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
+    start_extraction_worker_inner(state, false).await
 }
 
 pub(crate) async fn stop_extraction_worker(state: &AppState) {
@@ -1164,16 +1174,21 @@ async fn cli_preflight(name: &str) -> bool {
         return false;
     };
     // Verify the binary actually runs (mirrors JS daemon's --version check)
-    tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&path)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            std::process::Command::new(&path)
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }),
+    )
     .await
+    .ok()
+    .and_then(|result| result.ok())
     .unwrap_or(false)
 }
 
@@ -1405,7 +1420,7 @@ mod tests {
         preflight_extraction, resolve_runtime_extraction_endpoint,
         resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
         provider_is_unsupported_for_daemon_startup_preflight, dead_letter_pending_extraction_jobs,
-        start_extraction_worker, stop_extraction_worker,
+        start_extraction_worker, start_extraction_worker_inner, stop_extraction_worker,
     };
 
     fn test_state_with_pipeline_config(
@@ -1766,6 +1781,72 @@ mod tests {
         assert_eq!(extraction.effective, "none");
         assert_eq!(extraction.status, "blocked");
         assert!(!extraction.fallback_applied);
+    }
+
+    #[tokio::test]
+    async fn startup_worker_block_dead_letters_pending_jobs_when_provider_becomes_blocked() {
+        let state = test_state_with_extraction("claude-code", "none", None);
+
+        state
+            .pool
+            .write_tx(signet_core::db::Priority::High, |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, content, normalized_content, content_hash, type, importance, extraction_status, created_at, updated_at, updated_by)
+                     VALUES (?1, 'memory', 'memory', 'hash-startup-worker-block', 'fact', 0.5, 'queued', ?2, ?2, 'test')",
+                    rusqlite::params!["mem-startup-worker-block", "2026-03-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                     VALUES (?1, ?2, 'extract', 'pending', ?3, ?3)",
+                    rusqlite::params![
+                        "job-startup-worker-block",
+                        "mem-startup-worker-block",
+                        "2026-03-27T00:00:00Z"
+                    ],
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed pending extraction");
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "claude-code".to_string(),
+                fallback_provider: "none".to_string(),
+                status: "active".to_string(),
+                degraded: false,
+                fallback_applied: false,
+                reason: None,
+                since: None,
+            });
+        }
+
+        let started = start_extraction_worker_inner(state.as_ref(), true).await;
+        assert!(!started);
+
+        let (job_status, memory_status) = state
+            .pool
+            .read(|conn| {
+                let job_status: String = conn.query_row(
+                    "SELECT status FROM memory_jobs WHERE id = 'job-startup-worker-block'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let memory_status: String = conn.query_row(
+                    "SELECT extraction_status FROM memories WHERE id = 'mem-startup-worker-block'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((job_status, memory_status))
+            })
+            .await
+            .expect("read blocked startup statuses");
+
+        assert_eq!(job_status, "dead");
+        assert_eq!(memory_status, "failed");
     }
 
     #[tokio::test]
