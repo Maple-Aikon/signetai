@@ -158,6 +158,17 @@ impl WorkerRuntimeStats {
 
 pub type SharedWorkerRuntimeStats = Arc<Mutex<WorkerRuntimeStats>>;
 
+/// Build a shared runtime-stats handle using configured load-shedding bounds.
+pub fn new_runtime_stats_handle(
+    max_load_per_cpu: f64,
+    overload_backoff_ms: u64,
+) -> SharedWorkerRuntimeStats {
+    Arc::new(Mutex::new(WorkerRuntimeStats::new(
+        max_load_per_cpu,
+        overload_backoff_ms,
+    )))
+}
+
 // ---------------------------------------------------------------------------
 // Worker handle
 // ---------------------------------------------------------------------------
@@ -193,10 +204,7 @@ pub fn start(
     config: WorkerConfig,
 ) -> WorkerHandle {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let stats = Arc::new(Mutex::new(WorkerRuntimeStats::new(
-        config.max_load_per_cpu,
-        config.overload_backoff_ms,
-    )));
+    let stats = new_runtime_stats_handle(config.max_load_per_cpu, config.overload_backoff_ms);
 
     let handle = tokio::spawn(worker_loop(
         pool,
@@ -519,7 +527,7 @@ async fn fail_job(pool: &DbPool, job_id: &str, error: &str) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::WorkerRuntimeStats;
+    use super::{WorkerRuntimeStats, new_runtime_stats_handle};
 
     #[test]
     fn runtime_stats_preserve_overload_since_and_countdown() {
@@ -558,5 +566,15 @@ mod tests {
         assert!(!snap.running);
         assert_eq!(snap.load_per_cpu, None);
         assert_eq!(snap.next_tick_in_ms, None);
+    }
+
+    #[tokio::test]
+    async fn new_runtime_stats_handle_uses_configured_bounds() {
+        let stats = new_runtime_stats_handle(0.55, 42_000);
+        let snap = stats.lock().await.snapshot(0);
+        assert_eq!(snap.max_load_per_cpu, 0.55);
+        assert_eq!(snap.overload_backoff_ms, 42_000);
+        assert!(!snap.running);
+        assert!(!snap.overloaded);
     }
 }

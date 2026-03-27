@@ -153,7 +153,17 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
-    let extraction_worker_stats = None;
+    let extraction_worker_stats = config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|pipeline| {
+            signet_pipeline::worker::new_runtime_stats_handle(
+                pipeline.worker.max_load_per_cpu,
+                pipeline.worker.overload_backoff_ms,
+            )
+        });
 
     // Build app state
     let state = Arc::new(AppState::new(
@@ -830,7 +840,7 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             // Collect affected memory IDs before updating jobs
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT memory_id FROM memory_jobs
-                 WHERE job_type = 'extract' AND status = 'pending'",
+                 WHERE job_type IN ('extract', 'extraction') AND status = 'pending'",
             )?;
             let memory_ids: Vec<String> = stmt
                 .query_map([], |row| row.get(0))?
@@ -840,7 +850,7 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             // Dead-letter the pending jobs
             let count = conn.execute(
                 "UPDATE memory_jobs SET status = 'dead', error = ?1, failed_at = ?2, updated_at = ?2
-                 WHERE job_type = 'extract' AND status = 'pending'",
+                 WHERE job_type IN ('extract', 'extraction') AND status = 'pending'",
                 rusqlite::params![reason, now],
             )?;
 
@@ -849,7 +859,7 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             if !memory_ids.is_empty() {
                 let mut check_leased = conn.prepare(
                     "SELECT COUNT(*) FROM memory_jobs
-                     WHERE memory_id = ?1 AND job_type = 'extract' AND status = 'leased'",
+                     WHERE memory_id = ?1 AND job_type IN ('extract', 'extraction') AND status = 'leased'",
                 )?;
                 let mut update_mem = conn.prepare(
                     "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
