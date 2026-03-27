@@ -354,24 +354,29 @@ export async function runSummaryCommandProvider(
 	const transcriptPath = join(tempDir, "transcript.txt");
 	writeFileSync(transcriptPath, job.transcript, "utf-8");
 
-	const replacements: Record<string, string> = {
+	const tokenReplacements: Record<string, string> = {
 		$TRANSCRIPT: transcriptPath,
 		$TRANSCRIPT_PATH: transcriptPath,
 		$SESSION_KEY: job.session_key ?? "",
 		$PROJECT: job.project ?? "",
+		$AGENT_ID: job.agent_id,
 		$SIGNET_PATH: AGENTS_DIR,
 	};
-	const bin = substituteCommandTokens(command.bin, replacements).trim();
+	const locationReplacements: Record<string, string> = {
+		$AGENT_ID: job.agent_id,
+		$SIGNET_PATH: AGENTS_DIR,
+	};
+	const bin = substituteCommandTokens(command.bin, locationReplacements).trim();
 	if (bin.length === 0) {
 		throw new Error("pipelineV2.extraction.command.bin resolved to an empty value");
 	}
-	const args = command.args.map((arg) => substituteCommandTokens(arg, replacements));
+	const args = command.args.map((arg) => substituteCommandTokens(arg, tokenReplacements));
 	const timeoutMs = Math.max(5000, Math.min(300000, cfg.pipelineV2.extraction.timeout));
-	const cwd = command.cwd ? substituteCommandTokens(command.cwd, replacements).trim() : undefined;
+	const cwd = command.cwd ? substituteCommandTokens(command.cwd, locationReplacements).trim() : undefined;
 	const envFromConfig: Record<string, string> = {};
 	if (command.env) {
 		for (const [key, value] of Object.entries(command.env)) {
-			envFromConfig[key] = substituteCommandTokens(value, replacements);
+			envFromConfig[key] = substituteCommandTokens(value, tokenReplacements);
 		}
 	}
 
@@ -389,11 +394,18 @@ export async function runSummaryCommandProvider(
 			});
 
 			let settled = false;
+			let killTimer: ReturnType<typeof setTimeout> | null = null;
+			const clearKillTimer = (): void => {
+				if (killTimer) {
+					clearTimeout(killTimer);
+					killTimer = null;
+				}
+			};
 			const timeout = setTimeout(() => {
 				if (settled) return;
 				settled = true;
 				child.kill("SIGTERM");
-				setTimeout(() => {
+				killTimer = setTimeout(() => {
 					try {
 						child.kill("SIGKILL");
 					} catch {
@@ -404,6 +416,7 @@ export async function runSummaryCommandProvider(
 			}, timeoutMs);
 
 			child.on("error", (err) => {
+				clearKillTimer();
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
@@ -411,6 +424,7 @@ export async function runSummaryCommandProvider(
 			});
 
 			child.on("close", (code) => {
+				clearKillTimer();
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
@@ -1397,7 +1411,10 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			});
 
 			let providerForJob: LlmProvider | null = null;
-			if (cfg.pipelineV2.synthesis.enabled && cfg.pipelineV2.synthesis.provider !== "none") {
+			const requiresProviderForExtraction = cfg.pipelineV2.extraction.provider !== "command";
+			const requiresProviderForSynthesis =
+				cfg.pipelineV2.synthesis.enabled && cfg.pipelineV2.synthesis.provider !== "none";
+			if (requiresProviderForExtraction || requiresProviderForSynthesis) {
 				// Cache provider across jobs — re-resolve on config change, env
 				// key rotation, or TTL expiry. Env-var key changes invalidate
 				// immediately; secrets-store-only rotations rely on the 5-min TTL.

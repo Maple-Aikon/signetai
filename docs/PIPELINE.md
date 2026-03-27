@@ -976,8 +976,9 @@ extraction:
   minConfidence: 0.7             # fraction 0.0–1.0
   command:                       # required when provider: command
     bin: node
-    args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"]
-    # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $SIGNET_PATH
+    args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
+    # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $AGENT_ID, $SIGNET_PATH
+    # keep bin/cwd fixed (or trusted $SIGNET_PATH/$AGENT_ID only); use args/env for session/project tokens
     # command stdout/stderr are ignored; command must write memories to Signet state directly
     # after command success, synthesis hooks can run when configured, but markdown/fact writes are skipped in command mode
 

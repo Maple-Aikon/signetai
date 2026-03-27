@@ -220,12 +220,13 @@ describe("runSummaryCommandProvider", () => {
 		writeFileSync(
 			scriptPath,
 			`import { existsSync, readFileSync, writeFileSync } from "node:fs";
-const [transcriptPath, sessionKey, project, markerPath] = process.argv.slice(2);
+const [transcriptPath, sessionKey, project, agentId, markerPath] = process.argv.slice(2);
 if (!existsSync(transcriptPath)) process.exit(11);
 const text = readFileSync(transcriptPath, "utf8");
 if (!text.includes("hello command provider")) process.exit(12);
 if (sessionKey !== "session-123") process.exit(13);
 if (project !== "/tmp/project") process.exit(14);
+if (agentId !== "agent-abc") process.exit(15);
 writeFileSync(markerPath, transcriptPath, "utf8");
 `,
 			"utf8",
@@ -241,7 +242,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 					provider: "command",
 					command: {
 						bin: "node",
-						args: [scriptPath, "$TRANSCRIPT", "$SESSION_KEY", "$PROJECT", marker],
+						args: [scriptPath, "$TRANSCRIPT", "$SESSION_KEY", "$PROJECT", "$AGENT_ID", marker],
 					},
 				},
 			},
@@ -252,7 +253,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				session_key: "session-123",
 				harness: "codex",
 				project: "/tmp/project",
-				agent_id: "default",
+				agent_id: "agent-abc",
 				transcript: "hello command provider",
 				attempts: 1,
 				max_attempts: 3,

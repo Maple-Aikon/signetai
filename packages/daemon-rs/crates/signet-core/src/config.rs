@@ -20,7 +20,7 @@ pub struct DaemonConfig {
 }
 
 impl DaemonConfig {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> Result<Self, String> {
         let base = std::env::var("SIGNET_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| dirs_home().join(".agents"));
@@ -29,11 +29,7 @@ impl DaemonConfig {
             Ok(Some(manifest)) => manifest,
             Ok(None) => AgentManifest::default(),
             Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "invalid or unreadable agent.yaml; falling back to default manifest"
-                );
-                AgentManifest::default()
+                return Err(format!("Invalid agent.yaml: {error}"));
             }
         };
         let (cfg_host, cfg_bind) = resolve_network_binding(
@@ -59,14 +55,14 @@ impl DaemonConfig {
             }
         });
 
-        Self {
+        Ok(Self {
             base_path: base,
             db_path: db,
             port,
             host,
             bind,
             manifest,
-        }
+        })
     }
 
     pub fn memory_dir(&self) -> PathBuf {
@@ -113,6 +109,7 @@ fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, String> {
     parse_manifest_result(&content).map(Some)
 }
 
+#[cfg(test)]
 fn parse_manifest(content: &str) -> Option<AgentManifest> {
     parse_manifest_result(content).ok()
 }

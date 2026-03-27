@@ -279,8 +279,7 @@ function parseCommandConfig(raw: unknown): PipelineV2Config["extraction"]["comma
 	}
 
 	const record = raw;
-	const candidateBin =
-		typeof record.bin === "string" ? record.bin : typeof record.command === "string" ? record.command : "";
+	const candidateBin = typeof record.bin === "string" ? record.bin : "";
 	const bin = candidateBin.trim();
 	if (bin.length === 0) return undefined;
 

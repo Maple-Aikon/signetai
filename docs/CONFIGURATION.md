@@ -341,7 +341,13 @@ its path is substituted into command arguments:
 - `$TRANSCRIPT` (alias `$TRANSCRIPT_PATH`) — temp transcript file path
 - `$SESSION_KEY` — session key (or empty string)
 - `$PROJECT` — project path (or empty string)
+- `$AGENT_ID` — agent id for the queued job
 - `$SIGNET_PATH` — active Signet workspace path
+
+For safety, user-derived tokens (`$SESSION_KEY`, `$PROJECT`,
+`$TRANSCRIPT`) are intended for args/env substitution. Keep `bin` and
+`cwd` fixed (or use trusted `$SIGNET_PATH` / `$AGENT_ID`), so command
+path resolution is not driven by transcript/session metadata.
 
 The command's stdout/stderr are not used as extraction output. The
 external command is responsible for writing memories to Signet state
