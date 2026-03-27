@@ -283,7 +283,13 @@ function parseCommandConfig(raw: unknown): PipelineV2Config["extraction"]["comma
 	const bin = candidateBin.trim();
 	if (bin.length === 0) return undefined;
 
-	const args = Array.isArray(record.args) ? record.args.filter((item): item is string => typeof item === "string") : [];
+	let args: string[] = [];
+	if (Array.isArray(record.args)) {
+		if (record.args.some((item) => typeof item !== "string")) {
+			return undefined;
+		}
+		args = [...record.args];
+	}
 	const cwd = typeof record.cwd === "string" && record.cwd.trim().length > 0 ? record.cwd.trim() : undefined;
 
 	let env: Record<string, string> | undefined;

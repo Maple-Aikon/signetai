@@ -639,6 +639,24 @@ describe("loadPipelineConfig", () => {
 		).toThrow("extraction.command is required when extraction.provider='command'");
 	});
 
+	it("rejects extraction.command args that contain non-strings", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "command",
+							command: {
+								bin: "node",
+								args: ["script.mjs", 123],
+							},
+						},
+					},
+				},
+			}),
+		).toThrow("extraction.command is required when extraction.provider='command'");
+	});
+
 	it("loadMemoryConfig fails fast when extraction.provider=command is missing command config", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
