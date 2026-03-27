@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.78.0] - 2026-03-27
+
+### Bug Fixes
+
+- **daemon**: add prompt-submit success telemetry on all success paths (#360)
+
+
 ## [0.77.7] - 2026-03-26
 
 ### Features

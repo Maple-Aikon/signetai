@@ -2297,6 +2297,39 @@ function resolveRecallUserMessage(req: UserPromptSubmitRequest): string {
 	return stripUntrustedMetadata(raw).trim();
 }
 
+function finalizeUserPromptSubmitSuccess(
+	req: UserPromptSubmitRequest,
+	userMessage: string,
+	start: number,
+	result: UserPromptSubmitResponse,
+	engineOverride?: string,
+): UserPromptSubmitResponse {
+	const inject = typeof result.inject === "string" ? result.inject : "";
+	const rawMemoryCount = typeof result.memoryCount === "number" ? result.memoryCount : 0;
+	const memoryCount = Number.isFinite(rawMemoryCount) && rawMemoryCount >= 0 ? rawMemoryCount : 0;
+	const engine =
+		typeof engineOverride === "string" && engineOverride.trim().length > 0
+			? engineOverride
+			: typeof result.engine === "string" && result.engine.trim().length > 0
+				? result.engine
+				: "none";
+	const duration = Date.now() - start;
+
+	logger.info("hooks", "User prompt submit", {
+		harness: req.harness,
+		project: req.project,
+		sessionKey: req.sessionKey,
+		memoryCount,
+		prompt: userMessage,
+		injectChars: inject.length,
+		inject,
+		engine,
+		durationMs: duration,
+	});
+
+	return result;
+}
+
 export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Promise<UserPromptSubmitResponse> {
 	const start = Date.now();
 	const submitCfg = loadHooksConfig().userPromptSubmit ?? {};
@@ -2399,11 +2432,31 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
 
 	if (submitCfg.enabled === false) {
-		return { inject: metadataHeader, memoryCount: 0, warnings };
+		return finalizeUserPromptSubmitSuccess(
+			req,
+			userMessage,
+			start,
+			{
+				inject: metadataHeader,
+				memoryCount: 0,
+				warnings,
+			},
+			"disabled",
+		);
 	}
 
 	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(MEMORY_DB)) {
-		return { inject: metadataHeader, memoryCount: 0, warnings };
+		return finalizeUserPromptSubmitSuccess(
+			req,
+			userMessage,
+			start,
+			{
+				inject: metadataHeader,
+				memoryCount: 0,
+				warnings,
+			},
+			"no-query",
+		);
 	}
 
 	try {
@@ -2440,7 +2493,12 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				limit: 4,
 			});
 			if (temporalHits.length > 0) {
-				return buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings);
+				return finalizeUserPromptSubmitSuccess(
+					req,
+					userMessage,
+					start,
+					buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings),
+				);
 			}
 			const transcriptHits = searchTranscriptFallback({
 				query: vectorQuery,
@@ -2450,10 +2508,25 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				limit: 3,
 			});
 			if (transcriptHits.length > 0) {
-				return buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings);
+				return finalizeUserPromptSubmitSuccess(
+					req,
+					userMessage,
+					start,
+					buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings),
+				);
 			}
 			if (noStructured) {
-				return { inject: metadataHeader, memoryCount: 0, warnings };
+				return finalizeUserPromptSubmitSuccess(
+					req,
+					userMessage,
+					start,
+					{
+						inject: metadataHeader,
+						memoryCount: 0,
+						warnings,
+					},
+					"no-structured",
+				);
 			}
 		}
 
@@ -2485,7 +2558,17 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		}
 
 		if (selected.length === 0) {
-			return { inject: metadataHeader, memoryCount: 0, warnings };
+			return finalizeUserPromptSubmitSuccess(
+				req,
+				userMessage,
+				start,
+				{
+					inject: metadataHeader,
+					memoryCount: 0,
+					warnings,
+				},
+				"dedup-empty",
+			);
 		}
 
 		const lines = selected.map((s) => {
@@ -2516,25 +2599,13 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			}
 		}
 
-		const duration = Date.now() - start;
-		logger.info("hooks", "User prompt submit", {
-			harness: req.harness,
-			project: req.project,
-			sessionKey: req.sessionKey,
-			memoryCount: selected.length,
-			prompt: userMessage,
-			injectChars: inject.length,
-			inject,
-			durationMs: duration,
-		});
-
-		return {
+		return finalizeUserPromptSubmitSuccess(req, userMessage, start, {
 			inject,
 			memoryCount: selected.length,
 			queryTerms,
 			engine: "hybrid",
 			warnings,
-		};
+		});
 	} catch (e) {
 		logger.error("hooks", "User prompt submit failed", e as Error);
 		return { inject: "", memoryCount: 0, warnings };
