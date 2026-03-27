@@ -247,6 +247,7 @@ pub async fn remember(
                 .get("duplicateOf")
                 .and_then(|v| v.as_str())
                 .map(|v| v.to_string());
+            let mut blocked_enforcement_failed = false;
             if duplicate_of.is_none() && state.is_extraction_blocked().await {
                 let blocked_reason = state
                     .extraction_block_reason()
@@ -271,13 +272,7 @@ pub async fn remember(
                         err = %error,
                         "failed to enforce blocked extraction invariant for remembered memory"
                     );
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": "Failed to enforce blocked extraction invariant"
-                        })),
-                    )
-                        .into_response();
+                    blocked_enforcement_failed = true;
                 }
             }
             let status = if duplicate_of.is_some() {
@@ -285,14 +280,20 @@ pub async fn remember(
             } else {
                 "created"
             };
+            let mut response = serde_json::json!({
+                "id": id,
+                "status": status,
+                "hash": hash,
+                "duplicateOf": duplicate_of,
+            });
+            if blocked_enforcement_failed {
+                response["warning"] = serde_json::json!(
+                    "Memory was persisted, but blocked-extraction enforcement failed post-commit"
+                );
+            }
             (
                 StatusCode::OK,
-                Json(serde_json::json!({
-                    "id": id,
-                    "status": status,
-                    "hash": hash,
-                    "duplicateOf": duplicate_of,
-                })),
+                Json(response),
             )
                 .into_response()
         }
