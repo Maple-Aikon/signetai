@@ -6,33 +6,38 @@
 	import Orbit from "@lucide/svelte/icons/orbit";
 	import Activity from "@lucide/svelte/icons/activity";
 	import Cog from "@lucide/svelte/icons/cog";
-	import Store from "@lucide/svelte/icons/store";
+	import BookOpen from "@lucide/svelte/icons/book-open";
 	import ListChecks from "@lucide/svelte/icons/list-checks";
 
 	interface QuickLink {
 		label: string;
-		tab: TabId;
+		tab: TabId | null;
 		icon: typeof Brain;
 	}
 
 	const links: QuickLink[] = [
-		{ label: "Memory", tab: "memory", icon: Brain },
-		{ label: "Knowledge", tab: "knowledge", icon: Network },
-		{ label: "Constellation", tab: "embeddings", icon: Orbit },
-		{ label: "Pipeline", tab: "pipeline", icon: Activity },
+		{ label: "Memory", tab: "cortex-memory", icon: Brain },
+		{ label: "Knowledge", tab: null, icon: Network },
+		{ label: "Constellation", tab: null, icon: Orbit },
+		{ label: "Pipeline", tab: null, icon: Activity },
 		{ label: "Settings", tab: "settings", icon: Cog },
-		{ label: "Marketplace", tab: "skills", icon: Store },
+		{ label: "Skills", tab: "skills", icon: BookOpen },
 		{ label: "Tasks", tab: "tasks", icon: ListChecks },
 	];
+
+	function open(link: QuickLink): void {
+		if (!link.tab) return;
+		setTab(link.tab);
+	}
 </script>
 
 <div class="quick-links">
-	{#each links as link (link.tab)}
+	{#each links as link (link.label)}
 		<Button
 			variant="ghost"
 			size="sm"
 			class="link-btn"
-			onclick={() => setTab(link.tab)}
+			onclick={() => open(link)}
 		>
 			<link.icon class="size-3.5" />
 			<span class="link-label">{link.label}</span>

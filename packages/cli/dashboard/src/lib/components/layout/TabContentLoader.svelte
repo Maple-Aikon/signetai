@@ -19,6 +19,7 @@ interface Props {
 	harnesses: Harness[];
 	daemonStatus: DaemonStatus | null;
 	displayMemories: Memory[];
+	agentId: string;
 	onopenglobalsimilar: (memory: Memory) => void;
 	ontimelinegeneratedforchange: (value: string) => void;
 }
@@ -31,6 +32,7 @@ const {
 	harnesses,
 	daemonStatus,
 	displayMemories,
+	agentId,
 	onopenglobalsimilar,
 	ontimelinegeneratedforchange,
 }: Props = $props();
@@ -109,7 +111,7 @@ const {
 	{#await import("$lib/components/tabs/MemoryTab.svelte")}
 		{@render skeletonCards()}
 	{:then module}
-		<module.default memories={displayMemories} />
+		<module.default memories={displayMemories} {agentId} />
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
@@ -127,13 +129,21 @@ const {
 			<Skeleton class="h-64 w-64 rounded-full" />
 		</div>
 	{:then module}
-		<module.default onopenglobalsimilar={onopenglobalsimilar} />
+		<module.default onopenglobalsimilar={onopenglobalsimilar} {agentId} />
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
 {:else if activeTab === "knowledge"}
 	{#await import("$lib/components/tabs/KnowledgeTab.svelte")}
 		{@render skeletonCards()}
+	{:then module}
+		<module.default />
+	{:catch error}
+		{@render skeletonError(error)}
+	{/await}
+{:else if activeTab === "audit"}
+	{#await import("$lib/components/tabs/AuditTab.svelte")}
+		{@render skeletonList()}
 	{:then module}
 		<module.default />
 	{:catch error}
@@ -172,7 +182,7 @@ const {
 		{@render skeletonError(error)}
 	{/await}
 {:else if activeTab === "tasks"}
-	{#await import("$lib/components/tabs/TasksTab.svelte")}
+	{#await import("$lib/components/cortex/CortexTasksPanel.svelte")}
 		{@render skeletonList()}
 	{:then module}
 		<module.default />
@@ -218,6 +228,7 @@ const {
 		<module.default
 			{activeTab}
 			memories={displayMemories}
+			{agentId}
 			{memoryStats}
 			{harnesses}
 			{daemonStatus}
