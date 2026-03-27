@@ -8,9 +8,12 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
+	clearCommandStageRunning,
+	getCommandStageStatus,
 	hasCommandStageCompleted,
 	insertSummaryFacts,
 	markCommandStageCompleted,
+	markCommandStageRunning,
 	recoverSummaryJobs,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
@@ -217,16 +220,18 @@ describe("recoverSummaryJobs", () => {
 
 describe("shouldRunSignificanceGateForJob", () => {
 	it("runs significance gate for non-command extraction jobs", () => {
-		expect(shouldRunSignificanceGateForJob(false, false)).toBe(true);
-		expect(shouldRunSignificanceGateForJob(false, true)).toBe(true);
+		expect(shouldRunSignificanceGateForJob(false, "none")).toBe(true);
+		expect(shouldRunSignificanceGateForJob(false, "running")).toBe(true);
+		expect(shouldRunSignificanceGateForJob(false, "complete")).toBe(true);
 	});
 
 	it("runs significance gate before command stage has completed", () => {
-		expect(shouldRunSignificanceGateForJob(true, false)).toBe(true);
+		expect(shouldRunSignificanceGateForJob(true, "none")).toBe(true);
 	});
 
-	it("skips significance gate on retries after command stage completion", () => {
-		expect(shouldRunSignificanceGateForJob(true, true)).toBe(false);
+	it("skips significance gate for command retries once a stage checkpoint exists", () => {
+		expect(shouldRunSignificanceGateForJob(true, "running")).toBe(false);
+		expect(shouldRunSignificanceGateForJob(true, "complete")).toBe(false);
 	});
 });
 
@@ -244,7 +249,7 @@ describe("command stage completion marker", () => {
 		db.close();
 	});
 
-	it("persists command-stage completion so retries can skip command reruns", () => {
+	it("tracks running and completed stage checkpoints for command-mode retries", () => {
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT INTO summary_jobs
@@ -252,14 +257,20 @@ describe("command stage completion marker", () => {
 			 VALUES ('job-cmd-marker', NULL, 'codex', NULL, 'transcript', 'processing', 1, 3, ?, NULL)`,
 		).run(now);
 
+		expect(getCommandStageStatus(accessor, "job-cmd-marker")).toBe("none");
+		expect(hasCommandStageCompleted(accessor, "job-cmd-marker")).toBe(false);
+
+		markCommandStageRunning(accessor, "job-cmd-marker");
+		expect(getCommandStageStatus(accessor, "job-cmd-marker")).toBe("running");
 		expect(hasCommandStageCompleted(accessor, "job-cmd-marker")).toBe(false);
 
 		markCommandStageCompleted(accessor, "job-cmd-marker");
 
+		expect(getCommandStageStatus(accessor, "job-cmd-marker")).toBe("complete");
 		expect(hasCommandStageCompleted(accessor, "job-cmd-marker")).toBe(true);
 	});
 
-	it("does not mark command completion when the job is not in processing state", () => {
+	it("does not mutate stage checkpoints when the job is not in processing state", () => {
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT INTO summary_jobs
@@ -267,9 +278,27 @@ describe("command stage completion marker", () => {
 			 VALUES ('job-cmd-pending', NULL, 'codex', NULL, 'transcript', 'pending', 0, 3, ?, NULL)`,
 		).run(now);
 
+		markCommandStageRunning(accessor, "job-cmd-pending");
 		markCommandStageCompleted(accessor, "job-cmd-pending");
+		clearCommandStageRunning(accessor, "job-cmd-pending");
 
+		expect(getCommandStageStatus(accessor, "job-cmd-pending")).toBe("none");
 		expect(hasCommandStageCompleted(accessor, "job-cmd-pending")).toBe(false);
+	});
+
+	it("clears the running checkpoint when command execution fails", () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at, result)
+			 VALUES ('job-cmd-fail-reset', NULL, 'codex', NULL, 'transcript', 'processing', 1, 3, ?, NULL)`,
+		).run(now);
+
+		markCommandStageRunning(accessor, "job-cmd-fail-reset");
+		expect(getCommandStageStatus(accessor, "job-cmd-fail-reset")).toBe("running");
+
+		clearCommandStageRunning(accessor, "job-cmd-fail-reset");
+		expect(getCommandStageStatus(accessor, "job-cmd-fail-reset")).toBe("none");
 	});
 });
 

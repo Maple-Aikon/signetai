@@ -76,7 +76,9 @@ interface LlmSummaryResult {
 }
 
 export const SUMMARY_WORKER_UPDATED_BY = "summary-worker";
+const COMMAND_STAGE_RUNNING_RESULT = "command-stage-running";
 const COMMAND_STAGE_COMPLETED_RESULT = "command-stage-complete";
+type CommandStageStatus = "none" | "running" | "complete";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -334,8 +336,8 @@ function passesSignificanceGate(
 	return false;
 }
 
-export function shouldRunSignificanceGateForJob(commandMode: boolean, commandStageCompleted: boolean): boolean {
-	return !commandMode || !commandStageCompleted;
+export function shouldRunSignificanceGateForJob(commandMode: boolean, commandStageStatus: CommandStageStatus): boolean {
+	return !commandMode || commandStageStatus === "none";
 }
 
 function substituteCommandTokens(input: string, replacements: Record<string, string>): string {
@@ -455,12 +457,42 @@ export async function runSummaryCommandProvider(
 	}
 }
 
-export function hasCommandStageCompleted(accessor: DbAccessor, jobId: string): boolean {
+export function getCommandStageStatus(accessor: DbAccessor, jobId: string): CommandStageStatus {
 	return accessor.withReadDb((db) => {
 		const row = db.prepare("SELECT result FROM summary_jobs WHERE id = ?").get(jobId) as
 			| { result: string | null }
 			| undefined;
-		return row?.result === COMMAND_STAGE_COMPLETED_RESULT;
+		if (row?.result === COMMAND_STAGE_COMPLETED_RESULT) {
+			return "complete";
+		}
+		if (row?.result === COMMAND_STAGE_RUNNING_RESULT) {
+			return "running";
+		}
+		return "none";
+	});
+}
+
+export function hasCommandStageCompleted(accessor: DbAccessor, jobId: string): boolean {
+	return getCommandStageStatus(accessor, jobId) === "complete";
+}
+
+export function markCommandStageRunning(accessor: DbAccessor, jobId: string): void {
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE summary_jobs
+			 SET result = ?
+			 WHERE id = ? AND status = 'processing' AND (result IS NULL OR result = '')`,
+		).run(COMMAND_STAGE_RUNNING_RESULT, jobId);
+	});
+}
+
+export function clearCommandStageRunning(accessor: DbAccessor, jobId: string): void {
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE summary_jobs
+			 SET result = NULL
+			 WHERE id = ? AND status = 'processing' AND result = ?`,
+		).run(jobId, COMMAND_STAGE_RUNNING_RESULT);
 	});
 }
 
@@ -469,8 +501,8 @@ export function markCommandStageCompleted(accessor: DbAccessor, jobId: string): 
 		db.prepare(
 			`UPDATE summary_jobs
 			 SET result = ?
-			 WHERE id = ? AND status = 'processing'`,
-		).run(COMMAND_STAGE_COMPLETED_RESULT, jobId);
+			 WHERE id = ? AND status = 'processing' AND (result = ? OR result IS NULL OR result = '')`,
+		).run(COMMAND_STAGE_COMPLETED_RESULT, jobId, COMMAND_STAGE_RUNNING_RESULT);
 	});
 }
 
@@ -481,26 +513,43 @@ async function processJob(
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	const commandMode = memoryCfg.pipelineV2.extraction.provider === "command";
-	const commandAlreadyCompleted = commandMode && hasCommandStageCompleted(accessor, job.id);
+	const commandStageStatus: CommandStageStatus = commandMode ? getCommandStageStatus(accessor, job.id) : "none";
 
 	if (
-		shouldRunSignificanceGateForJob(commandMode, commandAlreadyCompleted) &&
+		shouldRunSignificanceGateForJob(commandMode, commandStageStatus) &&
 		!passesSignificanceGate(accessor, job, memoryCfg)
 	) {
 		return;
 	}
 
 	if (commandMode) {
-		if (!commandAlreadyCompleted) {
-			await runSummaryCommandProvider(job, memoryCfg);
+		if (commandStageStatus === "none") {
+			markCommandStageRunning(accessor, job.id);
+			try {
+				await runSummaryCommandProvider(job, memoryCfg);
+			} catch (error) {
+				clearCommandStageRunning(accessor, job.id);
+				throw error;
+			}
 			markCommandStageCompleted(accessor, job.id);
-		} else {
+		} else if (commandStageStatus === "complete") {
 			logger.info("summary-worker", "Command extraction already completed for this job attempt chain; skipping rerun", {
 				jobId: job.id,
 				attempt: job.attempts,
 				sessionKey: job.session_key,
 				project: job.project,
 			});
+		} else {
+			logger.warn(
+				"summary-worker",
+				"Command stage checkpoint indicates in-flight prior attempt; skipping rerun to avoid duplicate side effects",
+				{
+					jobId: job.id,
+					attempt: job.attempts,
+					sessionKey: job.session_key,
+					project: job.project,
+				},
+			);
 		}
 	}
 	if (!commandMode && !provider) {
