@@ -654,10 +654,15 @@ fn resolve_runtime_extraction_model(
 }
 
 fn resolve_runtime_extraction_endpoint(
-    _effective_provider: &str,
-    _configured_provider: &str,
+    effective_provider: &str,
+    configured_provider: &str,
     configured_endpoint: Option<&str>,
 ) -> Option<String> {
+    if effective_provider == "ollama"
+        && matches!(configured_provider, "anthropic" | "openrouter")
+    {
+        return None;
+    }
     configured_endpoint
         .filter(|v| !v.is_empty())
         .map(|v| v.to_string())
@@ -1523,14 +1528,22 @@ mod tests {
     }
 
     #[test]
-    fn resolve_runtime_extraction_endpoint_keeps_configured_endpoint_on_fallback() {
+    fn resolve_runtime_extraction_endpoint_drops_non_ollama_api_endpoints_on_fallback() {
         assert_eq!(
             resolve_runtime_extraction_endpoint(
                 "ollama",
                 "openrouter",
                 Some("https://openrouter.ai/api/v1")
             ),
-            Some("https://openrouter.ai/api/v1".to_string())
+            None
+        );
+        assert_eq!(
+            resolve_runtime_extraction_endpoint(
+                "ollama",
+                "anthropic",
+                Some("https://api.anthropic.com")
+            ),
+            None
         );
     }
 
@@ -1543,6 +1556,26 @@ mod tests {
         assert_eq!(
             resolve_runtime_extraction_endpoint("anthropic", "anthropic", Some("https://api.anthropic.com")),
             Some("https://api.anthropic.com".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_endpoint_keeps_custom_ollama_endpoint_for_cli_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_endpoint(
+                "ollama",
+                "claude-code",
+                Some("http://remote-ollama:11434")
+            ),
+            Some("http://remote-ollama:11434".to_string())
+        );
+        assert_eq!(
+            resolve_runtime_extraction_endpoint(
+                "ollama",
+                "codex",
+                Some("http://remote-ollama:11434")
+            ),
+            Some("http://remote-ollama:11434".to_string())
         );
     }
 
