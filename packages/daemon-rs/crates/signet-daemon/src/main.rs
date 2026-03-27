@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
-use signet_core::config::{DaemonConfig, network_mode_from_bind};
+use signet_core::config::{DaemonConfig, ManifestLoadError, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
 use tracing::{info, warn};
@@ -59,14 +59,24 @@ fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
     rules
 }
 
+fn load_daemon_config() -> anyhow::Result<DaemonConfig> {
+    match DaemonConfig::try_from_env() {
+        Ok(config) => Ok(config),
+        Err(error @ ManifestLoadError::InvalidExtractionFallbackProvider { .. })
+        | Err(error @ ManifestLoadError::InvalidExtractionFallbackProviderType { .. }) => {
+            Err(anyhow::anyhow!("invalid daemon config: {error}"))
+        }
+        Err(_) => Ok(DaemonConfig::from_env()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     // Service management subcommands (no logging needed)
     if args.iter().any(|a| a == "--install-service") {
-        let config = DaemonConfig::try_from_env()
-            .map_err(|error| anyhow::anyhow!("invalid daemon config: {error}"))?;
+        let config = load_daemon_config()?;
         service::install(config.port)?;
         println!("signet service installed (port {})", config.port);
         return Ok(());
@@ -93,8 +103,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Load config
-    let config = DaemonConfig::try_from_env()
-        .map_err(|error| anyhow::anyhow!("invalid daemon config: {error}"))?;
+    let config = load_daemon_config()?;
 
     // --check-migrations: open DB, run migrations, exit (for benchmarking startup)
     if args.iter().any(|a| a == "--check-migrations") {
@@ -1025,6 +1034,8 @@ async fn check_http_reachability_without_auth(url: &str) -> bool {
 
 fn probe_status_is_healthy(status: reqwest::StatusCode) -> bool {
     status.is_success()
+        || status == reqwest::StatusCode::UNAUTHORIZED
+        || status == reqwest::StatusCode::FORBIDDEN
 }
 
 /// Check Anthropic API reachability with credential validation.
@@ -1487,10 +1498,10 @@ mod tests {
     }
 
     #[test]
-    fn unauthenticated_reachability_probe_requires_success_status() {
+    fn unauthenticated_reachability_probe_accepts_auth_required_or_success() {
         assert!(probe_status_is_healthy(reqwest::StatusCode::OK));
-        assert!(!probe_status_is_healthy(reqwest::StatusCode::UNAUTHORIZED));
-        assert!(!probe_status_is_healthy(reqwest::StatusCode::FORBIDDEN));
+        assert!(probe_status_is_healthy(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(probe_status_is_healthy(reqwest::StatusCode::FORBIDDEN));
         assert!(!probe_status_is_healthy(reqwest::StatusCode::NOT_FOUND));
     }
 
