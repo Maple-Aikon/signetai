@@ -343,6 +343,11 @@ its path is substituted into command arguments:
 - `$PROJECT` — project path (or empty string)
 - `$SIGNET_PATH` — active Signet workspace path
 
+After command extraction succeeds, the normal summary-worker lifecycle
+continues when a synthesis provider is configured (session summary
+generation, DAG write, continuity/predictor hooks, and synthesis
+triggering).
+
 Example:
 
 ```yaml

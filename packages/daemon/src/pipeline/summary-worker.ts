@@ -341,11 +341,6 @@ function substituteCommandTokens(input: string, replacements: Record<string, str
 	return output;
 }
 
-function trimOutput(value: string, maxChars: number): string {
-	if (value.length <= maxChars) return value;
-	return `${value.slice(0, maxChars)}…`;
-}
-
 export async function runSummaryCommandProvider(
 	job: SummaryJobRow,
 	cfg: ReturnType<typeof loadMemoryConfig>,
@@ -389,21 +384,8 @@ export async function runSummaryCommandProvider(
 					...envFromConfig,
 					SIGNET_PATH: AGENTS_DIR,
 				},
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["ignore", "ignore", "ignore"],
 				windowsHide: true,
-			});
-
-			let stdout = "";
-			let stderr = "";
-			const MAX_CAPTURE_CHARS = 4000;
-
-			child.stdout?.on("data", (chunk: Buffer) => {
-				if (stdout.length >= MAX_CAPTURE_CHARS) return;
-				stdout += chunk.toString("utf-8").slice(0, MAX_CAPTURE_CHARS - stdout.length);
-			});
-			child.stderr?.on("data", (chunk: Buffer) => {
-				if (stderr.length >= MAX_CAPTURE_CHARS) return;
-				stderr += chunk.toString("utf-8").slice(0, MAX_CAPTURE_CHARS - stderr.length);
 			});
 
 			let settled = false;
@@ -434,8 +416,7 @@ export async function runSummaryCommandProvider(
 				clearTimeout(timeout);
 				const exitCode = code ?? 1;
 				if (exitCode !== 0) {
-					const detail = stderr.trim().length > 0 ? stderr.trim() : stdout.trim();
-					reject(new Error(`summary command exited with code ${exitCode}: ${trimOutput(detail, 500)}`));
+					reject(new Error(`summary command exited with code ${exitCode}`));
 					return;
 				}
 				resolve();
@@ -461,7 +442,7 @@ async function processJob(
 		throw new Error("summary worker requires an LLM provider when extraction.provider is not 'command'");
 	}
 
-	if (!commandMode && provider) {
+	if (provider) {
 		const today = new Date().toISOString().slice(0, 10);
 		const genOpts = {
 			timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
@@ -1414,7 +1395,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			});
 
 			let providerForJob: LlmProvider | null = null;
-			if (cfg.pipelineV2.extraction.provider !== "command") {
+			if (cfg.pipelineV2.synthesis.enabled && cfg.pipelineV2.synthesis.provider !== "none") {
 				// Cache provider across jobs — re-resolve on config change, env
 				// key rotation, or TTL expiry. Env-var key changes invalidate
 				// immediately; secrets-store-only rotations rely on the 5-min TTL.
