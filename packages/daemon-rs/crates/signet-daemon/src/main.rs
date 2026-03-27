@@ -155,18 +155,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
-    let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> =
-        config
-            .manifest
-            .memory
-            .as_ref()
-            .and_then(|memory| memory.pipeline_v2.as_ref())
-            .map(|pipeline| {
-                signet_pipeline::worker::new_runtime_stats_handle(
-                    pipeline.worker.max_load_per_cpu,
-                    pipeline.worker.overload_backoff_ms,
-                )
-            });
+    let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
     // Build app state
     let state = Arc::new(AppState::new(
@@ -183,6 +172,10 @@ async fn main() -> anyhow::Result<()> {
     // This matches the JS daemon's startup behavior and eliminates any
     // race between writes and provider validation.
     preflight_extraction(&state).await;
+
+    // Start extraction worker and wire its live runtime-stats handle into
+    // AppState so /api/status reports real worker state.
+    let mut extraction_worker_handle = start_extraction_worker(state.as_ref()).await;
 
     // Build router
     let app = Router::new()
@@ -587,6 +580,10 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutting down");
 
+    if let Some(handle) = extraction_worker_handle.take() {
+        handle.stop().await;
+    }
+
     // Drop state to close DB channels, then await writer
     drop(state);
     let _ = writer_handle.await;
@@ -635,6 +632,88 @@ pub(crate) async fn resume_extraction_check(state: &AppState) {
     extraction_probe(state, false).await;
 }
 
+async fn start_extraction_worker(state: &AppState) -> Option<signet_pipeline::worker::WorkerHandle> {
+    let Some(pipeline) = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+    else {
+        return None;
+    };
+
+    if !pipeline.enabled || pipeline.paused || state.pipeline_paused() {
+        return None;
+    }
+
+    let effective_provider = {
+        let guard = state.extraction_state.read().await;
+        guard
+            .as_ref()
+            .map(|s| s.effective.clone())
+            .unwrap_or_else(|| pipeline.extraction.provider.clone())
+    };
+
+    if effective_provider == "none" {
+        return None;
+    }
+
+    if effective_provider != "ollama" && effective_provider != "anthropic" {
+        warn!(
+            provider = %effective_provider,
+            "extraction worker not started: provider not supported by daemon-rs worker"
+        );
+        return None;
+    }
+
+    let api_key = if effective_provider == "anthropic" {
+        std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+    } else {
+        None
+    };
+
+    if effective_provider == "anthropic" && api_key.is_none() {
+        warn!("extraction worker not started: ANTHROPIC_API_KEY is missing");
+        return None;
+    }
+
+    let provider_cfg = signet_pipeline::provider::LlmProviderConfig {
+        provider: effective_provider.clone(),
+        model: pipeline.extraction.model.clone(),
+        base_url: pipeline.extraction.endpoint.clone(),
+        api_key,
+        timeout_ms: Some(pipeline.extraction.timeout),
+    };
+    let provider = signet_pipeline::provider::from_config(&provider_cfg);
+    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let worker_config = signet_pipeline::worker::WorkerConfig {
+        poll_ms: pipeline.worker.poll_ms,
+        max_retries: pipeline.worker.max_retries,
+        lease_timeout_ms: pipeline.worker.lease_timeout_ms,
+        max_load_per_cpu: pipeline.worker.max_load_per_cpu,
+        overload_backoff_ms: pipeline.worker.overload_backoff_ms,
+        extraction_timeout_ms: pipeline.extraction.timeout,
+        extraction_max_tokens: 4096,
+        min_confidence: pipeline.extraction.min_confidence,
+        shadow_mode: pipeline.shadow_mode,
+        graph_enabled: pipeline.graph.enabled,
+        structural_enabled: pipeline.structural.enabled,
+    };
+
+    let handle = signet_pipeline::worker::start(
+        state.pool.clone(),
+        provider,
+        semaphore,
+        worker_config,
+    );
+    let stats = handle.stats_handle();
+    *state.extraction_worker_stats.write().await = Some(stats);
+    Some(handle)
+}
+
 async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let pipeline = match state
         .config
@@ -663,8 +742,8 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
         "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
         "claude-code" => cli_preflight("claude").await,
         "codex" => cli_preflight("codex").await,
-        "anthropic" => std::env::var("ANTHROPIC_API_KEY").map_or(false, |k| !k.is_empty()),
-        "openrouter" => std::env::var("OPENROUTER_API_KEY").map_or(false, |k| !k.is_empty()),
+        "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
+        "openrouter" => check_openrouter_health(extraction.endpoint.as_deref()).await,
         "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
         _ => {
             warn!(provider, "unknown extraction provider, assuming unavailable");
@@ -786,6 +865,73 @@ async fn check_opencode_health(endpoint: Option<&str>) -> bool {
     let Ok(client) = client else { return false };
     client
         .get(&url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+fn normalize_endpoint_base(endpoint: Option<&str>, default_base: &str) -> String {
+    endpoint
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_base)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn append_api_path(base: &str, v1_path: &str, no_v1_path: &str) -> String {
+    if base.ends_with("/v1") {
+        format!("{base}{no_v1_path}")
+    } else {
+        format!("{base}{v1_path}")
+    }
+}
+
+/// Check Anthropic API reachability with credential validation.
+async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
+    let Some(api_key) = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    else {
+        return false;
+    };
+
+    let base = normalize_endpoint_base(endpoint, "https://api.anthropic.com");
+    let url = append_api_path(&base, "/v1/models", "/models");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .map(|r: reqwest::Response| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Check OpenRouter API reachability with credential validation.
+async fn check_openrouter_health(endpoint: Option<&str>) -> bool {
+    let Some(api_key) = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    else {
+        return false;
+    };
+
+    let base = normalize_endpoint_base(endpoint, "https://openrouter.ai/api/v1");
+    let url = append_api_path(&base, "/api/v1/models", "/models");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client
+        .get(&url)
+        .header("authorization", format!("Bearer {api_key}"))
         .send()
         .await
         .map(|r: reqwest::Response| r.status().is_success())
@@ -939,9 +1085,10 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             })
         })
     };
+    let extraction_worker_stats = state.extraction_worker_stats.read().await.clone();
     let extraction_worker = if let Some(pipeline) = pipeline {
         let paused = pipeline.paused || state.pipeline_paused();
-        if let Some(stats) = state.extraction_worker_stats.as_ref() {
+        if let Some(stats) = extraction_worker_stats.as_ref() {
             let snapshot = stats.lock().await.snapshot(current_epoch_ms());
             let running = snapshot.running && !paused;
             let overloaded = running && snapshot.overloaded;
@@ -1036,7 +1183,7 @@ mod tests {
     use crate::auth::types::AuthMode;
     use crate::state::AppState;
 
-    use super::status;
+    use super::{append_api_path, normalize_endpoint_base, status};
 
     fn test_state() -> Arc<AppState> {
         let dir = tempdir().expect("tempdir").keep();
@@ -1111,5 +1258,29 @@ mod tests {
         assert_eq!(body["pipeline"]["extraction"]["overloaded"], false);
         assert_eq!(body["pipeline"]["extraction"]["maxLoadPerCpu"], 0.8);
         assert_eq!(body["pipeline"]["extraction"]["overloadBackoffMs"], 30000);
+    }
+
+    #[test]
+    fn append_api_path_handles_v1_and_non_v1_bases() {
+        assert_eq!(
+            append_api_path("https://api.anthropic.com", "/v1/models", "/models"),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            append_api_path("https://api.anthropic.com/v1", "/v1/models", "/models"),
+            "https://api.anthropic.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_base_uses_trimmed_endpoint_or_default() {
+        assert_eq!(
+            normalize_endpoint_base(Some("https://openrouter.ai/api/v1/"), "https://default"),
+            "https://openrouter.ai/api/v1"
+        );
+        assert_eq!(
+            normalize_endpoint_base(None, "https://default/"),
+            "https://default"
+        );
     }
 }
