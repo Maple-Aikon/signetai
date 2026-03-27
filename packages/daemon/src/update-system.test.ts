@@ -111,6 +111,21 @@ describe("verifyInstalledVersion", () => {
 		}
 	});
 
+	it("fails gracefully when manifest read throws", () => {
+		const result = verifyInstalledVersion("bun", "signetai", null, {
+			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",
+			existsSync: () => true,
+			readFileSync: (_path, _encoding) => {
+				throw new Error("EACCES: permission denied");
+			},
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.message).toContain("failed to verify installed version");
+			expect(result.message).toContain("EACCES");
+		}
+	});
+
 	it("succeeds and returns installed version when verification passes", () => {
 		const result = verifyInstalledVersion("bun", "signetai", "0.78.1", {
 			resolveGlobalPackagePath: (_family, _packageName) => "/tmp/signetai",

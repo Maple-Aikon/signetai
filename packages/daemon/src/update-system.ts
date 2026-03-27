@@ -544,43 +544,52 @@ export function verifyInstalledVersion(
 		readFileSync: (path, encoding) => readFileSync(path, { encoding }),
 	},
 ): { ok: true; installedVersion: string } | { ok: false; message: string } {
-	const packagePath = deps.resolveGlobalPackagePath(family, packageName);
-	if (!packagePath) {
+	try {
+		const packagePath = deps.resolveGlobalPackagePath(family, packageName);
+		if (!packagePath) {
+			return {
+				ok: false,
+				message: `Update exited cleanly but could not locate global package path for '${packageName}'`,
+			};
+		}
+
+		const packageJsonPath = join(packagePath, "package.json");
+		if (!deps.existsSync(packageJsonPath)) {
+			return {
+				ok: false,
+				message: `Update exited cleanly but package manifest missing at ${packageJsonPath}`,
+			};
+		}
+
+		const installedVersion = parseInstalledPackageVersion(
+			deps.readFileSync(packageJsonPath, "utf-8"),
+		);
+		if (!installedVersion) {
+			return {
+				ok: false,
+				message: `Update exited cleanly but installed package.json has no valid version at ${packageJsonPath}`,
+			};
+		}
+
+		if (expectedVersion && installedVersion !== expectedVersion) {
+			return {
+				ok: false,
+				message: `Install exited cleanly but version is ${installedVersion}, expected ${expectedVersion}`,
+			};
+		}
+
+		return {
+			ok: true,
+			installedVersion,
+		};
+	} catch (error) {
 		return {
 			ok: false,
-			message: `Update exited cleanly but could not locate global package path for '${packageName}'`,
+			message: `Update exited cleanly but failed to verify installed version: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
 		};
 	}
-
-	const packageJsonPath = join(packagePath, "package.json");
-	if (!deps.existsSync(packageJsonPath)) {
-		return {
-			ok: false,
-			message: `Update exited cleanly but package manifest missing at ${packageJsonPath}`,
-		};
-	}
-
-	const installedVersion = parseInstalledPackageVersion(
-		deps.readFileSync(packageJsonPath, "utf-8"),
-	);
-	if (!installedVersion) {
-		return {
-			ok: false,
-			message: `Update exited cleanly but installed package.json has no valid version at ${packageJsonPath}`,
-		};
-	}
-
-	if (expectedVersion && installedVersion !== expectedVersion) {
-		return {
-			ok: false,
-			message: `Install exited cleanly but version is ${installedVersion}, expected ${expectedVersion}`,
-		};
-	}
-
-	return {
-		ok: true,
-		installedVersion,
-	};
 }
 
 export async function runUpdate(
