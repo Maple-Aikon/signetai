@@ -648,7 +648,7 @@ fn resolve_runtime_extraction_endpoint(
     configured_endpoint: Option<&str>,
 ) -> Option<String> {
     if effective_provider == "ollama"
-        && matches!(configured_provider, "anthropic" | "openrouter")
+        && matches!(configured_provider, "anthropic" | "openrouter" | "opencode")
     {
         return None;
     }
@@ -1637,6 +1637,14 @@ mod tests {
                 "ollama",
                 "anthropic",
                 Some("https://api.anthropic.com")
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_runtime_extraction_endpoint(
+                "ollama",
+                "opencode",
+                Some("http://127.0.0.1:4096")
             ),
             None
         );
