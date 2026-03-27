@@ -144,6 +144,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const resolveExtractionProvider = (
 		deploymentType: DeploymentTypeChoice,
 		providerFromConfig: ExtractionProviderChoice | null,
+		preserveExisting: boolean,
 	): ExtractionProviderChoice => {
 		const inferred = defaultExtractionProviderForDeployment(
 			deploymentType,
@@ -152,6 +153,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		);
 		if (requestedExtractionProvider) {
 			return requestedExtractionProvider;
+		}
+		if (preserveExisting && providerFromConfig) {
+			if (!(deploymentType === "vps" && providerFromConfig === "ollama")) {
+				return providerFromConfig;
+			}
 		}
 		if (deploymentType === "vps") {
 			return inferred;
@@ -251,7 +257,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider);
+			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider, true);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -321,7 +327,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider);
+			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider, true);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				embeddingProvider: migrationEmbeddingProvider,
@@ -590,7 +596,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const providerFromConfig =
 			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-		extractionProvider = resolveExtractionProvider(deploymentType, providerFromConfig);
+		extractionProvider = resolveExtractionProvider(deploymentType, providerFromConfig, false);
 	} else {
 		console.log();
 		console.log(chalk.cyan("  Deployment guidance:"));
