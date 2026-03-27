@@ -7,6 +7,7 @@ interface ForgeStatusOptions {
 
 interface ForgeInstallOptions {
 	version?: string;
+	yes?: boolean;
 }
 
 interface ForgeDeps {
@@ -23,12 +24,14 @@ export function registerForgeCommands(program: Command, deps: ForgeDeps): void {
 		.command("install")
 		.description("Install Forge from Signet first-party releases")
 		.option("--version <version>", "Install a specific Forge version")
+		.option("-y, --yes", "Acknowledge Forge development warning and continue without prompt")
 		.action(deps.installForge);
 
 	forgeCmd
 		.command("update")
 		.description("Update Forge to the latest managed release")
 		.option("--version <version>", "Update to a specific Forge version")
+		.option("-y, --yes", "Acknowledge Forge development warning and continue without prompt")
 		.action(deps.updateForge);
 
 	const status = forgeCmd.command("status").description("Show Forge installation status").action(deps.showForgeStatus);
