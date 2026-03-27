@@ -177,16 +177,6 @@ pub async fn remember(
         _ => "global",
     }
     .to_string();
-    let blocked_extraction_reason = if state.is_extraction_blocked().await {
-        Some(
-            state
-                .extraction_block_reason()
-                .await
-                .unwrap_or_else(|| "Extraction provider unavailable".to_string()),
-        )
-    } else {
-        None
-    };
     let extraction_max_attempts = state
         .config
         .manifest
@@ -219,26 +209,8 @@ pub async fn remember(
                     visibility: &visibility,
                 },
             )?;
-
-            if r.duplicate_of.is_none() {
-                if let Some(reason) = blocked_extraction_reason.as_deref() {
-                    dead_letter_blocked_extraction_memory(
-                        conn,
-                        &r.id,
-                        reason,
-                        extraction_max_attempts,
-                    )?;
-                }
-            }
-
-            let status = if r.duplicate_of.is_some() {
-                "duplicate"
-            } else {
-                "created"
-            };
             Ok(serde_json::json!({
                 "id": r.id,
-                "status": status,
                 "hash": r.hash,
                 "duplicateOf": r.duplicate_of,
             }))
@@ -246,7 +218,63 @@ pub async fn remember(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Ok(val) => {
+            let id = val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let hash = val
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let duplicate_of = val
+                .get("duplicateOf")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            if duplicate_of.is_none() && state.is_extraction_blocked().await {
+                let blocked_reason = state
+                    .extraction_block_reason()
+                    .await
+                    .unwrap_or_else(|| "Extraction provider unavailable".to_string());
+                let memory_id = id.clone();
+                if let Err(error) = state
+                    .pool
+                    .write_tx(Priority::High, move |conn| {
+                        dead_letter_blocked_extraction_memory(
+                            conn,
+                            &memory_id,
+                            &blocked_reason,
+                            extraction_max_attempts,
+                        )?;
+                        Ok(serde_json::json!({"status": "dead_lettered"}))
+                    })
+                    .await
+                {
+                    warn!(
+                        memory_id = %id,
+                        err = %error,
+                        "failed to dead-letter blocked extraction for remembered memory"
+                    );
+                }
+            }
+            let status = if duplicate_of.is_some() {
+                "duplicate"
+            } else {
+                "created"
+            };
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "id": id,
+                    "status": status,
+                    "hash": hash,
+                    "duplicateOf": duplicate_of,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => {
             warn!(err = %e, "remember failed");
             (

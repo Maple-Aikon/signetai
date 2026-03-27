@@ -1021,25 +1021,6 @@ fn provider_endpoint_is_trusted_for_secret_probe(provider: &str, base: &str) -> 
     }
 }
 
-async fn check_http_reachability_without_auth(url: &str) -> bool {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build();
-    let Ok(client) = client else { return false };
-    client
-        .get(url)
-        .send()
-        .await
-        .map(|r: reqwest::Response| probe_status_is_healthy(r.status()))
-        .unwrap_or(false)
-}
-
-fn probe_status_is_healthy(status: reqwest::StatusCode) -> bool {
-    status.is_success()
-        || status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-}
-
 /// Check Anthropic API reachability with credential validation.
 async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
     let Some(api_key) = std::env::var("ANTHROPIC_API_KEY")
@@ -1055,9 +1036,9 @@ async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
     if !provider_endpoint_is_trusted_for_secret_probe("anthropic", &base) {
         warn!(
             endpoint = %base,
-            "skipping authenticated anthropic startup probe for untrusted endpoint; probing reachability without credentials"
+            "refusing anthropic startup probe for untrusted endpoint"
         );
-        return check_http_reachability_without_auth(&url).await;
+        return false;
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -1088,9 +1069,9 @@ async fn check_openrouter_health(endpoint: Option<&str>) -> bool {
     if !provider_endpoint_is_trusted_for_secret_probe("openrouter", &base) {
         warn!(
             endpoint = %base,
-            "skipping authenticated openrouter startup probe for untrusted endpoint; probing reachability without credentials"
+            "refusing openrouter startup probe for untrusted endpoint"
         );
-        return check_http_reachability_without_auth(&url).await;
+        return false;
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -1351,9 +1332,9 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        append_api_path, normalize_endpoint_base, probe_status_is_healthy,
-        provider_endpoint_is_trusted_for_secret_probe, resolve_runtime_extraction_endpoint,
-        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
+        append_api_path, normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
+        resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
+        worker_supports_extraction_provider,
     };
 
     fn test_state() -> Arc<AppState> {
@@ -1497,14 +1478,6 @@ mod tests {
             "anthropic",
             "https://openrouter.ai/api/v1"
         ));
-    }
-
-    #[test]
-    fn unauthenticated_reachability_probe_accepts_auth_required_or_success() {
-        assert!(probe_status_is_healthy(reqwest::StatusCode::OK));
-        assert!(probe_status_is_healthy(reqwest::StatusCode::UNAUTHORIZED));
-        assert!(probe_status_is_healthy(reqwest::StatusCode::FORBIDDEN));
-        assert!(!probe_status_is_healthy(reqwest::StatusCode::NOT_FOUND));
     }
 
     #[test]
