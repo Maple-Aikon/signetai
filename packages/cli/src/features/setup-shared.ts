@@ -7,6 +7,15 @@ export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
 export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 export type DeploymentTypeChoice = "local" | "vps" | "server";
+export interface ResolveSetupExtractionProviderOptions {
+	readonly deploymentType: DeploymentTypeChoice;
+	readonly requestedProvider: ExtractionProviderChoice | null;
+	readonly providerFromConfig: ExtractionProviderChoice | null;
+	readonly preserveExisting: boolean;
+	readonly detectedProvider: ExtractionProviderChoice;
+	readonly availableProviders?: readonly ExtractionProviderChoice[];
+	readonly preferredHarnesses?: readonly HarnessChoice[];
+}
 
 export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"claude-code",
@@ -191,6 +200,27 @@ export function detectExtractionProviderFromAvailable(
 		}
 	}
 	return "none";
+}
+
+export function resolveSetupExtractionProvider(
+	options: ResolveSetupExtractionProviderOptions,
+): ExtractionProviderChoice {
+	const inferred = defaultExtractionProviderForDeployment(
+		options.deploymentType,
+		options.detectedProvider,
+		options.availableProviders ?? [],
+		options.preferredHarnesses ?? [],
+	);
+	if (options.requestedProvider) {
+		return options.requestedProvider;
+	}
+	if (options.preserveExisting && options.providerFromConfig) {
+		return options.providerFromConfig;
+	}
+	if (options.deploymentType === "vps") {
+		return inferred;
+	}
+	return options.providerFromConfig ?? inferred;
 }
 
 function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): ExtractionProviderChoice[] {

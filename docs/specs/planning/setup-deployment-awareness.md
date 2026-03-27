@@ -45,6 +45,7 @@ Setup lacked deployment context during provider selection. Users on constrained 
 
 - Interactive flow is guidance-oriented (recommendations, not forced provider selection).
 - Non-interactive explicit provider flags override inferred defaults.
+- Existing configured extraction providers are preserved during existing-identity migration unless `--extraction-provider` is explicitly provided.
 - VPS inference rule: if `--extraction-provider` is omitted and `--deployment-type vps` is passed, do not infer `ollama`; prefer selected non-local harness tooling (`claude-code`, `codex`, `opencode`) when those tools are available locally, then other detected non-local tooling, and fall back to `none`.
 - No changes to daemon schema or pipeline defaults are required for this scope.
 

@@ -5,6 +5,7 @@ import {
 	defaultExtractionProviderForDeployment,
 	detectExtractionProviderFromAvailable,
 	getDeploymentExtractionGuidance,
+	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
 
 describe("setup deployment defaults", () => {
@@ -58,5 +59,43 @@ describe("setup deployment defaults", () => {
 		expect(getDeploymentExtractionGuidance("local").length).toBeGreaterThan(0);
 		expect(getDeploymentExtractionGuidance("vps").join(" ").includes("VPS")).toBe(true);
 		expect(getDeploymentExtractionGuidance("server").join(" ").includes("Dedicated")).toBe(true);
+	});
+
+	it("preserves existing configured providers on migration paths", () => {
+		expect(
+			resolveSetupExtractionProvider({
+				deploymentType: "vps",
+				requestedProvider: null,
+				providerFromConfig: "ollama",
+				preserveExisting: true,
+				detectedProvider: "none",
+			}),
+		).toBe("ollama");
+	});
+
+	it("lets explicit provider flags override preserved migration config", () => {
+		expect(
+			resolveSetupExtractionProvider({
+				deploymentType: "vps",
+				requestedProvider: "codex",
+				providerFromConfig: "ollama",
+				preserveExisting: true,
+				detectedProvider: "none",
+			}),
+		).toBe("codex");
+	});
+
+	it("applies deployment defaults only when not preserving existing config", () => {
+		expect(
+			resolveSetupExtractionProvider({
+				deploymentType: "vps",
+				requestedProvider: null,
+				providerFromConfig: "ollama",
+				preserveExisting: false,
+				detectedProvider: "none",
+				availableProviders: ["claude-code"],
+				preferredHarnesses: [],
+			}),
+		).toBe("claude-code");
 	});
 });

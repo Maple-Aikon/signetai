@@ -143,6 +143,8 @@ Non-interactive behavior:
   from selected harnesses when those tools are available locally, then other
   detected tooling (`claude-code`, `codex`, `opencode`), and falls back to
   `none` when needed
+- for existing-identity migration, previously configured extraction providers
+  are preserved unless `--extraction-provider` is explicitly passed
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 

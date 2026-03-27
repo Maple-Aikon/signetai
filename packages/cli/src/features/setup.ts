@@ -37,6 +37,7 @@ import {
 	readHarnesses,
 	readRecord,
 	readString,
+	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
@@ -135,30 +136,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		);
 	}
 
-	const resolveExtractionProvider = (
-		deploymentType: DeploymentTypeChoice,
-		providerFromConfig: ExtractionProviderChoice | null,
-		preserveExisting: boolean,
-		preferredHarnesses: readonly HarnessChoice[] = [],
-	): ExtractionProviderChoice => {
-		const inferred = defaultExtractionProviderForDeployment(
-			deploymentType,
-			detectedProvider,
-			availableToolExtractionProviders,
-			preferredHarnesses,
-		);
-		if (requestedExtractionProvider) {
-			return requestedExtractionProvider;
-		}
-		if (preserveExisting && providerFromConfig) {
-			return providerFromConfig;
-		}
-		if (deploymentType === "vps") {
-			return inferred;
-		}
-		return providerFromConfig ?? inferred;
-	};
-
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
 		console.log(chalk.dim(`    ${basePath}`));
@@ -251,12 +228,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveExtractionProvider(
+			const migrationExtractionProvider = resolveSetupExtractionProvider({
 				deploymentType,
-				existingExtractionProvider,
-				true,
-				normalizedExistingHarnesses,
-			);
+				requestedProvider: requestedExtractionProvider,
+				providerFromConfig: existingExtractionProvider,
+				preserveExisting: true,
+				detectedProvider,
+				availableProviders: availableToolExtractionProviders,
+				preferredHarnesses: normalizedExistingHarnesses,
+			});
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -326,12 +306,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveExtractionProvider(
+			const migrationExtractionProvider = resolveSetupExtractionProvider({
 				deploymentType,
-				existingExtractionProvider,
-				true,
-				normalizedExistingHarnesses,
-			);
+				requestedProvider: requestedExtractionProvider,
+				providerFromConfig: existingExtractionProvider,
+				preserveExisting: true,
+				detectedProvider,
+				availableProviders: availableToolExtractionProviders,
+				preferredHarnesses: normalizedExistingHarnesses,
+			});
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				embeddingProvider: migrationEmbeddingProvider,
@@ -601,7 +584,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const providerFromConfig =
 			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-		extractionProvider = resolveExtractionProvider(deploymentType, providerFromConfig, false, harnesses);
+		extractionProvider = resolveSetupExtractionProvider({
+			deploymentType,
+			requestedProvider: requestedExtractionProvider,
+			providerFromConfig,
+			preserveExisting: false,
+			detectedProvider,
+			availableProviders: availableToolExtractionProviders,
+			preferredHarnesses: harnesses,
+		});
 	} else {
 		console.log();
 		console.log(chalk.cyan("  Deployment guidance:"));
