@@ -978,6 +978,7 @@ extraction:
     bin: node
     args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"]
     # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $SIGNET_PATH
+    # command stdout/stderr are ignored; command must write memories to Signet state directly
     # after command success, normal summary-worker lifecycle continues when synthesis provider is available
 
 synthesis:

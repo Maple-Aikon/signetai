@@ -25,7 +25,13 @@ impl DaemonConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| dirs_home().join(".agents"));
 
-        let manifest = load_manifest(&base).unwrap_or_default();
+        let manifest = match load_manifest(&base) {
+            Ok(Some(manifest)) => manifest,
+            Ok(None) => AgentManifest::default(),
+            Err(error) => {
+                panic!("Invalid agent.yaml: {error}");
+            }
+        };
         let (cfg_host, cfg_bind) = resolve_network_binding(
             manifest
                 .network
@@ -88,42 +94,60 @@ fn dirs_home() -> PathBuf {
         })
 }
 
-fn load_manifest(base: &Path) -> Option<AgentManifest> {
+fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, String> {
     let path = base.join("agent.yaml");
-    let content = std::fs::read_to_string(&path).ok()?;
-    parse_manifest(&content)
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "failed to read {}: {err}",
+                path.to_string_lossy()
+            ))
+        }
+    };
+    parse_manifest_result(&content).map(Some)
 }
 
 fn parse_manifest(content: &str) -> Option<AgentManifest> {
-    let raw: serde_yml::Value = serde_yml::from_str(content).ok()?;
-    let manifest: AgentManifest = serde_yml::from_str(content).ok()?;
+    parse_manifest_result(content).ok()
+}
+
+fn parse_manifest_result(content: &str) -> Result<AgentManifest, String> {
+    let raw: serde_yml::Value =
+        serde_yml::from_str(content).map_err(|err| format!("YAML parse error: {err}"))?;
+    let manifest: AgentManifest =
+        serde_yml::from_str(content).map_err(|err| format!("manifest shape error: {err}"))?;
     normalize_manifest(manifest, &raw)
 }
 
-fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> Option<AgentManifest> {
+fn normalize_manifest(
+    mut manifest: AgentManifest,
+    raw: &serde_yml::Value,
+) -> Result<AgentManifest, String> {
     let Some(memory) = manifest.memory.as_mut() else {
-        return Some(manifest);
+        return Ok(manifest);
     };
     let Some(pipeline) = memory.pipeline_v2.as_mut() else {
-        return Some(manifest);
+        return Ok(manifest);
     };
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
     normalize_pipeline_extraction(pipeline, raw_pipeline)?;
     normalize_pipeline_synthesis(pipeline, raw_pipeline)?;
-    Some(manifest)
+    Ok(manifest)
 }
 
 fn normalize_pipeline_extraction(
     pipeline: &mut PipelineV2Config,
     raw: Option<&serde_yml::Value>,
-) -> Option<()> {
+) -> Result<(), String> {
     let extraction_raw = raw.and_then(|value| raw_child(value, "extraction"));
     if pipeline.extraction.provider != "command" {
-        return Some(());
+        return Ok(());
     }
 
     if !is_pipeline_provider(&pipeline.extraction.provider) {
-        return None;
+        return Err("memory.pipelineV2.extraction.provider is invalid".to_string());
     }
 
     if pipeline.extraction.command.is_none() {
@@ -131,10 +155,16 @@ fn normalize_pipeline_extraction(
         pipeline.extraction.command = legacy.and_then(parse_command_argv);
     }
 
-    let mut command = pipeline.extraction.command.clone()?;
+    let mut command = pipeline.extraction.command.clone().ok_or_else(|| {
+        "memory.pipelineV2.extraction.command is required when extraction.provider='command'"
+            .to_string()
+    })?;
     command.bin = command.bin.trim().to_string();
     if command.bin.is_empty() {
-        return None;
+        return Err(
+            "memory.pipelineV2.extraction.command.bin is required when extraction.provider='command'"
+                .to_string(),
+        );
     }
     if command.args.iter().any(|arg| arg.trim().is_empty()) {
         command.args.retain(|arg| !arg.trim().is_empty());
@@ -171,13 +201,13 @@ fn normalize_pipeline_extraction(
     }
 
     pipeline.extraction.command = Some(command);
-    Some(())
+    Ok(())
 }
 
 fn normalize_pipeline_synthesis(
     pipeline: &mut PipelineV2Config,
     raw: Option<&serde_yml::Value>,
-) -> Option<()> {
+) -> Result<(), String> {
     let extraction = pipeline.extraction.clone();
     let fallback = SynthesisConfig::default();
     let inherits_extraction = extraction.provider != "command";
@@ -186,7 +216,10 @@ fn normalize_pipeline_synthesis(
         .and_then(|value| raw_string(value, "provider"))
         .is_some_and(|provider| provider == "command")
     {
-        return None;
+        return Err(
+            "memory.pipelineV2.synthesis.provider='command' is not supported. Use extraction.provider='command' instead."
+                .to_string(),
+        );
     }
     let provider = raw
         .and_then(|value| raw_child(value, "synthesis"))
@@ -240,7 +273,7 @@ fn normalize_pipeline_synthesis(
     if pipeline.synthesis.provider == "none" {
         pipeline.synthesis.enabled = false;
     }
-    Some(())
+    Ok(())
 }
 
 fn raw_child<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a serde_yml::Value> {

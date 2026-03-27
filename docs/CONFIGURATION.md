@@ -343,6 +343,10 @@ its path is substituted into command arguments:
 - `$PROJECT` — project path (or empty string)
 - `$SIGNET_PATH` — active Signet workspace path
 
+The command's stdout/stderr are not used as extraction output. The
+external command is responsible for writing memories to Signet state
+(for example, writing rows to `memories.db`).
+
 After command extraction succeeds, the normal summary-worker lifecycle
 continues when a synthesis provider is configured (session summary
 generation, DAG write, continuity/predictor hooks, and synthesis
