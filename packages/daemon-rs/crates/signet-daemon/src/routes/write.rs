@@ -149,6 +149,34 @@ fn dead_letter_blocked_extraction_memory(
     Ok(())
 }
 
+fn blocked_extraction_reason_blocking(state: &AppState) -> Option<String> {
+    let guard = state.extraction_state.blocking_read();
+    guard.as_ref().and_then(|es| {
+        if es.status == "blocked" {
+            Some(
+                es.reason
+                    .clone()
+                    .unwrap_or_else(|| "Extraction provider unavailable".to_string()),
+            )
+        } else {
+            None
+        }
+    })
+}
+
+fn ingest_remember_with_blocked_guard(
+    conn: &rusqlite::Connection,
+    input: &transactions::IngestInput<'_>,
+    blocked_reason: Option<&str>,
+    extraction_max_attempts: i64,
+) -> Result<transactions::IngestResult, signet_core::error::CoreError> {
+    let result = transactions::ingest(conn, input)?;
+    if result.duplicate_of.is_none() && let Some(reason) = blocked_reason {
+        dead_letter_blocked_extraction_memory(conn, &result.id, reason, extraction_max_attempts)?;
+    }
+    Ok(result)
+}
+
 pub async fn remember(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RememberBody>,
@@ -202,101 +230,49 @@ pub async fn remember(
 
     let result = state
         .pool
-        .write_tx(Priority::High, move |conn| {
-            let r = transactions::ingest(
-                conn,
-                &transactions::IngestInput {
-                    content: &content,
-                    memory_type: &memory_type,
-                    tags,
-                    who: who.as_deref(),
-                    why: None,
-                    project: project.as_deref(),
-                    importance,
-                    pinned,
-                    source_type: source_type.as_deref(),
-                    source_id: source_id.as_deref(),
-                    idempotency_key: None,
-                    runtime_path: None,
-                    actor: "api",
-                    agent_id: &agent_id,
-                    visibility: &visibility,
-                },
-            )?;
-            Ok(serde_json::json!({
-                "id": r.id,
-                "hash": r.hash,
-                "duplicateOf": r.duplicate_of,
-            }))
+        .write_tx(Priority::High, {
+            let state = state.clone();
+            move |conn| {
+                let blocked_reason = blocked_extraction_reason_blocking(&state);
+                let r = ingest_remember_with_blocked_guard(
+                    conn,
+                    &transactions::IngestInput {
+                        content: &content,
+                        memory_type: &memory_type,
+                        tags,
+                        who: who.as_deref(),
+                        why: None,
+                        project: project.as_deref(),
+                        importance,
+                        pinned,
+                        source_type: source_type.as_deref(),
+                        source_id: source_id.as_deref(),
+                        idempotency_key: None,
+                        runtime_path: None,
+                        actor: "api",
+                        agent_id: &agent_id,
+                        visibility: &visibility,
+                    },
+                    blocked_reason.as_deref(),
+                    extraction_max_attempts,
+                )?;
+                let status = if r.duplicate_of.is_some() {
+                    "duplicate"
+                } else {
+                    "created"
+                };
+                Ok(serde_json::json!({
+                    "id": r.id,
+                    "status": status,
+                    "hash": r.hash,
+                    "duplicateOf": r.duplicate_of,
+                }))
+            }
         })
         .await;
 
     match result {
-        Ok(val) => {
-            let id = val
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let hash = val
-                .get("hash")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let duplicate_of = val
-                .get("duplicateOf")
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_string());
-            let mut blocked_enforcement_failed = false;
-            if duplicate_of.is_none() && state.is_extraction_blocked().await {
-                let blocked_reason = state
-                    .extraction_block_reason()
-                    .await
-                    .unwrap_or_else(|| "Extraction provider unavailable".to_string());
-                let memory_id = id.clone();
-                if let Err(error) = state
-                    .pool
-                    .write_tx(Priority::High, move |conn| {
-                        dead_letter_blocked_extraction_memory(
-                            conn,
-                            &memory_id,
-                            &blocked_reason,
-                            extraction_max_attempts,
-                        )?;
-                        Ok(serde_json::json!({"status": "dead_lettered"}))
-                    })
-                    .await
-                {
-                    warn!(
-                        memory_id = %id,
-                        err = %error,
-                        "failed to enforce blocked extraction invariant for remembered memory"
-                    );
-                    blocked_enforcement_failed = true;
-                }
-            }
-            let status = if duplicate_of.is_some() {
-                "duplicate"
-            } else {
-                "created"
-            };
-            let mut response = serde_json::json!({
-                "id": id,
-                "status": status,
-                "hash": hash,
-                "duplicateOf": duplicate_of,
-            });
-            if blocked_enforcement_failed {
-                response["warning"] = serde_json::json!(
-                    "Memory was persisted, but blocked-extraction enforcement failed post-commit"
-                );
-            }
-            (
-                StatusCode::OK,
-                Json(response),
-            )
-                .into_response()
-        }
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
         Err(e) => {
             warn!(err = %e, "remember failed");
             (
@@ -310,9 +286,30 @@ pub async fn remember(
 
 #[cfg(test)]
 mod tests {
-    use super::{dead_letter_blocked_extraction_memory, parse_remember_tags};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::Json;
+    use axum::body::to_bytes;
+    use axum::extract::State;
+    use axum::http::StatusCode;
     use rusqlite::Connection;
     use serde_json::json;
+    use tempfile::tempdir;
+
+    use signet_core::config::{
+        AgentIdentity, AuthConfig, DaemonConfig, EmbeddingConfig, MemoryManifestConfig,
+        PipelineV2Config,
+    };
+    use signet_core::db::{DbPool, Priority};
+
+    use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
+    use crate::auth::types::AuthMode;
+    use crate::state::ExtractionRuntimeState;
+
+    use super::{
+        RememberBody, dead_letter_blocked_extraction_memory, parse_remember_tags, remember,
+    };
 
     #[test]
     fn remember_tags_accepts_comma_separated_strings() {
@@ -523,6 +520,302 @@ mod tests {
             .unwrap();
         assert_eq!(status, "leased");
         assert_eq!(error, None);
+    }
+
+    async fn build_test_state() -> (Arc<crate::state::AppState>, tempfile::TempDir) {
+        let dir = tempdir().expect("tempdir");
+        let db = dir.path().join("memory").join("memories.db");
+        std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
+        std::fs::write(
+            dir.path().join("agent.yaml"),
+            "memory:\n  pipelineV2:\n    enabled: true\n",
+        )
+        .expect("write config");
+
+        let (pool, _writer) = DbPool::open(&db).expect("open db");
+        pool.write(Priority::High, |conn| {
+            let mut stmt = conn.prepare("PRAGMA table_info(memories)")?;
+            let columns = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !columns.iter().any(|column| column == "agent_id") {
+                conn.execute_batch("ALTER TABLE memories ADD COLUMN agent_id TEXT DEFAULT 'default'")?;
+            }
+            if !columns.iter().any(|column| column == "visibility") {
+                conn.execute_batch("ALTER TABLE memories ADD COLUMN visibility TEXT DEFAULT 'global'")?;
+            }
+            Ok(serde_json::json!({"ok": true}))
+        })
+        .await
+        .expect("memory column patch");
+        let rules = default_limits();
+        let manifest = signet_core::config::AgentManifest {
+            agent: AgentIdentity {
+                name: "test-agent".to_string(),
+                description: None,
+                created: None,
+                updated: None,
+            },
+            embedding: Some(EmbeddingConfig::default()),
+            memory: Some(MemoryManifestConfig {
+                database: None,
+                vectors: None,
+                session_budget: None,
+                decay_rate: None,
+                pipeline_v2: Some(PipelineV2Config {
+                    enabled: true,
+                    ..Default::default()
+                }),
+            }),
+            auth: Some(AuthConfig {
+                method: "token".to_string(),
+                chain_id: None,
+                mode: Some("local".to_string()),
+                rate_limits: Some(HashMap::new()),
+            }),
+            ..Default::default()
+        };
+
+        (
+            Arc::new(crate::state::AppState::new(
+                DaemonConfig {
+                    base_path: dir.path().to_path_buf(),
+                    db_path: db,
+                    port: 3850,
+                    host: "127.0.0.1".to_string(),
+                    bind: Some("127.0.0.1".to_string()),
+                    manifest,
+                },
+                pool,
+                None,
+                None,
+                AuthMode::Local,
+                None,
+                AuthRateLimiter::from_rules(&rules),
+            )),
+            dir,
+        )
+    }
+
+    async fn read_json_body(response: axum::response::Response) -> serde_json::Value {
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    #[tokio::test]
+    async fn remember_atomically_dead_letters_blocked_extraction() {
+        let (state, _dir) = build_test_state().await;
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "none".to_string(),
+                fallback_provider: "none".to_string(),
+                status: "blocked".to_string(),
+                degraded: true,
+                fallback_applied: false,
+                reason: Some("Extraction blocked for test".to_string()),
+                since: Some("2026-03-27T00:00:00Z".to_string()),
+            });
+        }
+
+        let response = remember(
+            State(state.clone()),
+            Json(RememberBody {
+                content: Some("Atomic blocked remember".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json_body(response).await;
+        assert_eq!(body["status"], "created");
+        assert!(body.get("warning").is_none());
+
+        let memory_id = body["id"].as_str().expect("memory id").to_string();
+        let memory = state
+            .pool
+            .read(move |conn| {
+                let row = conn.query_row(
+                    "SELECT extraction_status FROM memories WHERE id = ?1",
+                    rusqlite::params![memory_id],
+                    |row| row.get::<_, String>(0),
+                )?;
+                Ok(row)
+            })
+            .await
+            .expect("read memory");
+        assert_eq!(memory, "failed");
+
+        let jobs = state
+            .pool
+            .read(|conn| {
+                let row = conn.query_row(
+                    "SELECT COUNT(*) FROM memory_jobs WHERE job_type = 'extract' AND status = 'dead'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                Ok(row)
+            })
+            .await
+            .expect("read jobs");
+        assert_eq!(jobs, 1);
+    }
+
+    #[tokio::test]
+    async fn remember_rolls_back_when_blocked_dead_letter_fails() {
+        let (state, _dir) = build_test_state().await;
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "none".to_string(),
+                fallback_provider: "none".to_string(),
+                status: "blocked".to_string(),
+                degraded: true,
+                fallback_applied: false,
+                reason: Some("Extraction blocked for test".to_string()),
+                since: Some("2026-03-27T00:00:00Z".to_string()),
+            });
+        }
+
+        state
+            .pool
+            .write(Priority::High, |conn| {
+                conn.execute_batch("DROP TABLE memory_jobs")?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("drop memory_jobs");
+
+        let response = remember(
+            State(state.clone()),
+            Json(RememberBody {
+                content: Some("Should roll back".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = read_json_body(response).await;
+        assert_eq!(body["error"], "Failed to save memory");
+
+        let memories = state
+            .pool
+            .read(|conn| {
+                let row = conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get::<_, i64>(0))?;
+                Ok(row)
+            })
+            .await
+            .expect("read memories");
+        assert_eq!(memories, 0);
+    }
+
+    #[tokio::test]
+    async fn remember_duplicate_does_not_create_dead_job_when_blocked() {
+        let (state, _dir) = build_test_state().await;
+        state
+            .pool
+            .write_tx(Priority::High, |conn| {
+                let _ = signet_services::transactions::ingest(
+                    conn,
+                    &signet_services::transactions::IngestInput {
+                        content: "Duplicate content",
+                        memory_type: "fact",
+                        tags: Vec::new(),
+                        who: None,
+                        why: None,
+                        project: None,
+                        importance: 0.5,
+                        pinned: false,
+                        source_type: None,
+                        source_id: None,
+                        idempotency_key: None,
+                        runtime_path: None,
+                        actor: "test",
+                        agent_id: "default",
+                        visibility: "global",
+                    },
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed memory");
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "none".to_string(),
+                fallback_provider: "none".to_string(),
+                status: "blocked".to_string(),
+                degraded: true,
+                fallback_applied: false,
+                reason: Some("Extraction blocked for test".to_string()),
+                since: Some("2026-03-27T00:00:00Z".to_string()),
+            });
+        }
+
+        let response = remember(
+            State(state.clone()),
+            Json(RememberBody {
+                content: Some("Duplicate content".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json_body(response).await;
+        assert_eq!(body["status"], "duplicate");
+
+        let dead_jobs = state
+            .pool
+            .read(|conn| {
+                let row = conn.query_row(
+                    "SELECT COUNT(*) FROM memory_jobs WHERE job_type = 'extract' AND status = 'dead'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                Ok(row)
+            })
+            .await
+            .expect("read dead jobs");
+        assert_eq!(dead_jobs, 0);
     }
 }
 

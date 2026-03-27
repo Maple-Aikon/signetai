@@ -134,34 +134,6 @@ impl AppState {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
 
-    /// Check whether extraction is blocked. Preflight runs synchronously
-    /// before the server accepts requests, so this is always accurate.
-    pub async fn is_extraction_blocked(&self) -> bool {
-        self.extraction_state
-            .read()
-            .await
-            .as_ref()
-            .map(|es| es.status == "blocked")
-            .unwrap_or(false)
-    }
-
-    /// Return the extraction block reason (if blocked), for use in dead-letter
-    /// error messages.
-    pub async fn extraction_block_reason(&self) -> Option<String> {
-        let guard = self.extraction_state.read().await;
-        guard.as_ref().and_then(|es| {
-            if es.status == "blocked" {
-                Some(
-                    es.reason
-                        .clone()
-                        .unwrap_or_else(|| "Extraction provider unavailable".to_string()),
-                )
-            } else {
-                None
-            }
-        })
-    }
-
     fn normalize_harness_id(harness: &str) -> Option<&'static str> {
         match harness.trim().to_ascii_lowercase().as_str() {
             "claude" | "claude-code" => Some("claude-code"),
