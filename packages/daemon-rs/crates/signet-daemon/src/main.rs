@@ -1167,7 +1167,7 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
     let now = now.to_string();
     let result = state
         .pool
-        .write(signet_core::db::Priority::Low, move |conn| {
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
             // Collect affected memory IDs before updating jobs
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT memory_id FROM memory_jobs
@@ -1175,8 +1175,7 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             )?;
             let memory_ids: Vec<String> = stmt
                 .query_map([], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
 
             // Dead-letter the pending jobs
             let count = conn.execute(
@@ -1196,11 +1195,10 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
                     "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
                 )?;
                 for mid in &memory_ids {
-                    let leased: i64 = check_leased
-                        .query_row(rusqlite::params![mid], |row| row.get(0))
-                        .unwrap_or(0);
+                    let leased: i64 =
+                        check_leased.query_row(rusqlite::params![mid], |row| row.get(0))?;
                     if leased == 0 {
-                        let _ = update_mem.execute(rusqlite::params![mid]);
+                        update_mem.execute(rusqlite::params![mid])?;
                     }
                 }
             }
@@ -1365,7 +1363,7 @@ mod tests {
         append_api_path, host_in_trusted_override_list, host_matches_trusted_override,
         normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
         resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
-        worker_supports_extraction_provider,
+        worker_supports_extraction_provider, dead_letter_pending_extraction_jobs,
     };
 
     fn test_state() -> Arc<AppState> {
@@ -1542,6 +1540,115 @@ mod tests {
             "api.example.org",
             Some("proxy.company.net")
         ));
+    }
+
+    #[tokio::test]
+    async fn startup_dead_letter_marks_pending_jobs_and_memories_failed() {
+        let state = test_state();
+        state
+            .pool
+            .write_tx(signet_core::db::Priority::High, |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, content, normalized_content, content_hash, type, importance, extraction_status, created_at, updated_at, updated_by)
+                     VALUES (?1, 'memory', 'memory', 'hash-1', 'fact', 0.5, 'queued', ?2, ?2, 'test')",
+                    rusqlite::params!["mem-1", "2026-03-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                     VALUES (?1, ?2, 'extract', 'pending', ?3, ?3)",
+                    rusqlite::params!["job-1", "mem-1", "2026-03-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed pending extraction");
+
+        dead_letter_pending_extraction_jobs(
+            &state,
+            "Configured extraction provider unavailable at startup",
+            "2026-03-27T00:00:01Z",
+        )
+        .await;
+
+        let (job_status, memory_status) = state
+            .pool
+            .read(|conn| {
+                let job_status: String = conn.query_row(
+                    "SELECT status FROM memory_jobs WHERE id = 'job-1'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let memory_status: String = conn.query_row(
+                    "SELECT extraction_status FROM memories WHERE id = 'mem-1'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((job_status, memory_status))
+            })
+            .await
+            .expect("read statuses");
+
+        assert_eq!(job_status, "dead");
+        assert_eq!(memory_status, "failed");
+    }
+
+    #[tokio::test]
+    async fn startup_dead_letter_rolls_back_if_memory_updates_fail() {
+        let state = test_state();
+        state
+            .pool
+            .write_tx(signet_core::db::Priority::High, |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, content, normalized_content, content_hash, type, importance, extraction_status, created_at, updated_at, updated_by)
+                     VALUES (?1, 'memory', 'memory', 'hash-2', 'fact', 0.5, 'queued', ?2, ?2, 'test')",
+                    rusqlite::params!["mem-2", "2026-03-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                     VALUES (?1, ?2, 'extract', 'pending', ?3, ?3)",
+                    rusqlite::params!["job-2", "mem-2", "2026-03-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed pending extraction");
+
+        state
+            .pool
+            .write(signet_core::db::Priority::High, |conn| {
+                conn.execute_batch(
+                    "CREATE TRIGGER fail_memory_dead_letter_update
+                     BEFORE UPDATE OF extraction_status ON memories
+                     BEGIN
+                       SELECT RAISE(FAIL, 'boom');
+                     END;",
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("install failure trigger");
+
+        dead_letter_pending_extraction_jobs(
+            &state,
+            "Configured extraction provider unavailable at startup",
+            "2026-03-27T00:00:01Z",
+        )
+        .await;
+
+        let job_status: String = state
+            .pool
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT status FROM memory_jobs WHERE id = 'job-2'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .expect("read rolled back job");
+
+        assert_eq!(job_status, "pending");
     }
 
     #[test]
