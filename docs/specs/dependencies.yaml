@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-26"
+updated_at: "2026-03-27"
 
 specs:
   - id: memory-pipeline-v2
@@ -206,8 +206,8 @@ specs:
     decision: null
 
   - id: daemon-provider-fallback-status
-    status: planning
-    path: docs/specs/planning/daemon-provider-fallback-status.md
+    status: complete
+    path: docs/specs/complete/daemon-provider-fallback-status.md
     hard_depends_on:
       - memory-pipeline-v2
     soft_depends_on: []

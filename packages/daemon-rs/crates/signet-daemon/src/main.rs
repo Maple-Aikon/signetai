@@ -805,7 +805,7 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let now = chrono::Utc::now().to_rfc3339();
 
     // Check provider availability
-    let mut available = match provider {
+    let available = match provider {
         "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
         "claude-code" => cli_preflight("claude").await,
         "codex" => cli_preflight("codex").await,
@@ -817,17 +817,6 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
             false
         }
     };
-    let mut unavailability_reason: Option<String> = None;
-    if available && !worker_supports_extraction_provider(provider) {
-        available = false;
-        unavailability_reason = Some(format!(
-            "{provider} is not supported by daemon-rs extraction worker"
-        ));
-        warn!(
-            provider,
-            "extraction preflight forcing fallback/block: provider unsupported by daemon-rs worker"
-        );
-    }
 
     if available {
         // Provider is healthy — explicitly restore active state in case this
@@ -844,8 +833,7 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
         return;
     }
 
-    let reason_prefix = unavailability_reason
-        .unwrap_or_else(|| format!("{provider} unavailable during extraction startup preflight"));
+    let reason_prefix = format!("{provider} unavailable during extraction startup preflight");
     info!(provider, "extraction provider unavailable, attempting fallback resolution");
 
     // Try fallback to ollama if configured — use the configured endpoint

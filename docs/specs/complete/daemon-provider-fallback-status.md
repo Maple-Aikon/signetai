@@ -1,7 +1,7 @@
 ---
 title: "Daemon Extraction Provider Fallback Visibility"
 description: "Persist extraction provider degradation in runtime status and allow hard-failure over silent fallback."
-status: "planning"
+status: "complete"
 informed_by: []
 success_criteria:
   - "Startup provider fallback or hard-failure is persisted in /api/status and surfaced by signet status"
@@ -18,7 +18,7 @@ Issue #320 highlighted that extraction provider fallback warnings only exist
 in startup logs. Once the daemon is running, `/api/status` and `signet status`
 do not distinguish between the configured provider and a fallback provider.
 
-## Planned Contract
+## Delivered Contract
 
 - Persist extraction runtime resolution with status metadata:
   - `active`
