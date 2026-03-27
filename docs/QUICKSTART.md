@@ -142,8 +142,8 @@ Extraction safety note:
 
 - intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a
   Pro/Max subscription, or local Ollama with at least `qwen3:4b`
-- with `--deployment-type vps`, setup infers `claude-code` extraction when
-  `--extraction-provider` is omitted
+- with `--deployment-type vps`, setup prefers non-local extraction defaults
+  and avoids defaulting to local Ollama extraction
 - on a VPS, set extraction to `none` if you do not want background LLM calls
 - remote API extraction can rack up extreme fees fast
 

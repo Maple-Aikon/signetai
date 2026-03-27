@@ -17,9 +17,12 @@ describe("setup deployment defaults", () => {
 		expect(defaultEmbeddingProviderForDeployment("server")).toBe("native");
 	});
 
-	it("forces claude-code extraction default on vps", () => {
-		expect(defaultExtractionProviderForDeployment("vps", "ollama")).toBe("claude-code");
-		expect(defaultExtractionProviderForDeployment("vps", "none")).toBe("claude-code");
+	it("prefers non-local extraction defaults on vps based on harness availability and detection", () => {
+		expect(defaultExtractionProviderForDeployment("vps", "ollama", ["claude-code"])).toBe("claude-code");
+		expect(defaultExtractionProviderForDeployment("vps", "none", ["codex"])).toBe("codex");
+		expect(defaultExtractionProviderForDeployment("vps", "none", ["opencode"])).toBe("opencode");
+		expect(defaultExtractionProviderForDeployment("vps", "codex")).toBe("codex");
+		expect(defaultExtractionProviderForDeployment("vps", "none")).toBe("none");
 	});
 
 	it("keeps detected extraction provider for local and server", () => {

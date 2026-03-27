@@ -105,6 +105,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingDesc =
 		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
 	const existingHarnesses = readHarnesses(existingConfig.harnesses);
+	const normalizedExistingHarnesses = normalizeHarnessList(existingHarnesses, deps);
 	const existingNetworkMode = readNetworkMode(existingConfig);
 	const detectedProvider: ExtractionProviderChoice = hasCommand("claude")
 		? "claude-code"
@@ -227,7 +228,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			const migrationExtractionProvider =
 				requestedExtractionProvider ??
 				existingExtractionProvider ??
-				defaultExtractionProviderForDeployment(deploymentType, detectedProvider);
+				defaultExtractionProviderForDeployment(deploymentType, detectedProvider, normalizedExistingHarnesses);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -268,15 +269,20 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			}
 		} else {
 			console.log();
-			const deploymentType = await select({
-				message: "Where is Signet running?",
-				choices: [
-					{ value: "local", name: "Local machine (dev / personal)" },
-					{ value: "vps", name: "VPS or cloud server (shared / constrained resources)" },
-					{ value: "server", name: "Self-hosted server (dedicated hardware)" },
-				],
-				default: requestedDeploymentType ?? "local",
-			});
+			const deploymentType =
+				requestedDeploymentType ??
+				(await select({
+					message: "Where is Signet running?",
+					choices: [
+						{ value: "local", name: "Local machine (dev / personal)" },
+						{ value: "vps", name: "VPS or cloud server (shared / constrained resources)" },
+						{ value: "server", name: "Self-hosted server (dedicated hardware)" },
+					],
+					default: "local",
+				}));
+			if (requestedDeploymentType) {
+				console.log(chalk.dim(`  Using deployment type from CLI: ${requestedDeploymentType}`));
+			}
 			console.log();
 			console.log(chalk.cyan("  Deployment guidance:"));
 			for (const line of getDeploymentExtractionGuidance(deploymentType)) {
@@ -295,7 +301,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			const migrationExtractionProvider =
 				requestedExtractionProvider ??
 				existingExtractionProvider ??
-				defaultExtractionProviderForDeployment(deploymentType, detectedProvider);
+				defaultExtractionProviderForDeployment(deploymentType, detectedProvider, normalizedExistingHarnesses);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				embeddingProvider: migrationEmbeddingProvider,
@@ -465,6 +471,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	let deploymentType: DeploymentTypeChoice;
 	if (nonInteractive) {
 		deploymentType = requestedDeploymentType ?? "local";
+	} else if (requestedDeploymentType) {
+		deploymentType = requestedDeploymentType;
+		console.log();
+		console.log(chalk.dim(`  Using deployment type from CLI: ${requestedDeploymentType}`));
 	} else {
 		console.log();
 		deploymentType = await select({
@@ -563,7 +573,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider =
 			requestedExtractionProvider ??
 			providerFromConfig ??
-			defaultExtractionProviderForDeployment(deploymentType, detectedProvider);
+			defaultExtractionProviderForDeployment(deploymentType, detectedProvider, harnesses);
 	} else {
 		console.log();
 		console.log(chalk.cyan("  Deployment guidance:"));

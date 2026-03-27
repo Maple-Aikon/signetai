@@ -150,9 +150,16 @@ export function defaultEmbeddingProviderForDeployment(_deploymentType: Deploymen
 export function defaultExtractionProviderForDeployment(
 	deploymentType: DeploymentTypeChoice,
 	detectedProvider: ExtractionProviderChoice,
+	availableHarnesses: readonly HarnessChoice[] = [],
 ): ExtractionProviderChoice {
 	if (deploymentType === "vps") {
-		return "claude-code";
+		if (availableHarnesses.includes("claude-code")) return "claude-code";
+		if (availableHarnesses.includes("codex")) return "codex";
+		if (availableHarnesses.includes("opencode")) return "opencode";
+		if (detectedProvider === "claude-code") return "claude-code";
+		if (detectedProvider === "codex") return "codex";
+		if (detectedProvider === "opencode") return "opencode";
+		return "none";
 	}
 	return detectedProvider;
 }

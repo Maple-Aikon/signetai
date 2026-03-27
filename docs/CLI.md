@@ -139,7 +139,8 @@ Non-interactive behavior:
 - setup method: create new identity (no GitHub import)
 - provider flags are optional; setup infers defaults from `--deployment-type`
   when omitted
-- with `--deployment-type vps`, omitted extraction defaults to `claude-code`
+- with `--deployment-type vps`, setup prefers non-local extraction defaults
+  (`claude-code`, `codex`, `opencode`) and falls back to `none` when needed
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 
@@ -147,8 +148,8 @@ Extraction safety note:
 
 - intended usage is `claude-code` on Haiku, `codex` on GPT Mini with a
   Pro/Max subscription, or local `ollama` with at least `qwen3:4b`
-- with `--deployment-type vps`, omitted extraction defaults to
-  `claude-code`
+- with `--deployment-type vps`, setup avoids defaulting to local `ollama`
+  extraction and prefers non-local providers
 - set `--extraction-provider none` on a VPS if you do not want
   background extraction
 - remote API extraction can create extreme usage fees fast
