@@ -130,6 +130,7 @@ import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { getAgentScope, resolveAgentId } from "./agent-id";
+import { writeFileIfChanged } from "./file-sync";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import { expandTemporalNode } from "./temporal-expand";
 import { upsertThreadHead } from "./thread-heads";
@@ -10404,8 +10405,10 @@ function syncAgentWorkspaces(agentsDir: string): void {
 			const composed = base + agentIdentity + sharedIdentity;
 
 			mkdirSync(workspaceDir, { recursive: true });
-			writeFileSync(join(workspaceDir, "AGENTS.md"), composed);
-			logger.sync.harness(`openclaw:${name}`, join(workspaceDir, "AGENTS.md"));
+			const workspaceAgentsPath = join(workspaceDir, "AGENTS.md");
+			if (writeFileIfChanged(workspaceAgentsPath, composed)) {
+				logger.sync.harness(`openclaw:${name}`, workspaceAgentsPath);
+			}
 		} catch (e) {
 			logger.error("sync", `Failed to sync agent workspace: ${name}`, e as Error);
 		}
@@ -10417,9 +10420,7 @@ function ensureArchitectureDoc(): void {
 	const archPath = join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md");
 	try {
 		const archContent = buildArchitectureDoc();
-		const existing = existsSync(archPath) ? readFileSync(archPath, "utf-8") : "";
-		if (existing !== archContent) {
-			writeFileSync(archPath, archContent);
+		if (writeFileIfChanged(archPath, archContent)) {
 			logger.info("sync", "SIGNET-ARCHITECTURE.md updated");
 		}
 	} catch (e) {

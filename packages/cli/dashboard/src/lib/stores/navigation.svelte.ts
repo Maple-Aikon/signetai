@@ -14,6 +14,7 @@ export type TabId =
 	| "timeline"
 	| "knowledge"
 	| "embeddings"
+	| "audit"
 	| "pipeline"
 	| "logs"
 	| "secrets"
@@ -31,23 +32,13 @@ export type TabId =
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"home",
 	"settings",
-	"memory",
-	"timeline",
-	"knowledge",
-	"embeddings",
-	"pipeline",
-	"logs",
+	"audit",
 	"secrets",
 	"skills",
 	"tasks",
-	"connectors",
-	"predictor",
 	"changelog",
 	"os",
 	"cortex-memory",
-	"cortex-apps",
-	"cortex-tasks",
-	"cortex-troubleshooter",
 ]);
 
 // Alias map for path-style hashes (e.g. #memory/constellation -> embeddings)
@@ -56,33 +47,94 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["memory/timeline", "cortex-memory"],
 	["memory/knowledge", "cortex-memory"],
 	["memory/memories", "cortex-memory"],
+	["ontology", "cortex-memory"],
+	["ontology/cortex", "cortex-memory"],
+	["ontology/constellation", "cortex-memory"],
+	["memory", "cortex-memory"],
+	["embeddings", "cortex-memory"],
+	["knowledge", "cortex-memory"],
 	["cortex", "cortex-memory"],
 	["cortex/memory", "cortex-memory"],
-	["cortex/apps", "cortex-apps"],
-	["cortex/tasks", "cortex-tasks"],
-	["cortex/troubleshooter", "cortex-troubleshooter"],
+	["cortex/apps", "cortex-memory"],
+	["cortex/tasks", "tasks"],
+	["cortex/troubleshooter", "audit"],
 	["cortex-memory/constellation", "cortex-memory"],
 	["cortex-memory/timeline", "cortex-memory"],
 	["cortex-memory/knowledge", "cortex-memory"],
 	["matt", "cortex-memory"],
 	["matt/memory", "cortex-memory"],
-	["matt/apps", "cortex-apps"],
-	["matt/tasks", "cortex-tasks"],
-	["matt/troubleshooter", "cortex-troubleshooter"],
+	["matt/apps", "cortex-memory"],
+	["matt/tasks", "tasks"],
+	["matt/troubleshooter", "audit"],
 	["engine/settings", "settings"],
-	["engine/pipeline", "pipeline"],
-	["engine/predictor", "predictor"],
-	["engine/connectors", "connectors"],
-	["engine/logs", "logs"],
+	["engine/pipeline", "settings"],
+	["engine/predictor", "settings"],
+	["engine/connectors", "settings"],
+	["engine/logs", "audit"],
+	["pipeline", "settings"],
+	["predictor", "settings"],
+	["connectors", "settings"],
+	["logs", "audit"],
+	["audit/logs", "audit"],
+	["audit/troubleshooter", "audit"],
+	["cortex-apps", "cortex-memory"],
+	["cortex-tasks", "tasks"],
+	["cortex-troubleshooter", "audit"],
 	["config", "settings"],
-	["review-queue", "pipeline"],
+	["review-queue", "settings"],
 ]);
 
-function readTabFromHash(): TabId | null {
-	if (typeof window === "undefined") return null;
-	const hash = window.location.hash.slice(1);
+const HASH_CANONICAL: ReadonlyMap<string, string> = new Map([
+	["memory/constellation", "cortex-memory/constellation"],
+	["ontology/constellation", "cortex-memory/constellation"],
+	["cortex-memory/constellation", "cortex-memory/constellation"],
+	["memory/timeline", "cortex-memory"],
+	["memory/knowledge", "cortex-memory"],
+	["memory/memories", "cortex-memory"],
+	["ontology", "cortex-memory"],
+	["ontology/cortex", "cortex-memory"],
+	["cortex", "cortex-memory"],
+	["cortex/memory", "cortex-memory"],
+	["cortex/apps", "cortex-memory"],
+	["cortex-apps", "cortex-memory"],
+	["matt", "cortex-memory"],
+	["matt/memory", "cortex-memory"],
+	["matt/apps", "cortex-memory"],
+	["memory", "cortex-memory"],
+	["embeddings", "cortex-memory"],
+	["knowledge", "cortex-memory"],
+	["audit/logs", "audit/logs"],
+	["engine/logs", "audit/logs"],
+	["audit/troubleshooter", "audit"],
+	["cortex/troubleshooter", "audit"],
+	["matt/troubleshooter", "audit"],
+	["logs", "audit/logs"],
+	["pipeline", "settings"],
+	["predictor", "settings"],
+	["connectors", "settings"],
+	["engine/pipeline", "settings"],
+	["engine/predictor", "settings"],
+	["engine/connectors", "settings"],
+	["cortex/tasks", "tasks"],
+	["matt/tasks", "tasks"],
+	["cortex-tasks", "tasks"],
+]);
+
+function readHash(): string {
+	if (typeof window === "undefined") return "";
+	return window.location.hash.slice(1);
+}
+
+function readTabFromHash(hash = readHash()): TabId | null {
 	if (VALID_TABS.has(hash)) return hash as TabId;
 	return HASH_ALIASES.get(hash) ?? null;
+}
+
+function canonicalHash(hash: string, tab: TabId): string {
+	const exact = HASH_CANONICAL.get(hash);
+	if (exact) return exact;
+	if (hash === tab) return hash;
+	return tab;
 }
 
 export const nav = $state({
@@ -91,29 +143,13 @@ export const nav = $state({
 
 /* ── Tab groups (display-layer only) ── */
 
-const MEMORY_TABS: ReadonlySet<TabId> = new Set([
-	"memory",
-	"timeline",
-	"knowledge",
-	"embeddings",
-]);
-const ENGINE_TABS: ReadonlySet<TabId> = new Set([
-	"settings",
-	"pipeline",
-	"predictor",
-	"connectors",
-	"logs",
-]);
-const CORTEX_TABS: ReadonlySet<TabId> = new Set([
-	"cortex-memory",
-	"cortex-apps",
-	"cortex-tasks",
-	"cortex-troubleshooter",
-]);
+const MEMORY_TABS: ReadonlySet<TabId> = new Set(["cortex-memory"]);
+const ENGINE_TABS: ReadonlySet<TabId> = new Set(["settings"]);
+const CORTEX_TABS: ReadonlySet<TabId> = new Set(["cortex-memory"]);
 
 export type NavGroup = "memory" | "engine" | "cortex";
 
-const lastMemoryTab = $state({ value: "memory" as TabId });
+const lastMemoryTab = $state({ value: "cortex-memory" as TabId });
 const lastEngineTab = $state({ value: "settings" as TabId });
 const lastCortexTab = $state({ value: "cortex-memory" as TabId });
 
@@ -128,14 +164,16 @@ export function isCortexGroup(tab: TabId): boolean {
 }
 
 export function setTab(tab: TabId): boolean {
-	if (tab === nav.activeTab) return true;
-	if (!confirmDiscardChanges(`switch to ${tab}`)) return false;
-	nav.activeTab = tab;
-	if (MEMORY_TABS.has(tab)) lastMemoryTab.value = tab;
-	if (ENGINE_TABS.has(tab)) lastEngineTab.value = tab;
-	if (CORTEX_TABS.has(tab)) lastCortexTab.value = tab;
+	const next = VALID_TABS.has(tab) ? tab : (HASH_ALIASES.get(tab) ?? null);
+	if (!next) return false;
+	if (next === nav.activeTab) return true;
+	if (!confirmDiscardChanges(`switch to ${next}`)) return false;
+	nav.activeTab = next;
+	if (MEMORY_TABS.has(next)) lastMemoryTab.value = next;
+	if (ENGINE_TABS.has(next)) lastEngineTab.value = next;
+	if (CORTEX_TABS.has(next)) lastCortexTab.value = next;
 	if (typeof window !== "undefined") {
-		history.replaceState(null, "", `#${tab}`);
+		history.replaceState(null, "", `#${next}`);
 	}
 	return true;
 }
@@ -153,17 +191,30 @@ export function navigateToGroup(group: NavGroup): boolean {
  * Returns a cleanup function to remove the event listener.
  */
 export function initNavFromHash(): () => void {
-	const initial = readTabFromHash();
+	const raw = readHash();
+	const initial = readTabFromHash(raw);
 	if (initial) {
 		nav.activeTab = initial;
+		if (typeof window !== "undefined") {
+			const next = canonicalHash(raw, initial);
+			if (raw !== next) {
+				history.replaceState(null, "", `#${next}`);
+			}
+		}
 	} else if (typeof window !== "undefined") {
 		// No hash present — set it to the default tab
 		history.replaceState(null, "", `#${nav.activeTab}`);
 	}
 
 	const onHashChange = () => {
-		const tab = readTabFromHash();
-		if (tab && tab !== nav.activeTab) nav.activeTab = tab;
+		const next = readHash();
+		const tab = readTabFromHash(next);
+		if (!tab) return;
+		if (tab !== nav.activeTab) nav.activeTab = tab;
+		const target = canonicalHash(next, tab);
+		if (next !== target) {
+			history.replaceState(null, "", `#${target}`);
+		}
 	};
 	window.addEventListener("hashchange", onHashChange);
 	return () => window.removeEventListener("hashchange", onHashChange);

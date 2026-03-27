@@ -54,4 +54,16 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		expect(shouldIgnore(join(agentsDir, "memory", "memories.db-shm"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "memory", "memories.db-journal"))).toBe(true);
 	});
+
+	it("ignores generated per-agent workspace AGENTS.md files", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "workspace", "AGENTS.md"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "workspace", "nested-project", "AGENTS.md"))).toBe(
+			false,
+		);
+		expect(shouldIgnore(join(agentsDir, "agents-backup", "claude-code", "workspace", "AGENTS.md"))).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "SOUL.md"))).toBe(false);
+	});
 });

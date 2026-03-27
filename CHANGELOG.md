@@ -2,6 +2,24 @@
 
 All notable changes to Signet are documented here.
 
+## [0.78.2] - 2026-03-27
+
+### Bug Fixes
+
+- **daemon**: stop workspace AGENTS.md sync watcher loop (#366)
+
+### Refactoring
+
+- **dashboard**: stabilize IA and gate experimental surfaces (#364)
+
+
+## [0.78.1] - 2026-03-27
+
+### Bug Fixes
+
+- **update**: verify installed version after install (#365)
+
+
 ## [0.78.0] - 2026-03-27
 
 ### Bug Fixes
