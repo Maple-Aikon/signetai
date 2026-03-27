@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.79.0] - 2026-03-27
+
+### Features
+
+- **pipeline**: add command extraction provider for summary worker control-plane path (#368)
+
+
 ## [0.78.4] - 2026-03-27
 
 ### Features

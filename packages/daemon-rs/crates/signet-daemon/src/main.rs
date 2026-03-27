@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
-use signet_core::config::{DaemonConfig, ManifestLoadError, network_mode_from_bind};
+use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
 use tracing::{info, warn};
@@ -59,24 +59,13 @@ fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
     rules
 }
 
-fn load_daemon_config() -> anyhow::Result<DaemonConfig> {
-    match DaemonConfig::try_from_env() {
-        Ok(config) => Ok(config),
-        Err(error @ ManifestLoadError::InvalidExtractionFallbackProvider { .. })
-        | Err(error @ ManifestLoadError::InvalidExtractionFallbackProviderType { .. }) => {
-            Err(anyhow::anyhow!("invalid daemon config: {error}"))
-        }
-        Err(_) => Ok(DaemonConfig::from_env()),
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     // Service management subcommands (no logging needed)
     if args.iter().any(|a| a == "--install-service") {
-        let config = load_daemon_config()?;
+        let config = DaemonConfig::from_env().map_err(anyhow::Error::msg)?;
         service::install(config.port)?;
         println!("signet service installed (port {})", config.port);
         return Ok(());
@@ -103,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Load config
-    let config = load_daemon_config()?;
+    let config = DaemonConfig::from_env().map_err(anyhow::Error::msg)?;
 
     // --check-migrations: open DB, run migrations, exit (for benchmarking startup)
     if args.iter().any(|a| a == "--check-migrations") {
@@ -816,30 +805,30 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let fallback_provider = extraction.fallback_provider.as_str();
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Check provider availability
-    let mut available = match provider {
-        "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
-        "claude-code" => cli_preflight("claude").await,
-        "codex" => cli_preflight("codex").await,
-        "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
-        "openrouter" => check_openrouter_health(extraction.endpoint.as_deref()).await,
-        "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
-        _ => {
-            warn!(provider, "unknown extraction provider, assuming unavailable");
-            false
-        }
-    };
     let mut unavailability_reason: Option<String> = None;
-    if available && !worker_supports_extraction_provider(provider) {
-        available = false;
+    let available = if !worker_supports_extraction_provider(provider) {
         unavailability_reason = Some(format!(
             "{provider} is not supported by daemon-rs extraction worker"
         ));
         warn!(
             provider,
-            "extraction preflight forcing fallback/block: provider unsupported by daemon-rs worker"
+            "extraction preflight forcing fallback/block before provider probe: provider unsupported by daemon-rs worker"
         );
-    }
+        false
+    } else {
+        match provider {
+            "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
+            "claude-code" => cli_preflight("claude").await,
+            "codex" => cli_preflight("codex").await,
+            "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
+            "openrouter" => check_openrouter_health(extraction.endpoint.as_deref()).await,
+            "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
+            _ => {
+                warn!(provider, "unknown extraction provider, assuming unavailable");
+                false
+            }
+        }
+    };
 
     if available {
         // Provider is healthy — explicitly restore active state in case this
