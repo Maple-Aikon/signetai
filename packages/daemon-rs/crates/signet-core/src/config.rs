@@ -114,10 +114,11 @@ fn normalize_manifest(mut manifest: AgentManifest, raw: &serde_yml::Value) -> Ag
 fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
     let extraction = pipeline.extraction.clone();
     let fallback = SynthesisConfig::default();
+    let inherits_extraction = extraction.provider != "command";
     let provider = raw
         .and_then(|value| raw_child(value, "synthesis"))
         .and_then(|value| raw_string(value, "provider"))
-        .filter(|value| is_pipeline_provider(value));
+        .filter(|value| is_synthesis_provider(value));
     let model = raw
         .and_then(|value| raw_child(value, "synthesis"))
         .and_then(|value| raw_string(value, "model"));
@@ -133,23 +134,31 @@ fn normalize_pipeline_synthesis(pipeline: &mut PipelineV2Config, raw: Option<&se
 
     pipeline.synthesis.provider = provider
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| extraction.provider.clone());
+        .unwrap_or_else(|| {
+            if inherits_extraction {
+                extraction.provider.clone()
+            } else {
+                fallback.provider.clone()
+            }
+        });
     pipeline.synthesis.model = model.map(ToOwned::to_owned).unwrap_or_else(|| {
         if provider_won {
             default_pipeline_model(&pipeline.synthesis.provider).to_string()
-        } else {
+        } else if inherits_extraction {
             extraction.model.clone()
+        } else {
+            fallback.model.clone()
         }
     });
     pipeline.synthesis.endpoint = endpoint.map(ToOwned::to_owned).or_else(|| {
-        if provider_won {
+        if provider_won || !inherits_extraction {
             None
         } else {
             extraction.endpoint.clone()
         }
     });
     pipeline.synthesis.timeout = timeout.unwrap_or_else(|| {
-        if provider_won {
+        if provider_won || !inherits_extraction {
             fallback.timeout
         } else {
             extraction.timeout
@@ -182,6 +191,10 @@ fn is_pipeline_provider(value: &str) -> bool {
         value,
         "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command"
     )
+}
+
+fn is_synthesis_provider(value: &str) -> bool {
+    is_pipeline_provider(value) && value != "command"
 }
 
 fn default_pipeline_model(provider: &str) -> &'static str {
@@ -322,7 +335,7 @@ memory:
         assert_eq!(pipeline.extraction.provider, "ollama");
         assert_eq!(pipeline.extraction.model, "qwen3.5:4b");
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(pipeline.synthesis.timeout, pipeline.extraction.timeout);
     }
 
@@ -349,7 +362,7 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(
             pipeline.synthesis.endpoint.as_deref(),
             Some("http://127.0.0.1:11434")
@@ -472,6 +485,32 @@ memory:
                 .as_deref(),
             Some("pipeline")
         );
+        assert_eq!(pipeline.synthesis.provider, "ollama");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
+    }
+
+    #[test]
+    fn synthesis_command_provider_is_ignored_for_safety() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      model: qwen3.5:4b
+    synthesis:
+      provider: command
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.synthesis.provider, "ollama");
+        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
     }
 }
 

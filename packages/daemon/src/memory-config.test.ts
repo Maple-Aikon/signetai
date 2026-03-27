@@ -549,8 +549,9 @@ describe("loadPipelineConfig", () => {
 				SIGNET_MODE: "pipeline",
 			},
 		});
-		// synthesis inherits extraction provider when not explicitly configured
-		expect(result.synthesis.provider).toBe("command");
+		// synthesis never accepts command provider; extraction command falls back to synthesis defaults
+		expect(result.synthesis.provider).toBe("ollama");
+		expect(result.synthesis.model).toBe("qwen3:4b");
 	});
 
 	it("parses legacy extraction.command string into argv", () => {
@@ -568,6 +569,42 @@ describe("loadPipelineConfig", () => {
 			bin: "node",
 			args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"],
 		});
+	});
+
+	it("rejects synthesis.provider=command with a clear validation error", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "ollama",
+							model: "qwen3:4b",
+						},
+						synthesis: {
+							provider: "command",
+						},
+					},
+				},
+			}),
+		).toThrow("synthesis.provider='command' is not supported");
+	});
+
+	it("loadMemoryConfig fails fast when synthesis.provider=command is configured", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      model: qwen3:4b
+    synthesis:
+      provider: command
+`,
+			"utf8",
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow("synthesis.provider='command' is not supported");
 	});
 
 	it("loads all flags correctly when all set to true (flat keys)", () => {

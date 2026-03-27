@@ -31,6 +31,13 @@ export interface MemorySearchConfig {
 export { PIPELINE_FLAGS };
 export type { PipelineFlag, PipelineV2Config };
 
+class PipelineConfigValidationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PipelineConfigValidationError";
+	}
+}
+
 export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	enabled: true,
 	paused: false,
@@ -349,6 +356,9 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const flatModel = raw.extractionModel;
 
 	type ProviderKind = Parameters<typeof defaultPipelineModel>[0];
+	type SynthesisProviderKind = Exclude<ProviderKind, "command">;
+	const isSynthesisProvider = (value: unknown): value is SynthesisProviderKind =>
+		isPipelineProvider(value) && value !== "command";
 
 	function resolveModel(provider: ProviderKind, raw: unknown, fallback?: string): string {
 		if (typeof raw === "string" && raw.trim().length > 0) {
@@ -390,23 +400,35 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		d.extraction.timeout,
 	);
-	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
-	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
+	if (synthesisRaw?.provider === "command") {
+		throw new PipelineConfigValidationError(
+			"memory.pipelineV2.synthesis.provider='command' is not supported. Use memory.pipelineV2.extraction.provider='command' instead.",
+		);
+	}
+
+	const synthesisProviderWon = isSynthesisProvider(synthesisRaw?.provider);
+	const resolvedSynthesisProvider: SynthesisProviderKind = synthesisProviderWon
+		? synthesisRaw.provider
+		: resolvedProvider === "command"
+			? d.synthesis.provider
+			: resolvedProvider;
 	const resolvedSynthesisModel =
 		typeof synthesisRaw?.model === "string" && synthesisRaw.model.trim().length > 0
 			? synthesisRaw.model
 			: synthesisProviderWon
 				? defaultPipelineModel(resolvedSynthesisProvider)
-				: resolvedModel;
+				: resolvedProvider === "command"
+					? d.synthesis.model
+					: resolvedModel;
 	const resolvedSynthesisEndpoint =
 		parseOptionalUrl(synthesisRaw?.endpoint) ??
 		parseOptionalUrl(synthesisRaw?.base_url) ??
-		(synthesisProviderWon ? undefined : resolvedEndpoint);
+		(synthesisProviderWon || resolvedProvider === "command" ? undefined : resolvedEndpoint);
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,
 		300000,
-		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
+		synthesisProviderWon || resolvedProvider === "command" ? d.synthesis.timeout : resolvedTimeout,
 	);
 	const resolvedSynthesisEnabled =
 		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
@@ -683,13 +705,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 		synthesis: {
 			enabled: resolvedSynthesisEnabled,
-			provider: (() => {
-				const p = synthesisRaw?.provider;
-				if (isPipelineProvider(p)) {
-					return p;
-				}
-				return resolvedSynthesisProvider;
-			})(),
+			provider: resolvedSynthesisProvider,
 			model: resolvedSynthesisModel,
 			endpoint: resolvedSynthesisEndpoint,
 			timeout: resolvedSynthesisTimeout,
@@ -913,7 +929,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 
 			break;
-		} catch {
+		} catch (error) {
+			if (error instanceof PipelineConfigValidationError) {
+				throw error;
+			}
 			// ignore parse errors, try next file
 		}
 	}

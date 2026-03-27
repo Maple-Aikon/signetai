@@ -981,10 +981,11 @@ extraction:
 
 synthesis:
   enabled: true
-  provider: ollama               # same provider choices as extraction
+  provider: ollama               # same provider choices as extraction, except "command"
   model: qwen3:4b
   timeout: 120000                # ms, range 5000–300000
-  # when omitted entirely, synthesis falls back to the resolved extraction provider/model
+  # when omitted entirely, synthesis falls back to extraction provider/model
+  # except extraction.provider=command, which falls back to synthesis defaults
 
 worker:
   pollMs: 2000                   # ms, range 100–60000

@@ -367,8 +367,9 @@ Controls the provider used by the `summary-worker` for session summaries.
 This is separate from fact extraction once explicitly configured.
 
 If the `synthesis` block is omitted entirely, Signet falls back to the
-resolved extraction provider, model, endpoint, and timeout instead of
-using a hidden hardcoded provider.
+resolved extraction provider, model, endpoint, and timeout. Exception:
+when `extraction.provider: command`, synthesis falls back to synthesis
+defaults (`ollama` + default synthesis model/timeout) instead.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
@@ -380,6 +381,8 @@ using a hidden hardcoded provider.
 
 Set `provider: none` or `enabled: false` to disable background session
 summary synthesis entirely.
+
+`synthesis.provider: command` is invalid and rejected during config load.
 
 
 ### Worker (`worker`)

@@ -1308,12 +1308,6 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 			logger.warn("summary-worker", "Codex CLI not available for summary worker — falling back to ollama");
 			return fallback();
 		}
-		case "command":
-			logger.warn(
-				"summary-worker",
-				"synthesis.provider='command' is not used by the summary worker; use extraction.provider='command' instead. Falling back to ollama",
-			);
-			return fallback();
 		case "opencode":
 			return createOpenCodeProvider({
 				model: model || "anthropic/claude-haiku-4-5-20251001",

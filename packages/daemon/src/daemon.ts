@@ -429,8 +429,7 @@ type RuntimeSynthesisProviderName =
 	| "codex"
 	| "opencode"
 	| "anthropic"
-	| "openrouter"
-	| "command";
+	| "openrouter";
 
 interface ProviderRuntimeResolution {
 	extraction: {
@@ -11295,7 +11294,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		"opencode",
 		"anthropic",
 		"openrouter",
-		"command",
 	]);
 
 	providerRuntimeResolution.extraction = {
