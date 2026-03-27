@@ -34,9 +34,11 @@ describe("setup deployment defaults", () => {
 		);
 	});
 
-	it("uses selected harness extraction provider even when local tooling is not detected on vps", () => {
-		expect(defaultExtractionProviderForDeployment("vps", "none", [], ["codex"])).toBe("codex");
-		expect(defaultExtractionProviderForDeployment("vps", "none", ["claude-code"], ["opencode"])).toBe("opencode");
+	it("falls back when selected harness extraction tooling is unavailable on vps", () => {
+		expect(defaultExtractionProviderForDeployment("vps", "none", [], ["codex"])).toBe("none");
+		expect(defaultExtractionProviderForDeployment("vps", "claude-code", ["claude-code"], ["codex"])).toBe(
+			"claude-code",
+		);
 	});
 
 	it("keeps detected extraction provider for local and server", () => {

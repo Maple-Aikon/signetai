@@ -399,8 +399,8 @@ cd packages/cli/dashboard && bun run dev # Dashboard dev
 Requirements:
 
 - Node.js 18+ or Bun
-- A supported AI coding harness (Claude Code, Codex, OpenCode, or OpenClaw)
 - macOS or Linux
+- Optional for harness integrations: Claude Code, Codex, OpenCode, or OpenClaw
 
 Embeddings (choose one):
 
