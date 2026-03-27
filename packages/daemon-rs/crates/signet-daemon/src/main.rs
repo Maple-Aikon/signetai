@@ -155,9 +155,18 @@ async fn main() -> anyhow::Result<()> {
     };
     let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
 
-    // Do not create a detached runtime-stats handle in daemon state.
-    // Status should read from the worker-owned handle when one exists.
-    let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
+    let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> =
+        config
+            .manifest
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.pipeline_v2.as_ref())
+            .map(|pipeline| {
+                signet_pipeline::worker::new_runtime_stats_handle(
+                    pipeline.worker.max_load_per_cpu,
+                    pipeline.worker.overload_backoff_ms,
+                )
+            });
 
     // Build app state
     let state = Arc::new(AppState::new(
@@ -951,10 +960,15 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
                 "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
             }))
         } else {
-            // Do not synthesize an "idle" worker status from config-only values.
-            // Runtime worker fields should only be surfaced when backed by a live
-            // worker-owned stats handle.
-            None
+            Some(serde_json::json!({
+                "running": false,
+                "overloaded": false,
+                "loadPerCpu": None::<f64>,
+                "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
+                "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
+                "overloadSince": None::<String>,
+                "nextTickInMs": None::<u64>,
+            }))
         }
     } else {
         None
@@ -1082,7 +1096,7 @@ mod tests {
                 &EmbeddingConfig::default(),
                 None,
             )),
-            None,
+            Some(signet_pipeline::worker::new_runtime_stats_handle(0.8, 30_000)),
             AuthMode::Local,
             None,
             AuthRateLimiter::from_rules(&rules),
@@ -1090,9 +1104,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_omits_worker_runtime_fields_without_live_stats_handle() {
+    async fn status_includes_worker_runtime_fields_with_configured_bounds() {
         let state = test_state();
         let axum::response::Json(body) = status(State(state)).await;
-        assert!(body["pipeline"]["extraction"].is_null());
+        assert_eq!(body["pipeline"]["extraction"]["running"], false);
+        assert_eq!(body["pipeline"]["extraction"]["overloaded"], false);
+        assert_eq!(body["pipeline"]["extraction"]["maxLoadPerCpu"], 0.8);
+        assert_eq!(body["pipeline"]["extraction"]["overloadBackoffMs"], 30000);
     }
 }

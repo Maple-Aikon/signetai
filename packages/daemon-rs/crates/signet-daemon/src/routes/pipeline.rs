@@ -198,12 +198,12 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
     // Update extraction runtime state on pause/resume transitions,
     // mirroring the JS daemon's restartPipelineRuntime behavior.
     if paused {
-        // Pipeline pause disables extraction execution at runtime. Reflect
-        // that directly in provider-resolution state so /api/status remains
-        // internally consistent across status/effective/fallback fields.
+        // Pipeline pause disables extraction execution at runtime.
+        // Preserve "blocked" and "disabled" states so write routes keep the
+        // startup block guard active while paused.
         let mut guard = state.extraction_state.write().await;
         if let Some(es) = guard.as_mut() {
-            if es.status != "disabled" {
+            if es.status != "disabled" && es.status != "blocked" {
                 es.status = "paused".to_string();
                 es.effective = "none".to_string();
                 es.degraded = false;
@@ -829,7 +829,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_clears_blocked_runtime_resolution_fields() {
+    async fn pause_preserves_blocked_runtime_resolution_fields() {
         let test = build_state(AuthMode::Local, false, 10);
         let peer = SocketAddr::from(([127, 0, 0, 1], 3850));
 
@@ -851,11 +851,14 @@ mod tests {
 
         let extraction = test.state.extraction_state.read().await;
         let extraction = extraction.as_ref().expect("paused extraction state");
-        assert_eq!(extraction.status, "paused");
+        assert_eq!(extraction.status, "blocked");
         assert_eq!(extraction.effective, "none");
-        assert!(!extraction.degraded);
+        assert!(extraction.degraded);
         assert!(!extraction.fallback_applied);
-        assert!(extraction.reason.is_none());
-        assert!(extraction.since.is_none());
+        assert_eq!(
+            extraction.reason.as_deref(),
+            Some("startup preflight failed")
+        );
+        assert_eq!(extraction.since.as_deref(), Some("2026-03-27T00:00:00Z"));
     }
 }
