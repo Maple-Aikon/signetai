@@ -140,7 +140,8 @@ Non-interactive behavior:
 - provider flags are optional; setup infers defaults from `--deployment-type`
   when omitted
 - with `--deployment-type vps`, setup prefers non-local extraction defaults
-  (`claude-code`, `codex`, `opencode`) and falls back to `none` when needed
+  from selected harnesses first, then detected tooling (`claude-code`, `codex`,
+  `opencode`), and falls back to `none` when needed
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 

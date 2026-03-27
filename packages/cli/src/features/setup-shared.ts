@@ -26,6 +26,7 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
+const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["claude-code", "codex", "opencode"];
 
 interface PathDeps {
 	readonly detectExistingSetup: (basePath: string) => SetupDetection;
@@ -151,17 +152,42 @@ export function defaultExtractionProviderForDeployment(
 	deploymentType: DeploymentTypeChoice,
 	detectedProvider: ExtractionProviderChoice,
 	availableProviders: readonly ExtractionProviderChoice[] = [],
+	preferredHarnesses: readonly HarnessChoice[] = [],
 ): ExtractionProviderChoice {
 	if (deploymentType === "vps") {
-		if (availableProviders.includes("claude-code")) return "claude-code";
-		if (availableProviders.includes("codex")) return "codex";
-		if (availableProviders.includes("opencode")) return "opencode";
-		if (detectedProvider === "claude-code" || detectedProvider === "codex" || detectedProvider === "opencode") {
+		const preferredProviders = extractionProvidersFromHarnesses(preferredHarnesses);
+		for (const provider of preferredProviders) {
+			if (availableProviders.includes(provider)) {
+				return provider;
+			}
+		}
+
+		for (const provider of VPS_NON_LOCAL_EXTRACTION_PROVIDERS) {
+			if (availableProviders.includes(provider)) {
+				return provider;
+			}
+		}
+
+		if (VPS_NON_LOCAL_EXTRACTION_PROVIDERS.includes(detectedProvider)) {
 			return detectedProvider;
 		}
 		return "none";
 	}
 	return detectedProvider;
+}
+
+function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): ExtractionProviderChoice[] {
+	const providers: ExtractionProviderChoice[] = [];
+	for (const harness of harnesses) {
+		let provider: ExtractionProviderChoice | null = null;
+		if (harness === "claude-code" || harness === "codex" || harness === "opencode") {
+			provider = harness;
+		}
+		if (provider && !providers.includes(provider)) {
+			providers.push(provider);
+		}
+	}
+	return providers;
 }
 
 export function getDeploymentExtractionGuidance(deploymentType: DeploymentTypeChoice): string[] {

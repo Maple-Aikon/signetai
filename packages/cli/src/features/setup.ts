@@ -105,6 +105,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingDesc =
 		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
 	const existingHarnesses = readHarnesses(existingConfig.harnesses);
+	const normalizedExistingHarnesses = normalizeHarnessList(existingHarnesses, deps);
 	const existingNetworkMode = readNetworkMode(existingConfig);
 	const hasClaudeCommand = hasCommand("claude");
 	const hasCodexCommand = hasCommand("codex");
@@ -145,11 +146,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		deploymentType: DeploymentTypeChoice,
 		providerFromConfig: ExtractionProviderChoice | null,
 		preserveExisting: boolean,
+		preferredHarnesses: readonly HarnessChoice[] = [],
 	): ExtractionProviderChoice => {
 		const inferred = defaultExtractionProviderForDeployment(
 			deploymentType,
 			detectedProvider,
 			availableToolExtractionProviders,
+			preferredHarnesses,
 		);
 		if (requestedExtractionProvider) {
 			return requestedExtractionProvider;
@@ -257,7 +260,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider, true);
+			const migrationExtractionProvider = resolveExtractionProvider(
+				deploymentType,
+				existingExtractionProvider,
+				true,
+				normalizedExistingHarnesses,
+			);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -327,7 +335,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider, true);
+			const migrationExtractionProvider = resolveExtractionProvider(
+				deploymentType,
+				existingExtractionProvider,
+				true,
+				normalizedExistingHarnesses,
+			);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				embeddingProvider: migrationEmbeddingProvider,
@@ -386,7 +399,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		},
 	];
 
-	let harnesses: string[] = [];
+	let harnesses: HarnessChoice[] = [];
 	if (nonInteractive) {
 		const rawParts = (options.harness ?? []).flatMap((value) =>
 			value
@@ -410,10 +423,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		}
 	} else {
 		console.log();
-		harnesses = await checkbox({
+		const selectedHarnesses = await checkbox({
 			message: "Which AI platforms do you use?",
 			choices: harnessChoices,
 		});
+		harnesses = normalizeHarnessList(selectedHarnesses, deps);
 	}
 
 	if (harnesses.includes("forge") && !existing.harnesses.forge && !managedForgeInstallSupportedOnCurrentPlatform()) {
@@ -596,7 +610,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const providerFromConfig =
 			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-		extractionProvider = resolveExtractionProvider(deploymentType, providerFromConfig, false);
+		extractionProvider = resolveExtractionProvider(deploymentType, providerFromConfig, false, harnesses);
 	} else {
 		console.log();
 		console.log(chalk.cyan("  Deployment guidance:"));
@@ -632,7 +646,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider = await select({
 			message: "Memory extraction provider (analyzes conversations):",
 			choices,
-			default: detectedProvider,
+			default: defaultExtractionProviderForDeployment(
+				deploymentType,
+				detectedProvider,
+				availableToolExtractionProviders,
+				harnesses,
+			),
 		});
 	}
 

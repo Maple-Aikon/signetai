@@ -9,7 +9,7 @@ depends_on:
 success_criteria:
   - "Interactive setup asks deployment context before provider prompts and shows deployment-specific extraction guidance"
   - "Non-interactive setup accepts --deployment-type and infers provider defaults when provider flags are omitted"
-  - "With --deployment-type vps and omitted extraction provider, setup avoids inferring ollama, prefers detected non-local tooling, and falls back to none"
+  - "With --deployment-type vps and omitted extraction provider, setup avoids inferring ollama, prefers selected non-local harness tooling first, then detected non-local tooling, and falls back to none"
   - "README/QUICKSTART/CLI docs consistently present built-in native embeddings as recommended"
 scope_boundary: "CLI setup and docs only; no daemon config schema, provider resolution internals, or memory pipeline behavior changes"
 draft_quality: "implementation-aligned planning spec"
@@ -45,7 +45,7 @@ Setup lacked deployment context during provider selection. Users on constrained 
 
 - Interactive flow is guidance-oriented (recommendations, not forced provider selection).
 - Non-interactive explicit provider flags override inferred defaults.
-- VPS inference rule: if `--extraction-provider` is omitted and `--deployment-type vps` is passed, do not infer `ollama`; prefer detected non-local tooling (`claude-code`, `codex`, `opencode`) and fall back to `none`.
+- VPS inference rule: if `--extraction-provider` is omitted and `--deployment-type vps` is passed, do not infer `ollama`; prefer selected non-local harness tooling (`claude-code`, `codex`, `opencode`) first, then detected non-local tooling, and fall back to `none`.
 - No changes to daemon schema or pipeline defaults are required for this scope.
 
 ## 4) Proposed capability set
