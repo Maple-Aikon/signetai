@@ -12,6 +12,8 @@ import {
 	parseSimpleYaml,
 	resolvePrimaryPackageManager,
 	getGlobalInstallCommand,
+	resolveGlobalPackagePath,
+	type PackageManagerFamily,
 } from "@signet/core";
 import { logger } from "./logger";
 import { compareVersions, isVersionNewer, isMajorUpgrade } from "./version";
@@ -497,10 +499,81 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 	return result;
 }
 
+export function normalizeTargetVersion(targetVersion: string | undefined): string | null {
+	if (typeof targetVersion !== "string") return null;
+	const trimmed = targetVersion.trim();
+	if (!trimmed) return null;
+	const normalized = trimmed.replace(/^v/i, "");
+	if (!/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(normalized)) return null;
+	return normalized;
+}
+
+export function parseInstalledPackageVersion(packageJsonContent: string): string | null {
+	try {
+		const parsed = JSON.parse(packageJsonContent) as { version?: unknown };
+		if (typeof parsed.version !== "string") return null;
+		const version = parsed.version.trim();
+		return version.length > 0 ? version : null;
+	} catch {
+		return null;
+	}
+}
+
+function verifyInstalledVersion(
+	family: PackageManagerFamily,
+	packageName: string,
+	expectedVersion: string | null,
+): { ok: true; installedVersion: string } | { ok: false; message: string } {
+	const packagePath = resolveGlobalPackagePath(family, packageName);
+	if (!packagePath) {
+		return {
+			ok: false,
+			message: `Update exited cleanly but could not locate global package path for '${packageName}'`,
+		};
+	}
+
+	const packageJsonPath = join(packagePath, "package.json");
+	if (!existsSync(packageJsonPath)) {
+		return {
+			ok: false,
+			message: `Update exited cleanly but package manifest missing at ${packageJsonPath}`,
+		};
+	}
+
+	const installedVersion = parseInstalledPackageVersion(
+		readFileSync(packageJsonPath, "utf-8"),
+	);
+	if (!installedVersion) {
+		return {
+			ok: false,
+			message: `Update exited cleanly but installed package.json has no valid version at ${packageJsonPath}`,
+		};
+	}
+
+	if (expectedVersion && installedVersion !== expectedVersion) {
+		return {
+			ok: false,
+			message: `Install exited cleanly but version is ${installedVersion}, expected ${expectedVersion}`,
+		};
+	}
+
+	return {
+		ok: true,
+		installedVersion,
+	};
+}
+
 export async function runUpdate(
 	targetVersion?: string,
 ): Promise<UpdateRunResult> {
 	assertInitialized();
+	const normalizedTargetVersion = normalizeTargetVersion(targetVersion);
+	if (targetVersion && !normalizedTargetVersion) {
+		return {
+			success: false,
+			message: `Invalid targetVersion '${targetVersion}'`,
+		};
+	}
 
 	if (updateInstallInProgress) {
 		return {
@@ -517,9 +590,12 @@ export async function runUpdate(
 				agentsDir,
 				env: process.env,
 			});
+			const installPackage = normalizedTargetVersion
+				? `${NPM_PACKAGE}@${normalizedTargetVersion}`
+				: NPM_PACKAGE;
 			const installCommand = getGlobalInstallCommand(
 				packageManager.family,
-				NPM_PACKAGE,
+				installPackage,
 			);
 
 			logger.info("system", "Running update command", {
@@ -549,7 +625,25 @@ export async function runUpdate(
 					command: `${installCommand.command} ${installCommand.args.join(" ")}`,
 				});
 				if (code === 0) {
-					pendingRestartVersion = targetVersion ?? "unknown";
+					const verification = verifyInstalledVersion(
+						packageManager.family,
+						NPM_PACKAGE,
+						normalizedTargetVersion,
+					);
+					if (!verification.ok) {
+						logger.warn("system", "Update verification failed", {
+							reason: verification.message,
+							family: packageManager.family,
+						});
+						resolve({
+							success: false,
+							message: verification.message,
+							output: stdout + stderr,
+						});
+						return;
+					}
+
+					pendingRestartVersion = verification.installedVersion;
 					lastUpdateCheck = null;
 					lastUpdateCheckTime = null;
 
@@ -558,7 +652,7 @@ export async function runUpdate(
 						success: true,
 						message: "Update installed. Restart daemon to apply.",
 						output: stdout,
-						installedVersion: targetVersion ?? "unknown",
+						installedVersion: verification.installedVersion,
 						restartRequired: true,
 					});
 				} else {

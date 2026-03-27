@@ -14,6 +14,8 @@ import {
 	MIN_UPDATE_INTERVAL_SECONDS,
 	MAX_UPDATE_INTERVAL_SECONDS,
 	categorizeUpdateError,
+	normalizeTargetVersion,
+	parseInstalledPackageVersion,
 } from "./update-system";
 
 const UPDATE_SYSTEM_SRC = readFileSync(
@@ -22,19 +24,37 @@ const UPDATE_SYSTEM_SRC = readFileSync(
 );
 const SERVICE_SRC = readFileSync(join(__dirname, "service.ts"), "utf-8");
 
-describe("Bug 5: pendingRestartVersion always set on success", () => {
-	it("sets pendingRestartVersion unconditionally (no targetVersion guard)", () => {
-		// The old code: `if (targetVersion) { pendingRestartVersion = targetVersion; }`
-		// The fix: `pendingRestartVersion = targetVersion ?? "unknown";`
+describe("Bug 5: pendingRestartVersion is set only after successful verification", () => {
+	it("does not gate pendingRestartVersion on targetVersion", () => {
 		const hasOldGuard = /if\s*\(\s*targetVersion\s*\)\s*\{?\s*\n?\s*pendingRestartVersion\s*=/.test(
 			UPDATE_SYSTEM_SRC,
 		);
 		expect(hasOldGuard).toBe(false);
+	});
 
-		// Verify the new unconditional assignment exists
-		const hasUnconditionalSet =
-			UPDATE_SYSTEM_SRC.includes('pendingRestartVersion = targetVersion ?? "unknown"');
-		expect(hasUnconditionalSet).toBe(true);
+	it("sets pendingRestartVersion from verified installed version", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"pendingRestartVersion = verification.installedVersion",
+		);
+	});
+});
+
+describe("Issue 322: verify installed version after update install", () => {
+	it("pins install command to targetVersion when provided", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"const installPackage = normalizedTargetVersion",
+		);
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"? `${NPM_PACKAGE}@${normalizedTargetVersion}`",
+		);
+	});
+
+	it("verifies installed package version after exit code 0", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain("verifyInstalledVersion(");
+		expect(UPDATE_SYSTEM_SRC).toContain(
+			"Install exited cleanly but version is",
+		);
+		expect(UPDATE_SYSTEM_SRC).toContain("resolveGlobalPackagePath");
 	});
 });
 
@@ -119,6 +139,29 @@ describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 		const unitBody = unitMatch![0];
 		expect(unitBody).toContain("Restart=always");
 		expect(unitBody).not.toContain("Restart=on-failure");
+	});
+});
+
+describe("version parsing helpers", () => {
+	it("normalizeTargetVersion strips leading v and validates format", () => {
+		expect(normalizeTargetVersion("1.2.3")).toBe("1.2.3");
+		expect(normalizeTargetVersion("v1.2.3")).toBe("1.2.3");
+		expect(normalizeTargetVersion("V2.0.0-rc.1+build.7")).toBe(
+			"2.0.0-rc.1+build.7",
+		);
+		expect(normalizeTargetVersion("")).toBeNull();
+		expect(normalizeTargetVersion("   ")).toBeNull();
+		expect(normalizeTargetVersion("--1.2.3")).toBeNull();
+		expect(normalizeTargetVersion("1.2.3 bad")).toBeNull();
+	});
+
+	it("parseInstalledPackageVersion extracts version from package.json", () => {
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"0.78.1"}')).toBe(
+			"0.78.1",
+		);
+		expect(parseInstalledPackageVersion('{"name":"signetai","version":"   "}')).toBeNull();
+		expect(parseInstalledPackageVersion('{"name":"signetai"}')).toBeNull();
+		expect(parseInstalledPackageVersion("not-json")).toBeNull();
 	});
 });
 
