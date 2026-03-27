@@ -60,6 +60,10 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
 		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "workspace", "AGENTS.md"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "workspace", "nested-project", "AGENTS.md"))).toBe(
+			false,
+		);
+		expect(shouldIgnore(join(agentsDir, "agents-backup", "claude-code", "workspace", "AGENTS.md"))).toBe(false);
 		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "SOUL.md"))).toBe(false);
 	});
 });
