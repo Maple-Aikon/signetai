@@ -970,6 +970,54 @@ fn append_api_path(base: &str, v1_path: &str, no_v1_path: &str) -> String {
     }
 }
 
+fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let normalized = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    normalized
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Restrict credential-bearing startup probes to trusted provider hosts.
+/// For untrusted/custom endpoints we skip auth headers and only probe
+/// reachability without secrets.
+fn provider_endpoint_is_trusted_for_secret_probe(provider: &str, base: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+
+    if is_loopback_host(host) {
+        return true;
+    }
+
+    if !url.scheme().eq_ignore_ascii_case("https") {
+        return false;
+    }
+
+    match provider {
+        "anthropic" => host.eq_ignore_ascii_case("api.anthropic.com"),
+        "openrouter" => host.eq_ignore_ascii_case("openrouter.ai"),
+        _ => false,
+    }
+}
+
+async fn check_http_reachability_without_auth(url: &str) -> bool {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    let Ok(client) = client else { return false };
+    client.get(url).send().await.is_ok()
+}
+
 /// Check Anthropic API reachability with credential validation.
 async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
     let Some(api_key) = std::env::var("ANTHROPIC_API_KEY")
@@ -982,6 +1030,13 @@ async fn check_anthropic_health(endpoint: Option<&str>) -> bool {
 
     let base = normalize_endpoint_base(endpoint, "https://api.anthropic.com");
     let url = append_api_path(&base, "/v1/models", "/models");
+    if !provider_endpoint_is_trusted_for_secret_probe("anthropic", &base) {
+        warn!(
+            endpoint = %base,
+            "skipping authenticated anthropic startup probe for untrusted endpoint; probing reachability without credentials"
+        );
+        return check_http_reachability_without_auth(&url).await;
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build();
@@ -1008,6 +1063,13 @@ async fn check_openrouter_health(endpoint: Option<&str>) -> bool {
 
     let base = normalize_endpoint_base(endpoint, "https://openrouter.ai/api/v1");
     let url = append_api_path(&base, "/api/v1/models", "/models");
+    if !provider_endpoint_is_trusted_for_secret_probe("openrouter", &base) {
+        warn!(
+            endpoint = %base,
+            "skipping authenticated openrouter startup probe for untrusted endpoint; probing reachability without credentials"
+        );
+        return check_http_reachability_without_auth(&url).await;
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build();
@@ -1267,8 +1329,9 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        append_api_path, normalize_endpoint_base, resolve_runtime_extraction_endpoint,
-        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
+        append_api_path, normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
+        resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
+        worker_supports_extraction_provider,
     };
 
     fn test_state() -> Arc<AppState> {
@@ -1368,6 +1431,50 @@ mod tests {
             normalize_endpoint_base(None, "https://default/"),
             "https://default"
         );
+    }
+
+    #[test]
+    fn trusted_secret_probe_hosts_allow_official_provider_endpoints() {
+        assert!(provider_endpoint_is_trusted_for_secret_probe(
+            "anthropic",
+            "https://api.anthropic.com"
+        ));
+        assert!(provider_endpoint_is_trusted_for_secret_probe(
+            "openrouter",
+            "https://openrouter.ai/api/v1"
+        ));
+    }
+
+    #[test]
+    fn trusted_secret_probe_hosts_allow_loopback_endpoints() {
+        assert!(provider_endpoint_is_trusted_for_secret_probe(
+            "anthropic",
+            "http://127.0.0.1:8080"
+        ));
+        assert!(provider_endpoint_is_trusted_for_secret_probe(
+            "openrouter",
+            "http://localhost:8080"
+        ));
+        assert!(provider_endpoint_is_trusted_for_secret_probe(
+            "openrouter",
+            "http://[::1]:8080"
+        ));
+    }
+
+    #[test]
+    fn trusted_secret_probe_hosts_reject_untrusted_or_mismatched_endpoints() {
+        assert!(!provider_endpoint_is_trusted_for_secret_probe(
+            "anthropic",
+            "https://proxy.example.com"
+        ));
+        assert!(!provider_endpoint_is_trusted_for_secret_probe(
+            "openrouter",
+            "http://openrouter.ai/api/v1"
+        ));
+        assert!(!provider_endpoint_is_trusted_for_secret_probe(
+            "anthropic",
+            "https://openrouter.ai/api/v1"
+        ));
     }
 
     #[test]
