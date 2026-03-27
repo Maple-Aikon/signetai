@@ -26,12 +26,22 @@ export function createSingleFlightRunner(
 
 			running = true;
 			try {
-				do {
+				while (true) {
 					rerunRequested = false;
-					await runOnce();
-				} while (rerunRequested);
-			} catch (error) {
-				onError?.(error instanceof Error ? error : new Error(String(error)));
+					try {
+						await runOnce();
+					} catch (error) {
+						onError?.(error instanceof Error ? error : new Error(String(error)));
+						if (!rerunRequested) {
+							break;
+						}
+						continue;
+					}
+
+					if (!rerunRequested) {
+						break;
+					}
+				}
 			} finally {
 				running = false;
 			}
