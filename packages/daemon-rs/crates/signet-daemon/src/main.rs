@@ -661,6 +661,10 @@ fn worker_supports_extraction_provider(provider: &str) -> bool {
     matches!(provider, "ollama" | "anthropic")
 }
 
+fn provider_is_unsupported_for_daemon_startup_preflight(provider: &str) -> bool {
+    matches!(provider, "openrouter")
+}
+
 pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
     {
         let handle = state.extraction_worker_handle.lock().await;
@@ -806,7 +810,7 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let now = chrono::Utc::now().to_rfc3339();
 
     let mut unavailability_reason: Option<String> = None;
-    let available = if !worker_supports_extraction_provider(provider) {
+    let available = if provider_is_unsupported_for_daemon_startup_preflight(provider) {
         unavailability_reason = Some(format!(
             "{provider} is not supported by daemon-rs extraction worker"
         ));
@@ -1317,7 +1321,8 @@ mod tests {
         append_api_path, host_in_trusted_override_list, host_matches_trusted_override,
         normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
         resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
-        worker_supports_extraction_provider, dead_letter_pending_extraction_jobs,
+        worker_supports_extraction_provider, provider_is_unsupported_for_daemon_startup_preflight,
+        dead_letter_pending_extraction_jobs,
     };
 
     fn test_state() -> Arc<AppState> {
@@ -1677,5 +1682,15 @@ mod tests {
         assert!(!worker_supports_extraction_provider("codex"));
         assert!(!worker_supports_extraction_provider("opencode"));
         assert!(!worker_supports_extraction_provider("openrouter"));
+    }
+
+    #[test]
+    fn only_openrouter_is_startup_preflight_blocked_as_unsupported() {
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight("ollama"));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight("anthropic"));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight("claude-code"));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight("codex"));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight("opencode"));
+        assert!(provider_is_unsupported_for_daemon_startup_preflight("openrouter"));
     }
 }
