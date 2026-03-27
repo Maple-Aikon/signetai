@@ -917,22 +917,12 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let extraction = {
         let guard = state.extraction_state.read().await;
         guard.as_ref().map(|es| {
-            // Reflect runtime pause/resume transitions bidirectionally.
-            let paused = state.pipeline_paused();
-            let status = if paused && es.status != "disabled" && es.status != "blocked" {
-                "paused"
-            } else if !paused && es.status == "paused" {
-                // Pipeline was resumed — revert to the underlying state.
-                if es.degraded { "degraded" } else { "active" }
-            } else {
-                es.status.as_str()
-            };
             serde_json::json!({
                 "configured": es.configured,
                 "resolved": es.resolved,
                 "effective": es.effective,
                 "fallbackProvider": es.fallback_provider,
-                "status": status,
+                "status": es.status,
                 "degraded": es.degraded,
                 "fallbackApplied": es.fallback_applied,
                 "reason": es.reason,
@@ -961,15 +951,10 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
                 "nextTickInMs": if running { snapshot.next_tick_in_ms } else { None },
             }))
         } else {
-            Some(serde_json::json!({
-                "running": false,
-                "overloaded": false,
-                "loadPerCpu": None::<f64>,
-                "maxLoadPerCpu": pipeline.worker.max_load_per_cpu,
-                "overloadBackoffMs": pipeline.worker.overload_backoff_ms,
-                "overloadSince": None::<String>,
-                "nextTickInMs": None::<u64>,
-            }))
+            // Do not synthesize an "idle" worker status from config-only values.
+            // Runtime worker fields should only be surfaced when backed by a live
+            // worker-owned stats handle.
+            None
         }
     } else {
         None
@@ -1018,4 +1003,96 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "extraction": extraction,
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::extract::State;
+    use signet_core::config::{
+        AgentIdentity, AgentManifest, AuthConfig as ManifestAuthConfig, DaemonConfig,
+        EmbeddingConfig, MemoryManifestConfig, PipelineV2Config, RateLimitConfig,
+    };
+    use signet_core::db::DbPool;
+    use tempfile::tempdir;
+
+    use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
+    use crate::auth::types::AuthMode;
+    use crate::state::AppState;
+
+    use super::status;
+
+    fn test_state() -> Arc<AppState> {
+        let dir = tempdir().expect("tempdir").keep();
+        let db = dir.join("memory").join("memories.db");
+        std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
+
+        let mut limits = HashMap::new();
+        limits.insert(
+            "admin".to_string(),
+            RateLimitConfig {
+                window_ms: Some(60_000),
+                max: Some(10),
+            },
+        );
+
+        let manifest = AgentManifest {
+            agent: AgentIdentity {
+                name: "test-agent".to_string(),
+                description: None,
+                created: None,
+                updated: None,
+            },
+            embedding: Some(EmbeddingConfig::default()),
+            memory: Some(MemoryManifestConfig {
+                database: None,
+                vectors: None,
+                session_budget: None,
+                decay_rate: None,
+                pipeline_v2: Some(PipelineV2Config::default()),
+            }),
+            auth: Some(ManifestAuthConfig {
+                method: "token".to_string(),
+                chain_id: None,
+                mode: Some("local".to_string()),
+                rate_limits: Some(limits),
+            }),
+            ..Default::default()
+        };
+
+        let (pool, _writer) = DbPool::open(&db).expect("open db");
+        let mut rules = default_limits();
+        if let Some(rule) = rules.get_mut("admin") {
+            rule.max = 10;
+        }
+
+        Arc::new(AppState::new(
+            DaemonConfig {
+                base_path: dir,
+                db_path: db,
+                port: 3850,
+                host: "127.0.0.1".to_string(),
+                bind: Some("127.0.0.1".to_string()),
+                manifest,
+            },
+            pool,
+            Some(signet_pipeline::embedding::from_config(
+                &EmbeddingConfig::default(),
+                None,
+            )),
+            None,
+            AuthMode::Local,
+            None,
+            AuthRateLimiter::from_rules(&rules),
+        ))
+    }
+
+    #[tokio::test]
+    async fn status_omits_worker_runtime_fields_without_live_stats_handle() {
+        let state = test_state();
+        let axum::response::Json(body) = status(State(state)).await;
+        assert!(body["pipeline"]["extraction"].is_null());
+    }
 }
