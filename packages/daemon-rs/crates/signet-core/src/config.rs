@@ -29,7 +29,11 @@ impl DaemonConfig {
             Ok(Some(manifest)) => manifest,
             Ok(None) => AgentManifest::default(),
             Err(error) => {
-                panic!("Invalid agent.yaml: {error}");
+                tracing::warn!(
+                    error = %error,
+                    "invalid or unreadable agent.yaml; falling back to default manifest"
+                );
+                AgentManifest::default()
             }
         };
         let (cfg_host, cfg_bind) = resolve_network_binding(
@@ -453,7 +457,7 @@ impl Default for EmbeddingConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{network_mode_from_bind, parse_manifest, resolve_network_binding};
+    use super::{network_mode_from_bind, parse_manifest, resolve_network_binding, PipelineV2Config};
 
     #[test]
     fn resolves_localhost_binding_by_default() {
@@ -624,6 +628,7 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.extraction.provider, "command");
+        assert_eq!(pipeline.extraction.timeout, 90_000);
         let command = pipeline
             .extraction
             .command
@@ -711,6 +716,12 @@ memory:
                 "$SESSION_KEY".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn extraction_timeout_default_matches_typescript_timeout() {
+        let pipeline = PipelineV2Config::default();
+        assert_eq!(pipeline.extraction.timeout, 90_000);
     }
 }
 
@@ -895,7 +906,7 @@ impl Default for ExtractionConfig {
             model: "qwen3:4b".to_string(),
             strength: "medium".to_string(),
             endpoint: None,
-            timeout: 30_000,
+            timeout: 90_000,
             min_confidence: 0.5,
             command: None,
             escalation: Some(EscalationConfig::default()),
