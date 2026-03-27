@@ -347,10 +347,11 @@ The command's stdout/stderr are not used as extraction output. The
 external command is responsible for writing memories to Signet state
 (for example, writing rows to `memories.db`).
 
-After command extraction succeeds, the normal summary-worker lifecycle
-continues when a synthesis provider is configured (session summary
-generation, DAG write, continuity/predictor hooks, and synthesis
-triggering).
+After command extraction succeeds, synthesis-provider hooks can still run
+(summary generation for continuity/predictor + DAG + synthesis trigger),
+but summary markdown writes and `insertSummaryFacts` are skipped in
+command mode to avoid duplicate memory writes. The external command
+remains the source of truth for fact persistence.
 
 Example:
 

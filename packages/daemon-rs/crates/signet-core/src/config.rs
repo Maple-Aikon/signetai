@@ -150,10 +150,6 @@ fn normalize_pipeline_extraction(
         return Ok(());
     }
 
-    if !is_pipeline_provider(&pipeline.extraction.provider) {
-        return Err("memory.pipelineV2.extraction.provider is invalid".to_string());
-    }
-
     if pipeline.extraction.command.is_none() {
         let legacy = raw.and_then(|value| raw_string(value, "extractionCommand"));
         pipeline.extraction.command = legacy.and_then(parse_command_argv);
@@ -499,7 +495,7 @@ memory:
         assert_eq!(pipeline.extraction.provider, "ollama");
         assert_eq!(pipeline.extraction.model, "qwen3.5:4b");
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
         assert_eq!(pipeline.synthesis.timeout, pipeline.extraction.timeout);
     }
 
@@ -526,7 +522,7 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
         assert_eq!(
             pipeline.synthesis.endpoint.as_deref(),
             Some("http://127.0.0.1:11434")

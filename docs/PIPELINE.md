@@ -979,7 +979,7 @@ extraction:
     args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"]
     # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $SIGNET_PATH
     # command stdout/stderr are ignored; command must write memories to Signet state directly
-    # after command success, normal summary-worker lifecycle continues when synthesis provider is available
+    # after command success, synthesis hooks can run when configured, but markdown/fact writes are skipped in command mode
 
 synthesis:
   enabled: true

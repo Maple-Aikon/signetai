@@ -458,31 +458,33 @@ async function processJob(
 			throw new Error("Failed to parse LLM summary response");
 		}
 
-		// Write markdown file
-		mkdirSync(MEMORY_DIR, { recursive: true });
-		const slug = deriveSlug(result.summary, job.project);
-		const filename = uniqueFilename(MEMORY_DIR, `${today}-${slug}`, ".md");
-		writeFileSync(filename, result.summary, "utf-8");
+		if (!commandMode) {
+			// Write markdown file
+			mkdirSync(MEMORY_DIR, { recursive: true });
+			const slug = deriveSlug(result.summary, job.project);
+			const filename = uniqueFilename(MEMORY_DIR, `${today}-${slug}`, ".md");
+			writeFileSync(filename, result.summary, "utf-8");
 
-		logger.info("summary-worker", "Wrote session summary", {
-			path: filename,
-			sessionKey: job.session_key,
-			project: job.project,
-			summaryChars: result.summary.length,
-		});
+			logger.info("summary-worker", "Wrote session summary", {
+				path: filename,
+				sessionKey: job.session_key,
+				project: job.project,
+				summaryChars: result.summary.length,
+			});
 
-		const saved = insertSummaryFacts(accessor, job, result.facts);
+			const saved = insertSummaryFacts(accessor, job, result.facts);
 
-		logger.info("summary-worker", "Inserted session facts", {
-			total: result.facts.length,
-			saved,
-			deduplicated: result.facts.length - saved,
-			factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
-		});
-
-		// Lossless retention: preserve raw transcript alongside extracted facts
-		if (job.session_key) {
-			upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
+			logger.info("summary-worker", "Inserted session facts", {
+				total: result.facts.length,
+				saved,
+				deduplicated: result.facts.length - saved,
+				factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
+			});
+		} else {
+			logger.info("summary-worker", "Command extraction mode: skipping summary markdown + fact insertion", {
+				sessionKey: job.session_key,
+				project: job.project,
+			});
 		}
 
 		// Write to session_summaries DAG (depth 0 = session level)
@@ -628,7 +630,7 @@ async function processJob(
 			});
 		}
 	}
-	if (commandMode && job.session_key) {
+	if (job.session_key && (commandMode || provider)) {
 		upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
 	}
 }
