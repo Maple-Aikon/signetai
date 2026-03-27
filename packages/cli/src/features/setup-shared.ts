@@ -27,6 +27,12 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
 const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["claude-code", "codex", "opencode"];
+const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
+	"claude-code",
+	"codex",
+	"ollama",
+	"opencode",
+];
 
 interface PathDeps {
 	readonly detectExistingSetup: (basePath: string) => SetupDetection;
@@ -174,6 +180,17 @@ export function defaultExtractionProviderForDeployment(
 		return "none";
 	}
 	return detectedProvider;
+}
+
+export function detectExtractionProviderFromAvailable(
+	availableProviders: readonly ExtractionProviderChoice[],
+): ExtractionProviderChoice {
+	for (const provider of DETECTED_EXTRACTION_PROVIDER_ORDER) {
+		if (availableProviders.includes(provider)) {
+			return provider;
+		}
+	}
+	return "none";
 }
 
 function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): ExtractionProviderChoice[] {

@@ -3,6 +3,7 @@ import {
 	DEPLOYMENT_TYPE_CHOICES,
 	defaultEmbeddingProviderForDeployment,
 	defaultExtractionProviderForDeployment,
+	detectExtractionProviderFromAvailable,
 	getDeploymentExtractionGuidance,
 } from "./setup-shared.js";
 
@@ -44,6 +45,13 @@ describe("setup deployment defaults", () => {
 	it("keeps detected extraction provider for local and server", () => {
 		expect(defaultExtractionProviderForDeployment("local", "ollama")).toBe("ollama");
 		expect(defaultExtractionProviderForDeployment("server", "codex")).toBe("codex");
+	});
+
+	it("preserves local/server detection precedence (ollama before opencode)", () => {
+		expect(detectExtractionProviderFromAvailable(["ollama", "opencode"])).toBe("ollama");
+		expect(detectExtractionProviderFromAvailable(["claude-code", "ollama", "opencode"])).toBe("claude-code");
+		expect(detectExtractionProviderFromAvailable(["opencode"])).toBe("opencode");
+		expect(detectExtractionProviderFromAvailable([])).toBe("none");
 	});
 
 	it("returns guidance text for each deployment type", () => {

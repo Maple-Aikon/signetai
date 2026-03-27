@@ -24,6 +24,7 @@ import {
 	SETUP_HARNESS_CHOICES,
 	defaultEmbeddingProviderForDeployment,
 	defaultExtractionProviderForDeployment,
+	detectExtractionProviderFromAvailable,
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
 	failSetupValidation,
@@ -109,22 +110,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingNetworkMode = readNetworkMode(existingConfig);
 	const hasClaudeCommand = hasCommand("claude");
 	const hasCodexCommand = hasCommand("codex");
-	const hasOpenCodeCommand = hasCommand("opencode");
 	const hasOllamaCommand = hasCommand("ollama");
-	const detectedProvider: ExtractionProviderChoice = hasClaudeCommand
-		? "claude-code"
-		: hasCodexCommand
-			? "codex"
-			: hasOpenCodeCommand
-				? "opencode"
-				: hasOllamaCommand
-					? "ollama"
-					: "none";
+	const hasOpenCodeCommand = hasCommand("opencode");
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
-	if (hasOpenCodeCommand) availableToolExtractionProviders.push("opencode");
 	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
+	if (hasOpenCodeCommand) availableToolExtractionProviders.push("opencode");
+	const detectedProvider = detectExtractionProviderFromAvailable(availableToolExtractionProviders);
 
 	if (rawDeploymentType && !requestedDeploymentType) {
 		failSetupValidation(
