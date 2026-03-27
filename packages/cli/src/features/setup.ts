@@ -26,6 +26,7 @@ import {
 	defaultExtractionProviderForDeployment,
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
+	failSetupValidation,
 	formatDetectionSummary,
 	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
@@ -115,18 +116,18 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					? "opencode"
 					: "none";
 
-	if (nonInteractive && rawDeploymentType && !requestedDeploymentType) {
-		failNonInteractiveSetup(
+	if (rawDeploymentType && !requestedDeploymentType) {
+		failSetupValidation(
 			`Unknown --deployment-type value: ${rawDeploymentType}. Valid choices: ${DEPLOYMENT_TYPE_CHOICES.join(", ")}.`,
 		);
 	}
-	if (nonInteractive && rawEmbeddingProvider && !requestedEmbeddingProvider) {
-		failNonInteractiveSetup(
+	if (rawEmbeddingProvider && !requestedEmbeddingProvider) {
+		failSetupValidation(
 			`Unknown --embedding-provider value: ${rawEmbeddingProvider}. Valid choices: ${EMBEDDING_PROVIDER_CHOICES.join(", ")}.`,
 		);
 	}
-	if (nonInteractive && rawExtractionProvider && !requestedExtractionProvider) {
-		failNonInteractiveSetup(
+	if (rawExtractionProvider && !requestedExtractionProvider) {
+		failSetupValidation(
 			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
 		);
 	}
@@ -266,7 +267,45 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				return;
 			}
 		} else {
-			await runExistingSetupWizard(basePath, existing, existingConfig, deps);
+			console.log();
+			const deploymentType = await select({
+				message: "Where is Signet running?",
+				choices: [
+					{ value: "local", name: "Local machine (dev / personal)" },
+					{ value: "vps", name: "VPS or cloud server (shared / constrained resources)" },
+					{ value: "server", name: "Self-hosted server (dedicated hardware)" },
+				],
+				default: requestedDeploymentType ?? "local",
+			});
+			console.log();
+			console.log(chalk.cyan("  Deployment guidance:"));
+			for (const line of getDeploymentExtractionGuidance(deploymentType)) {
+				console.log(chalk.dim(`    ${line}`));
+			}
+			console.log();
+
+			const existingEmbeddingProvider = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
+			const existingExtractionProvider =
+				deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
+				deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
+			const migrationEmbeddingProvider =
+				requestedEmbeddingProvider ??
+				existingEmbeddingProvider ??
+				defaultEmbeddingProviderForDeployment(deploymentType);
+			const migrationExtractionProvider =
+				requestedExtractionProvider ??
+				existingExtractionProvider ??
+				defaultExtractionProviderForDeployment(deploymentType, detectedProvider);
+
+			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
+				embeddingProvider: migrationEmbeddingProvider,
+				embeddingModel: deps.normalizeStringValue(existingEmbedding.model) || undefined,
+				extractionProvider: migrationExtractionProvider,
+				extractionModel:
+					deps.normalizeStringValue(existingPipeline.extractionModel) ||
+					deps.normalizeStringValue(existingExtraction.model) ||
+					undefined,
+			});
 			return;
 		}
 	} else {

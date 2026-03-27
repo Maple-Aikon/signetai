@@ -113,12 +113,19 @@ export function normalizeHarnessList(rawValues: readonly string[] | undefined, d
 	return harnesses;
 }
 
-export function failNonInteractiveSetup(message: string): never {
+export function failSetupValidation(message: string, hint?: string): never {
 	console.error(chalk.red(`  ${message}`));
-	console.error(
-		chalk.dim("  Provide explicit CLI values, or pass --deployment-type to use inferred provider defaults."),
-	);
+	if (hint) {
+		console.error(chalk.dim(`  ${hint}`));
+	}
 	process.exit(1);
+}
+
+export function failNonInteractiveSetup(message: string): never {
+	failSetupValidation(
+		message,
+		"Provide explicit CLI values, or pass --deployment-type to use inferred provider defaults.",
+	);
 }
 
 export function getEmbeddingDimensions(model: string): number {
