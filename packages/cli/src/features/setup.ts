@@ -105,17 +105,25 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingDesc =
 		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
 	const existingHarnesses = readHarnesses(existingConfig.harnesses);
-	const normalizedExistingHarnesses = normalizeHarnessList(existingHarnesses, deps);
 	const existingNetworkMode = readNetworkMode(existingConfig);
-	const detectedProvider: ExtractionProviderChoice = hasCommand("claude")
+	const hasClaudeCommand = hasCommand("claude");
+	const hasCodexCommand = hasCommand("codex");
+	const hasOpenCodeCommand = hasCommand("opencode");
+	const hasOllamaCommand = hasCommand("ollama");
+	const detectedProvider: ExtractionProviderChoice = hasClaudeCommand
 		? "claude-code"
-		: hasCommand("codex")
+		: hasCodexCommand
 			? "codex"
-			: hasCommand("ollama")
-				? "ollama"
-				: hasCommand("opencode")
-					? "opencode"
+			: hasOpenCodeCommand
+				? "opencode"
+				: hasOllamaCommand
+					? "ollama"
 					: "none";
+	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
+	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
+	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
+	if (hasOpenCodeCommand) availableToolExtractionProviders.push("opencode");
+	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
 
 	if (rawDeploymentType && !requestedDeploymentType) {
 		failSetupValidation(
@@ -132,6 +140,24 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
 		);
 	}
+
+	const resolveExtractionProvider = (
+		deploymentType: DeploymentTypeChoice,
+		providerFromConfig: ExtractionProviderChoice | null,
+	): ExtractionProviderChoice => {
+		const inferred = defaultExtractionProviderForDeployment(
+			deploymentType,
+			detectedProvider,
+			availableToolExtractionProviders,
+		);
+		if (requestedExtractionProvider) {
+			return requestedExtractionProvider;
+		}
+		if (deploymentType === "vps") {
+			return inferred;
+		}
+		return providerFromConfig ?? inferred;
+	};
 
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
@@ -225,10 +251,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider =
-				requestedExtractionProvider ??
-				existingExtractionProvider ??
-				defaultExtractionProviderForDeployment(deploymentType, detectedProvider, normalizedExistingHarnesses);
+			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -298,10 +321,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				requestedEmbeddingProvider ??
 				existingEmbeddingProvider ??
 				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider =
-				requestedExtractionProvider ??
-				existingExtractionProvider ??
-				defaultExtractionProviderForDeployment(deploymentType, detectedProvider, normalizedExistingHarnesses);
+			const migrationExtractionProvider = resolveExtractionProvider(deploymentType, existingExtractionProvider);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				embeddingProvider: migrationEmbeddingProvider,
@@ -570,10 +590,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const providerFromConfig =
 			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-		extractionProvider =
-			requestedExtractionProvider ??
-			providerFromConfig ??
-			defaultExtractionProviderForDeployment(deploymentType, detectedProvider, harnesses);
+		extractionProvider = resolveExtractionProvider(deploymentType, providerFromConfig);
 	} else {
 		console.log();
 		console.log(chalk.cyan("  Deployment guidance:"));

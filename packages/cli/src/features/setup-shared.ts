@@ -150,15 +150,15 @@ export function defaultEmbeddingProviderForDeployment(_deploymentType: Deploymen
 export function defaultExtractionProviderForDeployment(
 	deploymentType: DeploymentTypeChoice,
 	detectedProvider: ExtractionProviderChoice,
-	availableHarnesses: readonly HarnessChoice[] = [],
+	availableProviders: readonly ExtractionProviderChoice[] = [],
 ): ExtractionProviderChoice {
 	if (deploymentType === "vps") {
-		if (availableHarnesses.includes("claude-code")) return "claude-code";
-		if (availableHarnesses.includes("codex")) return "codex";
-		if (availableHarnesses.includes("opencode")) return "opencode";
-		if (detectedProvider === "claude-code") return "claude-code";
-		if (detectedProvider === "codex") return "codex";
-		if (detectedProvider === "opencode") return "opencode";
+		if (availableProviders.includes("claude-code")) return "claude-code";
+		if (availableProviders.includes("codex")) return "codex";
+		if (availableProviders.includes("opencode")) return "opencode";
+		if (detectedProvider === "claude-code" || detectedProvider === "codex" || detectedProvider === "opencode") {
+			return detectedProvider;
+		}
 		return "none";
 	}
 	return detectedProvider;
