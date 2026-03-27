@@ -1329,14 +1329,18 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 
 		const update = db.prepare(
 			`UPDATE summary_jobs
-			 SET status = ?
+			 SET status = ?,
+			     result = CASE
+			       WHEN result = ? THEN NULL
+			       ELSE result
+			     END
 			 WHERE id = ? AND status IN ('processing', 'leased')`,
 		);
 
 		let updated = 0;
 		for (const row of rows) {
 			const status = row.attempts >= row.max_attempts ? "dead" : "pending";
-			updated += countChanges(update.run(status, row.id));
+			updated += countChanges(update.run(status, COMMAND_STAGE_RUNNING_RESULT, row.id));
 		}
 
 		return { selected: rows.length, updated };

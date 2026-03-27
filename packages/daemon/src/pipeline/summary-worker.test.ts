@@ -198,6 +198,22 @@ describe("recoverSummaryJobs", () => {
 		]);
 	});
 
+	it("clears in-flight command-stage-running marker during crash recovery but preserves completed checkpoint", () => {
+		const now = new Date().toISOString();
+		const stmt = db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, result, attempts, max_attempts, created_at)
+			 VALUES (?, NULL, 'codex', NULL, 'transcript', 'processing', ?, 0, 3, ?)`,
+		);
+		stmt.run("job-running", "command-stage-running", now);
+		stmt.run("job-complete", "command-stage-complete", now);
+
+		expect(recoverSummaryJobs(accessor, 10)).toEqual({ selected: 2, updated: 2 });
+
+		expect(getCommandStageStatus(accessor, "job-running")).toBe("none");
+		expect(getCommandStageStatus(accessor, "job-complete")).toBe("complete");
+	});
+
 	it("defers crash recovery off the synchronous startup path", async () => {
 		const now = new Date().toISOString();
 		db.prepare(
