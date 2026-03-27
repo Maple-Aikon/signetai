@@ -22,7 +22,7 @@ mod state;
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use auth::tokens::load_or_create_secret;
 use auth::types::AuthMode;
-use state::{AppState, ExtractionRuntimeState};
+use state::{AppState, ExtractionRuntimeState, derive_initial_extraction_state};
 
 fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
     config
@@ -873,7 +873,17 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
     let extraction = &pipeline.extraction;
 
     // Skip preflight if pipeline is disabled, paused, or provider is "none"
-    if !pipeline.enabled || extraction.provider == "none" || pipeline.paused || state.pipeline_paused() {
+    if !pipeline.enabled
+        || extraction.provider == "none"
+        || pipeline.paused
+        || state.pipeline_paused()
+    {
+        *state.extraction_state.write().await = Some(derive_initial_extraction_state(
+            &extraction.provider,
+            &extraction.fallback_provider,
+            pipeline.enabled,
+            pipeline.paused || state.pipeline_paused(),
+        ));
         return;
     }
 
@@ -1392,15 +1402,18 @@ mod tests {
     use super::{
         append_api_path, host_in_trusted_override_list, host_matches_trusted_override,
         normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
-        resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
-        worker_supports_extraction_provider, provider_is_unsupported_for_daemon_startup_preflight,
-        dead_letter_pending_extraction_jobs, start_extraction_worker, stop_extraction_worker,
+        preflight_extraction, resolve_runtime_extraction_endpoint,
+        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
+        provider_is_unsupported_for_daemon_startup_preflight, dead_letter_pending_extraction_jobs,
+        start_extraction_worker, stop_extraction_worker,
     };
 
-    fn test_state_with_extraction(
+    fn test_state_with_pipeline_config(
         provider: &str,
         fallback_provider: &str,
         endpoint: Option<&str>,
+        enabled: bool,
+        paused: bool,
     ) -> Arc<AppState> {
         let dir = tempdir().expect("tempdir").keep();
         let db = dir.join("memory").join("memories.db");
@@ -1416,6 +1429,8 @@ mod tests {
         );
 
         let mut pipeline = PipelineV2Config::default();
+        pipeline.enabled = enabled;
+        pipeline.paused = paused;
         pipeline.extraction.provider = provider.to_string();
         pipeline.extraction.fallback_provider = fallback_provider.to_string();
         pipeline.extraction.endpoint = endpoint.map(str::to_string);
@@ -1469,6 +1484,14 @@ mod tests {
             None,
             AuthRateLimiter::from_rules(&rules),
         ))
+    }
+
+    fn test_state_with_extraction(
+        provider: &str,
+        fallback_provider: &str,
+        endpoint: Option<&str>,
+    ) -> Arc<AppState> {
+        test_state_with_pipeline_config(provider, fallback_provider, endpoint, true, false)
     }
 
     fn test_state() -> Arc<AppState> {
@@ -1743,6 +1766,62 @@ mod tests {
         assert_eq!(extraction.effective, "none");
         assert_eq!(extraction.status, "blocked");
         assert!(!extraction.fallback_applied);
+    }
+
+    #[tokio::test]
+    async fn preflight_persists_disabled_resolution_when_provider_is_none() {
+        let state = test_state_with_pipeline_config("none", "ollama", None, true, false);
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("ollama".to_string()),
+                resolved: "ollama".to_string(),
+                effective: "ollama".to_string(),
+                fallback_provider: "ollama".to_string(),
+                status: "active".to_string(),
+                degraded: false,
+                fallback_applied: false,
+                reason: Some("stale".to_string()),
+                since: Some("2026-03-27T00:00:00Z".to_string()),
+            });
+        }
+
+        preflight_extraction(state.as_ref()).await;
+
+        let axum::response::Json(body) = status(State(state)).await;
+        assert_eq!(body["providerResolution"]["extraction"]["status"], "disabled");
+        assert_eq!(body["providerResolution"]["extraction"]["resolved"], "none");
+        assert_eq!(body["providerResolution"]["extraction"]["effective"], "none");
+        assert_eq!(body["providerResolution"]["extraction"]["reason"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn preflight_persists_paused_resolution_when_pipeline_is_paused() {
+        let state = test_state_with_pipeline_config("claude-code", "ollama", None, true, true);
+
+        {
+            let mut extraction = state.extraction_state.write().await;
+            *extraction = Some(ExtractionRuntimeState {
+                configured: Some("claude-code".to_string()),
+                resolved: "claude-code".to_string(),
+                effective: "claude-code".to_string(),
+                fallback_provider: "ollama".to_string(),
+                status: "active".to_string(),
+                degraded: true,
+                fallback_applied: true,
+                reason: Some("stale".to_string()),
+                since: Some("2026-03-27T00:00:00Z".to_string()),
+            });
+        }
+
+        preflight_extraction(state.as_ref()).await;
+
+        let axum::response::Json(body) = status(State(state)).await;
+        assert_eq!(body["providerResolution"]["extraction"]["status"], "paused");
+        assert_eq!(body["providerResolution"]["extraction"]["resolved"], "claude-code");
+        assert_eq!(body["providerResolution"]["extraction"]["effective"], "none");
+        assert_eq!(body["providerResolution"]["extraction"]["reason"], serde_json::Value::Null);
     }
 
     #[test]

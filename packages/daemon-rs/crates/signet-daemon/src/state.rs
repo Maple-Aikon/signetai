@@ -45,7 +45,7 @@ pub struct AppState {
     pub harness_last_seen: RwLock<HashMap<String, String>>,
 }
 
-fn derive_initial_extraction_state(
+pub(crate) fn derive_initial_extraction_state(
     provider: &str,
     fallback_provider: &str,
     pipeline_enabled: bool,
