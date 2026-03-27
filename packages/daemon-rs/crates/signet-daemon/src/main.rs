@@ -1015,7 +1015,16 @@ async fn check_http_reachability_without_auth(url: &str) -> bool {
         .timeout(std::time::Duration::from_secs(2))
         .build();
     let Ok(client) = client else { return false };
-    client.get(url).send().await.is_ok()
+    client
+        .get(url)
+        .send()
+        .await
+        .map(|r: reqwest::Response| probe_status_is_healthy(r.status()))
+        .unwrap_or(false)
+}
+
+fn probe_status_is_healthy(status: reqwest::StatusCode) -> bool {
+    status.is_success()
 }
 
 /// Check Anthropic API reachability with credential validation.
@@ -1329,9 +1338,9 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        append_api_path, normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
-        resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model, status,
-        worker_supports_extraction_provider,
+        append_api_path, normalize_endpoint_base, probe_status_is_healthy,
+        provider_endpoint_is_trusted_for_secret_probe, resolve_runtime_extraction_endpoint,
+        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
     };
 
     fn test_state() -> Arc<AppState> {
@@ -1475,6 +1484,14 @@ mod tests {
             "anthropic",
             "https://openrouter.ai/api/v1"
         ));
+    }
+
+    #[test]
+    fn unauthenticated_reachability_probe_requires_success_status() {
+        assert!(probe_status_is_healthy(reqwest::StatusCode::OK));
+        assert!(!probe_status_is_healthy(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!probe_status_is_healthy(reqwest::StatusCode::FORBIDDEN));
+        assert!(!probe_status_is_healthy(reqwest::StatusCode::NOT_FOUND));
     }
 
     #[test]
