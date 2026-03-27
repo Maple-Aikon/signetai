@@ -630,6 +630,33 @@ pub(crate) async fn resume_extraction_check(state: &AppState) {
     extraction_probe(state, false).await;
 }
 
+const DEFAULT_OLLAMA_EXTRACTION_MODEL: &str = "qwen3:4b";
+
+fn resolve_runtime_extraction_model(
+    effective_provider: &str,
+    configured_provider: &str,
+    configured_model: &str,
+) -> String {
+    if effective_provider == "ollama" && configured_provider != "ollama" {
+        DEFAULT_OLLAMA_EXTRACTION_MODEL.to_string()
+    } else {
+        configured_model.to_string()
+    }
+}
+
+fn resolve_runtime_extraction_endpoint(
+    effective_provider: &str,
+    configured_provider: &str,
+    configured_endpoint: Option<&str>,
+) -> Option<String> {
+    if effective_provider == "ollama" && configured_provider != "ollama" {
+        return None;
+    }
+    configured_endpoint
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+}
+
 pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
     {
         let handle = state.extraction_worker_handle.lock().await;
@@ -685,10 +712,20 @@ pub(crate) async fn start_extraction_worker(state: &AppState) -> bool {
         return false;
     }
 
+    let runtime_model = resolve_runtime_extraction_model(
+        &effective_provider,
+        &pipeline.extraction.provider,
+        &pipeline.extraction.model,
+    );
+    let runtime_endpoint = resolve_runtime_extraction_endpoint(
+        &effective_provider,
+        &pipeline.extraction.provider,
+        pipeline.extraction.endpoint.as_deref(),
+    );
     let provider_cfg = signet_pipeline::provider::LlmProviderConfig {
         provider: effective_provider.clone(),
-        model: pipeline.extraction.model.clone(),
-        base_url: pipeline.extraction.endpoint.clone(),
+        model: runtime_model,
+        base_url: runtime_endpoint,
         api_key,
         timeout_ms: Some(pipeline.extraction.timeout),
     };
@@ -797,9 +834,13 @@ async fn extraction_probe(state: &AppState, dead_letter_on_blocked: bool) {
 
     // Try fallback to ollama if configured — use the configured endpoint
     // (mirrors JS daemon which resolves Ollama base URL from config)
-    let ollama_fallback_endpoint = extraction.endpoint.as_deref();
+    let ollama_fallback_endpoint = resolve_runtime_extraction_endpoint(
+        "ollama",
+        provider,
+        extraction.endpoint.as_deref(),
+    );
     if fallback_provider == "ollama" && provider != "ollama" {
-        let ollama_ok = check_ollama_health(ollama_fallback_endpoint).await;
+        let ollama_ok = check_ollama_health(ollama_fallback_endpoint.as_deref()).await;
         if ollama_ok {
             let new_state = ExtractionRuntimeState {
                 configured: Some(extraction.provider.clone()),
@@ -1209,7 +1250,10 @@ mod tests {
     use crate::auth::types::AuthMode;
     use crate::state::AppState;
 
-    use super::{append_api_path, normalize_endpoint_base, status};
+    use super::{
+        append_api_path, normalize_endpoint_base, resolve_runtime_extraction_endpoint,
+        resolve_runtime_extraction_model, status,
+    };
 
     fn test_state() -> Arc<AppState> {
         let dir = tempdir().expect("tempdir").keep();
@@ -1307,6 +1351,50 @@ mod tests {
         assert_eq!(
             normalize_endpoint_base(None, "https://default/"),
             "https://default"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_model_drops_non_ollama_model_on_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_model("ollama", "codex", "gpt-5-codex-mini"),
+            "qwen3:4b"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_model_keeps_model_when_provider_matches() {
+        assert_eq!(
+            resolve_runtime_extraction_model("ollama", "ollama", "qwen3.5:4b"),
+            "qwen3.5:4b"
+        );
+        assert_eq!(
+            resolve_runtime_extraction_model("codex", "codex", "gpt-5-codex-mini"),
+            "gpt-5-codex-mini"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_endpoint_drops_non_ollama_endpoint_on_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_endpoint(
+                "ollama",
+                "openrouter",
+                Some("https://openrouter.ai/api/v1")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_extraction_endpoint_keeps_configured_endpoint_when_not_fallback() {
+        assert_eq!(
+            resolve_runtime_extraction_endpoint("ollama", "ollama", Some("http://127.0.0.1:11434")),
+            Some("http://127.0.0.1:11434".to_string())
+        );
+        assert_eq!(
+            resolve_runtime_extraction_endpoint("anthropic", "anthropic", Some("https://api.anthropic.com")),
+            Some("https://api.anthropic.com".to_string())
         );
     }
 }
