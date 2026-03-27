@@ -400,6 +400,12 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		d.extraction.timeout,
 	);
+	const resolvedCommandConfig = parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand);
+	if (resolvedProvider === "command" && !resolvedCommandConfig) {
+		throw new PipelineConfigValidationError(
+			"memory.pipelineV2.extraction.command is required when extraction.provider='command'.",
+		);
+	}
 	if (synthesisRaw?.provider === "command") {
 		throw new PipelineConfigValidationError(
 			"memory.pipelineV2.synthesis.provider='command' is not supported. Use memory.pipelineV2.extraction.provider='command' instead.",
@@ -469,7 +475,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
 			),
-			command: parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand),
+			command: resolvedCommandConfig,
 			escalation: {
 				maxNewEntitiesPerChunk: clampPositive(
 					escalationRaw?.maxNewEntitiesPerChunk,

@@ -12,7 +12,7 @@
 
 import type { Database } from "bun:sqlite";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
@@ -438,15 +438,6 @@ export async function runSummaryCommandProvider(
 					reject(new Error(`summary command exited with code ${exitCode}: ${trimOutput(detail, 500)}`));
 					return;
 				}
-
-				if (stdout.trim().length > 0 || stderr.trim().length > 0) {
-					logger.info("summary-worker", "Summary command completed", {
-						sessionKey: job.session_key,
-						project: job.project,
-						stdout: trimOutput(stdout.trim(), 500),
-						stderr: trimOutput(stderr.trim(), 500),
-					});
-				}
 				resolve();
 			});
 		});
@@ -457,11 +448,18 @@ export async function runSummaryCommandProvider(
 
 async function processJob(
 	accessor: DbAccessor,
-	provider: LlmProvider,
+	provider: LlmProvider | null,
 	job: SummaryJobRow,
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	if (!passesSignificanceGate(accessor, job, memoryCfg)) return;
+	if (memoryCfg.pipelineV2.extraction.provider === "command") {
+		await runSummaryCommandProvider(job, memoryCfg);
+		return;
+	}
+	if (!provider) {
+		throw new Error("summary worker requires an LLM provider when extraction.provider is not 'command'");
+	}
 
 	const today = new Date().toISOString().slice(0, 10);
 	const genOpts = {
@@ -1406,11 +1404,8 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				project: job.project,
 			});
 
-			if (cfg.pipelineV2.extraction.provider === "command") {
-				if (passesSignificanceGate(accessor, job, cfg)) {
-					await runSummaryCommandProvider(job, cfg);
-				}
-			} else {
+			let providerForJob: LlmProvider | null = null;
+			if (cfg.pipelineV2.extraction.provider !== "command") {
 				// Cache provider across jobs — re-resolve on config change, env
 				// key rotation, or TTL expiry. Env-var key changes invalidate
 				// immediately; secrets-store-only rotations rely on the 5-min TTL.
@@ -1423,8 +1418,9 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 					cachedProviderKey = providerKey;
 					cachedProviderAt = Date.now();
 				}
-				await processJob(accessor, cachedProvider, job, cfg);
+				providerForJob = cachedProvider;
 			}
+			await processJob(accessor, providerForJob, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {

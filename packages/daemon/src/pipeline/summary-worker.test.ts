@@ -215,7 +215,7 @@ describe("recoverSummaryJobs", () => {
 describe("runSummaryCommandProvider", () => {
 	it("executes argv-safe command mode with token substitution and temp cleanup", async () => {
 		const marker = join(tmpdir(), `signet-summary-marker-${Date.now()}-${Math.random()}.txt`);
-		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: command\n");
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n");
 		const scriptPath = join(dir, "summary-command-success.mjs");
 		writeFileSync(
 			scriptPath,
@@ -268,7 +268,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 	});
 
 	it("throws when command exits non-zero", async () => {
-		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: command\n");
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n");
 		const scriptPath = join(dir, "summary-command-fail.mjs");
 		writeFileSync(scriptPath, "process.exit(7);\n", "utf8");
 

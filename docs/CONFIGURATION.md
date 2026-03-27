@@ -310,7 +310,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
-| `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) |
+| `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) — required when `provider: "command"` |
 
 For safety, the intended extraction setups are:
 

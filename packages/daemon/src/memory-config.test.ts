@@ -607,6 +607,37 @@ describe("loadPipelineConfig", () => {
 		expect(() => loadMemoryConfig(agentsDir)).toThrow("synthesis.provider='command' is not supported");
 	});
 
+	it("rejects extraction.provider=command when extraction.command is missing", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "command",
+						},
+					},
+				},
+			}),
+		).toThrow("extraction.command is required when extraction.provider='command'");
+	});
+
+	it("loadMemoryConfig fails fast when extraction.provider=command is missing command config", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: command
+`,
+			"utf8",
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(
+			"extraction.command is required when extraction.provider='command'",
+		);
+	});
+
 	it("loads all flags correctly when all set to true (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
