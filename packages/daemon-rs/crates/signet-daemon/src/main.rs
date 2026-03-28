@@ -1247,11 +1247,20 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
             )?;
 
             // Mark affected memories as failed — but only if they have no
-            // remaining leased (in-flight) extract jobs that may still complete.
+            // remaining leased (in-flight) extract jobs and no already-completed
+            // extraction work for the same memory.
             if !memory_ids.is_empty() {
                 let mut check_leased = conn.prepare(
                     "SELECT COUNT(*) FROM memory_jobs
                      WHERE memory_id = ?1 AND job_type IN ('extract', 'extraction') AND status = 'leased'",
+                )?;
+                let mut check_completed_jobs = conn.prepare(
+                    "SELECT COUNT(*) FROM memory_jobs
+                     WHERE memory_id = ?1 AND job_type IN ('extract', 'extraction') AND status = 'completed'",
+                )?;
+                let mut check_completed_memory = conn.prepare(
+                    "SELECT COUNT(*) FROM memories
+                     WHERE id = ?1 AND extraction_status IN ('complete', 'completed')",
                 )?;
                 let mut update_mem = conn.prepare(
                     "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
@@ -1259,7 +1268,11 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
                 for mid in &memory_ids {
                     let leased: i64 =
                         check_leased.query_row(rusqlite::params![mid], |row| row.get(0))?;
-                    if leased == 0 {
+                    let completed_jobs: i64 = check_completed_jobs
+                        .query_row(rusqlite::params![mid], |row| row.get(0))?;
+                    let completed_memory: i64 = check_completed_memory
+                        .query_row(rusqlite::params![mid], |row| row.get(0))?;
+                    if leased == 0 && completed_jobs == 0 && completed_memory == 0 {
                         update_mem.execute(rusqlite::params![mid])?;
                     }
                 }
@@ -1731,6 +1744,61 @@ mod tests {
             .expect("read rolled back job");
 
         assert_eq!(job_status, "pending");
+    }
+
+    #[tokio::test]
+    async fn startup_dead_letter_preserves_completed_memory_status_when_stale_pending_exists() {
+        let state = test_state();
+        state
+            .pool
+            .write_tx(signet_core::db::Priority::High, |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, content, normalized_content, content_hash, type, importance, extraction_status, created_at, updated_at, updated_by)
+                     VALUES (?1, 'memory', 'memory', 'hash-3', 'fact', 0.5, 'completed', ?2, ?2, 'test')",
+                    rusqlite::params!["mem-3", "2026-03-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at)
+                     VALUES (?1, ?2, 'extract', 'completed', ?3, ?3, ?3)",
+                    rusqlite::params!["job-3-completed", "mem-3", "2026-03-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                     VALUES (?1, ?2, 'extract', 'pending', ?3, ?3)",
+                    rusqlite::params!["job-3-pending", "mem-3", "2026-03-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed completed + pending extraction");
+
+        dead_letter_pending_extraction_jobs(
+            &state,
+            "Configured extraction provider unavailable at startup",
+            "2026-03-27T00:00:01Z",
+        )
+        .await;
+
+        let (pending_status, memory_status): (String, String) = state
+            .pool
+            .read(|conn| {
+                let pending_status: String = conn.query_row(
+                    "SELECT status FROM memory_jobs WHERE id = 'job-3-pending'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let memory_status: String = conn.query_row(
+                    "SELECT extraction_status FROM memories WHERE id = 'mem-3'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((pending_status, memory_status))
+            })
+            .await
+            .expect("read completed-memory status");
+
+        assert_eq!(pending_status, "dead");
+        assert_eq!(memory_status, "completed");
     }
 
     #[tokio::test]

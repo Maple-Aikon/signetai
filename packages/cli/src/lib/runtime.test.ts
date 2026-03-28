@@ -1,10 +1,87 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getDaemonStatus } from "./runtime.js";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getDaemonStatus, readManagedDaemonPid } from "./runtime.js";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+});
+
+describe("readManagedDaemonPid", () => {
+	it("accepts a live daemon pid when the command matches the daemon path", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		const dir = join(root, ".daemon");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "pid"), "4242\n");
+
+		const pid = readManagedDaemonPid(root, {
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			isAlive: () => true,
+			readCmd: () => "bun /opt/signet/dist/daemon.js",
+		});
+
+		expect(pid).toBe(4242);
+
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("accepts an older global install path for a live daemon pid", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		const dir = join(root, ".daemon");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "pid"), "5252\n");
+
+		const pid = readManagedDaemonPid(root, {
+			daemonPaths: ["/home/nicholai/.bun/install/global/node_modules/signetai/dist/daemon.js"],
+			isAlive: () => true,
+			readCmd: () => "bun /home/nicholai/.bun/install/cache/signetai@0.77.0/node_modules/signetai/dist/daemon.js",
+		});
+
+		expect(pid).toBe(5252);
+
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("rejects a live reused pid when the command does not match signet daemon", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		const dir = join(root, ".daemon");
+		mkdirSync(dir, { recursive: true });
+		const path = join(dir, "pid");
+		writeFileSync(path, "7777\n");
+
+		const pid = readManagedDaemonPid(root, {
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			isAlive: () => true,
+			readCmd: () => "/usr/bin/python3 /tmp/something-else.py",
+		});
+
+		expect(pid).toBeNull();
+		expect(existsSync(path)).toBe(true);
+
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("cleans up the pid file when the process is no longer alive", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		const dir = join(root, ".daemon");
+		mkdirSync(dir, { recursive: true });
+		const path = join(dir, "pid");
+		writeFileSync(path, "8888\n");
+
+		const pid = readManagedDaemonPid(root, {
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			isAlive: () => false,
+			readCmd: () => null,
+		});
+
+		expect(pid).toBeNull();
+		expect(existsSync(path)).toBe(false);
+
+		rmSync(root, { recursive: true, force: true });
+	});
 });
 
 describe("getDaemonStatus", () => {

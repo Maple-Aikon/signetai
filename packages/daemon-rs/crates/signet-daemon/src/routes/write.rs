@@ -122,6 +122,21 @@ fn dead_letter_blocked_extraction_memory(
         rusqlite::params![memory_id],
         |row| row.get(0),
     )?;
+    let completed_jobs_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_jobs
+         WHERE memory_id = ?1
+           AND job_type IN ('extract', 'extraction')
+           AND status = 'completed'",
+        rusqlite::params![memory_id],
+        |row| row.get(0),
+    )?;
+    let completed_memory_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memories
+         WHERE id = ?1
+           AND extraction_status IN ('complete', 'completed')",
+        rusqlite::params![memory_id],
+        |row| row.get(0),
+    )?;
 
     if updated == 0 {
         if leased_count == 0 {
@@ -140,7 +155,7 @@ fn dead_letter_blocked_extraction_memory(
         }
     }
 
-    if leased_count == 0 {
+    if leased_count == 0 && completed_jobs_count == 0 && completed_memory_count == 0 {
         conn.execute(
             "UPDATE memories SET extraction_status = 'failed' WHERE id = ?1",
             rusqlite::params![memory_id],
@@ -520,6 +535,71 @@ mod tests {
             .unwrap();
         assert_eq!(status, "leased");
         assert_eq!(error, None);
+    }
+
+    #[test]
+    fn dead_letter_blocked_extraction_preserves_completed_memory_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE memories (
+              id TEXT PRIMARY KEY,
+              extraction_status TEXT
+            );
+            CREATE TABLE memory_jobs (
+              id TEXT PRIMARY KEY,
+              memory_id TEXT,
+              job_type TEXT,
+              status TEXT,
+              error TEXT,
+              attempts INTEGER,
+              max_attempts INTEGER,
+              failed_at TEXT,
+              created_at TEXT,
+              updated_at TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, extraction_status) VALUES (?1, 'completed')",
+            rusqlite::params!["mem-4"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_jobs
+             (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+             VALUES (?1, ?2, 'extract', 'completed', NULL, 1, 3, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            rusqlite::params!["job-completed", "mem-4"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_jobs
+             (id, memory_id, job_type, status, error, attempts, max_attempts, failed_at, created_at, updated_at)
+             VALUES (?1, ?2, 'extract', 'pending', NULL, 0, 3, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            rusqlite::params!["job-pending", "mem-4"],
+        )
+        .unwrap();
+
+        dead_letter_blocked_extraction_memory(&conn, "mem-4", "Extraction unavailable", 9).unwrap();
+
+        let extraction_status: String = conn
+            .query_row(
+                "SELECT extraction_status FROM memories WHERE id = ?1",
+                rusqlite::params!["mem-4"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(extraction_status, "completed");
+
+        let dead_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_jobs WHERE memory_id = ?1 AND status = 'dead'",
+                rusqlite::params!["mem-4"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dead_count, 1);
     }
 
     async fn build_test_state() -> (Arc<crate::state::AppState>, tempfile::TempDir) {
