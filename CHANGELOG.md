@@ -2,12 +2,30 @@
 
 All notable changes to Signet are documented here.
 
+## [0.81.0] - 2026-03-28
+
+### Bug Fixes
+
+- **docker**: unblock post-merge smoke failures from #374 (#377)
+
+
+## [0.80.0] - 2026-03-27
+
+### Features
+
+- **docker**: add first-party self-hosting stack (#374)
+
+
 ## [0.79.0] - 2026-03-27
 
 ### Features
 
 - **pipeline**: add command extraction provider for summary worker control-plane path (#368)
+- **docker**: add first-party self-hosting stack (Compose + Caddy + token bootstrap) and GHCR image workflows
 
+### Docs
+
+- add Docker self-hosting quickstart and operations runbook updates
 
 ## [0.78.4] - 2026-03-27
 
