@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.81.0] - 2026-03-28
+
+### Bug Fixes
+
+- **docker**: unblock post-merge smoke failures from #374 (#377)
+
+
 ## [0.80.0] - 2026-03-27
 
 ### Features
