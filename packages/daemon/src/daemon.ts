@@ -5786,14 +5786,24 @@ function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map(getActiveSessions().map((session) => [session.key, session] as const));
-	// No cap: presence is in-memory and bounded by active connections.
-	// Filter by agentId to prevent cross-agent key collisions — two sessions
-	// from different agents can share the same raw key.
-	for (const presence of listAgentPresence({ limit: Number.MAX_SAFE_INTEGER })) {
-		if (presence.agentId !== agentId) continue;
-		if (!presence.sessionKey) continue;
-		const key = normalizeSessionKey(presence.sessionKey);
+	// Presence is the agent-scoped source of truth. Build the set of keys
+	// that presence confirms belong to this agent so tracker claims from
+	// other agents (possible in a shared-daemon scenario) are excluded.
+	const agentPresence = listAgentPresence({ limit: Number.MAX_SAFE_INTEGER }).filter(
+		(p) => p.agentId === agentId && p.sessionKey,
+	);
+	const presenceKeys = new Set(agentPresence.map((p) => normalizeSessionKey(p.sessionKey!)));
+
+	// Seed from tracker claims that presence confirms belong to this agent.
+	const byKey = new Map(
+		getActiveSessions()
+			.filter((s) => presenceKeys.has(s.key))
+			.map((session) => [session.key, session] as const),
+	);
+
+	// Add presence-only sessions (no tracker claim yet, e.g. plugin path).
+	for (const presence of agentPresence) {
+		const key = normalizeSessionKey(presence.sessionKey!);
 		if (byKey.has(key)) continue;
 		byKey.set(key, {
 			key,
