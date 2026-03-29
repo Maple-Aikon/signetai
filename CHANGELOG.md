@@ -2,6 +2,20 @@
 
 All notable changes to Signet are documented here.
 
+## [0.86.0] - 2026-03-29
+
+### Bug Fixes
+
+- **daemon**: harden pipeline parsers and skill reconciler idempotency (#401)
+
+
+## [0.85.5] - 2026-03-29
+
+### Features
+
+- **memory**: derive MEMORY.md from canonical lineage (#399)
+
+
 ## [0.85.3] - 2026-03-29
 
 ### Bug Fixes
