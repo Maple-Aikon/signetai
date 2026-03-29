@@ -795,8 +795,16 @@ Only `query` is required.
 }
 ```
 
-`source` per result is one of `hybrid`, `vector`, or `keyword`. `method` on
-the response reflects whether vector search was available for this call.
+`source` per result is one of `hybrid`, `vector`, `keyword`, or `llm_summary`.
+`method` on the response reflects whether vector search was available for
+this call.
+
+When `memory.pipelineV2.reranker.useExtractionModel` is enabled, an
+additional synthesized summary card may be prepended to results. This card
+has `source: "llm_summary"`, `supplementary: true`, and an id of the form
+`summary:<sha1-12>`. It is only injected when `limit >= 2` so callers
+always receive at least one real memory to verify the summary against. The
+card is not stored in the database and does not affect access-time tracking.
 
 ### GET /api/memory/search
 

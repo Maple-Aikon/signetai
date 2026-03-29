@@ -145,33 +145,30 @@ async fn main() -> anyhow::Result<()> {
     };
     // Build LLM provider from extraction config so the recall reranker path
     // is available immediately, independent of when the extraction worker starts.
-    let llm_startup: Option<Arc<dyn signet_pipeline::provider::LlmProvider>> =
-        if pipeline_paused {
-            None
-        } else {
-            config
-                .manifest
-                .memory
-                .as_ref()
-                .and_then(|m| m.pipeline_v2.as_ref())
-                .filter(|p| p.reranker.enabled && p.reranker.use_extraction_model)
-                .map(|p| {
-                    let provider = p.extraction.provider.clone();
-                    let endpoint = p.extraction.endpoint.clone();
-                    let model = p.extraction.model.clone();
-                    let timeout = p.extraction.timeout;
-                    let api_key = std::env::var("OPENAI_API_KEY").ok();
-                    signet_pipeline::provider::from_config(
-                        &signet_pipeline::provider::LlmProviderConfig {
-                            provider,
-                            model,
-                            base_url: endpoint,
-                            api_key,
-                            timeout_ms: Some(timeout),
-                        },
-                    )
-                })
-        };
+    // Recall is a read path — do not gate on pipeline_paused (which only
+    // controls extraction writes).
+    let llm_startup: Option<Arc<dyn signet_pipeline::provider::LlmProvider>> = config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .filter(|p| p.reranker.enabled && p.reranker.use_extraction_model)
+        .map(|p| {
+            let provider = p.extraction.provider.clone();
+            let endpoint = p.extraction.endpoint.clone();
+            let model = p.extraction.model.clone();
+            let timeout = p.extraction.timeout;
+            let api_key = std::env::var("OPENAI_API_KEY").ok();
+            signet_pipeline::provider::from_config(
+                &signet_pipeline::provider::LlmProviderConfig {
+                    provider,
+                    model,
+                    base_url: endpoint,
+                    api_key,
+                    timeout_ms: Some(timeout),
+                },
+            )
+        });
 
     let auth_mode = read_auth_mode(&config);
     let auth_secret = if auth_mode == AuthMode::Local {
