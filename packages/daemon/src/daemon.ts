@@ -5787,7 +5787,9 @@ function listLiveSessions(): Array<{
 	bypassed: boolean;
 }> {
 	const byKey = new Map(getActiveSessions().map((session) => [session.key, session] as const));
-	for (const presence of listAgentPresence({ includeSelf: true, limit: 200 })) {
+	// No cap: presence is in-memory and bounded by active connections,
+	// so all live sessions must be visible regardless of count.
+	for (const presence of listAgentPresence({ includeSelf: true, limit: Number.MAX_SAFE_INTEGER })) {
 		if (!presence.sessionKey) continue;
 		const key = normalizeSessionKey(presence.sessionKey);
 		if (byKey.has(key)) continue;
@@ -9137,16 +9139,17 @@ app.post("/api/knowledge/expand/session", async (c) => {
 
 		// Text fallback: only for names >= 4 chars to avoid ambiguous
 		// short tokens ("go", "ai", etc.) matching unrelated content.
-		// Use word-boundary patterns for content and exact match for
-		// structured fields (project, source_ref).
-		const cn = entity.canonicalName;
+		// Escape SQL wildcards in canonicalName before building patterns.
+		// Use word-boundary patterns for content; LIKE contains for
+		// structured fields (project, source_ref) so path segments match.
+		const cn = entity.canonicalName.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const useTextFallback = cn.length >= 4;
 		const fallbackClause = useTextFallback
-			? `OR (LOWER(ss.content) LIKE ? OR LOWER(ss.content) LIKE ? OR LOWER(ss.content) LIKE ? OR LOWER(ss.content) = ?)
-					OR LOWER(COALESCE(ss.project, '')) = ?
-					OR LOWER(COALESCE(ss.source_ref, '')) = ?`
+			? `OR (LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) = ?)
+					OR LOWER(COALESCE(ss.project, '')) LIKE ? ESCAPE '\\'
+					OR LOWER(COALESCE(ss.source_ref, '')) LIKE ? ESCAPE '\\'`
 			: "";
-		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, cn, cn, cn] : [];
+		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, cn, `%${cn}%`, `%${cn}%`] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,
