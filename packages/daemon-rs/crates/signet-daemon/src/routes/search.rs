@@ -422,8 +422,15 @@ pub async fn recall(
     match result {
         Ok(resp) => {
             // Update access tracking on a writable connection (fire-and-forget).
+            // Exclude supplementary cards (e.g. llm_summary) — they are not
+            // stored in the database and have no access-time row to update.
             if !resp.results.is_empty() {
-                let ids: Vec<String> = resp.results.iter().map(|h| h.id.clone()).collect();
+                let ids: Vec<String> = resp
+                    .results
+                    .iter()
+                    .filter(|h| h.supplementary != Some(true))
+                    .map(|h| h.id.clone())
+                    .collect();
                 let pool = state.pool.clone();
                 tokio::spawn(async move {
                     let _ = pool
