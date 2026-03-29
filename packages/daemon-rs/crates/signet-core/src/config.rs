@@ -1381,9 +1381,19 @@ impl Default for TraversalConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct RerankerConfig {
     pub enabled: bool,
+    /// Model name for the non-extraction reranker path. Only read when
+    /// `use_extraction_model` is false and a non-LLM reranker is wired up.
     pub model: String,
+    /// When true, uses the extraction LLM for reranking and recall summary.
+    /// `top_n`, `timeout_ms`, and `model` below are only read in this path.
+    /// Existing behavior (use_extraction_model: false) is unaffected by their
+    /// values. Defaults match the TS daemon.
     pub use_extraction_model: bool,
+    /// Max candidates passed to the LLM reranker. Only used when
+    /// `use_extraction_model: true`. Default matches TS daemon (topN: 20).
     pub top_n: usize,
+    /// Shared timeout budget for rerank + summary LLM calls (ms). Only used
+    /// when `use_extraction_model: true`. Default matches TS daemon (2000 ms).
     pub timeout_ms: u64,
 }
 

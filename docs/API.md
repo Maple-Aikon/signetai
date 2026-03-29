@@ -806,6 +806,13 @@ has `source: "llm_summary"`, `supplementary: true`, and an id of the form
 always receive at least one real memory to verify the summary against. The
 card is not stored in the database and does not affect access-time tracking.
 
+**Operational note**: `useExtractionModel` moves recall onto a live LLM
+call path. Enabling it on a publicly accessible daemon (i.e. not loopback-
+only) requires token auth and rate limiting to be configured — see
+`auth.rateLimits` in agent.yaml and the [Auth middleware](../packages/daemon/src/auth/)
+docs. The endpoint is protected by the daemon's existing auth middleware;
+no additional permission level is required beyond `recall`.
+
 ### GET /api/memory/search
 
 GET-compatible alias for `POST /api/memory/recall`. Forwards query parameters
