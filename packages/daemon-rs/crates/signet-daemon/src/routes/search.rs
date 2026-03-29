@@ -342,6 +342,7 @@ pub async fn recall(
             if reranker_enabled && use_extraction_model {
                 let llm = state.llm.read().await.clone();
                 if let Some(ref provider) = llm {
+                    // Fallbacks match TS daemon defaults (timeoutMs: 2000, topN: 20).
                     let timeout_ms = state
                         .config
                         .manifest
@@ -349,7 +350,7 @@ pub async fn recall(
                         .as_ref()
                         .and_then(|m| m.pipeline_v2.as_ref())
                         .map(|p| p.reranker.timeout_ms)
-                        .unwrap_or(30_000);
+                        .unwrap_or(2_000);
                     let top_n = state
                         .config
                         .manifest
@@ -508,6 +509,7 @@ pub struct SearchParams {
 
 pub async fn search_get(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<SearchParams>,
 ) -> axum::response::Response {
     let q = params.q.unwrap_or_default().trim().to_string();
@@ -535,7 +537,7 @@ pub async fn search_get(
         until: None,
     };
 
-    recall(State(state), HeaderMap::new(), Json(body)).await.into_response()
+    recall(State(state), headers, Json(body)).await.into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +552,7 @@ pub struct LegacySearchParams {
 
 pub async fn legacy_search(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<LegacySearchParams>,
 ) -> axum::response::Response {
     let q = params.q.unwrap_or_default().trim().to_string();
@@ -575,7 +578,7 @@ pub async fn legacy_search(
         until: None,
     };
 
-    recall(State(state), HeaderMap::new(), Json(body)).await.into_response()
+    recall(State(state), headers, Json(body)).await.into_response()
 }
 
 // ---------------------------------------------------------------------------
