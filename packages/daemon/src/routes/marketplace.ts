@@ -596,10 +596,14 @@ export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpC
 		while ((m = re.exec(tpSection)) !== null) {
 			const name = m[1].trim();
 			const url = m[2].trim();
-			const desc = m[3]
-				.replace(/<[^>]*>/g, "")
-				.replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-				.trim();
+			let raw = m[3].replace(/!\[[^\]]*\]\([^)]*\)/g, "");
+			// Strip HTML tags iteratively to prevent nested-tag bypass (e.g. <scr<script>ipt>)
+			let prev = "";
+			while (prev !== raw) {
+				prev = raw;
+				raw = raw.replace(/<[^>]*>/g, "");
+			}
+			const desc = raw.replace(/</g, "&lt;").replace(/>/g, "&gt;").trim();
 			if (!name || !url) continue;
 			const ghMatch = url.match(/github\.com\/([a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)/);
 			if (!ghMatch) continue;

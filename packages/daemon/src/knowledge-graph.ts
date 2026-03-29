@@ -663,7 +663,7 @@ export function resolveNamedEntity(
 	if (canonical.length === 0) return null;
 
 	return accessor.withReadDb((db) => {
-		const escaped = canonical.replace(/[%_]/g, "\\$&");
+		const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const starts = `${escaped}%`;
 		const contains = `%${escaped}%`;
 		const rows = db
