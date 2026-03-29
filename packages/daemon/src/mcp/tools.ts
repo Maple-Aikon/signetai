@@ -1345,10 +1345,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ session_key, enabled, agent_id }) => {
-			const qs = agent_id ? `?agent_id=${encodeURIComponent(agent_id)}` : "";
+			// Always thread agent_id so the scoped route resolves correctly.
+			// Default to "default" matching other cross-agent MCP tools.
+			const aid = agent_id ?? "default";
 			const result = await daemonFetch<{ key: string; bypassed: boolean }>(
 				baseUrl,
-				`/api/sessions/${encodeURIComponent(session_key)}/bypass${qs}`,
+				`/api/sessions/${encodeURIComponent(session_key)}/bypass?agent_id=${encodeURIComponent(aid)}`,
 				{ method: "POST", body: { enabled } },
 			);
 			if (!result.ok) return errorResult(`Bypass toggle failed: ${result.error}`);

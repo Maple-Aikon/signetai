@@ -132,11 +132,12 @@ impl SessionTracker {
         ClaimResult::Ok
     }
 
-    /// Release a session.
+    /// Release a session. Clears both the tracker claim and any bypass state
+    /// so bypass does not leak across session lifetimes.
     pub fn release(&self, key: &str) {
         let key = Self::normalize_key(key);
-        let mut claims = self.claims.lock().unwrap();
-        claims.remove(key);
+        self.claims.lock().unwrap().remove(key);
+        self.bypassed_keys.lock().unwrap().remove(key);
     }
 
     /// Get the runtime path for a session.
@@ -229,11 +230,17 @@ impl SessionTracker {
             .collect()
     }
 
-    /// Clean up stale sessions.
+    /// Clean up stale sessions. Also removes bypass state for keys no longer
+    /// in the tracker to prevent unbounded growth.
     pub fn cleanup(&self) -> usize {
         let mut claims = self.claims.lock().unwrap();
         let before = claims.len();
         claims.retain(|_, c| !c.is_stale());
+        let live_keys: std::collections::HashSet<&str> = claims.keys().map(|k| k.as_str()).collect();
+        self.bypassed_keys
+            .lock()
+            .unwrap()
+            .retain(|k| live_keys.contains(k.as_str()));
         before - claims.len()
     }
 }
