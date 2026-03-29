@@ -54,9 +54,8 @@ function main() {
 	const shimContent = [
 		"// Auto-generated shim — sharp native bindings unavailable.",
 		"// Signet only uses text embeddings; image processing is not needed.",
-		"// See: https://github.com/Signet-AI/signetai/issues/TBD",
-		"module.exports = undefined;",
-		"module.exports.default = undefined;",
+		"// Exports falsy default so transformers' `else if (sharp)` is skipped.",
+		"module.exports = null;",
 		"",
 	].join("\n");
 

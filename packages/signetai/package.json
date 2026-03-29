@@ -12,7 +12,7 @@
     "dist",
     "dashboard",
     "templates",
-    "postinstall.js",
+    "postinstall.cjs",
     "README.md",
     "LICENSE"
   ],
@@ -21,7 +21,7 @@
     "build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
     "build:daemon": "bun run build-daemon.ts",
     "build:dashboard": "rm -rf ./dashboard && cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
-    "postinstall": "node postinstall.js",
+    "postinstall": "node postinstall.cjs",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
