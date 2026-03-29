@@ -1,9 +1,10 @@
 //! Search and recall route handlers.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ use signet_core::search::{
 use crate::auth::middleware::{authenticate_headers, require_rate_limit_guard};
 use crate::auth::types::AuthMode;
 use crate::reranker;
+use crate::routes::pipeline::is_loopback;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ pub struct RecallHit {
 
 pub async fn recall(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<RecallBody>,
 ) -> impl IntoResponse {
@@ -98,7 +101,7 @@ pub async fn recall(
                 state.auth_mode,
                 state.auth_secret.as_deref(),
                 &headers,
-                false,
+                is_loopback(&peer),
             )
             .unwrap_or_else(|_| crate::auth::middleware::AuthState {
                 result: crate::auth::types::AuthResult::unauthenticated(),
@@ -508,6 +511,7 @@ pub struct SearchParams {
 
 pub async fn search_get(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Query(params): Query<SearchParams>,
 ) -> axum::response::Response {
@@ -536,7 +540,9 @@ pub async fn search_get(
         until: None,
     };
 
-    recall(State(state), headers, Json(body)).await.into_response()
+    recall(State(state), ConnectInfo(peer), headers, Json(body))
+        .await
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +557,7 @@ pub struct LegacySearchParams {
 
 pub async fn legacy_search(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Query(params): Query<LegacySearchParams>,
 ) -> axum::response::Response {
@@ -577,7 +584,9 @@ pub async fn legacy_search(
         until: None,
     };
 
-    recall(State(state), headers, Json(body)).await.into_response()
+    recall(State(state), ConnectInfo(peer), headers, Json(body))
+        .await
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
