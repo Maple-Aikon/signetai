@@ -10,7 +10,7 @@
  */
 
 import { logger } from "../logger";
-import { extractBalancedJsonObject, stripFences, tryParseJson } from "./extraction";
+import { extractBalancedJsonObjects, stripFences, tryParseJson } from "./extraction";
 import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
@@ -81,18 +81,26 @@ export async function detectSemanticContradiction(
 
 function parseSemanticContradiction(raw: string): Record<string, unknown> | null {
 	const stripped = stripFences(raw);
-	const candidates = [raw.trim(), stripped];
-	const rawObj = extractBalancedJsonObject(raw);
-	if (rawObj) candidates.push(rawObj);
-	const strippedObj = extractBalancedJsonObject(stripped);
-	if (strippedObj) candidates.push(strippedObj);
+	const candidates: string[] = [raw.trim(), stripped];
+	const rawObjs = extractBalancedJsonObjects(raw);
+	for (let i = rawObjs.length - 1; i >= 0; i--) {
+		candidates.push(rawObjs[i]);
+	}
+	const strippedObjs = extractBalancedJsonObjects(stripped);
+	for (let i = strippedObjs.length - 1; i >= 0; i--) {
+		candidates.push(strippedObjs[i]);
+	}
 
+	const seen = new Set<string>();
 	for (const candidate of candidates) {
+		const text = candidate.trim();
+		if (!text || seen.has(text)) continue;
+		seen.add(text);
 		const parsed = tryParseJson(candidate);
 		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
 			continue;
 		}
-		return parsed;
+		if ("contradicts" in parsed) return parsed as Record<string, unknown>;
 	}
 
 	return null;

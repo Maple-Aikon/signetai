@@ -57,4 +57,23 @@ describe("enrichSkillFrontmatter", () => {
 		expect(result?.triggers.length).toBe(2);
 		expect(result?.tags).toContain("performance");
 	});
+
+	it("prefers final enrichment object over earlier example objects", async () => {
+		const provider = mockProvider(
+			'Example: {"description":"","triggers":[],"tags":[]}\nFinal: {"description":"Practical guidance for producing Remotion compositions with reusable patterns.","triggers":["build remotion video"],"tags":["video"]}',
+		);
+
+		const result = await enrichSkillFrontmatter(
+			{
+				name: "remotion-best-practices",
+				description: "",
+				body: "Skill details",
+			},
+			provider,
+		);
+
+		expect(result).not.toBeNull();
+		expect(result?.description).toContain("Remotion");
+		expect(result?.triggers).toContain("build remotion video");
+	});
 });

@@ -45,4 +45,20 @@ describe("detectSemanticContradiction", () => {
 		expect(result.detected).toBe(false);
 		expect(result.confidence).toBe(0.8);
 	});
+
+	it("prefers the final contradiction object over earlier examples", async () => {
+		const provider = mockProvider(
+			'Example: {"contradicts": false, "confidence": 0.2, "reasoning": "example"}\nFinal: {"contradicts": true, "confidence": 0.95, "reasoning": "actual answer"}',
+		);
+
+		const result = await detectSemanticContradiction(
+			"Dark mode is enabled by default",
+			"Light mode is the default theme",
+			provider,
+		);
+
+		expect(result.detected).toBe(true);
+		expect(result.confidence).toBe(0.95);
+		expect(result.reasoning).toContain("actual answer");
+	});
 });
