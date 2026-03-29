@@ -475,7 +475,7 @@ fn default_pipeline_model(provider: &str) -> &'static str {
         "codex" => "gpt-5-codex-mini",
         "opencode" => "anthropic/claude-haiku-4-5-20251001",
         "openrouter" => "openai/gpt-4o-mini",
-        _ => "qwen3:4b",
+        _ => "gemma3:4b",
     }
 }
 
@@ -1181,7 +1181,7 @@ impl Default for ExtractionConfig {
         Self {
             provider: "ollama".to_string(),
             fallback_provider: "ollama".to_string(),
-            model: "qwen3:4b".to_string(),
+            model: "gemma3:4b".to_string(),
             strength: "medium".to_string(),
             endpoint: None,
             timeout: 90_000,

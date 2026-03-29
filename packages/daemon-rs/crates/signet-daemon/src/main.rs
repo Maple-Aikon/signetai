@@ -628,7 +628,7 @@ pub(crate) async fn resume_extraction_check(state: &AppState) {
     extraction_probe(state, false, true).await;
 }
 
-const DEFAULT_OLLAMA_EXTRACTION_MODEL: &str = "qwen3:4b";
+const DEFAULT_OLLAMA_EXTRACTION_MODEL: &str = "gemma3:4b";
 
 fn resolve_runtime_extraction_model(
     effective_provider: &str,

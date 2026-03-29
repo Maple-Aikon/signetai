@@ -349,7 +349,7 @@ pub async fn models(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         .map(|p| &p.extraction);
 
     let provider = extraction.map(|e| e.provider.as_str()).unwrap_or("ollama");
-    let model = extraction.map(|e| e.model.as_str()).unwrap_or("qwen3:4b");
+    let model = extraction.map(|e| e.model.as_str()).unwrap_or("gemma3:4b");
 
     Json(serde_json::json!({
         "models": [
@@ -373,7 +373,7 @@ pub async fn models_by_provider(State(state): State<Arc<AppState>>) -> Json<serd
         .map(|p| &p.extraction);
 
     let provider = extraction.map(|e| e.provider.as_str()).unwrap_or("ollama");
-    let model = extraction.map(|e| e.model.as_str()).unwrap_or("qwen3:4b");
+    let model = extraction.map(|e| e.model.as_str()).unwrap_or("gemma3:4b");
 
     let mut result = serde_json::Map::new();
     result.insert(

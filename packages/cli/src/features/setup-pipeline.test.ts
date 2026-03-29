@@ -57,11 +57,20 @@ describe("buildSetupPipeline", () => {
 		});
 	});
 
-	it("copies the selected extraction provider into explicit synthesis config", () => {
-		expect(buildSetupPipeline("ollama", "qwen3.5:4b").synthesis).toEqual({
+	it("ollama synthesis uses qwen3:4b regardless of extraction model", () => {
+		expect(buildSetupPipeline("ollama", "gemma3:4b").synthesis).toEqual({
 			enabled: true,
 			provider: "ollama",
-			model: "qwen3.5:4b",
+			model: "qwen3:4b",
+			timeout: 120000,
+		});
+	});
+
+	it("non-ollama providers mirror extraction model into synthesis", () => {
+		expect(buildSetupPipeline("codex", "gpt-5-codex-mini").synthesis).toEqual({
+			enabled: true,
+			provider: "codex",
+			model: "gpt-5-codex-mini",
 			timeout: 120000,
 		});
 	});

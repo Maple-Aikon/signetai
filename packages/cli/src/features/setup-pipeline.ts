@@ -1,6 +1,8 @@
 import { defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice } from "./setup-shared.js";
 
+const OLLAMA_SYNTHESIS_MODEL = "qwen3:4b";
+
 export const EXTRACTION_SAFETY_WARNING =
 	"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on a Pro/Max subscription, or local Ollama models (gemma3:4b recommended). Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
@@ -68,7 +70,7 @@ export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: s
 		synthesis: {
 			enabled: true,
 			provider,
-			model: resolved,
+			model: provider === "ollama" ? OLLAMA_SYNTHESIS_MODEL : resolved,
 			timeout: 120000,
 		},
 		semanticContradictionEnabled: true,
