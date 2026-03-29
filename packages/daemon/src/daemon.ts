@@ -9178,14 +9178,23 @@ app.post("/api/knowledge/expand/session", async (c) => {
 		}
 
 		// Text fallback: only for names >= 4 chars to avoid ambiguous short
-		// tokens ("go", "ai", etc.) matching unrelated content. The length
-		// gate is the primary protection; use a simple contains pattern so
-		// common punctuation forms like "Signet:", "(Signet)", and line-start
-		// mentions are covered. SQL wildcards in canonicalName are escaped.
-		const cn = entity.canonicalName.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+		// tokens ("go", "ai", etc.) matching unrelated content. Use
+		// word-boundary patterns (space-surrounded, colon-suffixed, parenthetical,
+		// start/end of content) so "signet" does not collide with "signetai".
+		// SQL wildcards in canonicalName are escaped; cn is lowercased to match
+		// LOWER(ss.content).
+		const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const useTextFallback = cn.length >= 4;
-		const fallbackClause = useTextFallback ? `OR LOWER(ss.content) LIKE ? ESCAPE '\\'` : "";
-		const fallbackArgs = useTextFallback ? [`%${cn}%`] : [];
+		// Five patterns cover: mid-sentence, content-start, content-end,
+		// colon-suffix ("Signet: …"), and parenthetical "(Signet)".
+		const fallbackClause = useTextFallback
+			? `OR (LOWER(ss.content) LIKE ? ESCAPE '\\'
+				 OR LOWER(ss.content) LIKE ? ESCAPE '\\'
+				 OR LOWER(ss.content) LIKE ? ESCAPE '\\'
+				 OR LOWER(ss.content) LIKE ? ESCAPE '\\'
+				 OR LOWER(ss.content) LIKE ? ESCAPE '\\')`
+			: "";
+		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, `% ${cn}:%`, `%(${cn})%`] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,

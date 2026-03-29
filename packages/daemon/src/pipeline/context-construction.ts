@@ -74,8 +74,10 @@ function isNoise(value: string): boolean {
 	if (text.length < 3) return true;
 	if (/^\*+\s*:/.test(text)) return true;
 	if (text.includes("[[memory/")) return true;
-	if (/(^|[\s|])(session|source|latest|node|project|harness|compaction)=/.test(text)) return true;
-	if (/(^|[\s|])(session|source|latest|node|project|harness):/.test(text)) return true;
+	if (/(^|[\s|])(session|source|latest|node|project|harness|compaction)=[^\s]/.test(text)) return true;
+	// Require no space after ":" to distinguish machine-generated tags (project:signet)
+	// from human-authored sentences ("Project: Signet daemon").
+	if (/(^|[\s|])(session|source|latest|node|project|harness):[^\s]/.test(text)) return true;
 	if (text.includes("#source:")) return true;
 	return false;
 }

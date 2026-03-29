@@ -1926,10 +1926,11 @@ memory_store, etc.) continue to work normally.
 
 ### GET /api/sessions
 
-List all active sessions with their bypass status. The response merges
-live tracker claims with live cross-agent presence so operator-visible
+List active sessions for the requesting agent with their bypass status.
+The response merges live tracker claims with live cross-agent presence so
 sessions do not disappear just because one surface has not claimed the
-session yet.
+session yet. Results are scoped to the authenticated agent; for
+cross-agent visibility use `GET /api/cross-agent/presence`.
 
 **Response**
 
