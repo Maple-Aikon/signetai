@@ -68,12 +68,12 @@ by Signet.
 Secrets
 ---
 
-API keys and tokens are stored securely in Signet:
+API keys and tokens are stored securely in Signet. Agents never see
+raw values — secrets are injected into subprocesses as environment
+variables with output automatically redacted.
 
-```bash
-signet secret get OPENAI_API_KEY
-signet secret list
-```
+- `mcp__signet__secret_list` — discover available secret names
+- `mcp__signet__secret_exec` — run a command with secrets injected as env vars
 <!-- SIGNET:END -->
 
 About Your User
