@@ -5829,9 +5829,15 @@ app.post("/api/hooks/session-start", async (c) => {
 		const runtimePath = resolveRuntimePath(c, body);
 		if (runtimePath) body.runtimePath = runtimePath;
 
-		// Enforce single runtime path per session
+		// Enforce single runtime path per session.
+		// Use resolveAgentId to match the same agent-resolution path used
+		// throughout the hook (handles body.agentId and session-key-encoded ids).
 		if (body.sessionKey && runtimePath) {
-			const claim = claimSession(body.sessionKey, runtimePath, parseOptionalString(body.agentId) ?? "default");
+			const claim = claimSession(
+				body.sessionKey,
+				runtimePath,
+				resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey }),
+			);
 			if (!claim.ok) {
 				return c.json(
 					{
