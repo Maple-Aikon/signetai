@@ -601,6 +601,11 @@ implement the `RerankProvider` signature
 `(query, candidates, cfg) => Promise<RerankCandidate[]>` and can call any
 scoring backend.
 
+Set `reranker.useExtractionModel: true` to run reranking through the
+active extraction provider/model instead of the embedding reranker.
+When enabled, recall also prepends a short synthesized summary card
+grounded in the top recalled memories.
+
 ### Embedding-Based Reranker
 
 An embedding-based reranker implementation is provided in
@@ -1009,6 +1014,7 @@ graph:
 reranker:
   enabled: true
   model: ""
+  useExtractionModel: false
   topN: 20                       # range 1–100
   timeoutMs: 2000                # ms, range 100–30000
 

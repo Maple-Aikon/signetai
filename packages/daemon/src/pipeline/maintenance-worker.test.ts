@@ -61,6 +61,7 @@ const BASE_CFG: PipelineV2Config = {
 	reranker: {
 		enabled: false,
 		model: "",
+		useExtractionModel: false,
 		topN: 20,
 		timeoutMs: 2000,
 	},

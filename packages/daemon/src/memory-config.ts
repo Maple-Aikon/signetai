@@ -90,6 +90,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	reranker: {
 		enabled: true,
 		model: "",
+		useExtractionModel: false,
 		topN: 20,
 		timeoutMs: 2000,
 	},
@@ -603,6 +604,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 					: typeof raw.rerankerModel === "string"
 						? (raw.rerankerModel as string)
 						: d.reranker.model,
+			useExtractionModel: resolveBool(
+				rerankerRaw?.useExtractionModel,
+				raw.rerankerUseExtractionModel,
+				d.reranker.useExtractionModel,
+			),
 			topN: clampPositive(rerankerRaw?.topN ?? raw.rerankerTopN, 1, 100, d.reranker.topN),
 			timeoutMs: clampPositive(rerankerRaw?.timeoutMs ?? raw.rerankerTimeoutMs, 100, 30000, d.reranker.timeoutMs),
 		},

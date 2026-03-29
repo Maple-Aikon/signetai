@@ -190,15 +190,7 @@ export interface PipelineCommandConfig {
 }
 
 export interface PipelineExtractionConfig {
-	readonly provider:
-		| "none"
-		| "ollama"
-		| "claude-code"
-		| "opencode"
-		| "codex"
-		| "anthropic"
-		| "openrouter"
-		| "command";
+	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
 	readonly fallbackProvider?: "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
@@ -241,6 +233,7 @@ export interface PipelineTraversalConfig {
 export interface PipelineRerankerConfig {
 	readonly enabled: boolean;
 	readonly model: string;
+	readonly useExtractionModel: boolean;
 	readonly topN: number;
 	readonly timeoutMs: number;
 }

@@ -938,6 +938,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.graph.boostTimeoutMs).toBe(300);
 		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("cross-encoder/ms-marco");
+		expect(result.reranker.useExtractionModel).toBe(false);
 		expect(result.reranker.topN).toBe(15);
 		expect(result.reranker.timeoutMs).toBe(1500);
 	});
@@ -951,6 +952,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.graph.boostTimeoutMs).toBe(DEFAULT_PIPELINE_V2.graph.boostTimeoutMs);
 		expect(result.reranker.enabled).toBe(DEFAULT_PIPELINE_V2.reranker.enabled);
 		expect(result.reranker.model).toBe(DEFAULT_PIPELINE_V2.reranker.model);
+		expect(result.reranker.useExtractionModel).toBe(DEFAULT_PIPELINE_V2.reranker.useExtractionModel);
 		expect(result.reranker.topN).toBe(DEFAULT_PIPELINE_V2.reranker.topN);
 		expect(result.reranker.timeoutMs).toBe(DEFAULT_PIPELINE_V2.reranker.timeoutMs);
 	});
@@ -1117,7 +1119,7 @@ describe("loadPipelineConfig", () => {
 						minConfidence: 0.8,
 					},
 					graph: { enabled: true, boostWeight: 0.3 },
-					reranker: { enabled: true, model: "my-reranker", topN: 10 },
+					reranker: { enabled: true, model: "my-reranker", useExtractionModel: true, topN: 10 },
 					autonomous: {
 						enabled: true,
 						frozen: false,
@@ -1138,6 +1140,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.graph.boostWeight).toBe(0.3);
 		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("my-reranker");
+		expect(result.reranker.useExtractionModel).toBe(true);
 		expect(result.reranker.topN).toBe(10);
 		expect(result.autonomous.enabled).toBe(true);
 		expect(result.autonomous.allowUpdateDelete).toBe(true);
@@ -1152,10 +1155,12 @@ describe("loadPipelineConfig", () => {
 					// Flat key
 					rerankerEnabled: false,
 					rerankerModel: "flat-model",
+					rerankerUseExtractionModel: false,
 					// Nested key (wins)
 					reranker: {
 						enabled: true,
 						model: "nested-model",
+						useExtractionModel: true,
 					},
 				},
 			},
@@ -1163,5 +1168,6 @@ describe("loadPipelineConfig", () => {
 
 		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("nested-model");
+		expect(result.reranker.useExtractionModel).toBe(true);
 	});
 });

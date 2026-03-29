@@ -114,7 +114,7 @@ function pipelineCfg(hints = HINTS_CFG) {
 		extraction: { provider: "ollama" as const, model: "test", timeout: 5000, minConfidence: 0.7 },
 		worker: { pollMs: 10, maxRetries: 3, leaseTimeoutMs: 300000 },
 		graph: { enabled: false, boostWeight: 0, boostTimeoutMs: 500 },
-		reranker: { enabled: false, model: "", topN: 20, timeoutMs: 2000 },
+		reranker: { enabled: false, model: "", useExtractionModel: false, topN: 20, timeoutMs: 2000 },
 		autonomous: {
 			enabled: false,
 			frozen: false,

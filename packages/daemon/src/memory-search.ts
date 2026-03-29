@@ -6,8 +6,10 @@
  * daemon.ts is now a thin HTTP wrapper that delegates here.
  */
 
+import { createHash } from "node:crypto";
 import { vectorSearch } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
+import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
 import { constructContextBlocks } from "./pipeline/context-construction";
@@ -16,6 +18,7 @@ import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
 import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
+import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { FTS_STOP } from "./pipeline/stop-words";
 
 // ---------------------------------------------------------------------------
@@ -664,6 +667,7 @@ export async function hybridRecall(
 	}
 
 	// --- Optional reranker hook ---
+	let recallSummary: string | undefined;
 	if (cfg.pipelineV2.reranker.enabled) {
 		try {
 			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
@@ -690,8 +694,11 @@ export async function hybridRecall(
 				content: contentMap.get(s.id) ?? "",
 				score: s.score,
 			}));
-			// Use embedding reranker when query vector is available, else noop
-			const provider = queryVecF32 ? createEmbeddingReranker(getDbAccessor(), queryVecF32) : noopReranker;
+			const provider = cfg.pipelineV2.reranker.useExtractionModel
+				? createLlmReranker(getLlmProvider())
+				: queryVecF32
+					? createEmbeddingReranker(getDbAccessor(), queryVecF32)
+					: noopReranker;
 			const reranked = await rerank(query, candidates, provider, {
 				topN: cfg.pipelineV2.reranker.topN,
 				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
@@ -705,6 +712,15 @@ export async function hybridRecall(
 				if (typeof score === "number" && Number.isFinite(score)) {
 					s.score = score;
 				}
+			}
+			if (cfg.pipelineV2.reranker.useExtractionModel) {
+				const summary = await summarizeRecallWithLlm(
+					getLlmProvider(),
+					query,
+					candidates,
+					cfg.pipelineV2.reranker.timeoutMs,
+				);
+				if (summary) recallSummary = summary;
 			}
 			scored.sort((a, b) => b.score - a.score);
 		} catch (e) {
@@ -914,6 +930,26 @@ export async function hybridRecall(
 				created_at: r.created_at,
 			};
 		});
+
+	if (recallSummary) {
+		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
+		results.unshift({
+			id: `summary:${digest}`,
+			content: recallSummary,
+			content_length: recallSummary.length,
+			truncated: false,
+			score: 1,
+			source: "llm_summary",
+			type: "semantic",
+			tags: null,
+			pinned: false,
+			importance: 0.9,
+			who: "",
+			project: null,
+			created_at: new Date().toISOString(),
+			supplementary: true,
+		});
+	}
 
 	// --- Decision-rationale linking: auto-fetch linked rationale memories ---
 	const decisionIds = results.filter((r) => r.type === "decision").map((r) => r.id);

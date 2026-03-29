@@ -520,12 +520,14 @@ supplementary mode is more conservative and better for freeform text.
 
 An optional reranking pass that runs after initial retrieval. An
 embedding-based reranker is built in (uses cached vectors, no extra
-LLM calls). Custom cross-encoder providers can also be used.
+LLM calls). Optionally, reranking can call the active extraction
+provider model.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `enabled` | `true` | — | Enable the reranking pass |
 | `model` | `""` | — | Model name for the reranker (empty uses embedding-based) |
+| `useExtractionModel` | `false` | — | When `true`, use the extraction provider LLM for reranking and emit a synthesized summary card |
 | `topN` | `20` | 1-100 | Number of candidates to pass to the reranker |
 | `timeoutMs` | `2000` | 100-30000 ms | Timeout for the reranking call |
 

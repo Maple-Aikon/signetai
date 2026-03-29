@@ -174,7 +174,7 @@ function testPipelineCfg(): PipelineV2Config {
 			boostWeight: 0.2,
 			constraintBudgetChars: 1000,
 		},
-		reranker: { enabled: false, model: "", topN: 20, timeoutMs: 2000 },
+		reranker: { enabled: false, model: "", useExtractionModel: false, topN: 20, timeoutMs: 2000 },
 		autonomous: {
 			enabled: true,
 			frozen: false,

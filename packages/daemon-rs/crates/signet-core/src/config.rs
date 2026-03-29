@@ -1314,6 +1314,7 @@ impl Default for TraversalConfig {
 pub struct RerankerConfig {
     pub enabled: bool,
     pub model: String,
+    pub use_extraction_model: bool,
     pub top_n: usize,
     pub timeout_ms: u64,
 }
@@ -1323,6 +1324,7 @@ impl Default for RerankerConfig {
         Self {
             enabled: true,
             model: "nomic-embed-text".to_string(),
+            use_extraction_model: false,
             top_n: 10,
             timeout_ms: 5_000,
         }
