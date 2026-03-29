@@ -6837,8 +6837,9 @@ app.get("/api/sessions", (c) => {
 });
 
 // Get single session status
+// Optional ?agent_id= query param to target a specific agent's session.
 app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
-	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
 	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const key = normalizeSessionKey(c.req.param("key"));
 	const sessions = listLiveSessions(scopedAgent.agentId);
@@ -6850,8 +6851,9 @@ app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
 });
 
 // Toggle bypass for a session
+// Optional ?agent_id= query param to target a specific agent's session.
 app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
-	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
 	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const key = normalizeSessionKey(c.req.param("key"));
 	const sessions = listLiveSessions(scopedAgent.agentId);
@@ -9164,17 +9166,15 @@ app.post("/api/knowledge/expand/session", async (c) => {
 			args.push(timeRange);
 		}
 
-		// Text fallback: only for names >= 4 chars to avoid ambiguous
-		// short tokens ("go", "ai", etc.) matching unrelated content.
-		// Escape SQL wildcards in canonicalName before building patterns.
-		// Only match against summary content with word-boundary patterns —
-		// project/source_ref path substring matching is too noisy.
+		// Text fallback: only for names >= 4 chars to avoid ambiguous short
+		// tokens ("go", "ai", etc.) matching unrelated content. The length
+		// gate is the primary protection; use a simple contains pattern so
+		// common punctuation forms like "Signet:", "(Signet)", and line-start
+		// mentions are covered. SQL wildcards in canonicalName are escaped.
 		const cn = entity.canonicalName.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const useTextFallback = cn.length >= 4;
-		const fallbackClause = useTextFallback
-			? `OR (LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) = ?)`
-			: "";
-		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, cn] : [];
+		const fallbackClause = useTextFallback ? `OR LOWER(ss.content) LIKE ? ESCAPE '\\'` : "";
+		const fallbackArgs = useTextFallback ? [`%${cn}%`] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,
