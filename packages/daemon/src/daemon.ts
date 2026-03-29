@@ -6901,9 +6901,10 @@ app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
 	}
 	// Presence-only sessions (expiresAt === null) have no tracker claim —
 	// renewSession would return null, but the session is live via cross-agent
-	// presence and does not need TTL renewal.
+	// presence. Refresh last_seen_at so the 4-hour stale filter doesn't evict it.
 	if (session.expiresAt === null) {
-		return c.json({ key, renewed: false, reason: "presence-only session has no tracker TTL to renew" });
+		touchAgentPresence(key);
+		return c.json({ key, renewed: true });
 	}
 	const expiresAt = renewSession(key);
 	if (!expiresAt) {

@@ -274,6 +274,7 @@ impl Default for SessionTracker {
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub key: String,
+    #[serde(skip)]
     pub agent_id: String,
     pub runtime_path: String,
     pub claimed_at: String,
