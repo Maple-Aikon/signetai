@@ -5786,24 +5786,18 @@ function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	// Presence is the agent-scoped source of truth. Build the set of keys
-	// that presence confirms belong to this agent so tracker claims from
-	// other agents (possible in a shared-daemon scenario) are excluded.
-	const agentPresence = listAgentPresence({ limit: Number.MAX_SAFE_INTEGER }).filter(
-		(p) => p.agentId === agentId && p.sessionKey,
-	);
-	const presenceKeys = new Set(agentPresence.map((p) => normalizeSessionKey(p.sessionKey!)));
+	// Seed from all tracker claims. The session tracker is per-daemon-process
+	// (one daemon per agent workspace), so all claimed sessions belong to
+	// this agent by construction.
+	const byKey = new Map(getActiveSessions().map((session) => [session.key, session] as const));
 
-	// Seed from tracker claims that presence confirms belong to this agent.
-	const byKey = new Map(
-		getActiveSessions()
-			.filter((s) => presenceKeys.has(s.key))
-			.map((session) => [session.key, session] as const),
-	);
-
-	// Add presence-only sessions (no tracker claim yet, e.g. plugin path).
-	for (const presence of agentPresence) {
-		const key = normalizeSessionKey(presence.sessionKey!);
+	// Merge in presence-only sessions for this agent (no tracker claim yet,
+	// e.g. plugin path or session whose claim arrived after presence).
+	// Filter by agentId here since presence can contain cross-agent records.
+	for (const presence of listAgentPresence({ limit: Number.MAX_SAFE_INTEGER })) {
+		if (presence.agentId !== agentId) continue;
+		if (!presence.sessionKey) continue;
+		const key = normalizeSessionKey(presence.sessionKey);
 		if (byKey.has(key)) continue;
 		byKey.set(key, {
 			key,
@@ -6823,16 +6817,18 @@ app.get("/api/synthesis/status", (c) => {
 
 // List active sessions with bypass status
 app.get("/api/sessions", (c) => {
-	const { agentId } = resolveScopedAgentId(c, undefined, "default");
-	const sessions = listLiveSessions(agentId);
+	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const sessions = listLiveSessions(scopedAgent.agentId);
 	return c.json({ sessions, count: sessions.length });
 });
 
 // Get single session status
 app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
-	const { agentId } = resolveScopedAgentId(c, undefined, "default");
+	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const key = normalizeSessionKey(c.req.param("key"));
-	const sessions = listLiveSessions(agentId);
+	const sessions = listLiveSessions(scopedAgent.agentId);
 	const session = sessions.find((s) => s.key === key);
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
@@ -6842,9 +6838,10 @@ app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
 
 // Toggle bypass for a session
 app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
-	const { agentId } = resolveScopedAgentId(c, undefined, "default");
+	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const key = normalizeSessionKey(c.req.param("key"));
-	const sessions = listLiveSessions(agentId);
+	const sessions = listLiveSessions(scopedAgent.agentId);
 	const session = sessions.find((s) => s.key === key);
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
