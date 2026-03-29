@@ -908,8 +908,9 @@ export async function hybridRecall(
 
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
+	const memoryLimit = recallSummary ? Math.max(0, limit - 1) : limit;
 	const results: RecallResult[] = scored
-		.slice(0, limit)
+		.slice(0, memoryLimit)
 		.filter((s) => rowMap.has(s.id))
 		.map((s) => {
 			const r = rowMap.get(s.id)!;
@@ -933,12 +934,14 @@ export async function hybridRecall(
 
 	if (recallSummary) {
 		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
+		const content = `[model summary, verify against source memories] ${recallSummary}`;
+		const score = results.length > 0 ? Math.max(0.01, Math.min(1, results[0].score)) : 0.5;
 		results.unshift({
 			id: `summary:${digest}`,
-			content: recallSummary,
-			content_length: recallSummary.length,
+			content,
+			content_length: content.length,
 			truncated: false,
-			score: 1,
+			score,
 			source: "llm_summary",
 			type: "semantic",
 			tags: null,
@@ -949,6 +952,7 @@ export async function hybridRecall(
 			created_at: new Date().toISOString(),
 			supplementary: true,
 		});
+		if (results.length > limit) results.length = limit;
 	}
 
 	// --- Decision-rationale linking: auto-fetch linked rationale memories ---
