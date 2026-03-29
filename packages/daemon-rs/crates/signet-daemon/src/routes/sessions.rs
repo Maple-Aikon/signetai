@@ -53,14 +53,18 @@ pub async fn list(
                 "SELECT session_key, runtime_path, started_at FROM agent_presence \
                  WHERE session_key IS NOT NULL"
                     .to_string();
-            if let Some(ref aid) = agent_id {
-                sql.push_str(&format!(" AND agent_id = '{aid}'"));
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            if agent_id.is_some() {
+                sql.push_str(" AND agent_id = ?");
+                params.push(Box::new(agent_id.clone()));
             }
             sql.push_str(" ORDER BY last_seen_at DESC");
 
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
             let rows: Vec<serde_json::Value> = stmt
-                .query_map([], |r| {
+                .query_map(param_refs.as_slice(), |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, Option<String>>(1)?,
