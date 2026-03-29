@@ -65,9 +65,12 @@ pub async fn list(
             }
 
             // agent_id is always resolved (defaults to "default"); always filter.
+            // Only return rows seen within the last 4 hours (matching STALE_SESSION_MS)
+            // to exclude stale presence records from disconnected agents.
             let sql =
                 "SELECT session_key, runtime_path, started_at FROM agent_presence \
                  WHERE session_key IS NOT NULL AND agent_id = ? \
+                   AND last_seen_at >= datetime('now', '-4 hours') \
                  ORDER BY last_seen_at DESC";
             let params: &[&dyn rusqlite::types::ToSql] = &[&agent_id];
             let mut stmt = conn.prepare(sql)?;
@@ -132,25 +135,29 @@ pub struct AgentScopeParams {
     pub agent_id: Option<String>,
 }
 
-/// Check whether a session key is live for the given agent — first in the
-/// in-memory tracker, then falling back to the `agent_presence` table.
-/// Mirrors the TS `listLiveSessions(agentId).find(s => s.key === key)` pattern.
-/// Returns `Some(is_presence_only)` if found, `None` if not found.
+/// Look up a session for the given agent — tracker first, then presence DB.
+/// Mirrors TS `listLiveSessions(agentId).find(s => s.key === key)`.
+///
+/// Returns:
+/// - `None` if not found anywhere (or table doesn't exist)
+/// - `Some(None)` if found in tracker (caller has the full SessionInfo)
+/// - `Some(Some(json))` if found only in presence DB (presence-only row)
 async fn find_live_session(
     state: &AppState,
     key: &str,
     agent_id: &str,
-) -> Option<bool> {
+) -> Option<Option<serde_json::Value>> {
     // Check tracker first (fast in-memory path).
     if state.sessions.list_sessions(Some(agent_id)).iter().any(|s| s.key == key) {
-        return Some(false);
+        return Some(None);
     }
 
     // Fall back to presence DB for sessions not in tracker.
     // Query both normalized and prefixed forms since DB rows may carry either.
-    let key = key.to_string();
-    let key_prefixed = format!("session:{key}");
-    let agent_id = agent_id.to_string();
+    // Only consider rows seen within the last 4 hours (STALE_SESSION_MS).
+    let key_norm = key.to_string();
+    let key_prefixed = format!("session:{key_norm}");
+    let aid = agent_id.to_string();
     state
         .pool
         .read(move |conn| {
@@ -163,21 +170,29 @@ async fn find_live_session(
                 .map(|c| c > 0)
                 .unwrap_or(false);
             if !exists {
-                return Ok(false);
+                return Ok(None);
             }
-            let count: i64 = conn
+            let row: Option<(Option<String>, String)> = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM agent_presence \
-                     WHERE (session_key = ?1 OR session_key = ?2) AND agent_id = ?3",
-                    rusqlite::params![key, key_prefixed, agent_id],
-                    |r| r.get(0),
+                    "SELECT runtime_path, started_at FROM agent_presence \
+                     WHERE (session_key = ?1 OR session_key = ?2) AND agent_id = ?3 \
+                       AND last_seen_at >= datetime('now', '-4 hours') \
+                     LIMIT 1",
+                    rusqlite::params![key_norm, key_prefixed, aid],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
-                .unwrap_or(0);
-            Ok(count > 0)
+                .ok();
+            Ok(row.map(|(runtime_path, started_at)| {
+                serde_json::json!({
+                    "runtimePath": runtime_path.unwrap_or_else(|| "unknown".into()),
+                    "claimedAt": started_at,
+                })
+            }))
         })
         .await
         .ok()
-        .and_then(|found| if found { Some(true) } else { None })
+        .flatten()
+        .map(Some)
 }
 
 // ---------------------------------------------------------------------------
@@ -209,13 +224,22 @@ pub async fn get(
         return (StatusCode::OK, Json(serde_json::to_value(s).unwrap())).into_response();
     }
 
-    // Presence-only session fallback (expiresAt: null).
+    // Presence-only session fallback — include runtimePath and claimedAt from
+    // the DB row, matching the TS listLiveSessions() presence-only shape.
     match find_live_session(&state, &key, &agent_id).await {
-        Some(true) => (StatusCode::OK, Json(serde_json::json!({
-            "key": key,
-            "expiresAt": serde_json::Value::Null,
-            "bypassed": state.sessions.is_bypassed(&key),
-        }))).into_response(),
+        Some(Some(row)) => {
+            let mut obj = serde_json::json!({
+                "key": key,
+                "expiresAt": serde_json::Value::Null,
+                "bypassed": state.sessions.is_bypassed(&key),
+            });
+            if let (Some(map), Some(row_map)) = (obj.as_object_mut(), row.as_object()) {
+                for (k, v) in row_map {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+            (StatusCode::OK, Json(obj)).into_response()
+        }
         _ => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response(),
     }
 }
