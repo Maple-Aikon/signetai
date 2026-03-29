@@ -6829,8 +6829,9 @@ app.get("/api/synthesis/status", (c) => {
 // Cross-agent session visibility is intentionally served by
 // /api/cross-agent/presence — surfacing other agents' sessions here
 // would violate per-agent data scoping (CLAUDE.md §agent-scoping).
+// Optional ?agent_id= query param to target a specific agent's sessions.
 app.get("/api/sessions", (c) => {
-	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
 	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const sessions = listLiveSessions(scopedAgent.agentId);
 	return c.json({ sessions, count: sessions.length });

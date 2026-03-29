@@ -4,7 +4,7 @@
  * Exposes MCP server catalog browsing, install state, and tool routing.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -130,11 +130,13 @@ interface DetailConfig {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const SECRET_REF_PREFIX = "secret://";
+// Sentinel: "never explicitly set" — not process start time, which would
+// be misleading since this default is returned whenever no policy file exists.
 const DEFAULT_EXPOSURE_POLICY: MarketplaceMcpExposurePolicy = {
 	mode: "hybrid",
 	maxExpandedTools: 12,
 	maxSearchResults: 8,
-	updatedAt: new Date().toISOString(),
+	updatedAt: "1970-01-01T00:00:00.000Z",
 };
 
 const catalogCache = new Map<number, { fetchedAt: number; page: ParsedCatalogPage }>();
@@ -292,21 +294,19 @@ function parsePositiveInt(value: unknown, fallback: number, min: number, max: nu
 	return Math.max(min, Math.min(max, Math.round(value)));
 }
 
-function parseExposurePolicy(value: unknown): MarketplaceMcpExposurePolicy | null {
+function parseExposurePolicy(value: unknown, fallbackUpdatedAt?: string): MarketplaceMcpExposurePolicy | null {
 	if (!isRecord(value)) return null;
 	const mode = parseExposureMode(value.mode);
 	if (!mode) return null;
 
 	const maxExpandedTools = parsePositiveInt(value.maxExpandedTools, DEFAULT_EXPOSURE_POLICY.maxExpandedTools, 0, 100);
 	const maxSearchResults = parsePositiveInt(value.maxSearchResults, DEFAULT_EXPOSURE_POLICY.maxSearchResults, 1, 50);
-	const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString();
+	// Prefer stored updatedAt, then caller-supplied fallback (file mtime),
+	// then the default sentinel — never use process start time.
+	const updatedAt =
+		typeof value.updatedAt === "string" ? value.updatedAt : (fallbackUpdatedAt ?? DEFAULT_EXPOSURE_POLICY.updatedAt);
 
-	return {
-		mode,
-		maxExpandedTools,
-		maxSearchResults,
-		updatedAt,
-	};
+	return { mode, maxExpandedTools, maxSearchResults, updatedAt };
 }
 
 function readExposurePolicy(): MarketplaceMcpExposurePolicy {
@@ -316,8 +316,9 @@ function readExposurePolicy(): MarketplaceMcpExposurePolicy {
 	}
 
 	try {
+		const mtime = statSync(path).mtime.toISOString();
 		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		return parseExposurePolicy(raw) ?? DEFAULT_EXPOSURE_POLICY;
+		return parseExposurePolicy(raw, mtime) ?? DEFAULT_EXPOSURE_POLICY;
 	} catch {
 		return DEFAULT_EXPOSURE_POLICY;
 	}
