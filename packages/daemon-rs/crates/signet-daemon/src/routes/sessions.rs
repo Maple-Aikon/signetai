@@ -104,14 +104,17 @@ pub async fn list(
         .collect();
 
     // Append presence-only sessions not already covered by the tracker.
-    // Normalize the DB key (strip session: prefix) before the dedup check —
-    // tracker keys are always normalized; DB rows may still carry the prefix.
+    // Normalize the DB key (strip session: prefix) before the dedup check AND
+    // update the key field in the output row so clients always see the bare key.
+    // Tracker keys are always normalized; DB rows may still carry the prefix.
     // Annotate with live bypass state from the in-memory tracker.
     for mut p in presence_only {
         let raw_sk = p.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let sk = raw_sk.strip_prefix("session:").unwrap_or(&raw_sk).to_string();
         if !tracker_keys.contains(&sk) {
             if let Some(obj) = p.as_object_mut() {
+                // Write normalized key back so output is consistent.
+                obj.insert("key".into(), sk.clone().into());
                 obj.insert("bypassed".into(), state.sessions.is_bypassed(&sk).into());
             }
             all.push(p);
