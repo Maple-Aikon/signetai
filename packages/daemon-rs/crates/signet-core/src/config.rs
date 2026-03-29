@@ -1403,12 +1403,12 @@ impl Default for RerankerConfig {
             enabled: true,
             model: String::new(),
             use_extraction_model: false,
-            // top_n and timeout_ms are only read when use_extraction_model is
-            // true. Kept at original values to preserve the struct default
-            // contract; the LLM path in routes/search.rs applies TS-parity
-            // fallbacks (20, 2000) via unwrap_or when config is absent.
-            top_n: 10,
-            timeout_ms: 5_000,
+            // top_n and timeout_ms match TS daemon defaults (topN: 20,
+            // timeoutMs: 2000). These fields are only read when
+            // use_extraction_model is true, so existing behavior is
+            // unaffected when the toggle is off.
+            top_n: 20,
+            timeout_ms: 2_000,
         }
     }
 }

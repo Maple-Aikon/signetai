@@ -41,6 +41,8 @@ pub struct AppState {
     pub auth_mode: AuthMode,
     pub auth_secret: Option<Vec<u8>>,
     pub auth_admin_limiter: AuthRateLimiter,
+    /// Independent limiter for the LLM-enabled recall path.
+    pub recall_llm_limiter: AuthRateLimiter,
     pub sessions: SessionTracker,
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
@@ -89,6 +91,7 @@ impl AppState {
         auth_mode: AuthMode,
         auth_secret: Option<Vec<u8>>,
         auth_admin_limiter: AuthRateLimiter,
+        recall_llm_limiter: AuthRateLimiter,
     ) -> Self {
         let paused = config
             .manifest
@@ -127,6 +130,7 @@ impl AppState {
             auth_mode,
             auth_secret,
             auth_admin_limiter,
+            recall_llm_limiter,
             sessions: SessionTracker::new(),
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),

@@ -606,6 +606,7 @@ mod tests {
             mode,
             secret.clone(),
             AuthRateLimiter::from_rules(&rules),
+            AuthRateLimiter::from_rules(&rules),
         ));
 
         TestState {

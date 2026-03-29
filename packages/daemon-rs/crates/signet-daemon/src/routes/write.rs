@@ -883,6 +883,7 @@ mod tests {
                 AuthMode::Local,
                 None,
                 AuthRateLimiter::from_rules(&rules),
+                AuthRateLimiter::from_rules(&rules),
             )),
             dir,
         )

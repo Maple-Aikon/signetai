@@ -178,7 +178,11 @@ async fn main() -> anyhow::Result<()> {
         let path = config.base_path.join(".daemon").join("auth-secret");
         Some(load_or_create_secret(&path).context("failed to load auth secret")?)
     };
-    let auth_admin_limiter = AuthRateLimiter::from_rules(&merge_rate_limits(&config));
+    let merged = merge_rate_limits(&config);
+    let auth_admin_limiter = AuthRateLimiter::from_rules(&merged);
+    // Independent limiter for LLM-enabled recall — separate from admin so
+    // the two buckets don't share state and operators can tune them independently.
+    let recall_llm_limiter = AuthRateLimiter::from_rules(&merged);
 
     let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
@@ -192,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
         auth_mode,
         auth_secret,
         auth_admin_limiter,
+        recall_llm_limiter,
     ));
 
     // Run extraction preflight synchronously before serving requests.
@@ -1549,6 +1554,7 @@ mod tests {
             Some(signet_pipeline::worker::new_runtime_stats_handle(0.8, 30_000)),
             AuthMode::Local,
             None,
+            AuthRateLimiter::from_rules(&rules),
             AuthRateLimiter::from_rules(&rules),
         ))
     }

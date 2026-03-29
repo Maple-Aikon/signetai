@@ -104,7 +104,7 @@ pub async fn recall(
                 result: crate::auth::types::AuthResult::unauthenticated(),
             });
             if let Err(resp) =
-                require_rate_limit_guard(&auth, "recallLlm", &state.auth_admin_limiter, state.auth_mode, None)
+                require_rate_limit_guard(&auth, "recallLlm", &state.recall_llm_limiter, state.auth_mode, None)
             {
                 return (*resp).into_response();
             }
@@ -342,7 +342,6 @@ pub async fn recall(
             if reranker_enabled && use_extraction_model {
                 let llm = state.llm.read().await.clone();
                 if let Some(ref provider) = llm {
-                    // Fallbacks match TS daemon defaults (timeoutMs: 2000, topN: 20).
                     let timeout_ms = state
                         .config
                         .manifest
