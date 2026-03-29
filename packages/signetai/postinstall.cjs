@@ -1,103 +1,86 @@
 #!/usr/bin/env node
 
 /**
- * postinstall — ensure sharp's native bindings are loadable.
+ * postinstall — ensure sharp is resolvable for @huggingface/transformers.
  *
  * Problem:  @huggingface/transformers does `import sharp from 'sharp'` at
  *           the module level.  When installed globally via bun, sharp's
- *           native binary (@img/sharp-darwin-arm64) can't find the
- *           libvips dylib because bun's cache isolates each package by
- *           version and the .node binary's @rpath expects the libvips
- *           package as a sibling — which bun never creates.
+ *           native binary can't find libvips because bun's cache isolates
+ *           packages by version.  If sharp isn't installed at all (e.g.
+ *           optional dep skipped), the import also fails.
  *
- *           This causes the entire native embedding provider to fail with
- *           "Unable to get model file path or buffer", falling back to
- *           Ollama (if available) or no embeddings at all.
+ * Fix:      If sharp doesn't load, create a local shim package inside
+ *           THIS package's node_modules (not the shared cache).  Node/bun
+ *           resolution checks local node_modules first, so the shim takes
+ *           precedence without corrupting the shared cache for other
+ *           consumers.
  *
- * Fix:      Try to require('sharp').  If it throws, write a minimal shim
- *           into node_modules/sharp/lib/index.js that exports undefined
- *           so transformers' `else if (sharp)` guard skips image loading
- *           cleanly.  This is safe because signet only uses text embeddings.
+ *           Safe because signet only uses text embeddings — never images.
  */
 
-const { existsSync, mkdirSync, writeFileSync, readFileSync } = require("node:fs");
-const { dirname, join } = require("node:path");
+const { mkdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
 
-function findSharpDir() {
-	try {
-		// resolve from the installed signetai package context
-		const sharpMain = require.resolve("sharp");
-		return dirname(dirname(sharpMain));
-	} catch {
-		return null;
-	}
-}
+/** The shim content — exported so tests can validate it. */
+const CJS_SHIM =
+	"// Auto-generated shim — sharp native bindings unavailable.\n" +
+	"// Signet only uses text embeddings; image processing is not needed.\n" +
+	"module.exports = null;\n";
+
+const ESM_SHIM =
+	"// Auto-generated shim — sharp native bindings unavailable.\n" +
+	"export default null;\n";
+
+const SHIM_PACKAGE_JSON = JSON.stringify(
+	{
+		name: "sharp",
+		version: "0.0.0-signet-shim",
+		main: "index.js",
+		module: "index.mjs",
+		exports: {
+			".": {
+				import: "./index.mjs",
+				require: "./index.js",
+				default: "./index.js",
+			},
+		},
+	},
+	null,
+	2,
+);
 
 function main() {
-	// First, check if sharp works fine as-is
+	// If sharp loads fine, nothing to do.
 	try {
 		require("sharp");
-		// sharp loads — no action needed
 		return;
 	} catch {
-		// sharp is broken — continue to shim it
+		// sharp is broken or absent — create a local shim.
 	}
 
-	const sharpDir = findSharpDir();
-	if (!sharpDir) {
-		// sharp isn't installed at all — transformers will handle the
-		// missing module gracefully (import returns undefined for
-		// optional deps in some runtimes).  Nothing to do.
-		return;
-	}
-
-	const shimContent = [
-		"// Auto-generated shim — sharp native bindings unavailable.",
-		"// Signet only uses text embeddings; image processing is not needed.",
-		"// Exports falsy default so transformers' `else if (sharp)` is skipped.",
-		"module.exports = null;",
-		"",
-	].join("\n");
-
-	const libDir = join(sharpDir, "lib");
-	const indexPath = join(libDir, "index.js");
+	// Write the shim into THIS package's node_modules so it takes
+	// precedence via Node's resolution algorithm without touching
+	// the shared bun/npm cache.
+	const shimDir = join(__dirname, "node_modules", "sharp");
 
 	try {
-		mkdirSync(libDir, { recursive: true });
-		writeFileSync(indexPath, shimContent, "utf8");
-
-		// Also patch the ESM entry if present
-		const esmPath = join(libDir, "index.mjs");
-		const esmShim = "// Auto-generated shim — sharp native bindings unavailable.\nexport default undefined;\n";
-		writeFileSync(esmPath, esmShim, "utf8");
-
-		// Update package.json main/exports if needed
-		const pkgPath = join(sharpDir, "package.json");
-		if (existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-				pkg.main = "lib/index.js";
-				// Remove or simplify exports so the shim is used
-				if (pkg.exports) {
-					pkg.exports = {
-						".": {
-							import: "./lib/index.mjs",
-							require: "./lib/index.js",
-							default: "./lib/index.js",
-						},
-					};
-				}
-				writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
-			} catch {
-				// Best-effort — the lib/index.js shim may still work
-			}
-		}
-
-		console.log("signet: sharp native bindings unavailable — installed text-only shim");
+		mkdirSync(shimDir, { recursive: true });
+		writeFileSync(join(shimDir, "index.js"), CJS_SHIM, "utf8");
+		writeFileSync(join(shimDir, "index.mjs"), ESM_SHIM, "utf8");
+		writeFileSync(join(shimDir, "package.json"), SHIM_PACKAGE_JSON + "\n", "utf8");
+		console.log("signet: sharp native bindings unavailable — installed local shim");
 	} catch (err) {
-		// Non-fatal — the daemon will fall back to Ollama
-		console.warn(`signet: could not shim sharp (${err.message}) — Ollama fallback will be used`);
+		// Non-fatal — the daemon will fall back to Ollama for embeddings.
+		console.warn(
+			`signet: could not create sharp shim (${err.message}) — Ollama fallback will be used`,
+		);
 	}
 }
 
-main();
+// Export shim content for tests.
+module.exports = { CJS_SHIM, ESM_SHIM, SHIM_PACKAGE_JSON };
+
+// Run when executed directly (postinstall).
+if (require.main === module) {
+	main();
+}
