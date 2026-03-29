@@ -961,8 +961,10 @@ export async function hybridRecall(
 		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
 		const content = `[model summary, verify against source memories] ${recallSummary}`;
 		const score = results.length > 0 ? Math.max(0.01, Math.min(1, results[0].score)) : 0.5;
-		// Summary is supplementary — it always prepends without evicting real
-		// memories. Callers can drop it via supplementary:true if needed.
+		// Keep total within limit: drop the last real memory to make room for
+		// the summary card. If results are already below limit (scope filtering
+		// discarded some), no drop needed — the unshift just adds one more.
+		if (results.length >= limit) results.length = limit - 1;
 		results.unshift({
 			id: `summary:${digest}`,
 			content,

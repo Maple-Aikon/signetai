@@ -131,5 +131,7 @@ export async function summarizeRecallWithLlm(
 		timeoutMs,
 		maxTokens: 180,
 	});
-	return cleanSummary(raw);
+	// Strip <think> blocks and fences before cleaning — qwen-style models
+	// can emit chain-of-thought before the actual summary text.
+	return cleanSummary(stripFences(raw));
 }
