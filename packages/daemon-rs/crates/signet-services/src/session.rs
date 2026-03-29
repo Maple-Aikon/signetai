@@ -56,6 +56,7 @@ struct SessionClaim {
     path: RuntimePath,
     expires: Instant,
     bypassed: bool,
+    agent_id: String,
 }
 
 impl SessionClaim {
@@ -95,7 +96,7 @@ impl SessionTracker {
 
     /// Claim a session for a runtime path. Returns Ok if claimed successfully
     /// or conflict if claimed by another path.
-    pub fn claim(&self, key: &str, path: RuntimePath) -> ClaimResult {
+    pub fn claim(&self, key: &str, path: RuntimePath, agent_id: &str) -> ClaimResult {
         let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
 
@@ -120,6 +121,7 @@ impl SessionTracker {
                 path,
                 expires: Instant::now() + Duration::from_millis(STALE_SESSION_MS),
                 bypassed: false,
+                agent_id: agent_id.to_string(),
             },
         );
         ClaimResult::Ok
@@ -205,13 +207,15 @@ impl SessionTracker {
     }
 
     /// List active sessions.
-    pub fn list_sessions(&self) -> Vec<SessionInfo> {
+    pub fn list_sessions(&self, agent_id: Option<&str>) -> Vec<SessionInfo> {
         let claims = self.claims.lock().unwrap();
         claims
             .iter()
             .filter(|(_, c)| !c.is_stale())
+            .filter(|(_, c)| agent_id.map_or(true, |aid| c.agent_id == aid))
             .map(|(key, claim)| SessionInfo {
                 key: key.clone(),
+                agent_id: claim.agent_id.clone(),
                 path: claim.path,
                 bypassed: claim.bypassed,
             })
@@ -237,6 +241,7 @@ impl Default for SessionTracker {
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub key: String,
+    pub agent_id: String,
     pub path: RuntimePath,
     pub bypassed: bool,
 }
@@ -699,26 +704,26 @@ mod tests {
 
         // First claim succeeds
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Plugin),
+            tracker.claim("s1", RuntimePath::Plugin, "default"),
             ClaimResult::Ok
         ));
 
         // Same path re-claim refreshes
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Plugin),
+            tracker.claim("s1", RuntimePath::Plugin, "default"),
             ClaimResult::Ok
         ));
 
         // Different path conflicts
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Legacy),
+            tracker.claim("s1", RuntimePath::Legacy, "default"),
             ClaimResult::Conflict { .. }
         ));
 
         // Release
         tracker.release("s1");
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Legacy),
+            tracker.claim("s1", RuntimePath::Legacy, "default"),
             ClaimResult::Ok
         ));
     }
@@ -726,7 +731,7 @@ mod tests {
     #[test]
     fn session_bypass() {
         let tracker = SessionTracker::new();
-        tracker.claim("s1", RuntimePath::Plugin);
+        tracker.claim("s1", RuntimePath::Plugin, "default");
         assert!(!tracker.is_bypassed("s1"));
 
         tracker.bypass("s1");

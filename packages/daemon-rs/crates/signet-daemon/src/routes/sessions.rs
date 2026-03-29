@@ -1,6 +1,5 @@
 //! Session and checkpoint route handlers.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -27,7 +26,7 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SessionListParams>,
 ) -> axum::response::Response {
-    let tracker_sessions = state.sessions.list_sessions();
+    let tracker_sessions = state.sessions.list_sessions(params.agent_id.as_deref());
     let tracker_keys: std::collections::HashSet<String> =
         tracker_sessions.iter().map(|s| s.key.clone()).collect();
 
@@ -63,24 +62,19 @@ pub async fn list(
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
+            // Return raw tuples as a JSON array; bypass state is checked
+            // after the DB read using the in-memory session tracker.
             let rows: Vec<serde_json::Value> = stmt
                 .query_map(param_refs.as_slice(), |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Option<String>>(1)?,
-                        r.get::<_, String>(2)?,
-                    ))
+                    Ok(serde_json::json!({
+                        "key": r.get::<_, String>(0)?,
+                        "runtimePath": r.get::<_, Option<String>>(1)?
+                            .unwrap_or_else(|| "unknown".into()),
+                        "claimedAt": r.get::<_, String>(2)?,
+                        "expiresAt": serde_json::Value::Null,
+                    }))
                 })?
                 .filter_map(|r| r.ok())
-                .map(|(sk, path, started_at)| {
-                    serde_json::json!({
-                        "key": sk,
-                        "runtimePath": path.unwrap_or_else(|| "unknown".into()),
-                        "claimedAt": started_at,
-                        "expiresAt": serde_json::Value::Null,
-                        "bypassed": false,
-                    })
-                })
                 .collect();
             Ok(serde_json::json!(rows))
         })
@@ -98,9 +92,13 @@ pub async fn list(
         .collect();
 
     // Append presence-only sessions not already covered by the tracker.
-    for p in presence_only {
+    // Annotate with live bypass state from the in-memory tracker.
+    for mut p in presence_only {
         let sk = p.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
         if !tracker_keys.contains(&sk) {
+            if let Some(obj) = p.as_object_mut() {
+                obj.insert("bypassed".into(), state.sessions.is_bypassed(&sk).into());
+            }
             all.push(p);
         }
     }
@@ -121,7 +119,7 @@ pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> axum::response::Response {
-    let sessions = state.sessions.list_sessions();
+    let sessions = state.sessions.list_sessions(None);
     let session = sessions.into_iter().find(|s| s.key == key);
 
     match session {
