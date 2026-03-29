@@ -8,8 +8,9 @@
  * Lives alongside the other extraction/decision prompts in pipeline/.
  */
 
-import type { LlmProvider } from "./provider";
 import { logger } from "../logger";
+import { extractBalancedJsonObject, stripFences, tryParseJson } from "./extraction";
+import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,9 +33,7 @@ export interface SkillEnrichmentResult {
 // ---------------------------------------------------------------------------
 
 function buildEnrichmentPrompt(input: SkillEnrichmentInput): string {
-	const bodyPreview = input.body.length > 3000
-		? `${input.body.slice(0, 3000)}\n[truncated]`
-		: input.body;
+	const bodyPreview = input.body.length > 3000 ? `${input.body.slice(0, 3000)}\n[truncated]` : input.body;
 
 	return `You are analyzing an AI agent skill to generate discovery metadata.
 
@@ -57,27 +56,27 @@ Return ONLY a JSON object with these three keys. No other text.
 // JSON parsing
 // ---------------------------------------------------------------------------
 
-const THINK_RE = /<think>[\s\S]*?<\/think>\s*/g;
-const FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/;
-
 function parseEnrichmentOutput(raw: string): SkillEnrichmentResult | null {
-	const stripped = raw.replace(THINK_RE, "").trim();
-	const fenceMatch = stripped.match(FENCE_RE);
-	const jsonStr = fenceMatch ? fenceMatch[1].trim() : stripped;
+	const stripped = stripFences(raw);
+	const candidates = [raw.trim(), stripped];
+	const rawObj = extractBalancedJsonObject(raw);
+	if (rawObj) candidates.push(rawObj);
+	const strippedObj = extractBalancedJsonObject(stripped);
+	if (strippedObj) candidates.push(strippedObj);
 
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(jsonStr);
-	} catch {
-		return null;
+	let obj: Record<string, unknown> | null = null;
+	for (const candidate of candidates) {
+		const parsed = tryParseJson(candidate);
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+			continue;
+		}
+		obj = parsed as Record<string, unknown>;
+		break;
 	}
 
-	if (typeof parsed !== "object" || parsed === null) return null;
-	const obj = parsed as Record<string, unknown>;
+	if (obj === null) return null;
 
-	const description = typeof obj.description === "string"
-		? obj.description.trim()
-		: "";
+	const description = typeof obj.description === "string" ? obj.description.trim() : "";
 
 	const triggers = Array.isArray(obj.triggers)
 		? obj.triggers.filter((t): t is string => typeof t === "string" && t.trim().length > 0)

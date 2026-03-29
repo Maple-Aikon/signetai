@@ -127,7 +127,7 @@ export function tryParseJson(candidate: string): unknown | null {
 	return null;
 }
 
-function extractBalancedJsonObject(raw: string): string | null {
+export function extractBalancedJsonObject(raw: string): string | null {
 	const start = raw.indexOf("{");
 	if (start < 0) return null;
 
@@ -188,13 +188,22 @@ export function extractBalancedJsonArray(raw: string): string | null {
 		const ch = raw[i];
 
 		if (inString) {
-			if (escaping) { escaping = false; continue; }
-			if (ch === "\\") { escaping = true; continue; }
+			if (escaping) {
+				escaping = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escaping = true;
+				continue;
+			}
 			if (ch === '"') inString = false;
 			continue;
 		}
 
-		if (ch === '"') { inString = true; continue; }
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
 		if (ch === "[") {
 			if (depth === 0) last = i;
 			depth++;
@@ -213,13 +222,22 @@ export function extractBalancedJsonArray(raw: string): string | null {
 		const ch = raw[i];
 
 		if (inString) {
-			if (escaping) { escaping = false; continue; }
-			if (ch === "\\") { escaping = true; continue; }
+			if (escaping) {
+				escaping = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escaping = true;
+				continue;
+			}
 			if (ch === '"') inString = false;
 			continue;
 		}
 
-		if (ch === '"') { inString = true; continue; }
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
 		if (ch === "[") depth++;
 		if (ch === "]") {
 			depth--;

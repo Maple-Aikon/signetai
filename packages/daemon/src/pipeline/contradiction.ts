@@ -10,6 +10,7 @@
  */
 
 import { logger } from "../logger";
+import { extractBalancedJsonObject, stripFences, tryParseJson } from "./extraction";
 import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
@@ -60,27 +61,45 @@ export async function detectSemanticContradiction(
 	try {
 		const prompt = buildPrompt(factContent, targetContent);
 		const raw = await provider.generate(prompt, { timeoutMs });
-
-		let jsonStr = raw.trim();
-		const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-		if (fenceMatch) jsonStr = fenceMatch[1].trim();
-		jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-
-		const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+		const parsed = parseSemanticContradiction(raw);
+		if (parsed === null) {
+			throw new Error("Invalid contradiction response payload");
+		}
 
 		const detected = parsed.contradicts === true;
-		const confidence =
-			typeof parsed.confidence === "number"
-				? Math.max(0, Math.min(1, parsed.confidence))
-				: 0.5;
-		const reasoning =
-			typeof parsed.reasoning === "string" ? parsed.reasoning : "";
+		const confidence = normalizeConfidence(parsed.confidence);
+		const reasoning = typeof parsed.reasoning === "string" ? parsed.reasoning : "";
 
 		return { detected, confidence, reasoning };
 	} catch (e) {
 		logger.warn("pipeline", "Semantic contradiction check failed", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 		return noContradiction;
 	}
+}
+
+function parseSemanticContradiction(raw: string): Record<string, unknown> | null {
+	const stripped = stripFences(raw);
+	const candidates = [raw.trim(), stripped];
+	const rawObj = extractBalancedJsonObject(raw);
+	if (rawObj) candidates.push(rawObj);
+	const strippedObj = extractBalancedJsonObject(stripped);
+	if (strippedObj) candidates.push(strippedObj);
+
+	for (const candidate of candidates) {
+		const parsed = tryParseJson(candidate);
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+			continue;
+		}
+		return parsed;
+	}
+
+	return null;
+}
+
+function normalizeConfidence(value: unknown): number {
+	if (typeof value !== "number") return 0.5;
+	if (Number.isNaN(value)) return 0.5;
+	return Math.max(0, Math.min(1, value));
 }
