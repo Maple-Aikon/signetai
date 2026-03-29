@@ -628,7 +628,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			},
 			{
 				value: "ollama",
-				name: `Ollama (local, qwen3:4b minimum)${detectedProvider === "ollama" ? " — detected" : ""}`,
+				name: `Ollama (local, gemma3:4b recommended)${detectedProvider === "ollama" ? " — detected" : ""}`,
 			},
 			{ value: "none", name: "Disable extraction pipeline" },
 			{
@@ -737,9 +737,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			extractionModel = await select({
 				message: "Which Ollama model for extraction?",
 				choices: [
-					{ value: "qwen3:4b", name: "qwen3:4b (minimum recommended local model)" },
-					{ value: "glm-4.7-flash", name: "glm-4.7-flash (alternative)" },
-					{ value: "llama3", name: "llama3 (general purpose)" },
+					{ value: "gemma3:4b", name: "gemma3:4b (recommended — fast, reliable JSON)" },
+					{ value: "qwen3:4b", name: "qwen3:4b (thinking model — slower on Apple Silicon)" },
+					{ value: "llama3.2:3b", name: "llama3.2:3b (fastest, lower quality)" },
 				],
 			});
 		}

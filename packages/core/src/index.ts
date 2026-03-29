@@ -79,6 +79,7 @@ export type {
 	ModelRegistryEntry,
 } from "./types";
 export {
+	ARM64_PIPELINE_TIMEOUT_MS,
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_PROVIDER_CHOICES,
 	defaultPipelineModel,

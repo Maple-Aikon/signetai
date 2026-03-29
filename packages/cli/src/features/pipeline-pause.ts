@@ -5,8 +5,8 @@ import {
 } from "@signet/core";
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
-const DEFAULT_EXTRACTION_MODEL = "qwen3.5:4b";
-const DEFAULT_SYNTHESIS_MODEL = "qwen3:4b";
+const DEFAULT_EXTRACTION_MODEL = "gemma3:4b";
+const DEFAULT_SYNTHESIS_MODEL = "gemma3:4b";
 const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v1.5";
 
 export { readPipelinePauseState, setPipelinePaused };

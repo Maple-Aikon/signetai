@@ -6,8 +6,8 @@ describe("defaultExtractionModel", () => {
 		expect(defaultExtractionModel("codex")).toBe("gpt-5-codex-mini");
 	});
 
-	it("uses qwen3:4b as the ollama floor", () => {
-		expect(defaultExtractionModel("ollama")).toBe("qwen3:4b");
+	it("uses gemma3:4b as the ollama default", () => {
+		expect(defaultExtractionModel("ollama")).toBe("gemma3:4b");
 	});
 });
 

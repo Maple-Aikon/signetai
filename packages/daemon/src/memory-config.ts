@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { arch } from "node:os";
 import {
+	ARM64_PIPELINE_TIMEOUT_MS,
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
@@ -49,10 +51,10 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	extraction: {
 		provider: "ollama",
 		fallbackProvider: "ollama",
-		model: "qwen3:4b",
+		model: defaultPipelineModel("ollama"),
 		strength: "low",
 		endpoint: undefined,
-		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
+		timeout: arch() === "arm64" ? ARM64_PIPELINE_TIMEOUT_MS : DEFAULT_PIPELINE_TIMEOUT_MS,
 		minConfidence: 0.7,
 		command: undefined,
 		escalation: {
@@ -149,9 +151,9 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	synthesis: {
 		enabled: true,
 		provider: "ollama",
-		model: "qwen3:4b",
+		model: defaultPipelineModel("ollama"),
 		endpoint: undefined,
-		timeout: 120000,
+		timeout: arch() === "arm64" ? ARM64_PIPELINE_TIMEOUT_MS : 120000,
 		maxTokens: 8000,
 		idleGapMinutes: 15,
 	},
