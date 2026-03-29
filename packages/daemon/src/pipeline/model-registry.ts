@@ -65,8 +65,8 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 	ollama: [
 		{ id: "gemma3:4b", provider: "ollama", label: "Gemma3 4B", tier: "low", deprecated: false },
 		{ id: "qwen3:4b", provider: "ollama", label: "Qwen3 4B", tier: "low", deprecated: false },
+		{ id: "llama3.2:3b", provider: "ollama", label: "Llama 3.2 3B", tier: "low", deprecated: false },
 		{ id: "glm-4.7-flash", provider: "ollama", label: "GLM 4.7 Flash", tier: "low", deprecated: false },
-		{ id: "llama3", provider: "ollama", label: "Llama 3", tier: "low", deprecated: false },
 	],
 };
 
