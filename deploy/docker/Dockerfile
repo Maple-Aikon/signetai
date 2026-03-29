@@ -28,6 +28,7 @@ ENV SIGNET_BIND=0.0.0.0
 ENV SIGNET_PORT=3850
 
 COPY --from=build /app/packages/signetai/package.json ./packages/signetai/package.json
+COPY --from=build /app/packages/signetai/postinstall.cjs ./packages/signetai/postinstall.cjs
 RUN cd /app/packages/signetai && bun install --production
 
 COPY --from=build /app/packages/signetai/dist ./packages/signetai/dist
