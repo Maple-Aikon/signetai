@@ -6884,8 +6884,15 @@ app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
 });
 
 // Renew a session — reset TTL to prevent silent eviction
+// Optional ?agent_id= query param to target a specific agent's session.
 app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const key = normalizeSessionKey(c.req.param("key"));
+	const session = listLiveSessions(scopedAgent.agentId).find((s) => s.key === key);
+	if (!session) {
+		return c.json({ error: "Session not found" }, 404);
+	}
 	const expiresAt = renewSession(key);
 	if (!expiresAt) {
 		return c.json({ error: "Session not found" }, 404);
