@@ -1,13 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { Command } from "commander";
 import {
-	buildSessionStartFallback,
 	buildCompactionCompleteBody,
 	buildSessionEndBody,
+	buildSessionStartFallback,
 	buildUserPromptSubmitBody,
 	pickSessionKey,
+	registerHookCommands,
 	resolveSessionStartTimeout,
 	shouldReadCompactionInput,
 } from "./hook";
+
+const prevLog = console.log;
+
+afterEach(() => {
+	console.log = prevLog;
+});
 
 describe("pickSessionKey", () => {
 	test("prefers canonical sessionKey fields before legacy session_id aliases", () => {
@@ -145,6 +153,39 @@ describe("buildUserPromptSubmitBody", () => {
 			transcript: "user: hi",
 			lastAssistantMessage: "prior answer",
 		});
+	});
+
+	test("hook command uses daemon result transport for user-prompt-submit", async () => {
+		const seen: Array<{ path: string; body: string }> = [];
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async (path, opts) => {
+				seen.push({
+					path,
+					body: typeof opts?.body === "string" ? opts.body : "",
+				});
+				return {
+					ok: true,
+					data: {
+						inject: "recalled context",
+					},
+				};
+			},
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "user-prompt-submit", "-H", "claude-code"]);
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.path).toBe("/api/hooks/user-prompt-submit");
+		expect(seen[0]?.body).toContain('"harness":"claude-code"');
+		expect(lines).toContain("recalled context");
 	});
 });
 

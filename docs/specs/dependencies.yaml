@@ -224,6 +224,20 @@ specs:
       - "CLI start/restart can recover from a stale managed daemon process that still owns the port after health probes fail"
     decision: null
 
+  - id: runtime-upgrade-regression-hardening
+    status: planning
+    path: docs/specs/planning/runtime-upgrade-regression-hardening.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "CLI hook commands continue to reach daemon hook endpoints after runtime transport refactors"
+      - "Published daemon-bearing packages always include the bundled dashboard assets required for `/` to serve the UI"
+      - "Regression tests fail when `npm pack --dry-run` for `@signet/daemon` or `signetai` omits `dashboard/index.html`"
+    decision: null
+
   - id: daemon-provider-fallback-status
     status: complete
     path: docs/specs/complete/daemon-provider-fallback-status.md

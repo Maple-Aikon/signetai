@@ -1,9 +1,6 @@
+import { STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS, resolveSessionStartTimeoutMs } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
-import {
-	resolveSessionStartTimeoutMs,
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
-} from "@signet/core";
 import type { DaemonFetchResult } from "../lib/daemon.js";
 
 interface HookDeps {
@@ -37,6 +34,37 @@ export function buildSessionStartFallback(
 	}
 	// offline, http error, invalid-json — all degrade to static identity
 	return readStaticIdentity(agentsDir);
+}
+
+function formatHookFailure(
+	name: string,
+	res: {
+		readonly reason: "offline" | "timeout" | "http" | "invalid-json";
+		readonly status?: number;
+	},
+): string {
+	if (res.reason === "http") {
+		return `[signet] daemon ${name} failed with HTTP ${res.status ?? "unknown"}, hook skipped\n`;
+	}
+	if (res.reason === "invalid-json") {
+		return `[signet] daemon ${name} returned invalid JSON, hook skipped\n`;
+	}
+	if (res.reason === "timeout") {
+		return `[signet] daemon ${name} timed out, hook skipped\n`;
+	}
+	return "[signet] daemon not running, hook skipped\n";
+}
+
+async function fetchHookData<T>(
+	deps: HookDeps,
+	name: string,
+	path: string,
+	opts?: RequestInit & { timeout?: number },
+): Promise<T | null> {
+	const res = await deps.fetchDaemonResult<T>(path, opts);
+	if (res.ok) return res.data;
+	process.stderr.write(formatHookFailure(name, res));
+	return null;
 }
 
 export function registerHookCommands(program: Command, deps: HookDeps): void {
@@ -79,15 +107,13 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			});
 			if (!res.ok) {
 				if (res.reason === "http") {
-					process.stderr.write(`[signet] daemon session-start failed with HTTP ${res.status ?? "unknown"} — using static identity\n`);
+					process.stderr.write(
+						`[signet] daemon session-start failed with HTTP ${res.status ?? "unknown"} — using static identity\n`,
+					);
 				} else if (res.reason === "invalid-json") {
 					process.stderr.write("[signet] daemon session-start returned invalid JSON — using static identity\n");
 				}
-				const fallback = buildSessionStartFallback(
-					deps.readStaticIdentity,
-					deps.AGENTS_DIR,
-					res.reason,
-				);
+				const fallback = buildSessionStartFallback(deps.readStaticIdentity, deps.AGENTS_DIR, res.reason);
 				if (fallback) {
 					if (res.reason === "timeout") {
 						process.stderr.write("[signet] daemon session-start timed out — using static identity\n");
@@ -130,13 +156,17 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson();
 			const stdinProject = pickString(input?.cwd);
-			const data = await deps.fetchFromDaemon<{ inject?: string }>("/api/hooks/user-prompt-submit", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
-			});
+			const data = await fetchHookData<{ inject?: string }>(
+				deps,
+				"user-prompt-submit",
+				"/api/hooks/user-prompt-submit",
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
+				},
+			);
 			if (!data) {
-				process.stderr.write("[signet] daemon not running, hook skipped\n");
 				process.exit(0);
 			}
 			if (data.inject) console.log(data.inject);
@@ -148,14 +178,13 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.action(async (options) => {
 			const body = (await readJson()) ?? {};
-			const data = await deps.fetchFromDaemon<{ memoriesSaved?: number }>("/api/hooks/session-end", {
+			const data = await fetchHookData<{ memoriesSaved?: number }>(deps, "session-end", "/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(buildSessionEndBody(body, options.harness)),
 				timeout: 60_000,
 			});
 			if (!data) {
-				process.stderr.write("[signet] daemon not running, hook skipped\n");
 				process.exit(0);
 			}
 			if ((data.memoriesSaved ?? 0) > 0) {
@@ -174,7 +203,9 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const input = await readJson();
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
-			const data = await deps.fetchFromDaemon<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
+			const data = await fetchHookData<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
+				deps,
+				"pre-compaction",
 				"/api/hooks/pre-compaction",
 				{
 					method: "POST",
@@ -186,6 +217,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					}),
 				},
 			);
+			if (!data) return;
 			if (data?.error) {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
@@ -207,7 +239,9 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--agent-id <id>", "Agent ID")
 		.action(async (options) => {
 			const input = shouldReadCompactionInput(process.stdin.isTTY, options) ? await readJson() : null;
-			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
+			const data = await fetchHookData<{ success?: boolean; memoryId?: number; error?: string }>(
+				deps,
+				"compaction-complete",
 				"/api/hooks/compaction-complete",
 				{
 					method: "POST",
@@ -220,6 +254,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					),
 				},
 			);
+			if (!data) return;
 			if (data?.error) {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
@@ -235,16 +270,17 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.description("Request MEMORY.md synthesis (returns prompt for configured harness)")
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
-			const data = await deps.fetchFromDaemon<{
+			const data = await fetchHookData<{
 				harness?: string;
 				model?: string;
 				prompt?: string;
 				fileCount?: number;
 				error?: string;
-			}>("/api/hooks/synthesis", {
+			}>(deps, "synthesis", "/api/hooks/synthesis", {
 				method: "POST",
 				body: JSON.stringify({ trigger: "manual" }),
 			});
+			if (!data) return;
 			if (data?.error) {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
@@ -265,10 +301,16 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.description("Save synthesized MEMORY.md content")
 		.requiredOption("-c, --content <content>", "Synthesized MEMORY.md content")
 		.action(async (options) => {
-			const data = await deps.fetchFromDaemon<{ success?: boolean; error?: string }>("/api/hooks/synthesis/complete", {
-				method: "POST",
-				body: JSON.stringify({ content: options.content }),
-			});
+			const data = await fetchHookData<{ success?: boolean; error?: string }>(
+				deps,
+				"synthesis-complete",
+				"/api/hooks/synthesis/complete",
+				{
+					method: "POST",
+					body: JSON.stringify({ content: options.content }),
+				},
+			);
+			if (!data) return;
 			if (data?.error) {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
@@ -292,6 +334,7 @@ export function shouldReadCompactionInput(
 
 async function readJson(): Promise<Record<string, unknown> | null> {
 	try {
+		if (process.stdin.isTTY) return null;
 		const chunks: Buffer[] = [];
 		for await (const chunk of process.stdin) {
 			chunks.push(chunk);
@@ -299,10 +342,16 @@ async function readJson(): Promise<Record<string, unknown> | null> {
 		const input = Buffer.concat(chunks).toString("utf-8").trim();
 		if (!input) return null;
 		const parsed = JSON.parse(input);
-		return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
+		return toRecord(parsed);
 	} catch {
 		return null;
 	}
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+	if (typeof value !== "object" || value === null) return null;
+	if (Array.isArray(value)) return null;
+	return Object.fromEntries(Object.entries(value));
 }
 
 function pickString(...values: unknown[]): string {

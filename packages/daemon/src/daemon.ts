@@ -1357,13 +1357,11 @@ function parsePrefixes(raw: string): ParsedMemory {
 	return { content, tags, pinned, importance };
 }
 
-// Resolve dashboard static files location
-function getDashboardPath(): string | null {
+function getDashboardCandidates(): string[] {
 	const __filename = fileURLToPath(import.meta.url);
 	const __dirname = dirname(__filename);
 
-	// Check various locations for the built dashboard
-	const candidates = [
+	return [
 		// When running from workspace
 		join(__dirname, "..", "..", "cli", "dashboard", "build"),
 		// When installed as package
@@ -1372,6 +1370,11 @@ function getDashboardPath(): string | null {
 		join(__dirname, "..", "dashboard"),
 		join(__dirname, "dashboard"),
 	];
+}
+
+// Resolve dashboard static files location
+function getDashboardPath(): string | null {
+	const candidates = getDashboardCandidates();
 
 	for (const candidate of candidates) {
 		if (existsSync(join(candidate, "index.html"))) {
@@ -9572,7 +9575,9 @@ function setupStaticServing() {
 			})(c, next);
 		});
 	} else {
-		logger.warn("daemon", "Dashboard not found - API-only mode");
+		logger.warn("daemon", "Dashboard not found - API-only mode", {
+			candidates: getDashboardCandidates(),
+		});
 		app.get("/", (c) => {
 			return c.html(`
         <!DOCTYPE html>
