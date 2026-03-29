@@ -28,6 +28,7 @@ export interface ConstructedProvenance {
 
 export interface ConstructedContext {
 	readonly content: string;
+	readonly truncated: boolean;
 	readonly score: number;
 	readonly source: "constructed";
 	readonly provenance: ConstructedProvenance;
@@ -200,11 +201,11 @@ export function constructContextBlocks(
 		if (lines.length === 0) continue;
 
 		const built = trimBlock(`[${ent.name} (${ent.entity_type})]\n${lines.join("\n")}`);
-		const text = built.text;
 		const score = densityScore(aspectIds.length, totalAttrs, cleanConstraints.length);
 
 		blocks.push({
-			content: text,
+			content: built.text,
+			truncated: built.truncated,
 			score,
 			source: "constructed",
 			provenance: {
