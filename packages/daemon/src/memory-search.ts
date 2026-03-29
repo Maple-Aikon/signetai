@@ -943,7 +943,9 @@ export async function hybridRecall(
 		});
 
 	// Generate LLM summary from the final recalled set (not pre-filter candidates).
-	if (summarizeLeft > 0 && results.length > 0) {
+	// Skip when limit < 2: can't fit a summary card without evicting the only
+	// real memory, which would leave the caller with nothing to verify against.
+	if (summarizeLeft > 0 && results.length > 0 && limit >= 2) {
 		try {
 			const summCandidates = results
 				.slice(0, 12)
@@ -957,14 +959,11 @@ export async function hybridRecall(
 		}
 	}
 
-	if (recallSummary) {
+	if (recallSummary && limit >= 2) {
 		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
 		const content = `[model summary, verify against source memories] ${recallSummary}`;
 		const score = results.length > 0 ? Math.max(0.01, Math.min(1, results[0].score)) : 0.5;
-		// Keep total within limit: drop the last real memory to make room for
-		// the summary card. At limit=1 skip the drop — caller always gets at
-		// least one real memory to verify against (summary is supplementary).
-		if (limit > 1 && results.length >= limit) results.length = limit - 1;
+		if (results.length >= limit) results.length = limit - 1;
 		results.unshift({
 			id: `summary:${digest}`,
 			content,
