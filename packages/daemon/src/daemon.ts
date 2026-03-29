@@ -5776,6 +5776,8 @@ function isInternalCall(c: Context): boolean {
 function checkBypass(body?: { sessionKey?: string; sessionId?: string }): boolean {
 	const key = body?.sessionKey ?? body?.sessionId;
 	if (!key) return false;
+	// isSessionBypassed normalizes the key via normalizeSessionKey() internally,
+	// so raw "session:<uuid>" forms from hook bodies are handled correctly.
 	return isSessionBypassed(key);
 }
 
