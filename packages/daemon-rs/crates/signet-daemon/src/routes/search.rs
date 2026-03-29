@@ -287,6 +287,13 @@ pub async fn recall(
         .await;
 
     // --- Optional LLM reranker + recall summary (parity with TS daemon) ---
+    // LLM calls are only made when the user has explicitly opted in via
+    // `memory.pipelineV2.reranker.enabled: true` AND
+    // `memory.pipelineV2.reranker.useExtractionModel: true`.
+    // Callers should be aware of the per-request LLM cost this incurs.
+    // The recall endpoint sits behind the daemon's existing auth middleware;
+    // operators should use token auth + rate limiting if recall is exposed
+    // beyond the local loopback.
     let result = match result {
         Ok(mut resp) if !resp.results.is_empty() => {
             let (reranker_enabled, use_extraction_model) = state
@@ -378,7 +385,10 @@ pub async fn recall(
                         let digest = format!("{hash:x}");
                         let digest = &digest[..12];
 
-                        if resp.results.len() >= limit {
+                        // Only drop a real memory to make room when limit > 1.
+                        // At limit=1 the summary is supplementary — caller
+                        // always gets at least one real memory to verify against.
+                        if limit > 1 && resp.results.len() >= limit {
                             resp.results.pop();
                         }
                         resp.results.insert(
