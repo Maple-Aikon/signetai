@@ -6400,12 +6400,15 @@ app.post("/api/cross-agent/presence", async (c) => {
 
 	const runtimePathRaw = parseOptionalString(payload.runtimePath);
 	const runtimePath = runtimePathRaw === "plugin" || runtimePathRaw === "legacy" ? runtimePathRaw : undefined;
-	const requestedAgentId = parseOptionalString(payload.agentId);
+	const sessionKey = parseOptionalString(payload.sessionKey);
+	// Resolve agent using the same fallback chain as hook paths: explicit
+	// agentId takes precedence, then the scope encoded in the session key
+	// (agent:<id>:<uuid>), then "default".
+	const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
 	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
 	if (scopedAgent.error) {
 		return c.json({ error: scopedAgent.error }, 403);
 	}
-	const sessionKey = parseOptionalString(payload.sessionKey);
 	const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
 		requireExisting: false,
 		context: "sessionKey",
