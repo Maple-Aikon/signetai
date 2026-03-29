@@ -140,12 +140,14 @@ export abstract class BaseConnector {
 	 */
 	protected generateHeader(sourcePath: string, targetName?: string): string {
 		const name = targetName || this.name;
+		// Strip CR/LF so a malformed path can't break out of comment lines
+		const safe = (p: string) => p.replace(/[\n\r]/g, "");
 		const root = dirname(sourcePath);
-		return `# Auto-generated from ${sourcePath}
-# Source: ${sourcePath}
+		return `# Auto-generated from ${safe(sourcePath)}
+# Source: ${safe(sourcePath)}
 # Generated: ${new Date().toISOString()}
 # DO NOT EDIT - changes will be overwritten
-# Edit the source files in ${root}/ instead
+# Edit the source files in ${safe(root)}/ instead
 
 `;
 	}
