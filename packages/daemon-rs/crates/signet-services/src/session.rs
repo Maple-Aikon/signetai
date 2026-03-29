@@ -136,6 +136,9 @@ impl SessionTracker {
             }
         }
 
+        // Clear any stale bypass state for this key so a new session on the
+        // same key does not inherit bypass from a previous session lifetime.
+        self.bypassed_keys.lock().unwrap().remove(key);
         claims.insert(
             key.to_string(),
             SessionClaim {
