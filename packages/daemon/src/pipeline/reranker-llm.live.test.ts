@@ -26,6 +26,8 @@ async function ollamaHasModel(model: string): Promise<boolean> {
 
 function liveProvider(model: string): LlmProvider {
 	return {
+		name: "ollama-live-test",
+		available: async () => ollamaHasModel(model),
 		generate: async (prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }) => {
 			const ctl = new AbortController();
 			const timeout = Math.max(1000, opts?.timeoutMs ?? 20000);

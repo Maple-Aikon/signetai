@@ -717,7 +717,7 @@ export async function hybridRecall(
 				const summary = await summarizeRecallWithLlm(
 					getLlmProvider(),
 					query,
-					candidates,
+					reranked,
 					cfg.pipelineV2.reranker.timeoutMs,
 				);
 				if (summary) recallSummary = summary;

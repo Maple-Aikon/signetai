@@ -5,6 +5,8 @@ import { createLlmReranker, summarizeRecallWithLlm } from "./reranker-llm";
 describe("createLlmReranker", () => {
 	it("reorders candidates when provider returns scored ids", async () => {
 		const provider: LlmProvider = {
+			name: "test",
+			available: async () => true,
 			generate: async () =>
 				JSON.stringify({
 					scores: [
@@ -29,6 +31,8 @@ describe("createLlmReranker", () => {
 
 	it("falls back to original ordering when provider output is not parseable", async () => {
 		const provider: LlmProvider = {
+			name: "test",
+			available: async () => true,
 			generate: async () => "not json",
 		};
 		const rerank = createLlmReranker(provider);
@@ -49,6 +53,8 @@ describe("createLlmReranker", () => {
 describe("summarizeRecallWithLlm", () => {
 	it("returns a cleaned summary", async () => {
 		const provider: LlmProvider = {
+			name: "test",
+			available: async () => true,
 			generate: async () => "  deploy uses blue/green with rollback checklist  ",
 		};
 		const result = await summarizeRecallWithLlm(
