@@ -1,9 +1,10 @@
 //! Session and checkpoint route handlers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
@@ -14,16 +15,96 @@ use crate::state::AppState;
 // GET /api/sessions
 // ---------------------------------------------------------------------------
 
-pub async fn list(State(state): State<Arc<AppState>>) -> axum::response::Response {
-    let sessions = state.sessions.list_sessions();
-    let count = sessions.len();
+#[derive(Deserialize)]
+pub struct SessionListParams {
+    pub agent_id: Option<String>,
+}
 
+/// Merge tracker claims with cross-agent presence records, mirroring the TS
+/// `listLiveSessions()` behavior. Presence-only sessions (not in the tracker)
+/// appear with `expiresAt: null`.
+pub async fn list(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SessionListParams>,
+) -> axum::response::Response {
+    let tracker_sessions = state.sessions.list_sessions();
+    let tracker_keys: std::collections::HashSet<String> =
+        tracker_sessions.iter().map(|s| s.key.clone()).collect();
+
+    // Fetch presence-only sessions from DB (those not already in the tracker).
+    let agent_id = params.agent_id.clone();
+    let presence_result = state
+        .pool
+        .read(move |conn| {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_presence'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            if !exists {
+                return Ok(serde_json::json!([]));
+            }
+
+            let mut sql =
+                "SELECT session_key, runtime_path, started_at FROM agent_presence \
+                 WHERE session_key IS NOT NULL"
+                    .to_string();
+            if let Some(ref aid) = agent_id {
+                sql.push_str(&format!(" AND agent_id = '{aid}'"));
+            }
+            sql.push_str(" ORDER BY last_seen_at DESC");
+
+            let mut stmt = conn.prepare(&sql)?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .map(|(sk, path, started_at)| {
+                    serde_json::json!({
+                        "key": sk,
+                        "runtimePath": path.unwrap_or_else(|| "unknown".into()),
+                        "claimedAt": started_at,
+                        "expiresAt": serde_json::Value::Null,
+                        "bypassed": false,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!(rows))
+        })
+        .await;
+
+    let presence_only: Vec<serde_json::Value> = presence_result
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    // Tracker sessions serialized with expiresAt present.
+    let mut all: Vec<serde_json::Value> = tracker_sessions
+        .into_iter()
+        .map(|s| serde_json::to_value(&s).unwrap_or_default())
+        .collect();
+
+    // Append presence-only sessions not already covered by the tracker.
+    for p in presence_only {
+        let sk = p.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !tracker_keys.contains(&sk) {
+            all.push(p);
+        }
+    }
+
+    let count = all.len();
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "sessions": sessions,
-            "count": count,
-        })),
+        Json(serde_json::json!({ "sessions": all, "count": count })),
     )
         .into_response()
 }
