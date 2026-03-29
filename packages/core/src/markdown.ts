@@ -86,10 +86,10 @@ API keys and tokens are stored securely in Signet. Agents never see
 raw values — secrets are injected into subprocesses as environment
 variables with output automatically redacted.
 
-- \`secret_list\` MCP tool — discover available secret names
-- \`secret_exec\` MCP tool — run a command with secrets injected as env vars
+- \`mcp__signet__secret_list\` — discover available secret names
+- \`mcp__signet__secret_exec\` — run a command with secrets injected as env vars
 
-Example: to use an API key stored as "OPENAI_API_KEY", call \`secret_exec\`
+Example: to use an API key stored as "OPENAI_API_KEY", call \`mcp__signet__secret_exec\`
 with \`command: "curl -H \\"Authorization: Bearer $OPENAI_API_KEY\\" ..."\`
 and \`secrets: { "OPENAI_API_KEY": "OPENAI_API_KEY" }\`.
 
@@ -99,8 +99,8 @@ Knowledge Graph
 Signet maintains a knowledge graph of entities extracted from your
 conversations. Use these MCP tools to explore it:
 
-- \`knowledge_expand\` — drill into an entity's aspects, attributes, constraints, and dependencies
-- \`knowledge_expand_session\` — find session summaries linked to an entity (temporal drill-down)
+- \`mcp__signet__knowledge_expand\` — drill into an entity's aspects, attributes, constraints, and dependencies
+- \`mcp__signet__knowledge_expand_session\` — find session summaries linked to an entity (temporal drill-down)
 
 About This System
 ---
@@ -257,7 +257,9 @@ function escapeRegex(str: string): string {
 }
 
 function normalizeWorkspace(workspace: string): string {
-	const root = workspace.trim();
+	// Strip markdown-significant characters that could break injected code spans
+	// (backticks close code spans, newlines break inline structure)
+	const root = workspace.trim().replace(/[`\n\r]/g, "");
 	if (!root) {
 		return "$SIGNET_WORKSPACE";
 	}
