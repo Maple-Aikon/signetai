@@ -125,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
     // Open database (runs migrations, starts writer task)
     let (pool, writer_handle) = DbPool::open(&config.db_path).context("failed to open database")?;
 
-    // Initialize embedding provider
+    // Initialize embedding and LLM providers
     let pipeline_paused = config
         .manifest
         .memory
@@ -143,6 +143,35 @@ async fn main() -> anyhow::Result<()> {
             .as_ref()
             .map(|cfg| signet_pipeline::embedding::from_config(cfg, None))
     };
+    // Build LLM provider from extraction config so the recall reranker path
+    // is available immediately, independent of when the extraction worker starts.
+    let llm_startup: Option<Arc<dyn signet_pipeline::provider::LlmProvider>> =
+        if pipeline_paused {
+            None
+        } else {
+            config
+                .manifest
+                .memory
+                .as_ref()
+                .and_then(|m| m.pipeline_v2.as_ref())
+                .filter(|p| p.reranker.enabled && p.reranker.use_extraction_model)
+                .map(|p| {
+                    let provider = p.extraction.provider.clone();
+                    let endpoint = p.extraction.endpoint.clone();
+                    let model = p.extraction.model.clone();
+                    let timeout = p.extraction.timeout;
+                    let api_key = std::env::var("OPENAI_API_KEY").ok();
+                    signet_pipeline::provider::from_config(
+                        &signet_pipeline::provider::LlmProviderConfig {
+                            provider,
+                            model,
+                            base_url: endpoint,
+                            api_key,
+                            timeout_ms: Some(timeout),
+                        },
+                    )
+                })
+        };
 
     let auth_mode = read_auth_mode(&config);
     let auth_secret = if auth_mode == AuthMode::Local {
@@ -156,13 +185,12 @@ async fn main() -> anyhow::Result<()> {
 
     let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
-    // Build app state — LLM provider is wired later after preflight so the
-    // recall reranker path is nil until the extraction provider is confirmed.
+    // Build app state — LLM provider pre-wired at startup for recall reranking.
     let state = Arc::new(AppState::new(
         config.clone(),
         pool,
         embedding,
-        None, // llm — set below after preflight
+        llm_startup,
         extraction_worker_stats,
         auth_mode,
         auth_secret,

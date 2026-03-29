@@ -289,16 +289,16 @@ pub async fn recall(
     // --- Optional LLM reranker + recall summary (parity with TS daemon) ---
     let result = match result {
         Ok(mut resp) if !resp.results.is_empty() => {
-            let use_extraction_model = state
+            let (reranker_enabled, use_extraction_model) = state
                 .config
                 .manifest
                 .memory
                 .as_ref()
                 .and_then(|m| m.pipeline_v2.as_ref())
-                .map(|p| p.reranker.use_extraction_model)
-                .unwrap_or(false);
+                .map(|p| (p.reranker.enabled, p.reranker.use_extraction_model))
+                .unwrap_or((false, false));
 
-            if use_extraction_model {
+            if reranker_enabled && use_extraction_model {
                 let llm = state.llm.read().await.clone();
                 if let Some(ref provider) = llm {
                     let timeout_ms = state
