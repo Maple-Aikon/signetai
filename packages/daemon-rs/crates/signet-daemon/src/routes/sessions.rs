@@ -121,16 +121,37 @@ pub async fn list(
 }
 
 // ---------------------------------------------------------------------------
+// Shared query param for agent scoping on single-session routes
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AgentScopeParams {
+    pub agent_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/sessions/:key
 // ---------------------------------------------------------------------------
 
 pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(reason) => return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": reason}))).into_response(),
+    };
     // Normalize session: prefix so raw and prefixed keys both resolve.
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
-    let sessions = state.sessions.list_sessions(None);
+    let sessions = state.sessions.list_sessions(Some(&agent_id));
     let session = sessions.into_iter().find(|s| s.key == key);
 
     match session {
@@ -155,11 +176,29 @@ pub struct BypassBody {
 pub async fn bypass(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<BypassBody>,
 ) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(reason) => return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": reason}))).into_response(),
+    };
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
-    let enabled = body.enabled.unwrap_or(true);
 
+    // Verify the session belongs to this agent before toggling bypass.
+    let sessions = state.sessions.list_sessions(Some(&agent_id));
+    if sessions.iter().find(|s| s.key == key).is_none() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    }
+
+    let enabled = body.enabled.unwrap_or(true);
     if enabled {
         state.sessions.bypass(&key);
     } else {

@@ -1340,13 +1340,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				session_key: z.string().describe("Session key to bypass"),
 				enabled: z.boolean().describe("true = bypass (disable hooks), false = re-enable"),
+				agent_id: z.string().optional().describe("Agent owning the session (defaults to current agent)"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ session_key, enabled }) => {
+		async ({ session_key, enabled, agent_id }) => {
+			const qs = agent_id ? `?agent_id=${encodeURIComponent(agent_id)}` : "";
 			const result = await daemonFetch<{ key: string; bypassed: boolean }>(
 				baseUrl,
-				`/api/sessions/${encodeURIComponent(session_key)}/bypass`,
+				`/api/sessions/${encodeURIComponent(session_key)}/bypass${qs}`,
 				{ method: "POST", body: { enabled } },
 			);
 			if (!result.ok) return errorResult(`Bypass toggle failed: ${result.error}`);
