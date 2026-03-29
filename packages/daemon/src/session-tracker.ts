@@ -15,6 +15,7 @@ export type RuntimePath = "plugin" | "legacy";
 
 export interface SessionInfo {
 	readonly key: string;
+	readonly agentId: string;
 	readonly runtimePath: RuntimePath;
 	readonly claimedAt: string;
 	readonly expiresAt: string;
@@ -22,6 +23,7 @@ export interface SessionInfo {
 }
 
 interface SessionClaim {
+	readonly agentId: string;
 	readonly runtimePath: RuntimePath;
 	readonly claimedAt: string;
 	expiresAt: number;
@@ -54,7 +56,7 @@ export function normalizeSessionKey(sessionKey: string): string {
  * session is unclaimed or already claimed by the same path. Returns
  * ok:false with claimedBy if claimed by the other path.
  */
-export function claimSession(sessionKey: string, runtimePath: RuntimePath): ClaimResult {
+export function claimSession(sessionKey: string, runtimePath: RuntimePath, agentId = "default"): ClaimResult {
 	const key = normalizeSessionKey(sessionKey);
 	const existing = sessions.get(key);
 
@@ -80,6 +82,7 @@ export function claimSession(sessionKey: string, runtimePath: RuntimePath): Clai
 	}
 
 	sessions.set(key, {
+		agentId,
 		runtimePath,
 		claimedAt: new Date().toISOString(),
 		expiresAt: Date.now() + STALE_SESSION_MS,
@@ -188,6 +191,7 @@ export function getActiveSessions(): readonly SessionInfo[] {
 		}
 		result.push({
 			key,
+			agentId: claim.agentId,
 			runtimePath: claim.runtimePath,
 			claimedAt: claim.claimedAt,
 			expiresAt: new Date(claim.expiresAt).toISOString(),

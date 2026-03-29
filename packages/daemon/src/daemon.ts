@@ -5786,10 +5786,14 @@ function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	// Seed from all tracker claims. The session tracker is per-daemon-process
-	// (one daemon per agent workspace), so all claimed sessions belong to
-	// this agent by construction.
-	const byKey = new Map(getActiveSessions().map((session) => [session.key, session] as const));
+	// Seed from tracker claims for this agent. Claims now carry agentId so
+	// sessions from another agent workspace that happens to share the daemon
+	// port cannot appear in this agent's session list.
+	const byKey = new Map(
+		getActiveSessions()
+			.filter((s) => s.agentId === agentId)
+			.map((session) => [session.key, session] as const),
+	);
 
 	// Merge in presence-only sessions for this agent (no tracker claim yet,
 	// e.g. plugin path or session whose claim arrived after presence).
@@ -5827,7 +5831,7 @@ app.post("/api/hooks/session-start", async (c) => {
 
 		// Enforce single runtime path per session
 		if (body.sessionKey && runtimePath) {
-			const claim = claimSession(body.sessionKey, runtimePath);
+			const claim = claimSession(body.sessionKey, runtimePath, parseOptionalString(body.agentId) ?? "default");
 			if (!claim.ok) {
 				return c.json(
 					{
@@ -8896,6 +8900,8 @@ app.get("/api/knowledge/constellation", (c) => {
 });
 
 app.post("/api/knowledge/expand", async (c) => {
+	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const body = await c.req.json().catch(() => ({}));
 	const entityName = typeof body.entity === "string" ? body.entity.trim() : "";
 	const aspectFilter = typeof body.aspect === "string" ? body.aspect.trim() : undefined;
@@ -8905,7 +8911,7 @@ app.post("/api/knowledge/expand", async (c) => {
 		return c.json({ error: "entity name is required" }, 400);
 	}
 
-	const agentId = "default";
+	const agentId = scopedAgent.agentId;
 	const resolved = resolveNamedEntity(getDbAccessor(), {
 		agentId,
 		name: entityName,
