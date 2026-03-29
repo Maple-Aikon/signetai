@@ -668,6 +668,9 @@ export async function hybridRecall(
 
 	// --- Optional reranker hook ---
 	let recallSummary: string | undefined;
+	// Remaining timeout budget to use for LLM summary after reranking.
+	// Set inside the reranker block; consumed after final results are assembled.
+	let summarizeLeft = 0;
 	if (cfg.pipelineV2.reranker.enabled) {
 		try {
 			const rerankStart = Date.now();
@@ -723,8 +726,9 @@ export async function hybridRecall(
 						elapsedMs: elapsed,
 					});
 				} else {
-					const summary = await summarizeRecallWithLlm(getLlmProvider(), query, reranked, left);
-					if (summary) recallSummary = summary;
+					// Store remaining budget; summary is generated after final
+					// results are assembled so it is grounded in the recalled set.
+					summarizeLeft = left;
 				}
 			}
 			scored.sort((a, b) => b.score - a.score);
@@ -913,9 +917,10 @@ export async function hybridRecall(
 
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
-	const memoryLimit = recallSummary ? Math.max(0, limit - 1) : limit;
+	// No pre-decrement: always fetch `limit` memories. The summary card is
+	// injected after assembly and the array is capped to `limit` at that point.
 	const results: RecallResult[] = scored
-		.slice(0, memoryLimit)
+		.slice(0, limit)
 		.filter((s) => rowMap.has(s.id))
 		.map((s) => {
 			const r = rowMap.get(s.id)!;
@@ -936,6 +941,21 @@ export async function hybridRecall(
 				created_at: r.created_at,
 			};
 		});
+
+	// Generate LLM summary from the final recalled set (not pre-filter candidates).
+	if (summarizeLeft > 0 && results.length > 0) {
+		try {
+			const summCandidates = results
+				.slice(0, 12)
+				.map((r) => ({ id: r.id, content: r.content, score: r.score }));
+			const s = await summarizeRecallWithLlm(getLlmProvider(), query, summCandidates, summarizeLeft);
+			if (s) recallSummary = s;
+		} catch (e) {
+			logger.warn("memory", "LLM summary failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
 
 	if (recallSummary) {
 		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
