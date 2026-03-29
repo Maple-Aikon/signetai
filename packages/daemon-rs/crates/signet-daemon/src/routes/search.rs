@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -13,6 +13,8 @@ use signet_core::search::{
     RecallFilter, fts_search, merge_scores, touch_accessed, vec_search_scored,
 };
 
+use crate::auth::middleware::{authenticate_headers, require_rate_limit_guard};
+use crate::auth::types::AuthMode;
 use crate::reranker;
 use crate::state::AppState;
 
@@ -66,6 +68,7 @@ pub struct RecallHit {
 
 pub async fn recall(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<RecallBody>,
 ) -> impl IntoResponse {
     let query = body.query.trim().to_string();
@@ -75,6 +78,37 @@ pub async fn recall(
             Json(serde_json::json!({"error": "query is required"})),
         )
             .into_response();
+    }
+
+    // Rate-limit LLM-enabled recall independently of plain recall.
+    // Skipped in local auth mode; active in team/hybrid modes.
+    {
+        let (reranker_enabled, use_extraction_model) = state
+            .config
+            .manifest
+            .memory
+            .as_ref()
+            .and_then(|m| m.pipeline_v2.as_ref())
+            .map(|p| (p.reranker.enabled, p.reranker.use_extraction_model))
+            .unwrap_or((false, false));
+        if reranker_enabled && use_extraction_model && state.auth_mode != AuthMode::Local {
+            // authenticate_headers returns Err only for hard auth failures; in local
+            // mode we already returned above, so unwrap_or with unauthenticated is safe.
+            let auth = authenticate_headers(
+                state.auth_mode,
+                state.auth_secret.as_deref(),
+                &headers,
+                false,
+            )
+            .unwrap_or_else(|_| crate::auth::middleware::AuthState {
+                result: crate::auth::types::AuthResult::unauthenticated(),
+            });
+            if let Err(resp) =
+                require_rate_limit_guard(&auth, "recallLlm", &state.auth_admin_limiter, state.auth_mode, None)
+            {
+                return (*resp).into_response();
+            }
+        }
     }
 
     let limit = body.limit.unwrap_or(10);
@@ -501,7 +535,7 @@ pub async fn search_get(
         until: None,
     };
 
-    recall(State(state), Json(body)).await.into_response()
+    recall(State(state), HeaderMap::new(), Json(body)).await.into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +575,7 @@ pub async fn legacy_search(
         until: None,
     };
 
-    recall(State(state), Json(body)).await.into_response()
+    recall(State(state), HeaderMap::new(), Json(body)).await.into_response()
 }
 
 // ---------------------------------------------------------------------------

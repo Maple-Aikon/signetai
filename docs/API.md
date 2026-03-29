@@ -807,11 +807,20 @@ always receive at least one real memory to verify the summary against. The
 card is not stored in the database and does not affect access-time tracking.
 
 **Operational note**: `useExtractionModel` moves recall onto a live LLM
-call path. Enabling it on a publicly accessible daemon (i.e. not loopback-
-only) requires token auth and rate limiting to be configured — see
-`auth.rateLimits` in agent.yaml and the [Auth middleware](../packages/daemon/src/auth/)
-docs. The endpoint is protected by the daemon's existing auth middleware;
-no additional permission level is required beyond `recall`.
+call path. When auth mode is not `local`, the daemon enforces a dedicated
+rate-limit bucket — `auth.rateLimits.recallLlm` (default: 60 req/min per
+token). Configure it in `agent.yaml` alongside the other operation limits:
+
+```yaml
+auth:
+  mode: team
+  rateLimits:
+    recallLlm:
+      windowMs: 60000
+      max: 30
+```
+
+No additional permission level is required beyond `recall`.
 
 ### GET /api/memory/search
 

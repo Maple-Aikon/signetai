@@ -535,6 +535,7 @@ let authForgetLimiter = new AuthRateLimiter(60_000, 30);
 let authModifyLimiter = new AuthRateLimiter(60_000, 60);
 let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
 let authAdminLimiter = new AuthRateLimiter(60_000, 10);
+let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
 const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 
 function hasMemoriesSessionIdColumn(db: Database): boolean {
@@ -4256,6 +4257,17 @@ app.post("/api/memory/recall", async (c) => {
 	if (!query) return c.json({ error: "query is required" }, 400);
 
 	const cfg = loadMemoryConfig(AGENTS_DIR);
+	// Rate-limit LLM-enabled recall independently of plain recall.
+	// Only enforced in non-local auth modes; skipped for loopback-only daemons.
+	if (cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.useExtractionModel && authConfig.mode !== "local") {
+		const actor = c.get("auth")?.claims?.sub ?? "anonymous";
+		const check = authRecallLlmLimiter.check(actor);
+		if (!check.allowed) {
+			c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
+			return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
+		}
+		authRecallLlmLimiter.record(actor);
+	}
 	try {
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
 		const agentScope = getAgentScope(agentId);
@@ -10568,6 +10580,9 @@ function startFileWatcher() {
 				authAdminLimiter = rl.admin
 					? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max)
 					: new AuthRateLimiter(60_000, 10);
+				authRecallLlmLimiter = rl.recallLlm
+					? new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max)
+					: new AuthRateLimiter(60_000, 60);
 				logger.info("config", "Auth config reloaded from disk");
 			} catch (e) {
 				logger.error("config", "Failed to reload auth config", e as Error);
