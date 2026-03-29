@@ -9135,7 +9135,18 @@ app.post("/api/knowledge/expand/session", async (c) => {
 			args.push(timeRange);
 		}
 
-		const summaryLike = `%${entity.canonicalName}%`;
+		// Text fallback: only for names >= 4 chars to avoid ambiguous
+		// short tokens ("go", "ai", etc.) matching unrelated content.
+		// Use word-boundary patterns for content and exact match for
+		// structured fields (project, source_ref).
+		const cn = entity.canonicalName;
+		const useTextFallback = cn.length >= 4;
+		const fallbackClause = useTextFallback
+			? `OR (LOWER(ss.content) LIKE ? OR LOWER(ss.content) LIKE ? OR LOWER(ss.content) LIKE ? OR LOWER(ss.content) = ?)
+					OR LOWER(COALESCE(ss.project, '')) = ?
+					OR LOWER(COALESCE(ss.source_ref, '')) = ?`
+			: "";
+		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, cn, cn, cn] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,
@@ -9151,14 +9162,12 @@ app.post("/api/knowledge/expand/session", async (c) => {
 							WHERE ssm.summary_id = ss.id
 							  AND mem.entity_id = ?
 						)
-						OR LOWER(ss.content) LIKE ?
-						OR LOWER(COALESCE(ss.project, '')) LIKE ?
-						OR LOWER(COALESCE(ss.source_ref, '')) LIKE ?
+						${fallbackClause}
 				   )
 				 ORDER BY ss.latest_at DESC
 				 LIMIT ?`,
 			)
-			.all(...args, entity.id, summaryLike, summaryLike, summaryLike, maxResults) as Array<{
+			.all(...args, entity.id, ...fallbackArgs, maxResults) as Array<{
 			id: string;
 			content: string;
 			session_key: string | null;
