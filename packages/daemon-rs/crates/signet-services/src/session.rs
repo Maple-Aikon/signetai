@@ -75,6 +75,10 @@ impl SessionClaim {
 
 pub struct SessionTracker {
     claims: Mutex<HashMap<String, SessionClaim>>,
+    /// Bypass state stored independently of tracker claims, mirroring the TS
+    /// `bypassedSessions` Set. Allows presence-only sessions to be bypassed
+    /// without a live tracker claim.
+    bypassed_keys: Mutex<std::collections::HashSet<String>>,
 }
 
 #[derive(Debug)]
@@ -91,6 +95,7 @@ impl SessionTracker {
     pub fn new() -> Self {
         Self {
             claims: Mutex::new(HashMap::new()),
+            bypassed_keys: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -181,11 +186,13 @@ impl SessionTracker {
         }
     }
 
-    /// Bypass a session.
+    /// Bypass a session. Works for both tracker-claimed and presence-only
+    /// sessions — bypass state is stored in a separate set (mirrors TS
+    /// `bypassedSessions`), so it does not require an active tracker claim.
     pub fn bypass(&self, key: &str) {
         let key = Self::normalize_key(key);
-        let mut claims = self.claims.lock().unwrap();
-        if let Some(claim) = claims.get_mut(key) {
+        self.bypassed_keys.lock().unwrap().insert(key.to_string());
+        if let Some(claim) = self.claims.lock().unwrap().get_mut(key) {
             claim.bypassed = true;
         }
     }
@@ -193,17 +200,17 @@ impl SessionTracker {
     /// Unbypass a session.
     pub fn unbypass(&self, key: &str) {
         let key = Self::normalize_key(key);
-        let mut claims = self.claims.lock().unwrap();
-        if let Some(claim) = claims.get_mut(key) {
+        self.bypassed_keys.lock().unwrap().remove(key);
+        if let Some(claim) = self.claims.lock().unwrap().get_mut(key) {
             claim.bypassed = false;
         }
     }
 
-    /// Check if session is bypassed.
+    /// Check if session is bypassed. Checks the independent bypass set so
+    /// presence-only sessions (not in tracker) are also handled correctly.
     pub fn is_bypassed(&self, key: &str) -> bool {
         let key = Self::normalize_key(key);
-        let claims = self.claims.lock().unwrap();
-        claims.get(key).map(|c| c.bypassed).unwrap_or(false)
+        self.bypassed_keys.lock().unwrap().contains(key)
     }
 
     /// List active sessions.

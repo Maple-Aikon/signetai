@@ -101,9 +101,12 @@ pub async fn list(
         .collect();
 
     // Append presence-only sessions not already covered by the tracker.
+    // Normalize the DB key (strip session: prefix) before the dedup check —
+    // tracker keys are always normalized; DB rows may still carry the prefix.
     // Annotate with live bypass state from the in-memory tracker.
     for mut p in presence_only {
-        let sk = p.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let raw_sk = p.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let sk = raw_sk.strip_prefix("session:").unwrap_or(&raw_sk).to_string();
         if !tracker_keys.contains(&sk) {
             if let Some(obj) = p.as_object_mut() {
                 obj.insert("bypassed".into(), state.sessions.is_bypassed(&sk).into());
@@ -129,6 +132,52 @@ pub struct AgentScopeParams {
     pub agent_id: Option<String>,
 }
 
+/// Check whether a session key is live for the given agent — first in the
+/// in-memory tracker, then falling back to the `agent_presence` table.
+/// Mirrors the TS `listLiveSessions(agentId).find(s => s.key === key)` pattern.
+/// Returns `Some(is_presence_only)` if found, `None` if not found.
+async fn find_live_session(
+    state: &AppState,
+    key: &str,
+    agent_id: &str,
+) -> Option<bool> {
+    // Check tracker first (fast in-memory path).
+    if state.sessions.list_sessions(Some(agent_id)).iter().any(|s| s.key == key) {
+        return Some(false);
+    }
+
+    // Fall back to presence DB for sessions not in tracker.
+    let key = key.to_string();
+    let agent_id = agent_id.to_string();
+    state
+        .pool
+        .read(move |conn| {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_presence'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            if !exists {
+                return Ok(false);
+            }
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_presence \
+                     WHERE session_key = ? AND agent_id = ?",
+                    rusqlite::params![key, agent_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            Ok(count > 0)
+        })
+        .await
+        .ok()
+        .and_then(|found| if found { Some(true) } else { None })
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/sessions/:key
 // ---------------------------------------------------------------------------
@@ -151,16 +200,21 @@ pub async fn get(
     };
     // Normalize session: prefix so raw and prefixed keys both resolve.
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
-    let sessions = state.sessions.list_sessions(Some(&agent_id));
-    let session = sessions.into_iter().find(|s| s.key == key);
 
-    match session {
-        Some(s) => (StatusCode::OK, Json(serde_json::to_value(s).unwrap())).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response(),
+    // Try tracker first; if not found, check presence for presence-only sessions.
+    let tracker_sessions = state.sessions.list_sessions(Some(&agent_id));
+    if let Some(s) = tracker_sessions.into_iter().find(|s| s.key == key) {
+        return (StatusCode::OK, Json(serde_json::to_value(s).unwrap())).into_response();
+    }
+
+    // Presence-only session fallback (expiresAt: null).
+    match find_live_session(&state, &key, &agent_id).await {
+        Some(true) => (StatusCode::OK, Json(serde_json::json!({
+            "key": key,
+            "expiresAt": serde_json::Value::Null,
+            "bypassed": state.sessions.is_bypassed(&key),
+        }))).into_response(),
+        _ => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response(),
     }
 }
 
@@ -192,9 +246,8 @@ pub async fn bypass(
     };
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
 
-    // Verify the session belongs to this agent before toggling bypass.
-    let sessions = state.sessions.list_sessions(Some(&agent_id));
-    if sessions.iter().find(|s| s.key == key).is_none() {
+    // Verify the session exists for this agent (tracker or presence-only).
+    if find_live_session(&state, &key, &agent_id).await.is_none() {
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
     }
 
