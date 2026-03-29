@@ -334,16 +334,33 @@ pub async fn recall(
                     .await;
 
                     // Apply updated scores from LLM reranker.
+                    // Sort on full-precision blended score before rounding,
+                    // matching TS daemon ordering behavior.
                     if let Some(scores) = updated_scores {
                         let score_map: std::collections::HashMap<&str, f64> =
                             scores.iter().map(|(id, s)| (id.as_str(), *s)).collect();
-                        for hit in &mut resp.results {
-                            if let Some(&s) = score_map.get(hit.id.as_str()) {
+                        // Update with full-precision scores and sort first.
+                        let mut full_scores: Vec<(usize, f64)> = resp
+                            .results
+                            .iter()
+                            .enumerate()
+                            .map(|(i, h)| {
+                                let s = score_map.get(h.id.as_str()).copied().unwrap_or(h.score);
+                                (i, s)
+                            })
+                            .collect();
+                        full_scores.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        let mut reordered: Vec<RecallHit> = full_scores
+                            .iter()
+                            .map(|(i, s)| {
+                                let mut hit = resp.results[*i].clone();
                                 hit.score = (s * 100.0).round() / 100.0;
-                            }
-                        }
-                        resp.results
-                            .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                                hit
+                            })
+                            .collect();
+                        std::mem::swap(&mut resp.results, &mut reordered);
                     }
 
                     // Inject summary card: drop last real memory to stay within
@@ -355,12 +372,10 @@ pub async fn recall(
                         let top_score = resp.results.first().map(|h| h.score).unwrap_or(0.5);
                         let score = top_score.clamp(0.01, 1.0);
 
-                        // Digest for stable id (sha1 first 12 hex chars).
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = DefaultHasher::new();
-                        resp.query.hash(&mut hasher);
-                        let digest = format!("{:016x}", hasher.finish());
+                        // SHA-1 digest of query for stable id, matching TS daemon.
+                        use sha1::Digest;
+                        let hash = sha1::Sha1::digest(resp.query.as_bytes());
+                        let digest = format!("{hash:x}");
                         let digest = &digest[..12];
 
                         if resp.results.len() >= limit {

@@ -25,6 +25,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 hmac = { workspace = true }
+sha1 = { workspace = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
