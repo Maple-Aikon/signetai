@@ -65,7 +65,9 @@ impl Default for ExposurePolicy {
             mode: "hybrid".into(),
             max_expanded_tools: 12,
             max_search_results: 8,
-            updated_at: chrono::Utc::now().to_rfc3339(),
+            // Sentinel: "never explicitly set" — not process start time, which
+            // would be misleading since Default is returned when no policy file exists.
+            updated_at: "1970-01-01T00:00:00.000Z".into(),
         }
     }
 }
@@ -116,8 +118,29 @@ fn save_servers(state: &AppState, servers: &[McpServer]) -> Result<(), String> {
 
 fn load_policy(state: &AppState) -> ExposurePolicy {
     let path = policy_path(state);
+    let mtime = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| {
+            let secs = t
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            chrono::DateTime::from_timestamp(secs as i64, 0)
+                .map(|dt| dt.to_rfc3339())
+        });
     match std::fs::read_to_string(&path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Ok(data) => {
+            let mut policy: ExposurePolicy = serde_json::from_str(&data).unwrap_or_default();
+            // If the stored JSON lacked updated_at, use file mtime rather
+            // than the process-start-time sentinel from Default.
+            if policy.updated_at == "1970-01-01T00:00:00.000Z" {
+                if let Some(mt) = mtime {
+                    policy.updated_at = mt;
+                }
+            }
+            policy
+        }
         Err(_) => ExposurePolicy::default(),
     }
 }

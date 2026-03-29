@@ -233,3 +233,52 @@ pub fn require_rate_limit_guard(
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Agent scope resolution (mirrors TS resolveScopedAgent)
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective agent_id for a request, applying scope enforcement
+/// when auth is active. Mirrors TS `resolveScopedAgent()` in request-scope.ts.
+///
+/// - Local mode or hybrid+unauthenticated: pass-through, no enforcement.
+/// - Otherwise: validate that the token's scope permits the requested agent.
+///
+/// Returns the resolved agent_id, or an error string for a 403 response.
+pub fn resolve_scoped_agent(
+    auth_state: &AuthState,
+    mode: AuthMode,
+    is_local: bool,
+    requested: Option<&str>,
+) -> Result<String, String> {
+    let scoped = auth_state
+        .result
+        .claims
+        .as_ref()
+        .and_then(|c| c.scope.agent.as_deref());
+    let agent_id = requested
+        .filter(|s| !s.trim().is_empty())
+        .or(scoped)
+        .unwrap_or("default")
+        .to_string();
+
+    // No enforcement in local mode or hybrid without token
+    if mode == AuthMode::Local {
+        return Ok(agent_id);
+    }
+    if mode == AuthMode::Hybrid && is_local && !auth_state.result.authenticated {
+        return Ok(agent_id);
+    }
+
+    let target = TokenScope {
+        agent: Some(agent_id.clone()),
+        project: None,
+        user: None,
+    };
+    let decision = check_scope(auth_state.result.claims.as_ref(), &target, mode);
+    if decision.allowed {
+        Ok(agent_id)
+    } else {
+        Err(decision.reason.unwrap_or_else(|| "scope violation".into()))
+    }
+}

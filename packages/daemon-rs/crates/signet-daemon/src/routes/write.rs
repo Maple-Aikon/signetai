@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(err, "session_key is not active");
 
         assert!(matches!(
-            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin),
+            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin, "agent-a"),
             signet_services::session::ClaimResult::Ok
         ));
         assert!(

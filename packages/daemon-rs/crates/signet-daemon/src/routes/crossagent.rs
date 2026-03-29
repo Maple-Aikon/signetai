@@ -129,10 +129,25 @@ pub async fn upsert_presence(
         .get("sessionKey")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    // Resolve agent_id: body field takes precedence; fall back to the agent
+    // scope encoded in the session key (agent:<id>:<uuid>) so tracker claims
+    // and presence rows share the same agent_id even when the connector omits
+    // the explicit field. Mirrors the TS resolve_remember_agent pattern.
     let agent_id = body
         .get("agentId")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            session_key.as_deref().and_then(|k| {
+                let mut parts = k.splitn(3, ':');
+                if parts.next() != Some("agent") {
+                    return None;
+                }
+                let id = parts.next().unwrap_or("").trim();
+                if id.is_empty() { None } else { Some(id.to_string()) }
+            })
+        });
     let project = body
         .get("project")
         .and_then(|v| v.as_str())

@@ -56,6 +56,9 @@ struct SessionClaim {
     path: RuntimePath,
     expires: Instant,
     bypassed: bool,
+    agent_id: String,
+    /// ISO-8601 timestamp recorded when the claim was first created.
+    claimed_at: String,
 }
 
 impl SessionClaim {
@@ -66,6 +69,20 @@ impl SessionClaim {
     fn refresh(&mut self) {
         self.expires = Instant::now() + Duration::from_millis(STALE_SESSION_MS);
     }
+
+    /// Compute the absolute expiry as an ISO-8601 string by projecting the
+    /// remaining TTL onto the current wall clock.
+    fn expires_at_iso(&self) -> String {
+        let remaining = self.expires.saturating_duration_since(Instant::now());
+        let wall = std::time::SystemTime::now() + remaining;
+        let ts = wall
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        chrono::DateTime::from_timestamp(ts as i64, 0)
+            .unwrap_or_else(chrono::Utc::now)
+            .to_rfc3339()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +91,16 @@ impl SessionClaim {
 
 pub struct SessionTracker {
     claims: Mutex<HashMap<String, SessionClaim>>,
+    /// Bypass state stored independently of tracker claims, mirroring the TS
+    /// `bypassedSessions` Set. Allows presence-only sessions to be bypassed
+    /// without a live tracker claim.
+    ///
+    /// Agent-scoping is NOT needed here: the bypass write path
+    /// (`routes::sessions::bypass`) calls `find_live_session(key, agent_id)`
+    /// before writing, so only agent-verified keys are ever stored.
+    /// Session keys embed the agent ID (`agent:<id>:<uuid>`), making
+    /// cross-agent key sharing structurally impossible in practice.
+    bypassed_keys: Mutex<std::collections::HashSet<String>>,
 }
 
 #[derive(Debug)]
@@ -83,15 +110,21 @@ pub enum ClaimResult {
 }
 
 impl SessionTracker {
+    fn normalize_key<'a>(key: &'a str) -> &'a str {
+        key.strip_prefix("session:").unwrap_or(key)
+    }
+
     pub fn new() -> Self {
         Self {
             claims: Mutex::new(HashMap::new()),
+            bypassed_keys: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
     /// Claim a session for a runtime path. Returns Ok if claimed successfully
     /// or conflict if claimed by another path.
-    pub fn claim(&self, key: &str, path: RuntimePath) -> ClaimResult {
+    pub fn claim(&self, key: &str, path: RuntimePath, agent_id: &str) -> ClaimResult {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
 
         if let Some(claim) = claims.get_mut(key) {
@@ -109,25 +142,33 @@ impl SessionTracker {
             }
         }
 
+        // Clear any stale bypass state for this key so a new session on the
+        // same key does not inherit bypass from a previous session lifetime.
+        self.bypassed_keys.lock().unwrap().remove(key);
         claims.insert(
             key.to_string(),
             SessionClaim {
                 path,
                 expires: Instant::now() + Duration::from_millis(STALE_SESSION_MS),
                 bypassed: false,
+                agent_id: agent_id.to_string(),
+                claimed_at: chrono::Utc::now().to_rfc3339(),
             },
         );
         ClaimResult::Ok
     }
 
-    /// Release a session.
+    /// Release a session. Clears both the tracker claim and any bypass state
+    /// so bypass does not leak across session lifetimes.
     pub fn release(&self, key: &str) {
-        let mut claims = self.claims.lock().unwrap();
-        claims.remove(key);
+        let key = Self::normalize_key(key);
+        self.claims.lock().unwrap().remove(key);
+        self.bypassed_keys.lock().unwrap().remove(key);
     }
 
     /// Get the runtime path for a session.
     pub fn get_path(&self, key: &str) -> Option<RuntimePath> {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get(key) {
             if claim.is_stale() {
@@ -142,6 +183,7 @@ impl SessionTracker {
 
     /// Check if session path matches, returns conflict response if not.
     pub fn check(&self, key: &str, path: RuntimePath) -> Option<RuntimePath> {
+        let key = Self::normalize_key(key);
         let claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get(key)
             && !claim.is_stale()
@@ -157,6 +199,7 @@ impl SessionTracker {
     /// Mirrors TS renewSession() — called on checkpoint-extract to keep
     /// long-lived sessions (Discord bots) alive without ending them.
     pub fn renew(&self, key: &str) -> bool {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get_mut(key) {
             if claim.is_stale() {
@@ -170,43 +213,55 @@ impl SessionTracker {
         }
     }
 
-    /// Bypass a session.
+    /// Bypass a session. Works for both tracker-claimed and presence-only
+    /// sessions — bypass state is stored in a separate set (mirrors TS
+    /// `bypassedSessions`), so it does not require an active tracker claim.
     pub fn bypass(&self, key: &str) {
-        let mut claims = self.claims.lock().unwrap();
-        if let Some(claim) = claims.get_mut(key) {
+        let key = Self::normalize_key(key);
+        self.bypassed_keys.lock().unwrap().insert(key.to_string());
+        if let Some(claim) = self.claims.lock().unwrap().get_mut(key) {
             claim.bypassed = true;
         }
     }
 
     /// Unbypass a session.
     pub fn unbypass(&self, key: &str) {
-        let mut claims = self.claims.lock().unwrap();
-        if let Some(claim) = claims.get_mut(key) {
+        let key = Self::normalize_key(key);
+        self.bypassed_keys.lock().unwrap().remove(key);
+        if let Some(claim) = self.claims.lock().unwrap().get_mut(key) {
             claim.bypassed = false;
         }
     }
 
-    /// Check if session is bypassed.
+    /// Check if session is bypassed. Checks the independent bypass set so
+    /// presence-only sessions (not in tracker) are also handled correctly.
     pub fn is_bypassed(&self, key: &str) -> bool {
-        let claims = self.claims.lock().unwrap();
-        claims.get(key).map(|c| c.bypassed).unwrap_or(false)
+        let key = Self::normalize_key(key);
+        self.bypassed_keys.lock().unwrap().contains(key)
     }
 
     /// List active sessions.
-    pub fn list_sessions(&self) -> Vec<SessionInfo> {
+    pub fn list_sessions(&self, agent_id: Option<&str>) -> Vec<SessionInfo> {
         let claims = self.claims.lock().unwrap();
         claims
             .iter()
             .filter(|(_, c)| !c.is_stale())
+            .filter(|(_, c)| agent_id.map_or(true, |aid| c.agent_id == aid))
             .map(|(key, claim)| SessionInfo {
                 key: key.clone(),
-                path: claim.path,
+                agent_id: claim.agent_id.clone(),
+                runtime_path: claim.path.as_str().to_string(),
+                claimed_at: claim.claimed_at.clone(),
+                expires_at: claim.expires_at_iso(),
                 bypassed: claim.bypassed,
             })
             .collect()
     }
 
-    /// Clean up stale sessions.
+    /// Clean up stale sessions. Bypass state is NOT pruned here — presence-only
+    /// sessions never have tracker claims so their bypass entries would be
+    /// incorrectly removed. Bypass state is only cleared on explicit release(),
+    /// matching the TS bypassedSessions Set lifecycle.
     pub fn cleanup(&self) -> usize {
         let mut claims = self.claims.lock().unwrap();
         let before = claims.len();
@@ -225,7 +280,11 @@ impl Default for SessionTracker {
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub key: String,
-    pub path: RuntimePath,
+    #[serde(skip)]
+    pub agent_id: String,
+    pub runtime_path: String,
+    pub claimed_at: String,
+    pub expires_at: String,
     pub bypassed: bool,
 }
 
@@ -687,26 +746,26 @@ mod tests {
 
         // First claim succeeds
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Plugin),
+            tracker.claim("s1", RuntimePath::Plugin, "default"),
             ClaimResult::Ok
         ));
 
         // Same path re-claim refreshes
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Plugin),
+            tracker.claim("s1", RuntimePath::Plugin, "default"),
             ClaimResult::Ok
         ));
 
         // Different path conflicts
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Legacy),
+            tracker.claim("s1", RuntimePath::Legacy, "default"),
             ClaimResult::Conflict { .. }
         ));
 
         // Release
         tracker.release("s1");
         assert!(matches!(
-            tracker.claim("s1", RuntimePath::Legacy),
+            tracker.claim("s1", RuntimePath::Legacy, "default"),
             ClaimResult::Ok
         ));
     }
@@ -714,7 +773,7 @@ mod tests {
     #[test]
     fn session_bypass() {
         let tracker = SessionTracker::new();
-        tracker.claim("s1", RuntimePath::Plugin);
+        tracker.claim("s1", RuntimePath::Plugin, "default");
         assert!(!tracker.is_bypassed("s1"));
 
         tracker.bypass("s1");

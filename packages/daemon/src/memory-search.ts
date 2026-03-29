@@ -1109,7 +1109,7 @@ export async function hybridRecall(
 					id: syntheticId,
 					content: block.content,
 					content_length: block.content.length,
-					truncated: false,
+					truncated: block.truncated,
 					score: Math.round(Math.min(block.score, maxConstructed) * 100) / 100,
 					source: "constructed",
 					type: "semantic",

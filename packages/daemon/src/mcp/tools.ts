@@ -506,7 +506,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			mode: "hybrid",
 			maxExpandedTools: 12,
 			maxSearchResults: 8,
-			updatedAt: new Date(0).toISOString(),
+			// Sentinel: "never explicitly set" — matches DEFAULT_EXPOSURE_POLICY.
+			updatedAt: "1970-01-01T00:00:00.000Z",
 		},
 	});
 
@@ -1339,13 +1340,17 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				session_key: z.string().describe("Session key to bypass"),
 				enabled: z.boolean().describe("true = bypass (disable hooks), false = re-enable"),
+				agent_id: z.string().optional().describe("Agent owning the session (defaults to current agent)"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ session_key, enabled }) => {
+		async ({ session_key, enabled, agent_id }) => {
+			// Always thread agent_id so the scoped route resolves correctly.
+			// Default to "default" matching other cross-agent MCP tools.
+			const aid = agent_id ?? "default";
 			const result = await daemonFetch<{ key: string; bypassed: boolean }>(
 				baseUrl,
-				`/api/sessions/${encodeURIComponent(session_key)}/bypass`,
+				`/api/sessions/${encodeURIComponent(session_key)}/bypass?agent_id=${encodeURIComponent(aid)}`,
 				{ method: "POST", body: { enabled } },
 			);
 			if (!result.ok) return errorResult(`Bypass toggle failed: ${result.error}`);

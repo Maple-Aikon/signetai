@@ -7,15 +7,11 @@
  * never mutating memory content.
  */
 
-import {
-	DECISION_ACTIONS,
-	type DecisionAction,
-	type ExtractedFact,
-} from "@signet/core";
-import type { DbAccessor } from "../db-accessor";
+import { DECISION_ACTIONS, type DecisionAction, type ExtractedFact } from "@signet/core";
+import { type DbAccessor, isVectorRuntimeUsable } from "../db-accessor";
+import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";
 import type { LlmProvider } from "./provider";
-import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,10 +34,7 @@ export interface DecisionConfig {
 	readonly embedding: EmbeddingConfig;
 	readonly search: MemorySearchConfig;
 	readonly timeoutMs?: number;
-	readonly fetchEmbedding: (
-		text: string,
-		cfg: EmbeddingConfig,
-	) => Promise<number[] | null>;
+	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 }
 
 export interface FactDecisionProposal {
@@ -113,10 +106,11 @@ async function findCandidatesVector(
 	scope: DecisionScope,
 ): Promise<Map<string, number>> {
 	const vectorMap = new Map<string, number>();
+	if (!isVectorRuntimeUsable()) {
+		return vectorMap;
+	}
 	const vectorLimit =
-		scope.scope !== null || scope.visibility !== "global"
-			? limit * VECTOR_OVERFETCH_MULTIPLIER
-			: limit;
+		scope.scope !== null || scope.visibility !== "global" ? limit * VECTOR_OVERFETCH_MULTIPLIER : limit;
 	try {
 		const queryVec = await cfg.fetchEmbedding(query, cfg.embedding);
 		if (queryVec) {
@@ -137,13 +131,7 @@ async function findCandidatesVector(
 				const stmt = db.prepare(sql) as unknown as AllQuery<Array<{ id: string; distance: number }>>;
 				const results =
 					scope.scope !== null
-						? stmt.all(
-								qf32,
-								vectorLimit,
-								scope.agentId,
-								scope.visibility,
-								scope.scope,
-							)
+						? stmt.all(qf32, vectorLimit, scope.agentId, scope.visibility, scope.scope)
 						: stmt.all(qf32, vectorLimit, scope.agentId, scope.visibility);
 				for (const r of results) {
 					const score = Math.max(0, 1 - r.distance);
@@ -158,11 +146,7 @@ async function findCandidatesVector(
 	return vectorMap;
 }
 
-function fetchMemoryRows(
-	accessor: DbAccessor,
-	ids: readonly string[],
-	scope: DecisionScope,
-): CandidateMemory[] {
+function fetchMemoryRows(accessor: DbAccessor, ids: readonly string[], scope: DecisionScope): CandidateMemory[] {
 	if (ids.length === 0) return [];
 	const placeholders = ids.map(() => "?").join(", ");
 	const sql = `SELECT id, content, type, importance
@@ -176,11 +160,9 @@ function fetchMemoryRows(
 			db
 				.prepare(sql)
 				.all(
-					...(
-						scope.scope !== null
-							? [...ids, scope.agentId, scope.visibility, scope.scope]
-							: [...ids, scope.agentId, scope.visibility]
-					),
+					...(scope.scope !== null
+						? [...ids, scope.agentId, scope.visibility, scope.scope]
+						: [...ids, scope.agentId, scope.visibility]),
 				) as CandidateMemory[],
 	);
 }
@@ -195,13 +177,7 @@ async function findCandidates(
 	const minScore = cfg.search.min_score;
 
 	const bm25Map = findCandidatesBm25(accessor, query, CANDIDATE_LIMIT * 2, scope);
-	const vectorMap = await findCandidatesVector(
-		accessor,
-		query,
-		cfg,
-		CANDIDATE_LIMIT * 2,
-		scope,
-	);
+	const vectorMap = await findCandidatesVector(accessor, query, cfg, CANDIDATE_LIMIT * 2, scope);
 
 	const allIds = new Set([...bm25Map.keys(), ...vectorMap.keys()]);
 	const scored: Array<{ id: string; score: number }> = [];
@@ -230,15 +206,9 @@ async function findCandidates(
 // Decision prompt
 // ---------------------------------------------------------------------------
 
-function buildDecisionPrompt(
-	fact: ExtractedFact,
-	candidates: readonly CandidateMemory[],
-): string {
+function buildDecisionPrompt(fact: ExtractedFact, candidates: readonly CandidateMemory[]): string {
 	const candidateBlock = candidates
-		.map(
-			(c, i) =>
-				`[${i + 1}] ID: ${c.id}\n    Type: ${c.type}\n    Content: ${c.content}`,
-		)
+		.map((c, i) => `[${i + 1}] ID: ${c.id}\n    Type: ${c.type}\n    Content: ${c.content}`)
 		.join("\n\n");
 
 	return `You are a memory management system. Given a new fact and existing memory candidates, decide the best action.
@@ -375,9 +345,7 @@ export async function runShadowDecisions(
 				const targetContent =
 					proposal.targetMemoryId === undefined
 						? undefined
-						: candidates.find(
-								(candidate) => candidate.id === proposal.targetMemoryId,
-							)?.content;
+						: candidates.find((candidate) => candidate.id === proposal.targetMemoryId)?.content;
 				proposals.push({
 					...proposal,
 					fact,

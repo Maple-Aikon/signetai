@@ -473,7 +473,7 @@ pub async fn session_start(
 
     // Session claim
     if let Some(p) = path
-        && let ClaimResult::Conflict { claimed_by } = state.sessions.claim(&session_key, p)
+        && let ClaimResult::Conflict { claimed_by } = state.sessions.claim(&session_key, p, &agent_id)
     {
         return conflict_response(claimed_by);
     }
@@ -2632,7 +2632,7 @@ mod tests {
         assert_eq!(err, "session_key is not active");
 
         assert!(matches!(
-            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin),
+            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin, "agent-a"),
             signet_services::session::ClaimResult::Ok
         ));
         assert!(

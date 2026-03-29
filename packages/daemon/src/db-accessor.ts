@@ -315,6 +315,10 @@ export function getVectorRuntimeStatus(): VectorRuntimeStatus {
 	};
 }
 
+export function isVectorRuntimeUsable(): boolean {
+	return vecLoaded && vecLoadError === null;
+}
+
 const MAX_MIGRATION_BACKUPS = 5;
 
 /**
@@ -398,9 +402,21 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	if (vecExtPath) {
 		try {
 			ensureVecTable(writeConn);
-			backfillVecEmbeddings(writeConn);
-		} catch {
-			// vec0 not usable — vector search will be disabled
+		} catch (err) {
+			// ensureVecTable failure means the vec0 runtime extension is not
+			// usable — disable vector search for this process lifetime.
+			vecLoaded = false;
+			vecLoadError = err instanceof Error ? err.message : String(err);
+			console.warn("[db-accessor] vec0 unavailable after extension load:", vecLoadError);
+		}
+		if (vecLoaded) {
+			try {
+				backfillVecEmbeddings(writeConn);
+			} catch (err) {
+				// Backfill failure is a data issue (e.g. bad row, schema mismatch),
+				// not a runtime unavailability — vector search stays enabled.
+				console.warn("[db-accessor] vec backfill partial:", err instanceof Error ? err.message : String(err));
+			}
 		}
 	}
 

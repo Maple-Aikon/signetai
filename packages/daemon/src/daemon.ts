@@ -25,8 +25,8 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
-	CONNECTOR_PROVIDERS,
 	type AgentDefinition,
+	CONNECTOR_PROVIDERS,
 	type ConnectorConfig,
 	SIGNET_GIT_PROTECTED_PATHS,
 	type SyncCursor,
@@ -39,8 +39,8 @@ import {
 	parseSimpleYaml,
 	readNetworkMode,
 	readPipelinePauseState,
-	resolveSignetForgeManagedPath,
 	resolveNetworkBinding,
+	resolveSignetForgeManagedPath,
 	setPipelinePaused,
 	stripSignetBlock,
 	vectorSearch,
@@ -49,6 +49,7 @@ import { watch } from "chokidar";
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger as honoLogger } from "hono/logger";
+import { getAgentScope, resolveAgentId } from "./agent-id";
 import { type AnalyticsCollector, type ErrorStage, createAnalyticsCollector } from "./analytics";
 import {
 	type AuthConfig,
@@ -64,7 +65,6 @@ import {
 	requireRateLimit,
 	requireScope,
 } from "./auth";
-import { resolveScopedAgent, resolveScopedProject as resolveScopedProjectForClaims, shouldEnforceScope } from "./request-scope";
 import { migrateConfig } from "./config-migration";
 import { createFilesystemConnector } from "./connectors/filesystem";
 import {
@@ -79,9 +79,9 @@ import { normalizeAndHashContent } from "./content-normalization";
 import {
 	type AgentMessage,
 	type AgentMessageType,
+	clearAllPresence,
 	createAgentMessage,
 	getAgentPresenceForSession,
-	clearAllPresence,
 	isMessageVisibleToAgent,
 	listAgentMessages,
 	listAgentPresence,
@@ -110,6 +110,10 @@ import {
 import { buildEmbeddingHealth } from "./embedding-health";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
+import { writeFileIfChangedAsync } from "./file-sync";
+import { walkImpact } from "./graph-impact";
+import { syncAgentWorkspaces } from "./identity-sync";
+import { linkMemoryToEntities } from "./inline-entity-linker";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
@@ -121,38 +125,32 @@ import {
 	getPinnedEntities,
 	listKnowledgeEntities,
 	pinEntity,
+	resolveNamedEntity,
 	unpinEntity,
 } from "./knowledge-graph";
 import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
-import { type LogEntry, logger } from "./logger";
+import { type LogCategory, type LogEntry, logger } from "./logger";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
-import { walkImpact } from "./graph-impact";
-import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
-import { getAgentScope, resolveAgentId } from "./agent-id";
-import { writeFileIfChangedAsync } from "./file-sync";
-import { syncAgentWorkspaces } from "./identity-sync";
-import { createSingleFlightRunner } from "./single-flight-runner";
+import { buildMemoryTimeline } from "./memory-timeline";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
-import { expandTemporalNode } from "./temporal-expand";
-import { upsertThreadHead } from "./thread-heads";
+import { recordPathFeedback } from "./path-feedback";
 import {
 	DEFAULT_RETENTION,
 	enqueueDocumentIngestJob,
 	enqueueExtractionJob,
-	getPipelineWorkerStatus,
 	ensureRetentionWorker,
+	getPipelineWorkerStatus,
 	getSynthesisWorker,
 	nudgeExtractionWorker,
 	readLastSynthesisTime,
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
+import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { clusterEntities } from "./pipeline/community-detection";
 import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
-import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { getGraphBoostIds } from "./pipeline/graph-search";
-import { linkMemoryToEntities } from "./inline-entity-linker";
 import {
 	getTraversalStatus,
 	invalidateTraversalCache,
@@ -198,6 +196,8 @@ import {
 	cleanOrphanedEmbeddings,
 	createRateLimiter,
 	deduplicateMemories,
+	findDeadMemories,
+	forgetDeadMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
 	pruneChunkGroupEntities,
@@ -209,9 +209,12 @@ import {
 	resyncVectorIndex,
 	structuralBackfill,
 	triggerRetentionSweep,
-	findDeadMemories,
-	forgetDeadMemories,
 } from "./repair-actions";
+import {
+	resolveScopedAgent,
+	resolveScopedProject as resolveScopedProjectForClaims,
+	shouldEnforceScope,
+} from "./request-scope";
 import {
 	CRON_PRESETS,
 	computeNextRun,
@@ -231,9 +234,11 @@ import {
 	redactCheckpointRow,
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
-import { recordPathFeedback } from "./path-feedback";
+import { createSingleFlightRunner } from "./single-flight-runner";
 import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
+import { expandTemporalNode } from "./temporal-expand";
+import { upsertThreadHead } from "./thread-heads";
 import { type TimelineSources, buildTimeline } from "./timeline";
 import {
 	type MutationContext,
@@ -480,9 +485,7 @@ const repairLimiter = createRateLimiter();
 function queueExtractionJob(memoryId: string): void {
 	if (providerRuntimeResolution.extraction.status === "blocked") {
 		deadLetterExtractionJob(getDbAccessor(), memoryId, {
-			reason:
-				providerRuntimeResolution.extraction.reason ??
-				"Configured extraction provider unavailable at startup",
+			reason: providerRuntimeResolution.extraction.reason ?? "Configured extraction provider unavailable at startup",
 		});
 		return;
 	}
@@ -566,7 +569,16 @@ function invalidateDiagnosticsCache(): void {
 
 function buildOpenClawHealth(): import("./diagnostics").OpenClawHealth {
 	if (!openClawHeartbeat) {
-		return { status: "never-seen", lastHeartbeat: null, pluginVersion: null, hooksRegistered: [], hooksSucceeded: 0, hooksFailed: 0, lastLatencyMs: 0, lastError: null };
+		return {
+			status: "never-seen",
+			lastHeartbeat: null,
+			pluginVersion: null,
+			hooksRegistered: [],
+			hooksSucceeded: 0,
+			hooksFailed: 0,
+			lastLatencyMs: 0,
+			lastError: null,
+		};
 	}
 	const age = Date.now() - new Date(openClawHeartbeat.timestamp).getTime();
 	const status = age < OPENCLAW_STALE_MS ? "connected" : "stale";
@@ -1809,8 +1821,9 @@ app.use("/api/memory/:id", async (c, next) => {
 app.get("/api/logs", (c) => {
 	const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 	const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
-	const category = c.req.query("category") as any;
-	const since = c.req.query("since") ? new Date(c.req.query("since")!) : undefined;
+	const category = c.req.query("category") as LogCategory | undefined;
+	const sinceRaw = c.req.query("since");
+	const since = sinceRaw ? new Date(sinceRaw) : undefined;
 
 	const logs = logger.getRecent({ limit, level, category, since });
 	return c.json({ logs, count: logs.length });
@@ -1971,7 +1984,10 @@ interface AgentRow {
 
 app.get("/api/agents", (c) => {
 	const agents = getDbAccessor().withReadDb(
-		(db) => db.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name").all() as AgentRow[],
+		(db) =>
+			db
+				.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name")
+				.all() as AgentRow[],
 	);
 	return c.json({ agents });
 });
@@ -2274,7 +2290,7 @@ app.get("/memory/search", (c) => {
 		tags: c.req.query("tags") ?? "",
 		who: c.req.query("who") ?? "",
 		pinned: c.req.query("pinned") === "1" || c.req.query("pinned") === "true",
-		importance_min: c.req.query("importance_min") ? Number.parseFloat(c.req.query("importance_min")!) : null,
+		importance_min: c.req.query("importance_min") ? Number.parseFloat(c.req.query("importance_min") ?? "") : null,
 		since: c.req.query("since") ?? "",
 	};
 
@@ -2885,11 +2901,16 @@ app.post("/api/memory/remember", async (c) => {
 			try {
 				// Dedup check + insert (scope-aware: same content in different scopes is not a duplicate)
 				const inserted = getDbAccessor().withWriteTx((db) => {
-					const byHash = scope !== null
-						? db.prepare(`SELECT id FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1`)
-							.get(chunkNormalized.contentHash, scope) as { id: string } | undefined
-						: db.prepare(`SELECT id FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`)
-							.get(chunkNormalized.contentHash) as { id: string } | undefined;
+					const byHash =
+						scope !== null
+							? (db
+									.prepare("SELECT id FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1")
+									.get(chunkNormalized.contentHash, scope) as { id: string } | undefined)
+							: (db
+									.prepare(
+										"SELECT id FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1",
+									)
+									.get(chunkNormalized.contentHash) as { id: string } | undefined);
 					if (byHash) return false;
 
 					txIngestEnvelope(db, {
@@ -2946,9 +2967,7 @@ app.post("/api/memory/remember", async (c) => {
 							// Use memory-scoped content hash for embeddings so the same
 							// content in different scopes each gets its own vector row
 							// (vector search joins on source_id, not content_hash)
-							const embHash = scope
-								? `${chunkNormalized.contentHash}:${scope}`
-								: chunkNormalized.contentHash;
+							const embHash = scope ? `${chunkNormalized.contentHash}:${scope}` : chunkNormalized.contentHash;
 							getDbAccessor().withWriteTx((db) => {
 								syncVecDeleteBySourceId(db, "memory", chunkId);
 								db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
@@ -2956,15 +2975,7 @@ app.post("/api/memory/remember", async (c) => {
 									INSERT INTO embeddings
 									  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 									VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-								`).run(
-									embId,
-									embHash,
-									blob,
-									vec.length,
-									chunkId,
-									chunkNormalized.storageContent,
-									now,
-								);
+								`).run(embId, embHash, blob, vec.length, chunkId, chunkNormalized.storageContent, now);
 								syncVecInsert(db, embId, vec);
 								db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 									fullCfg.embedding.model,
@@ -3062,28 +3073,40 @@ app.post("/api/memory/remember", async (c) => {
 		const result = getDbAccessor().withWriteTx((db) => {
 			// Check sourceId-based dedupe first (scope-aware)
 			if (sourceId) {
-				const bySource = (scope !== null
-					? db.prepare(
-						`SELECT id, type, tags, pinned, importance, content
+				const bySource = (
+					scope !== null
+						? db
+								.prepare(
+									`SELECT id, type, tags, pinned, importance, content
 						 FROM memories WHERE source_type = ? AND source_id = ? AND scope = ? AND is_deleted = 0 LIMIT 1`,
-					).get(sourceType, sourceId, scope)
-					: db.prepare(
-						`SELECT id, type, tags, pinned, importance, content
+								)
+								.get(sourceType, sourceId, scope)
+						: db
+								.prepare(
+									`SELECT id, type, tags, pinned, importance, content
 						 FROM memories WHERE source_type = ? AND source_id = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`,
-					).get(sourceType, sourceId)) as DedupeRow | undefined;
+								)
+								.get(sourceType, sourceId)
+				) as DedupeRow | undefined;
 				if (bySource) return { deduped: true as const, row: bySource };
 			}
 
 			// Check content_hash dedupe (scope-aware: same content in different scopes is not a duplicate)
-			const byHash = (scope !== null
-				? db.prepare(
-					`SELECT id, type, tags, pinned, importance, content
+			const byHash = (
+				scope !== null
+					? db
+							.prepare(
+								`SELECT id, type, tags, pinned, importance, content
 					 FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1`,
-				).get(contentHash, scope)
-				: db.prepare(
-					`SELECT id, type, tags, pinned, importance, content
+							)
+							.get(contentHash, scope)
+					: db
+							.prepare(
+								`SELECT id, type, tags, pinned, importance, content
 					 FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`,
-				).get(contentHash)) as DedupeRow | undefined;
+							)
+							.get(contentHash)
+			) as DedupeRow | undefined;
 			if (byHash) return { deduped: true as const, row: byHash };
 
 			// No duplicate — insert
@@ -3101,9 +3124,13 @@ app.post("/api/memory/remember", async (c) => {
 				tags,
 				pinned,
 				isDeleted: 0,
-				extractionStatus: hasStructured ? "complete" : (pipelineEnqueueEnabled ? "pending" : "none"),
+				extractionStatus: hasStructured ? "complete" : pipelineEnqueueEnabled ? "pending" : "none",
 				embeddingModel: null,
-				extractionModel: hasStructured ? "structured-passthrough" : (pipelineEnqueueEnabled ? pipelineCfg.extractionModel : null),
+				extractionModel: hasStructured
+					? "structured-passthrough"
+					: pipelineEnqueueEnabled
+						? pipelineCfg.extractionModel
+						: null,
 				updatedBy: who,
 				sourceType,
 				sourceId,
@@ -3942,9 +3969,11 @@ app.post("/api/memory/feedback", async (c) => {
 			ok: true,
 			recorded: Object.keys(parsed).length,
 			accepted: result.accepted,
+			rejected: Math.max(0, Object.keys(parsed).length - result.accepted),
 			propagated: result.propagated,
 			cooccurrenceUpdated: result.cooccurrenceUpdated,
 			dependenciesUpdated: result.dependenciesUpdated,
+			acceptanceRule: "accepted means the memory id was recorded for this session and agent",
 		});
 	} catch (error) {
 		recordAgentFeedback(sessionKey, parsed, agentId);
@@ -5691,6 +5720,7 @@ import {
 	getSessionPath,
 	hasSession,
 	isSessionBypassed,
+	normalizeSessionKey,
 	releaseAllSessions,
 	releaseSession,
 	renewSession,
@@ -5746,7 +5776,44 @@ function isInternalCall(c: Context): boolean {
 function checkBypass(body?: { sessionKey?: string; sessionId?: string }): boolean {
 	const key = body?.sessionKey ?? body?.sessionId;
 	if (!key) return false;
+	// isSessionBypassed normalizes the key via normalizeSessionKey() internally,
+	// so raw "session:<uuid>" forms from hook bodies are handled correctly.
 	return isSessionBypassed(key);
+}
+
+function listLiveSessions(agentId: string): Array<{
+	key: string;
+	runtimePath: string;
+	claimedAt: string;
+	expiresAt: string | null;
+	bypassed: boolean;
+}> {
+	// Seed from tracker claims for this agent. Claims now carry agentId so
+	// sessions from another agent workspace that happens to share the daemon
+	// port cannot appear in this agent's session list.
+	const byKey = new Map(
+		getActiveSessions()
+			.filter((s) => s.agentId === agentId)
+			.map((session) => [session.key, session] as const),
+	);
+
+	// Merge in presence-only sessions for this agent (no tracker claim yet,
+	// e.g. plugin path or session whose claim arrived after presence).
+	// Filter by agentId here since presence can contain cross-agent records.
+	for (const presence of listAgentPresence({ limit: Number.MAX_SAFE_INTEGER })) {
+		if (presence.agentId !== agentId) continue;
+		if (!presence.sessionKey) continue;
+		const key = normalizeSessionKey(presence.sessionKey);
+		if (byKey.has(key)) continue;
+		byKey.set(key, {
+			key,
+			runtimePath: presence.runtimePath ?? "unknown",
+			claimedAt: presence.startedAt,
+			expiresAt: null,
+			bypassed: isSessionBypassed(key),
+		});
+	}
+	return [...byKey.values()].sort((a, b) => b.claimedAt.localeCompare(a.claimedAt));
 }
 
 // Session start hook - provides context/memories for injection
@@ -5764,9 +5831,15 @@ app.post("/api/hooks/session-start", async (c) => {
 		const runtimePath = resolveRuntimePath(c, body);
 		if (runtimePath) body.runtimePath = runtimePath;
 
-		// Enforce single runtime path per session
+		// Enforce single runtime path per session.
+		// Use resolveAgentId to match the same agent-resolution path used
+		// throughout the hook (handles body.agentId and session-key-encoded ids).
 		if (body.sessionKey && runtimePath) {
-			const claim = claimSession(body.sessionKey, runtimePath);
+			const claim = claimSession(
+				body.sessionKey,
+				runtimePath,
+				resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey }),
+			);
 			if (!claim.ok) {
 				return c.json(
 					{
@@ -6085,23 +6158,21 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		}
 
 		const now = new Date().toISOString();
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey }),
-		);
+		const scopedAgent = resolveScopedAgentId(c, resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey }));
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
 		const agentId = scopedAgent.agentId;
 		const transcriptRow = body.sessionKey
-			? getDbAccessor().withReadDb((db) =>
-					db
-						.prepare(
-							`SELECT project
+			? getDbAccessor().withReadDb(
+					(db) =>
+						db
+							.prepare(
+								`SELECT project
 							 FROM session_transcripts
 							 WHERE session_key = ? AND agent_id = ?`,
-						)
-						.get(body.sessionKey, agentId) as { project: string | null } | undefined,
+							)
+							.get(body.sessionKey, agentId) as { project: string | null } | undefined,
 				)
 			: undefined;
 		const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
@@ -6140,9 +6211,7 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
 				.get();
 			if (table) {
-				const nodeId = body.sessionKey
-					? `${body.sessionKey}:compaction:${Date.parse(now)}`
-					: crypto.randomUUID();
+				const nodeId = body.sessionKey ? `${body.sessionKey}:compaction:${Date.parse(now)}` : crypto.randomUUID();
 				db.prepare(
 					`INSERT OR REPLACE INTO session_summaries (
 						id, project, depth, kind, content, token_count,
@@ -6219,19 +6288,19 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 						.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
 						.get();
 					if (hasTx) {
-						db.prepare(
-							"DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
-						).run(body.sessionKey, agentId);
+						db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(
+							body.sessionKey,
+							agentId,
+						);
 					}
 					const hasCur = db
-						.prepare(
-							"SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'",
-						)
+						.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'")
 						.get();
 					if (hasCur) {
-						db.prepare(
-							"DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?",
-						).run(body.sessionKey, agentId);
+						db.prepare("DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?").run(
+							body.sessionKey,
+							agentId,
+						);
 					}
 				});
 			} catch (err) {
@@ -6331,12 +6400,15 @@ app.post("/api/cross-agent/presence", async (c) => {
 
 	const runtimePathRaw = parseOptionalString(payload.runtimePath);
 	const runtimePath = runtimePathRaw === "plugin" || runtimePathRaw === "legacy" ? runtimePathRaw : undefined;
-	const requestedAgentId = parseOptionalString(payload.agentId);
+	const sessionKey = parseOptionalString(payload.sessionKey);
+	// Resolve agent using the same fallback chain as hook paths: explicit
+	// agentId takes precedence, then the scope encoded in the session key
+	// (agent:<id>:<uuid>), then "default".
+	const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
 	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
 	if (scopedAgent.error) {
 		return c.json({ error: scopedAgent.error }, 403);
 	}
-	const sessionKey = parseOptionalString(payload.sessionKey);
 	const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
 		requireExisting: false,
 		context: "sessionKey",
@@ -6758,16 +6830,25 @@ app.get("/api/synthesis/status", (c) => {
 // Session API
 // ============================================================================
 
-// List active sessions with bypass status
+// List active sessions for the requesting agent with bypass status.
+// Cross-agent session visibility is intentionally served by
+// /api/cross-agent/presence — surfacing other agents' sessions here
+// would violate per-agent data scoping (CLAUDE.md §agent-scoping).
+// Optional ?agent_id= query param to target a specific agent's sessions.
 app.get("/api/sessions", (c) => {
-	const sessions = getActiveSessions();
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const sessions = listLiveSessions(scopedAgent.agentId);
 	return c.json({ sessions, count: sessions.length });
 });
 
 // Get single session status
+// Optional ?agent_id= query param to target a specific agent's session.
 app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
-	const key = c.req.param("key");
-	const sessions = getActiveSessions();
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const key = normalizeSessionKey(c.req.param("key"));
+	const sessions = listLiveSessions(scopedAgent.agentId);
 	const session = sessions.find((s) => s.key === key);
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
@@ -6776,9 +6857,12 @@ app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
 });
 
 // Toggle bypass for a session
+// Optional ?agent_id= query param to target a specific agent's session.
 app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
-	const key = c.req.param("key");
-	const sessions = getActiveSessions();
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const key = normalizeSessionKey(c.req.param("key"));
+	const sessions = listLiveSessions(scopedAgent.agentId);
 	const session = sessions.find((s) => s.key === key);
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
@@ -6791,22 +6875,41 @@ app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
 	const enabled = body.enabled === true;
 
 	if (enabled) {
-		const ok = bypassSession(key);
+		// allowUnknown for presence-only sessions (expiresAt === null means no
+		// tracker claim) — bypassSession checks sessions.has(key) otherwise.
+		const ok = bypassSession(key, { allowUnknown: session.expiresAt === null });
 		if (!ok) {
 			return c.json({ error: "Session not found or already released" }, 404);
 		}
 	} else {
+		// unbypassSession is unconditional — bypassedSessions.delete() is a
+		// safe no-op for unknown keys, so no allowUnknown guard is needed.
 		unbypassSession(key);
 	}
 	return c.json({ key, bypassed: enabled });
 });
 
 // Renew a session — reset TTL to prevent silent eviction
+// Optional ?agent_id= query param to target a specific agent's session.
 app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
-	const key = c.req.param("key");
+	const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const key = normalizeSessionKey(c.req.param("key"));
+	const session = listLiveSessions(scopedAgent.agentId).find((s) => s.key === key);
+	if (!session) {
+		return c.json({ error: "Session not found" }, 404);
+	}
+	// Presence-only sessions (expiresAt === null) have no tracker claim —
+	// renewSession would return null, but the session is live via cross-agent
+	// presence. Refresh last_seen_at so the 4-hour stale filter doesn't evict it.
+	// Pass agentId so touchAgentPresence verifies record ownership before touching.
+	if (session.expiresAt === null) {
+		touchAgentPresence(key, scopedAgent.agentId);
+		return c.json({ key, renewed: true });
+	}
 	const expiresAt = renewSession(key);
 	if (!expiresAt) {
-		return c.json({ error: "Session not found" }, 404);
+		return c.json({ error: "Session not found or expired" }, 404);
 	}
 	return c.json({ key, renewed: true, expiresAt });
 });
@@ -6901,8 +7004,7 @@ app.post("/api/sessions/summaries/expand", async (c) => {
 		return c.json({ error: "id is required" }, 400);
 	}
 
-	const includeTranscript =
-		typeof body.includeTranscript === "boolean" ? body.includeTranscript : true;
+	const includeTranscript = typeof body.includeTranscript === "boolean" ? body.includeTranscript : true;
 	const transcriptCharLimit =
 		typeof body.transcriptCharLimit === "number" && Number.isFinite(body.transcriptCharLimit)
 			? Math.max(200, Math.min(12000, Math.trunc(body.transcriptCharLimit)))
@@ -6910,10 +7012,8 @@ app.post("/api/sessions/summaries/expand", async (c) => {
 	const scopedAgent = resolveScopedAgentId(
 		c,
 		resolveAgentId({
-			agentId:
-				typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
-			sessionKey:
-				typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
+			agentId: typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
+			sessionKey: typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
 		}),
 	);
 	if (scopedAgent.error) {
@@ -7737,16 +7837,28 @@ app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 		data: {
 			pluginVersion: b.pluginVersion.slice(0, 128),
 			hooksRegistered: Array.isArray(b.hooksRegistered)
-				? (b.hooksRegistered as unknown[]).filter((x): x is string => typeof x === "string").map((s) => s.slice(0, 128)).slice(0, 50)
+				? (b.hooksRegistered as unknown[])
+						.filter((x): x is string => typeof x === "string")
+						.map((s) => s.slice(0, 128))
+						.slice(0, 50)
 				: [],
 			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
 			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
 			latencyMs: typeof b.latencyMs === "number" && Number.isFinite(b.latencyMs) ? b.latencyMs : 0,
 			// Plugin sends per-heartbeat deltas, not cumulative totals. Clamp to
 			// non-negative to guard against malformed or negative inputs corrupting counters.
-			lastFailedDelta: Math.max(0, typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
-			totalSucceeded: (prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
-			totalFailed: (prev?.totalFailed ?? 0) + Math.max(0, typeof b.hooksFailed === "number" ? b.hooksFailed : (typeof b.errorCount === "number" ? b.errorCount : 0)),
+			lastFailedDelta: Math.max(
+				0,
+				typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
+			),
+			totalSucceeded:
+				(prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
+			totalFailed:
+				(prev?.totalFailed ?? 0) +
+				Math.max(
+					0,
+					typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
+				),
 		},
 	};
 	invalidateDiagnosticsCache();
@@ -7824,7 +7936,7 @@ app.get("/api/pipeline/status", (c) => {
 	});
 });
 
-const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
+const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
 	const perm = requirePermission("admin", authConfig);
 	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
 	return perm(c, async () => rate(c, next));
@@ -7860,10 +7972,7 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 		});
 	} catch (err) {
 		logger.error("pipeline", paused ? "Failed to pause pipeline" : "Failed to resume pipeline", err);
-		return c.json(
-			{ error: err instanceof Error ? err.message : String(err) },
-			500,
-		);
+		return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 	} finally {
 		pipelineTransition = false;
 	}
@@ -8276,9 +8385,7 @@ app.get("/api/repair/cold-stats", (c) => {
 
 app.post("/api/repair/cluster-entities", (c) => {
 	const agentId = c.req.query("agent_id") ?? "default";
-	const result = getDbAccessor().withWriteTx((db) =>
-		clusterEntities(db, agentId),
-	);
+	const result = getDbAccessor().withWriteTx((db) => clusterEntities(db, agentId));
 	return c.json(result);
 });
 
@@ -8294,13 +8401,16 @@ app.post("/api/repair/relink-entities", async (c) => {
 	const accessor = getDbAccessor();
 
 	// Find memories with no entity mentions
-	const unlinked = accessor.withReadDb((db) =>
-		db.prepare(
-			`SELECT id, content FROM memories
+	const unlinked = accessor.withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT id, content FROM memories
 			 WHERE is_deleted = 0
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)
 			 LIMIT ?`,
-		).all(batchSize) as Array<{ id: string; content: string }>,
+				)
+				.all(batchSize) as Array<{ id: string; content: string }>,
 	);
 
 	if (unlinked.length === 0) {
@@ -8313,9 +8423,7 @@ app.post("/api/repair/relink-entities", async (c) => {
 	let attributes = 0;
 
 	for (const mem of unlinked) {
-		const result = accessor.withWriteTx((db) =>
-			linkMemoryToEntities(db, mem.id, mem.content, agentId),
-		);
+		const result = accessor.withWriteTx((db) => linkMemoryToEntities(db, mem.id, mem.content, agentId));
 		linked += result.linked;
 		entities += result.entityIds.length;
 		aspects += result.aspects;
@@ -8323,12 +8431,17 @@ app.post("/api/repair/relink-entities", async (c) => {
 	}
 
 	// Check how many remain
-	const remaining = accessor.withReadDb((db) =>
-		(db.prepare(
-			`SELECT COUNT(*) as cnt FROM memories
+	const remaining = accessor.withReadDb(
+		(db) =>
+			(
+				db
+					.prepare(
+						`SELECT COUNT(*) as cnt FROM memories
 			 WHERE is_deleted = 0
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)`,
-		).get() as { cnt: number }).cnt,
+					)
+					.get() as { cnt: number }
+			).cnt,
 	);
 
 	return c.json({
@@ -8359,14 +8472,17 @@ app.post("/api/repair/backfill-hints", async (c) => {
 
 	const accessor = getDbAccessor();
 	// Find unscoped memories that have no hints yet
-	const unhinted = accessor.withReadDb((db) =>
-		db.prepare(
-			`SELECT m.id, m.content FROM memories m
+	const unhinted = accessor.withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT m.id, m.content FROM memories m
 			 WHERE m.is_deleted = 0 AND m.scope IS NULL
 			   AND m.id NOT IN (SELECT DISTINCT memory_id FROM memory_hints)
 			 ORDER BY m.created_at DESC
 			 LIMIT ?`,
-		).all(batchSize) as Array<{ id: string; content: string }>,
+				)
+				.all(batchSize) as Array<{ id: string; content: string }>,
 	);
 
 	if (unhinted.length === 0) {
@@ -8382,19 +8498,27 @@ app.post("/api/repair/backfill-hints", async (c) => {
 		}
 	});
 
-	const remaining = accessor.withReadDb((db) =>
-		(db.prepare(
-			`SELECT COUNT(*) as cnt FROM memories
+	const remaining = accessor.withReadDb(
+		(db) =>
+			(
+				db
+					.prepare(
+						`SELECT COUNT(*) as cnt FROM memories
 			 WHERE is_deleted = 0 AND scope IS NULL
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_hints)`,
-		).get() as { cnt: number }).cnt,
+					)
+					.get() as { cnt: number }
+			).cnt,
 	);
 
 	return c.json({
 		action: "backfill-hints",
 		enqueued,
 		remaining,
-		message: remaining > 0 ? `${remaining} unscoped memories still need hints — call again` : "all unscoped memories have hints",
+		message:
+			remaining > 0
+				? `${remaining} unscoped memories still need hints — call again`
+				: "all unscoped memories have hints",
 	});
 });
 
@@ -8407,14 +8531,17 @@ app.get("/api/repair/dead-memories", (c) => {
 	const maxAccessDays = Number(c.req.query("maxAccessDays") ?? "90");
 	const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
 	if (
-		!Number.isFinite(maxConfidence) || !Number.isFinite(maxAccessDays) || !Number.isFinite(limit)
-		|| maxConfidence < 0 || maxConfidence > 1 || maxAccessDays < 0 || limit < 0
+		!Number.isFinite(maxConfidence) ||
+		!Number.isFinite(maxAccessDays) ||
+		!Number.isFinite(limit) ||
+		maxConfidence < 0 ||
+		maxConfidence > 1 ||
+		maxAccessDays < 0 ||
+		limit < 0
 	) {
 		return c.json({ error: "maxConfidence must be 0–1, maxAccessDays and limit must be non-negative" }, 400);
 	}
-	const dead = getDbAccessor().withReadDb((db) =>
-		findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
-	);
+	const dead = getDbAccessor().withReadDb((db) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }));
 	return c.json({ count: dead.length, memories: dead });
 });
 
@@ -8806,6 +8933,8 @@ app.get("/api/knowledge/constellation", (c) => {
 });
 
 app.post("/api/knowledge/expand", async (c) => {
+	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const body = await c.req.json().catch(() => ({}));
 	const entityName = typeof body.entity === "string" ? body.entity.trim() : "";
 	const aspectFilter = typeof body.aspect === "string" ? body.aspect.trim() : undefined;
@@ -8815,13 +8944,21 @@ app.post("/api/knowledge/expand", async (c) => {
 		return c.json({ error: "entity name is required" }, 400);
 	}
 
-	const agentId = "default";
-
-	const focal = getDbAccessor().withReadDb((db) =>
-		resolveFocalEntities(db, agentId, {
-			queryTokens: entityName.split(/\s+/),
-		}),
-	);
+	const agentId = scopedAgent.agentId;
+	const resolved = resolveNamedEntity(getDbAccessor(), {
+		agentId,
+		name: entityName,
+	});
+	const focal =
+		resolved !== null
+			? {
+					entityIds: [resolved.id],
+				}
+			: getDbAccessor().withReadDb((db) =>
+					resolveFocalEntities(db, agentId, {
+						queryTokens: entityName.split(/\s+/),
+					}),
+				);
 
 	if (focal.entityIds.length === 0) {
 		return c.json(
@@ -8990,19 +9127,12 @@ app.post("/api/knowledge/expand", async (c) => {
 
 app.post("/api/knowledge/expand/session", async (c) => {
 	const body = await c.req.json().catch(() => ({}));
-	const entityName =
-		typeof body.entityName === "string" ? body.entityName.trim() : "";
+	const entityName = typeof body.entityName === "string" ? body.entityName.trim() : "";
 	const scopedAgent = resolveScopedAgentId(
 		c,
 		resolveAgentId({
-			agentId:
-				typeof body.agentId === "string"
-					? body.agentId
-					: c.req.header("x-signet-agent-id"),
-			sessionKey:
-				typeof body.sessionId === "string"
-					? body.sessionId
-					: c.req.header("x-signet-session-key"),
+			agentId: typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
+			sessionKey: typeof body.sessionId === "string" ? body.sessionId : c.req.header("x-signet-session-key"),
 		}),
 	);
 	if (scopedAgent.error) {
@@ -9013,14 +9143,9 @@ app.post("/api/knowledge/expand/session", async (c) => {
 		return c.json({ error: scopedProject.error }, 403);
 	}
 	const agentId = scopedAgent.agentId;
-	const sessionId =
-		typeof body.sessionId === "string" ? body.sessionId.trim() : undefined;
-	const timeRange =
-		typeof body.timeRange === "string" ? body.timeRange.trim() : undefined;
-	const maxResults =
-		typeof body.maxResults === "number"
-			? Math.max(1, Math.min(body.maxResults, 50))
-			: 10;
+	const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : undefined;
+	const timeRange = typeof body.timeRange === "string" ? body.timeRange.trim() : undefined;
+	const maxResults = typeof body.maxResults === "number" ? Math.max(1, Math.min(body.maxResults, 50)) : 10;
 
 	if (!entityName) {
 		return c.json({ error: "entityName is required" }, 400);
@@ -9029,40 +9154,23 @@ app.post("/api/knowledge/expand/session", async (c) => {
 	return getDbAccessor().withReadDb((db) => {
 		// Check if session_summaries table exists
 		const tbl = db
-			.prepare(
-				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'",
-			)
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
 			.get() as { name: string } | undefined;
 		if (!tbl) {
 			return c.json({ entityName, summaries: [], total: 0 });
 		}
 
-		// Resolve entity by canonical_name match
-		const entity = db
-			.prepare(
-				`SELECT id, name FROM entities
-				 WHERE canonical_name LIKE ?
-				   AND agent_id = ?
-				 ORDER BY mentions DESC, updated_at DESC
-				 LIMIT 1`,
-			)
-			.get(`%${entityName.toLowerCase()}%`, agentId) as
-			| { id: string; name: string }
-			| undefined;
+		const entity = resolveNamedEntity(getDbAccessor(), {
+			agentId,
+			name: entityName,
+		});
 
 		if (!entity) {
 			return c.json({ entityName, summaries: [], total: 0 });
 		}
 
-		// Build query: session_summaries ← session_summary_memories
-		//   ← memory_entity_mentions → entities
-		const conditions = [
-			"mem.entity_id = ?",
-			"ss.agent_id = ?",
-			"ss.kind = 'session'",
-			"COALESCE(ss.source_type, 'summary') = 'summary'",
-		];
-		const args: Array<string | number> = [entity.id, agentId];
+		const conditions = ["ss.agent_id = ?", "ss.kind = 'session'", "COALESCE(ss.source_type, 'summary') = 'summary'"];
+		const args: Array<string | number> = [agentId];
 
 		if (scopedProject.project) {
 			conditions.push("ss.project = ?");
@@ -9075,32 +9183,57 @@ app.post("/api/knowledge/expand/session", async (c) => {
 		}
 
 		if (timeRange === "last_week") {
-			conditions.push(
-				"ss.latest_at >= datetime('now', '-7 days')",
-			);
+			conditions.push("ss.latest_at >= datetime('now', '-7 days')");
 		} else if (timeRange === "last_month") {
-			conditions.push(
-				"ss.latest_at >= datetime('now', '-30 days')",
-			);
+			conditions.push("ss.latest_at >= datetime('now', '-30 days')");
 		} else if (timeRange && timeRange.length > 0) {
 			conditions.push("ss.latest_at >= ?");
 			args.push(timeRange);
 		}
 
+		// Text fallback: only for names >= 4 chars to avoid ambiguous short
+		// tokens ("go", "ai", etc.) matching unrelated content. Normalize
+		// the content by replacing common punctuation with spaces and
+		// space-padding both ends, then match the name as a space-delimited
+		// word. This avoids prefix collisions ("signetai") while covering all
+		// punctuation-adjacent forms: "Signet.", "Signet,", "(Signet)", '"Signet"'.
+		// SQL wildcards in canonicalName are escaped; cn is lowercased.
+		const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+		const useTextFallback = cn.length >= 4;
+		// Replace common punctuation with spaces so any delimiter around the
+		// name becomes a space, then space-pad both ends of the content.
+		// A single '% cn %' pattern then handles all forms: "Signet.", "Signet,",
+		// "(Signet)", '"Signet"', "Signet:" etc. without false prefix matches.
+		// char(39)=', char(40)=(, char(41)=), char(10)=LF, char(9)=TAB
+		const normalizedContent =
+			`LOWER(' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(` +
+			`REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ss.content,` +
+			`',', ' '), '.', ' '), '!', ' '), '?', ' '), ';', ' '), '"', ' '),` +
+			`char(39), ' '), char(40), ' '), char(41), ' '),` +
+			`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
+		const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
+		const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,
 				        ss.harness, ss.earliest_at, ss.latest_at
 				 FROM session_summaries ss
-				 JOIN session_summary_memories ssm
-				   ON ssm.summary_id = ss.id
-				 JOIN memory_entity_mentions mem
-				   ON mem.memory_id = ssm.memory_id
 				 WHERE ${conditions.join(" AND ")}
+				   AND (
+						EXISTS (
+							SELECT 1
+							FROM session_summary_memories ssm
+							JOIN memory_entity_mentions mem
+							  ON mem.memory_id = ssm.memory_id
+							WHERE ssm.summary_id = ss.id
+							  AND mem.entity_id = ?
+						)
+						${fallbackClause}
+				   )
 				 ORDER BY ss.latest_at DESC
 				 LIMIT ?`,
 			)
-			.all(...args, maxResults) as Array<{
+			.all(...args, entity.id, ...fallbackArgs, maxResults) as Array<{
 			id: string;
 			content: string;
 			session_key: string | null;
@@ -9130,22 +9263,15 @@ app.post("/api/knowledge/expand/session", async (c) => {
 
 app.post("/api/graph/impact", async (c) => {
 	const body = await c.req.json().catch(() => ({}));
-	const entityId =
-		typeof body.entityId === "string" ? body.entityId.trim() : "";
-	const direction =
-		body.direction === "upstream" ? "upstream" : "downstream";
-	const maxDepth =
-		typeof body.maxDepth === "number"
-			? Math.max(1, Math.min(body.maxDepth, 10))
-			: 3;
+	const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
+	const direction = body.direction === "upstream" ? "upstream" : "downstream";
+	const maxDepth = typeof body.maxDepth === "number" ? Math.max(1, Math.min(body.maxDepth, 10)) : 3;
 
 	if (!entityId) {
 		return c.json({ error: "entityId is required" }, 400);
 	}
 
-	const result = getDbAccessor().withReadDb((db) =>
-		walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-	);
+	const result = getDbAccessor().withReadDb((db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }));
 	return c.json(result);
 });
 
@@ -9160,7 +9286,8 @@ app.get("/api/analytics/usage", (c) => {
 app.get("/api/analytics/errors", (c) => {
 	const stage = c.req.query("stage") as ErrorStage | undefined;
 	const since = c.req.query("since") ?? undefined;
-	const limit = c.req.query("limit") ? Number.parseInt(c.req.query("limit")!, 10) : undefined;
+	const limitRaw = c.req.query("limit");
+	const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
 	return c.json({
 		errors: analyticsCollector.getErrors({ stage, since, limit }),
 		summary: analyticsCollector.getErrorSummary(),
@@ -9174,8 +9301,9 @@ app.get("/api/analytics/latency", (c) => {
 app.get("/api/analytics/logs", (c) => {
 	const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 	const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
-	const category = c.req.query("category") as any;
-	const since = c.req.query("since") ? new Date(c.req.query("since")!) : undefined;
+	const category = c.req.query("category") as LogCategory | undefined;
+	const sinceRaw = c.req.query("since");
+	const since = sinceRaw ? new Date(sinceRaw) : undefined;
 	const logs = logger.getRecent({ limit, level, category, since });
 	return c.json({ logs, count: logs.length });
 });
@@ -9380,7 +9508,6 @@ app.post("/api/predictor/train", async (c) => {
 		checkpoint_saved: checkpointSaved,
 	});
 });
-
 
 // ---------------------------------------------------------------------------
 // Telemetry endpoints
@@ -10515,7 +10642,11 @@ async function ensureArchitectureDoc(): Promise<void> {
 			logger.info("sync", "SIGNET-ARCHITECTURE.md updated");
 		}
 	} catch (error) {
-		logger.error("sync", "Failed to write SIGNET-ARCHITECTURE.md", error instanceof Error ? error : new Error(String(error)));
+		logger.error(
+			"sync",
+			"Failed to write SIGNET-ARCHITECTURE.md",
+			error instanceof Error ? error : new Error(String(error)),
+		);
 	}
 }
 
@@ -11277,7 +11408,6 @@ function syncAgentRoster(agentsDir: string): void {
 	logger.info("daemon", "Agent roster synced", { count: roster.length });
 }
 
-
 function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 	if (!cfg.enabled) return "disabled";
 	if (cfg.paused) return "paused";
@@ -11473,7 +11603,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
 		extractionStatus = "disabled";
 	} else if (effectiveExtractionProvider === "command") {
-		logger.info("config", "Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command");
+		logger.info(
+			"config",
+			"Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command",
+		);
 	} else if (effectiveExtractionProvider === "opencode") {
 		if (extractionOpenCodeShouldManage) {
 			const serverReady = await ensureOpenCodeServer(4096);
@@ -11646,8 +11779,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		const preflightOk = await llmProvider.available();
 		if (!preflightOk) {
 			const failedProvider = effectiveExtractionProvider;
-			const failedReason =
-				extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
+			const failedReason = extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
 			if (failedProvider !== "ollama" && extractionFallbackProvider === "ollama") {
 				extractionReason = failedReason;
 				extractionSince = extractionSince ?? new Date().toISOString();
@@ -11669,9 +11801,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				extractionDegraded = true;
 				extractionFallbackApplied = false;
 				extractionReason =
-					extractionFallbackProvider === "none"
-						? `${failedReason}; fallbackProvider is none`
-						: failedReason;
+					extractionFallbackProvider === "none" ? `${failedReason}; fallbackProvider is none` : failedReason;
 				extractionSince = extractionSince ?? new Date().toISOString();
 				llmProvider = null;
 			}
@@ -11742,26 +11872,18 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		extractionModelName &&
 		!extractionModelName.toLowerCase().includes("haiku")
 	) {
-		logger.warn(
-			"config",
-			"Claude Code extraction is safest on Haiku. Larger models increase cost significantly.",
-			{
-				model: extractionModelName,
-			},
-		);
+		logger.warn("config", "Claude Code extraction is safest on Haiku. Larger models increase cost significantly.", {
+			model: extractionModelName,
+		});
 	}
 	if (
 		effectiveExtractionProvider === "codex" &&
 		extractionModelName &&
 		!extractionModelName.toLowerCase().includes("mini")
 	) {
-		logger.warn(
-			"config",
-			"Codex extraction is safest on GPT Mini. Larger models increase cost significantly.",
-			{
-				model: extractionModelName,
-			},
-		);
+		logger.warn("config", "Codex extraction is safest on GPT Mini. Larger models increase cost significantly.", {
+			model: extractionModelName,
+		});
 	}
 
 	const startupExtractionBlocked = extractionStatus === "blocked" && extractionReason !== null;
@@ -11963,21 +12085,21 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 									model: effectiveSynthesisModel || "gpt-5-codex-mini",
 									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 								})
-						: effectiveSynthesisProvider === "claude-code"
-							? createClaudeCodeProvider({
-									model: effectiveSynthesisModel || "haiku",
-									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-								})
-							: createOllamaProvider({
-									...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
-									baseUrl: synthesisOllamaFallbackBaseUrl,
-									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-									...(usingSynthesisOllamaFallback
-										? {
-												maxContextTokens: ollamaFallbackMaxContextTokens,
-											}
-										: {}),
-								});
+							: effectiveSynthesisProvider === "claude-code"
+								? createClaudeCodeProvider({
+										model: effectiveSynthesisModel || "haiku",
+										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+									})
+								: createOllamaProvider({
+										...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
+										baseUrl: synthesisOllamaFallbackBaseUrl,
+										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+										...(usingSynthesisOllamaFallback
+											? {
+													maxContextTokens: ollamaFallbackMaxContextTokens,
+												}
+											: {}),
+									});
 		initSynthesisProvider(synthesisProvider);
 		// Widget provider defaults to synthesis provider (needs smart model for HTML gen)
 		initWidgetProvider(synthesisProvider);
@@ -12170,29 +12292,32 @@ async function main() {
 
 		// Heartbeat: record daemon stats every 5 minutes using live config.
 		const daemonStartTime = Date.now();
-		heartbeatTimer = setInterval(() => {
-			if (!telemetryRef) return;
-			try {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				const memoryCount = getDbAccessor().withReadDb((db) => {
-					const row = db
-						.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
-						.get() as { cnt: number } | undefined;
-					return row?.cnt ?? 0;
-				});
-				const connectors = listConnectors();
-				telemetryRef.record("daemon.heartbeat", {
-					uptimeMs: Date.now() - daemonStartTime,
-					memoryCount,
-					connectorsActive: connectors.filter((cn) => cn.status === "active").length,
-					pipelineMode: readPipelineMode(liveCfg.pipelineV2),
-					extractionProvider: liveCfg.pipelineV2.extraction.provider,
-					embeddingProvider: liveCfg.embedding.provider,
-				});
-			} catch {
-				// best-effort
-			}
-		}, 5 * 60 * 1000);
+		heartbeatTimer = setInterval(
+			() => {
+				if (!telemetryRef) return;
+				try {
+					const liveCfg = loadMemoryConfig(AGENTS_DIR);
+					const memoryCount = getDbAccessor().withReadDb((db) => {
+						const row = db
+							.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
+							.get() as { cnt: number } | undefined;
+						return row?.cnt ?? 0;
+					});
+					const connectors = listConnectors();
+					telemetryRef.record("daemon.heartbeat", {
+						uptimeMs: Date.now() - daemonStartTime,
+						memoryCount,
+						connectorsActive: connectors.filter((cn) => cn.status === "active").length,
+						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
+						extractionProvider: liveCfg.pipelineV2.extraction.provider,
+						embeddingProvider: liveCfg.embedding.provider,
+					});
+				} catch {
+					// best-effort
+				}
+			},
+			5 * 60 * 1000,
+		);
 	}
 
 	await startPipelineRuntime(memoryCfg, telemetryCollector);

@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-28"
+updated_at: "2026-03-29"
 
 specs:
   - id: memory-pipeline-v2
@@ -236,6 +236,26 @@ specs:
       - "CLI hook commands continue to reach daemon hook endpoints after runtime transport refactors"
       - "Published daemon-bearing packages always include the bundled dashboard assets required for `/` to serve the UI"
       - "Regression tests fail when `npm pack --dry-run` for `@signet/daemon` or `signetai` omits `dashboard/index.html`"
+    decision: null
+
+  - id: dogfood-hardening-2026-03-29
+    status: planning
+    path: docs/specs/planning/dogfood-hardening-2026-03-29.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - signet-runtime
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-DOGFOOD-HARDENING-2026-03-29.md
+    success_criteria:
+      - "Shadow decisions stop issuing vec-backed queries when the vector runtime is unavailable and continue without recurring vec0 failures"
+      - "Named entity expansion resolves exact requested entities before graph prominence or pinned-state heuristics"
+      - "Temporal session expansion returns matching summaries when mention links or summary/project text indicate the requested entity"
+      - "REST session listing and bypass routes accept normalized session keys and stay aligned with live presence visibility"
+      - "Memory feedback responses explain recorded versus accepted ratings clearly enough to debug zero-acceptance cases"
+      - "Constructed entity cards omit temporal bookkeeping noise and stay within a tighter supplementary content budget"
     decision: null
 
   - id: daemon-provider-fallback-status

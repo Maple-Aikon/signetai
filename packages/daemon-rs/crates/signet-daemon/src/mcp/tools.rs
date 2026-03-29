@@ -655,6 +655,7 @@ async fn exec_session_bypass(state: &Arc<AppState>, args: &serde_json::Value) ->
         Some(k) => k,
         None => return ToolCallResult::error("missing required parameter: session_key"),
     };
+    let key = key.strip_prefix("session:").unwrap_or(key);
     let enabled = args
         .get("enabled")
         .and_then(|v| v.as_bool())

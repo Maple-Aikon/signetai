@@ -411,12 +411,14 @@ export function upsertAgentPresence(input: UpsertAgentPresenceInput): AgentPrese
 	return out;
 }
 
-export function touchAgentPresence(sessionKey: string): AgentPresence | null {
+export function touchAgentPresence(sessionKey: string, agentId?: string): AgentPresence | null {
 	const normalized = normalizeText(sessionKey);
 	if (!normalized) return null;
 	pruneState();
 	const presence = presenceByKey.get(`session:${normalized}`);
 	if (!presence) return null;
+	// Guard: if caller provides agentId, verify record ownership before touching.
+	if (agentId && presence.agentId !== agentId) return null;
 	presence.lastSeenAt = new Date().toISOString();
 	return clonePresence(presence);
 }

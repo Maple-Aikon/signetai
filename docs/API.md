@@ -1926,7 +1926,11 @@ memory_store, etc.) continue to work normally.
 
 ### GET /api/sessions
 
-List all active sessions with their bypass status.
+List active sessions for the requesting agent with their bypass status.
+The response merges live tracker claims with live cross-agent presence so
+sessions do not disappear just because one surface has not claimed the
+session yet. Results are scoped to the authenticated agent; for
+cross-agent visibility use `GET /api/cross-agent/presence`.
 
 **Response**
 
@@ -1937,6 +1941,7 @@ List all active sessions with their bypass status.
       "key": "session-uuid",
       "runtimePath": "plugin",
       "claimedAt": "2026-03-08T10:00:00.000Z",
+      "expiresAt": "2026-03-08T14:00:00.000Z",
       "bypassed": false
     }
   ],
@@ -1948,6 +1953,8 @@ List all active sessions with their bypass status.
 
 Get a single session's status by its session key.
 
+Both raw keys (`abc123`) and prefixed keys (`session:abc123`) are accepted.
+
 **Response**
 
 ```json
@@ -1955,6 +1962,7 @@ Get a single session's status by its session key.
   "key": "session-uuid",
   "runtimePath": "plugin",
   "claimedAt": "2026-03-08T10:00:00.000Z",
+  "expiresAt": "2026-03-08T14:00:00.000Z",
   "bypassed": false
 }
 ```
@@ -2023,6 +2031,7 @@ agent-scoped.
 
 Toggle bypass for a session. When enabled, all hook endpoints for this session
 return empty no-op responses with `bypassed: true`. MCP tools are not affected.
+Both raw keys and `session:<uuid>` forms are accepted.
 
 **Request body**
 
