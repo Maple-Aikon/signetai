@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.83.0] - 2026-03-29
+
+### Features
+
+- **oh-my-pi**: add Oh My Pi support (#386)
+
+
 ## [0.82.7] - 2026-03-29
 
 ### Features
