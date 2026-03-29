@@ -127,6 +127,11 @@ hooks:
     includeIdentity: true
     includeRecentContext: true
     recencyBias: 0.7
+  userPromptSubmit:
+    enabled: true
+    recallLimit: 10
+    maxInjectChars: 500
+    minScore: 0.8
   preCompaction:
     includeRecentMemories: true
     memoryLimit: 5
@@ -737,6 +742,11 @@ hooks:
     includeIdentity: true
     includeRecentContext: true
     recencyBias: 0.7
+  userPromptSubmit:
+    enabled: true
+    recallLimit: 10
+    maxInjectChars: 500
+    minScore: 0.8
   preCompaction:
     includeRecentMemories: true
     memoryLimit: 5
@@ -761,6 +771,15 @@ a pre-compaction summary:
 | `includeRecentMemories` | `true` | Include recent memories in the prompt |
 | `memoryLimit` | `5` | How many recent memories to include |
 | `summaryGuidelines` | built-in | Custom instructions for session summary |
+
+`hooks.userPromptSubmit` controls per-prompt memory injection:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | Enable per-prompt recall injection |
+| `recallLimit` | `10` | Max recall candidates considered |
+| `maxInjectChars` | `500` | Prompt-time injection character budget |
+| `minScore` | `0.8` | Minimum top recall score required before injecting memories |
 
 
 Environment Variables
