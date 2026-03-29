@@ -878,6 +878,7 @@ mod tests {
                 },
                 pool,
                 None,
+                None, // llm provider
                 None,
                 AuthMode::Local,
                 None,

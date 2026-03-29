@@ -601,6 +601,7 @@ mod tests {
             },
             pool,
             embedding,
+            None, // llm provider
             None,
             mode,
             secret.clone(),

@@ -15,6 +15,7 @@ use tracing::{info, warn};
 mod auth;
 mod feedback;
 mod mcp;
+mod reranker;
 mod routes;
 mod service;
 mod state;
@@ -155,11 +156,13 @@ async fn main() -> anyhow::Result<()> {
 
     let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
-    // Build app state
+    // Build app state — LLM provider is wired later after preflight so the
+    // recall reranker path is nil until the extraction provider is confirmed.
     let state = Arc::new(AppState::new(
         config.clone(),
         pool,
         embedding,
+        None, // llm — set below after preflight
         extraction_worker_stats,
         auth_mode,
         auth_secret,
@@ -816,6 +819,8 @@ async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked:
         timeout_ms: Some(pipeline.extraction.timeout),
     };
     let provider = signet_pipeline::provider::from_config(&provider_cfg);
+    // Share the same provider with the recall handler for LLM reranking.
+    *state.llm.write().await = Some(provider.clone());
     let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
     let worker_config = signet_pipeline::worker::WorkerConfig {
         poll_ms: pipeline.worker.poll_ms,
@@ -1515,6 +1520,7 @@ mod tests {
                 &EmbeddingConfig::default(),
                 None,
             )),
+            None, // llm provider — not wired in test helpers
             Some(signet_pipeline::worker::new_runtime_stats_handle(0.8, 30_000)),
             AuthMode::Local,
             None,

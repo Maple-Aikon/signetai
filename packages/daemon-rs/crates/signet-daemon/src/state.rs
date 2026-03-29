@@ -5,6 +5,7 @@ use std::{collections::HashMap, time::SystemTime};
 use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
 use signet_pipeline::embedding::EmbeddingProvider;
+use signet_pipeline::provider::LlmProvider;
 use signet_pipeline::worker::{SharedWorkerRuntimeStats, WorkerHandle};
 use signet_services::session::{ContinuityTracker, DedupState, SessionTracker};
 use tokio::sync::{Mutex, RwLock};
@@ -31,6 +32,8 @@ pub struct AppState {
     pub config: DaemonConfig,
     pub pool: DbPool,
     pub embedding: RwLock<Option<Arc<dyn EmbeddingProvider>>>,
+    /// LLM provider for reranking and recall summary synthesis.
+    pub llm: RwLock<Option<Arc<dyn LlmProvider>>>,
     pub pipeline_paused: AtomicBool,
     pub pipeline_transition: AtomicBool,
     pub extraction_worker_handle: Mutex<Option<WorkerHandle>>,
@@ -81,6 +84,7 @@ impl AppState {
         config: DaemonConfig,
         pool: DbPool,
         embedding: Option<Arc<dyn EmbeddingProvider>>,
+        llm: Option<Arc<dyn LlmProvider>>,
         extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
         auth_mode: AuthMode,
         auth_secret: Option<Vec<u8>>,
@@ -115,6 +119,7 @@ impl AppState {
             config,
             pool,
             embedding: RwLock::new(embedding),
+            llm: RwLock::new(llm),
             pipeline_paused: AtomicBool::new(paused),
             pipeline_transition: AtomicBool::new(false),
             extraction_worker_handle: Mutex::new(None),

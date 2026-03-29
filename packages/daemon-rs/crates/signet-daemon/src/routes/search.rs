@@ -13,6 +13,7 @@ use signet_core::search::{
     RecallFilter, fts_search, merge_scores, touch_accessed, vec_search_scored,
 };
 
+use crate::reranker;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,8 @@ pub struct RecallHit {
     pub who: Option<String>,
     pub project: Option<String>,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplementary: Option<bool>,
 }
 
 pub async fn recall(
@@ -257,6 +260,7 @@ pub async fn recall(
                             who: row.get(6)?,
                             project: row.get(7)?,
                             created_at: row.get(8)?,
+                            supplementary: None,
                         },
                     ))
                 })?
@@ -281,6 +285,113 @@ pub async fn recall(
             })
         })
         .await;
+
+    // --- Optional LLM reranker + recall summary (parity with TS daemon) ---
+    let result = match result {
+        Ok(mut resp) if !resp.results.is_empty() => {
+            let use_extraction_model = state
+                .config
+                .manifest
+                .memory
+                .as_ref()
+                .and_then(|m| m.pipeline_v2.as_ref())
+                .map(|p| p.reranker.use_extraction_model)
+                .unwrap_or(false);
+
+            if use_extraction_model {
+                let llm = state.llm.read().await.clone();
+                if let Some(ref provider) = llm {
+                    let timeout_ms = state
+                        .config
+                        .manifest
+                        .memory
+                        .as_ref()
+                        .and_then(|m| m.pipeline_v2.as_ref())
+                        .map(|p| p.reranker.timeout_ms)
+                        .unwrap_or(30_000);
+                    let top_n = state
+                        .config
+                        .manifest
+                        .memory
+                        .as_ref()
+                        .and_then(|m| m.pipeline_v2.as_ref())
+                        .map(|p| p.reranker.top_n)
+                        .unwrap_or(20);
+
+                    let candidates: Vec<(&str, &str, f64)> = resp
+                        .results
+                        .iter()
+                        .take(top_n)
+                        .map(|h| (h.id.as_str(), h.content.as_str(), h.score))
+                        .collect();
+
+                    let (updated_scores, summary) = reranker::rerank_and_summarize(
+                        provider,
+                        &resp.query,
+                        &candidates,
+                        timeout_ms,
+                    )
+                    .await;
+
+                    // Apply updated scores from LLM reranker.
+                    if let Some(scores) = updated_scores {
+                        let score_map: std::collections::HashMap<&str, f64> =
+                            scores.iter().map(|(id, s)| (id.as_str(), *s)).collect();
+                        for hit in &mut resp.results {
+                            if let Some(&s) = score_map.get(hit.id.as_str()) {
+                                hit.score = (s * 100.0).round() / 100.0;
+                            }
+                        }
+                        resp.results
+                            .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                    }
+
+                    // Inject summary card: drop last real memory to stay within
+                    // limit, then prepend. Matches TS daemon parity contract.
+                    if let Some(text) = summary {
+                        let content = format!(
+                            "[model summary, verify against source memories] {text}"
+                        );
+                        let top_score = resp.results.first().map(|h| h.score).unwrap_or(0.5);
+                        let score = top_score.clamp(0.01, 1.0);
+
+                        // Digest for stable id (sha1 first 12 hex chars).
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        resp.query.hash(&mut hasher);
+                        let digest = format!("{:016x}", hasher.finish());
+                        let digest = &digest[..12];
+
+                        if resp.results.len() >= limit {
+                            resp.results.pop();
+                        }
+                        resp.results.insert(
+                            0,
+                            RecallHit {
+                                id: format!("summary:{digest}"),
+                                content: content.clone(),
+                                content_length: content.len(),
+                                truncated: false,
+                                score,
+                                source: "llm_summary".to_string(),
+                                memory_type: "semantic".to_string(),
+                                tags: None,
+                                pinned: false,
+                                importance: 0.9,
+                                who: None,
+                                project: None,
+                                created_at: chrono::Utc::now().to_rfc3339(),
+                                supplementary: Some(true),
+                            },
+                        );
+                    }
+                }
+            }
+            Ok(resp)
+        }
+        other => other,
+    };
 
     match result {
         Ok(resp) => {
