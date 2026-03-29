@@ -1,13 +1,15 @@
 //! Session and checkpoint route handlers.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
+use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -25,13 +27,27 @@ pub struct SessionListParams {
 pub async fn list(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SessionListParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> axum::response::Response {
-    let tracker_sessions = state.sessions.list_sessions(params.agent_id.as_deref());
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(reason) => return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": reason})),
+        ).into_response(),
+    };
+
+    let tracker_sessions = state.sessions.list_sessions(Some(&agent_id));
     let tracker_keys: std::collections::HashSet<String> =
         tracker_sessions.iter().map(|s| s.key.clone()).collect();
 
     // Fetch presence-only sessions from DB (those not already in the tracker).
-    let agent_id = params.agent_id.clone();
     let presence_result = state
         .pool
         .read(move |conn| {
@@ -48,24 +64,17 @@ pub async fn list(
                 return Ok(serde_json::json!([]));
             }
 
-            let mut sql =
+            // agent_id is always resolved (defaults to "default"); always filter.
+            let sql =
                 "SELECT session_key, runtime_path, started_at FROM agent_presence \
-                 WHERE session_key IS NOT NULL"
-                    .to_string();
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            if agent_id.is_some() {
-                sql.push_str(" AND agent_id = ?");
-                params.push(Box::new(agent_id.clone()));
-            }
-            sql.push_str(" ORDER BY last_seen_at DESC");
-
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
-            let mut stmt = conn.prepare(&sql)?;
+                 WHERE session_key IS NOT NULL AND agent_id = ? \
+                 ORDER BY last_seen_at DESC";
+            let params: &[&dyn rusqlite::types::ToSql] = &[&agent_id];
+            let mut stmt = conn.prepare(sql)?;
             // Return raw tuples as a JSON array; bypass state is checked
             // after the DB read using the in-memory session tracker.
             let rows: Vec<serde_json::Value> = stmt
-                .query_map(param_refs.as_slice(), |r| {
+                .query_map(params, |r| {
                     Ok(serde_json::json!({
                         "key": r.get::<_, String>(0)?,
                         "runtimePath": r.get::<_, Option<String>>(1)?
@@ -119,6 +128,8 @@ pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> axum::response::Response {
+    // Normalize session: prefix so raw and prefixed keys both resolve.
+    let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
     let sessions = state.sessions.list_sessions(None);
     let session = sessions.into_iter().find(|s| s.key == key);
 
