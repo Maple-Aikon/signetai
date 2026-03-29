@@ -57,6 +57,8 @@ struct SessionClaim {
     expires: Instant,
     bypassed: bool,
     agent_id: String,
+    /// ISO-8601 timestamp recorded when the claim was first created.
+    claimed_at: String,
 }
 
 impl SessionClaim {
@@ -66,6 +68,20 @@ impl SessionClaim {
 
     fn refresh(&mut self) {
         self.expires = Instant::now() + Duration::from_millis(STALE_SESSION_MS);
+    }
+
+    /// Compute the absolute expiry as an ISO-8601 string by projecting the
+    /// remaining TTL onto the current wall clock.
+    fn expires_at_iso(&self) -> String {
+        let remaining = self.expires.saturating_duration_since(Instant::now());
+        let wall = std::time::SystemTime::now() + remaining;
+        let ts = wall
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        chrono::DateTime::from_timestamp(ts as i64, 0)
+            .unwrap_or_else(chrono::Utc::now)
+            .to_rfc3339()
     }
 }
 
@@ -127,6 +143,7 @@ impl SessionTracker {
                 expires: Instant::now() + Duration::from_millis(STALE_SESSION_MS),
                 bypassed: false,
                 agent_id: agent_id.to_string(),
+                claimed_at: chrono::Utc::now().to_rfc3339(),
             },
         );
         ClaimResult::Ok
@@ -224,23 +241,22 @@ impl SessionTracker {
             .map(|(key, claim)| SessionInfo {
                 key: key.clone(),
                 agent_id: claim.agent_id.clone(),
-                path: claim.path,
+                runtime_path: claim.path.as_str().to_string(),
+                claimed_at: claim.claimed_at.clone(),
+                expires_at: claim.expires_at_iso(),
                 bypassed: claim.bypassed,
             })
             .collect()
     }
 
-    /// Clean up stale sessions. Also removes bypass state for keys no longer
-    /// in the tracker to prevent unbounded growth.
+    /// Clean up stale sessions. Bypass state is NOT pruned here — presence-only
+    /// sessions never have tracker claims so their bypass entries would be
+    /// incorrectly removed. Bypass state is only cleared on explicit release(),
+    /// matching the TS bypassedSessions Set lifecycle.
     pub fn cleanup(&self) -> usize {
         let mut claims = self.claims.lock().unwrap();
         let before = claims.len();
         claims.retain(|_, c| !c.is_stale());
-        let live_keys: std::collections::HashSet<&str> = claims.keys().map(|k| k.as_str()).collect();
-        self.bypassed_keys
-            .lock()
-            .unwrap()
-            .retain(|k| live_keys.contains(k.as_str()));
         before - claims.len()
     }
 }
@@ -256,7 +272,9 @@ impl Default for SessionTracker {
 pub struct SessionInfo {
     pub key: String,
     pub agent_id: String,
-    pub path: RuntimePath,
+    pub runtime_path: String,
+    pub claimed_at: String,
+    pub expires_at: String,
     pub bypassed: bool,
 }
 
