@@ -183,6 +183,7 @@ fn normalize_manifest(
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
     normalize_pipeline_extraction(pipeline, raw_pipeline)?;
     normalize_pipeline_worker(pipeline, raw_pipeline);
+    normalize_pipeline_reranker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline)?;
     Ok(manifest)
 }
@@ -286,6 +287,22 @@ fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde
         .or_else(|| raw.and_then(|value| raw_u64(value, "workerOverloadBackoffMs")));
     if let Some(value) = overload_backoff_ms {
         pipeline.worker.overload_backoff_ms = value.clamp(1_000, 300_000);
+    }
+}
+
+fn normalize_pipeline_reranker(
+    pipeline: &mut PipelineV2Config,
+    raw: Option<&serde_yml::Value>,
+) {
+    let nested = raw
+        .and_then(|value| raw_child(value, "reranker"))
+        .and_then(|value| raw_child(value, "useExtractionModel"))
+        .and_then(serde_yml::Value::as_bool);
+    let flat = raw
+        .and_then(|value| raw_child(value, "rerankerUseExtractionModel"))
+        .and_then(serde_yml::Value::as_bool);
+    if let Some(value) = nested.or(flat) {
+        pipeline.reranker.use_extraction_model = value;
     }
 }
 
@@ -946,6 +963,57 @@ memory:
             .expect("pipeline config");
         assert_eq!(flat_pipeline.worker.max_load_per_cpu, 0.55);
         assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
+    }
+
+    #[test]
+    fn reranker_use_extraction_model_loads_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    reranker:
+      useExtractionModel: true
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert!(nested_pipeline.reranker.use_extraction_model);
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    rerankerUseExtractionModel: true
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert!(flat_pipeline.reranker.use_extraction_model);
+    }
+
+    #[test]
+    fn reranker_nested_key_takes_precedence_over_flat_key() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    rerankerUseExtractionModel: false
+    reranker:
+      useExtractionModel: true
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert!(pipeline.reranker.use_extraction_model);
     }
 
     #[test]

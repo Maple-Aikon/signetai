@@ -670,6 +670,7 @@ export async function hybridRecall(
 	let recallSummary: string | undefined;
 	if (cfg.pipelineV2.reranker.enabled) {
 		try {
+			const rerankStart = Date.now();
 			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
 			const rerankIds = topForRerank.map((s) => s.id);
 			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
@@ -714,13 +715,17 @@ export async function hybridRecall(
 				}
 			}
 			if (cfg.pipelineV2.reranker.useExtractionModel) {
-				const summary = await summarizeRecallWithLlm(
-					getLlmProvider(),
-					query,
-					reranked,
-					cfg.pipelineV2.reranker.timeoutMs,
-				);
-				if (summary) recallSummary = summary;
+				const elapsed = Date.now() - rerankStart;
+				const left = cfg.pipelineV2.reranker.timeoutMs - elapsed;
+				if (left <= 0) {
+					logger.warn("memory", "LLM summary skipped (reranker timeout budget exhausted)", {
+						timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
+						elapsedMs: elapsed,
+					});
+				} else {
+					const summary = await summarizeRecallWithLlm(getLlmProvider(), query, reranked, left);
+					if (summary) recallSummary = summary;
+				}
 			}
 			scored.sort((a, b) => b.score - a.score);
 		} catch (e) {
