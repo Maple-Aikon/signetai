@@ -6869,11 +6869,15 @@ app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
 	const enabled = body.enabled === true;
 
 	if (enabled) {
+		// allowUnknown for presence-only sessions (expiresAt === null means no
+		// tracker claim) — bypassSession checks sessions.has(key) otherwise.
 		const ok = bypassSession(key, { allowUnknown: session.expiresAt === null });
 		if (!ok) {
 			return c.json({ error: "Session not found or already released" }, 404);
 		}
 	} else {
+		// unbypassSession is unconditional — bypassedSessions.delete() is a
+		// safe no-op for unknown keys, so no allowUnknown guard is needed.
 		unbypassSession(key);
 	}
 	return c.json({ key, bypassed: enabled });
