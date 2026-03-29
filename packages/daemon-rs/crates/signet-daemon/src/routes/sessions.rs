@@ -147,7 +147,9 @@ async fn find_live_session(
     }
 
     // Fall back to presence DB for sessions not in tracker.
+    // Query both normalized and prefixed forms since DB rows may carry either.
     let key = key.to_string();
+    let key_prefixed = format!("session:{key}");
     let agent_id = agent_id.to_string();
     state
         .pool
@@ -166,8 +168,8 @@ async fn find_live_session(
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM agent_presence \
-                     WHERE session_key = ? AND agent_id = ?",
-                    rusqlite::params![key, agent_id],
+                     WHERE (session_key = ?1 OR session_key = ?2) AND agent_id = ?3",
+                    rusqlite::params![key, key_prefixed, agent_id],
                     |r| r.get(0),
                 )
                 .unwrap_or(0);
