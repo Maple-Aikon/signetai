@@ -9185,23 +9185,27 @@ app.post("/api/knowledge/expand/session", async (c) => {
 		}
 
 		// Text fallback: only for names >= 4 chars to avoid ambiguous short
-		// tokens ("go", "ai", etc.) matching unrelated content. Use
-		// word-boundary patterns (space-surrounded, colon-suffixed, parenthetical,
-		// start/end of content) so "signet" does not collide with "signetai".
-		// SQL wildcards in canonicalName are escaped; cn is lowercased to match
-		// LOWER(ss.content).
+		// tokens ("go", "ai", etc.) matching unrelated content. Normalize
+		// the content by replacing common punctuation with spaces and
+		// space-padding both ends, then match the name as a space-delimited
+		// word. This avoids prefix collisions ("signetai") while covering all
+		// punctuation-adjacent forms: "Signet.", "Signet,", "(Signet)", '"Signet"'.
+		// SQL wildcards in canonicalName are escaped; cn is lowercased.
 		const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const useTextFallback = cn.length >= 4;
-		// Five patterns cover: mid-sentence, content-start, content-end,
-		// colon-suffix ("Signet: …"), and parenthetical "(Signet)".
-		const fallbackClause = useTextFallback
-			? `OR (LOWER(ss.content) LIKE ? ESCAPE '\\'
-				 OR LOWER(ss.content) LIKE ? ESCAPE '\\'
-				 OR LOWER(ss.content) LIKE ? ESCAPE '\\'
-				 OR LOWER(ss.content) LIKE ? ESCAPE '\\'
-				 OR LOWER(ss.content) LIKE ? ESCAPE '\\')`
-			: "";
-		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, `% ${cn}:%`, `%(${cn})%`] : [];
+		// Replace common punctuation with spaces so any delimiter around the
+		// name becomes a space, then space-pad both ends of the content.
+		// A single '% cn %' pattern then handles all forms: "Signet.", "Signet,",
+		// "(Signet)", '"Signet"', "Signet:" etc. without false prefix matches.
+		// char(39)=', char(40)=(, char(41)=), char(10)=LF, char(9)=TAB
+		const normalizedContent =
+			`LOWER(' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(` +
+			`REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ss.content,` +
+			`',', ' '), '.', ' '), '!', ' '), '?', ' '), ';', ' '), '"', ' '),` +
+			`char(39), ' '), char(40), ' '), char(41), ' '),` +
+			`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
+		const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
+		const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,

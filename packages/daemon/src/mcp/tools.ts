@@ -506,7 +506,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			mode: "hybrid",
 			maxExpandedTools: 12,
 			maxSearchResults: 8,
-			updatedAt: new Date().toISOString(),
+			// Sentinel: "never explicitly set" — matches DEFAULT_EXPOSURE_POLICY.
+			updatedAt: "1970-01-01T00:00:00.000Z",
 		},
 	});
 
