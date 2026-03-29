@@ -717,6 +717,7 @@ Legend:
 | `release-train-cadence` | planning | `docs/specs/planning/release-train-cadence.md` | `memory-pipeline-v2` | - | Stub: predictable release train model |
 | `post-merge-canary-suite` | planning | `docs/specs/planning/post-merge-canary-suite.md` | `release-train-cadence` | - | Stub: lightweight post-merge canaries |
 | `incident-guardrail-loop` | planning | `docs/specs/planning/incident-guardrail-loop.md` | `ci-contract-invariants-lane` | - | Stub: every incident adds durable guardrail |
+| `recall-confidence-gate` | complete | - | `memory-pipeline-v2` | - | Bug fix: preserve reranker-calibrated scores in hybridRecall (not rank-position placeholders); add `hooks.userPromptSubmit.minScore` gate (default 0.8) to filter low-confidence prompt recalls; daemon-rs parity via importance proxy + `HooksConfig` struct. PR #396. |
 | `competitive-systems-research` | reference | `docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md` | - | - | Informs desire-paths-epic, retroactive-supersession, ontology-evolution-core |
 
 ---
