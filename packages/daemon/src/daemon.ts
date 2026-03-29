@@ -6894,9 +6894,15 @@ app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
 	}
+	// Presence-only sessions (expiresAt === null) have no tracker claim —
+	// renewSession would return null, but the session is live via cross-agent
+	// presence and does not need TTL renewal.
+	if (session.expiresAt === null) {
+		return c.json({ key, renewed: false, reason: "presence-only session has no tracker TTL to renew" });
+	}
 	const expiresAt = renewSession(key);
 	if (!expiresAt) {
-		return c.json({ error: "Session not found" }, 404);
+		return c.json({ error: "Session not found or expired" }, 404);
 	}
 	return c.json({ key, renewed: true, expiresAt });
 });
