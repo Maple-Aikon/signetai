@@ -5779,7 +5779,7 @@ function checkBypass(body?: { sessionKey?: string; sessionId?: string }): boolea
 	return isSessionBypassed(key);
 }
 
-function listLiveSessions(): Array<{
+function listLiveSessions(agentId: string): Array<{
 	key: string;
 	runtimePath: string;
 	claimedAt: string;
@@ -5787,9 +5787,11 @@ function listLiveSessions(): Array<{
 	bypassed: boolean;
 }> {
 	const byKey = new Map(getActiveSessions().map((session) => [session.key, session] as const));
-	// No cap: presence is in-memory and bounded by active connections,
-	// so all live sessions must be visible regardless of count.
-	for (const presence of listAgentPresence({ includeSelf: true, limit: Number.MAX_SAFE_INTEGER })) {
+	// No cap: presence is in-memory and bounded by active connections.
+	// Filter by agentId to prevent cross-agent key collisions — two sessions
+	// from different agents can share the same raw key.
+	for (const presence of listAgentPresence({ limit: Number.MAX_SAFE_INTEGER })) {
+		if (presence.agentId !== agentId) continue;
 		if (!presence.sessionKey) continue;
 		const key = normalizeSessionKey(presence.sessionKey);
 		if (byKey.has(key)) continue;
@@ -6811,14 +6813,16 @@ app.get("/api/synthesis/status", (c) => {
 
 // List active sessions with bypass status
 app.get("/api/sessions", (c) => {
-	const sessions = listLiveSessions();
+	const { agentId } = resolveScopedAgentId(c, undefined, "default");
+	const sessions = listLiveSessions(agentId);
 	return c.json({ sessions, count: sessions.length });
 });
 
 // Get single session status
 app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
+	const { agentId } = resolveScopedAgentId(c, undefined, "default");
 	const key = normalizeSessionKey(c.req.param("key"));
-	const sessions = listLiveSessions();
+	const sessions = listLiveSessions(agentId);
 	const session = sessions.find((s) => s.key === key);
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
@@ -6828,8 +6832,9 @@ app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
 
 // Toggle bypass for a session
 app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
+	const { agentId } = resolveScopedAgentId(c, undefined, "default");
 	const key = normalizeSessionKey(c.req.param("key"));
-	const sessions = listLiveSessions();
+	const sessions = listLiveSessions(agentId);
 	const session = sessions.find((s) => s.key === key);
 	if (!session) {
 		return c.json({ error: "Session not found" }, 404);
@@ -9140,16 +9145,14 @@ app.post("/api/knowledge/expand/session", async (c) => {
 		// Text fallback: only for names >= 4 chars to avoid ambiguous
 		// short tokens ("go", "ai", etc.) matching unrelated content.
 		// Escape SQL wildcards in canonicalName before building patterns.
-		// Use word-boundary patterns for content; LIKE contains for
-		// structured fields (project, source_ref) so path segments match.
+		// Only match against summary content with word-boundary patterns —
+		// project/source_ref path substring matching is too noisy.
 		const cn = entity.canonicalName.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const useTextFallback = cn.length >= 4;
 		const fallbackClause = useTextFallback
-			? `OR (LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) = ?)
-					OR LOWER(COALESCE(ss.project, '')) LIKE ? ESCAPE '\\'
-					OR LOWER(COALESCE(ss.source_ref, '')) LIKE ? ESCAPE '\\'`
+			? `OR (LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) LIKE ? ESCAPE '\\' OR LOWER(ss.content) = ?)`
 			: "";
-		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, cn, `%${cn}%`, `%${cn}%`] : [];
+		const fallbackArgs = useTextFallback ? [`% ${cn} %`, `${cn} %`, `% ${cn}`, cn] : [];
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT ss.id, ss.content, ss.session_key,
