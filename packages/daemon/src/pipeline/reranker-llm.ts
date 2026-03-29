@@ -1,4 +1,5 @@
 import type { LlmProvider } from "@signet/core";
+import { stripFences } from "./extraction";
 import type { RerankCandidate, RerankConfig, RerankProvider } from "./reranker";
 
 interface RerankScore {
@@ -26,8 +27,11 @@ function parseScoreArray(raw: unknown): RerankScore[] {
 }
 
 function parseScores(raw: string): RerankScore[] {
+	// Strip <think> blocks and markdown fences before parsing — qwen and other
+	// chain-of-thought models emit these before the JSON output.
+	const cleaned = stripFences(raw);
 	try {
-		const parsed: unknown = JSON.parse(raw);
+		const parsed: unknown = JSON.parse(cleaned);
 		if (Array.isArray(parsed)) return parseScoreArray(parsed);
 		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
 		if (!("scores" in parsed)) return [];

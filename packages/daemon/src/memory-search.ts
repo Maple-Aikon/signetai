@@ -961,6 +961,8 @@ export async function hybridRecall(
 		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
 		const content = `[model summary, verify against source memories] ${recallSummary}`;
 		const score = results.length > 0 ? Math.max(0.01, Math.min(1, results[0].score)) : 0.5;
+		// Summary is supplementary — it always prepends without evicting real
+		// memories. Callers can drop it via supplementary:true if needed.
 		results.unshift({
 			id: `summary:${digest}`,
 			content,
@@ -977,7 +979,6 @@ export async function hybridRecall(
 			created_at: new Date().toISOString(),
 			supplementary: true,
 		});
-		if (results.length > limit) results.length = limit;
 	}
 
 	// --- Decision-rationale linking: auto-fetch linked rationale memories ---
