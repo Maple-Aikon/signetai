@@ -902,7 +902,10 @@ export async function hybridRecall(
 			}>,
 	);
 
-	// Update access tracking (don't fail if this fails)
+	// Update access tracking (don't fail if this fails).
+	// Uses topIds (real DB memory IDs from scored), not the final results
+	// array — so the synthetic llm_summary card injected later is never
+	// included here and never touches the memories table.
 	try {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
