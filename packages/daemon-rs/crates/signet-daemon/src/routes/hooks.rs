@@ -445,17 +445,6 @@ pub async fn prompt_submit(
         .clone()
         .unwrap_or_else(|| "default".to_string());
     let query_terms_for_resp = query_terms.clone();
-    // Mirror TS hooks.userPromptSubmit.minScore: only inject when top result
-    // confidence meets the threshold. Uses importance as a proxy until full
-    // hybrid scoring lands in the Rust prompt_submit path.
-    let min_score = state
-        .config
-        .manifest
-        .hooks
-        .as_ref()
-        .map(|h| h.user_prompt_submit.min_score)
-        .unwrap_or(0.8)
-        .clamp(0.0, 1.0);
 
     let result = state
         .pool
@@ -478,11 +467,13 @@ pub async fn prompt_submit(
                 .collect::<Vec<_>>();
 
             // 1) Structured recall from memories (best effort parity with TS hybrid-first path).
-            // importance is fetched as a proxy confidence score for the minScore gate.
-            // NOTE: when full hybrid scoring / reranker integration lands, replace importance
-            // with the actual calibrated relevance score — never synthesize from rank position.
+            // NOTE: the TS path gates injection on a calibrated hybridRecall relevance score
+            // (hooks.userPromptSubmit.minScore). That gate is deferred here until this path
+            // integrates full hybrid scoring — importance is not a per-query relevance proxy.
+            // When reranker/hybrid scoring lands, preserve actual scores; never synthesize
+            // from rank position.
             let mut mem_sql = String::from(
-                "SELECT id, content, created_at, importance
+                "SELECT id, content, created_at
                  FROM memories
                  WHERE deleted = 0",
             );
@@ -551,7 +542,6 @@ pub async fn prompt_submit(
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
-                            row.get::<_, f64>(3).unwrap_or(0.0),
                         ))
                     })
                     .ok()
@@ -565,15 +555,13 @@ pub async fn prompt_submit(
                 && !mem_rows
                     .iter()
                     .take(8)
-                    .map(|(_, content, _, _)| content.to_lowercase())
+                    .map(|(_, content, _)| content.to_lowercase())
                     .any(|content| anchors.iter().any(|anchor| content.contains(anchor)));
 
-            // Confidence gate: mirror TS topScore < minScore → return memoryCount: 0.
-            let top_importance = mem_rows.first().map(|(_, _, _, imp)| *imp).unwrap_or(0.0);
-            if !mem_rows.is_empty() && !anchor_missed && top_importance >= min_score {
+            if !mem_rows.is_empty() && !anchor_missed {
                 let lines = mem_rows
                     .iter()
-                    .map(|(_, content, created_at, _)| {
+                    .map(|(_, content, created_at)| {
                         format!("- {} ({})", trim_for_inject(content, 300), created_at)
                     })
                     .collect::<Vec<_>>();
