@@ -94,6 +94,12 @@ pub struct SessionTracker {
     /// Bypass state stored independently of tracker claims, mirroring the TS
     /// `bypassedSessions` Set. Allows presence-only sessions to be bypassed
     /// without a live tracker claim.
+    ///
+    /// Agent-scoping is NOT needed here: the bypass write path
+    /// (`routes::sessions::bypass`) calls `find_live_session(key, agent_id)`
+    /// before writing, so only agent-verified keys are ever stored.
+    /// Session keys embed the agent ID (`agent:<id>:<uuid>`), making
+    /// cross-agent key sharing structurally impossible in practice.
     bypassed_keys: Mutex<std::collections::HashSet<String>>,
 }
 
