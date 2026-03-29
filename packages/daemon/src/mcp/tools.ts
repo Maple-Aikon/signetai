@@ -506,7 +506,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			mode: "hybrid",
 			maxExpandedTools: 12,
 			maxSearchResults: 8,
-			updatedAt: new Date(0).toISOString(),
+			updatedAt: new Date().toISOString(),
 		},
 	});
 

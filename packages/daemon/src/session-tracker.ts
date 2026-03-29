@@ -41,13 +41,22 @@ let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 // Synchronous guard — prevents double-start during concurrent async init.
 let cleanupStarted = false;
 
+export function normalizeSessionKey(sessionKey: string): string {
+	const trimmed = sessionKey.trim();
+	if (trimmed.startsWith("session:")) {
+		return trimmed.slice("session:".length);
+	}
+	return trimmed;
+}
+
 /**
  * Claim a session for a given runtime path. Returns ok:true if the
  * session is unclaimed or already claimed by the same path. Returns
  * ok:false with claimedBy if claimed by the other path.
  */
 export function claimSession(sessionKey: string, runtimePath: RuntimePath): ClaimResult {
-	const existing = sessions.get(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const existing = sessions.get(key);
 
 	if (existing) {
 		if (existing.runtimePath === runtimePath) {
@@ -59,25 +68,25 @@ export function claimSession(sessionKey: string, runtimePath: RuntimePath): Clai
 		// Check if the existing claim is stale
 		if (Date.now() > existing.expiresAt) {
 			logger.info("session-tracker", "Evicting stale session claim", {
-				sessionKey,
+				sessionKey: key,
 				previousPath: existing.runtimePath,
 				newPath: runtimePath,
 			});
-			sessions.delete(sessionKey);
+			sessions.delete(key);
 			// Fall through to create new claim
 		} else {
 			return { ok: false, claimedBy: existing.runtimePath };
 		}
 	}
 
-	sessions.set(sessionKey, {
+	sessions.set(key, {
 		runtimePath,
 		claimedAt: new Date().toISOString(),
 		expiresAt: Date.now() + STALE_SESSION_MS,
 	});
 
 	logger.info("session-tracker", "Session claimed", {
-		sessionKey,
+		sessionKey: key,
 		runtimePath,
 	});
 
@@ -89,11 +98,12 @@ export function claimSession(sessionKey: string, runtimePath: RuntimePath): Clai
  * Also cleans up bypass state for the session.
  */
 export function releaseSession(sessionKey: string): void {
-	const removed = sessions.delete(sessionKey);
-	bypassedSessions.delete(sessionKey);
-	warnedSessions.delete(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const removed = sessions.delete(key);
+	bypassedSessions.delete(key);
+	warnedSessions.delete(key);
 	if (removed) {
-		logger.info("session-tracker", "Session released", { sessionKey });
+		logger.info("session-tracker", "Session released", { sessionKey: key });
 	}
 }
 
@@ -102,11 +112,12 @@ export function releaseSession(sessionKey: string): void {
  * Used by hooks to detect daemon-restart mid-session.
  */
 export function hasSession(sessionKey: string): boolean {
-	const claim = sessions.get(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const claim = sessions.get(key);
 	if (!claim) return false;
 	if (Date.now() > claim.expiresAt) {
-		sessions.delete(sessionKey);
-		bypassedSessions.delete(sessionKey);
+		sessions.delete(key);
+		bypassedSessions.delete(key);
 		return false;
 	}
 	return true;
@@ -116,12 +127,13 @@ export function hasSession(sessionKey: string): boolean {
  * Get the runtime path for a session, if claimed.
  */
 export function getSessionPath(sessionKey: string): RuntimePath | undefined {
-	const claim = sessions.get(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const claim = sessions.get(key);
 	if (!claim) return undefined;
 
 	if (Date.now() > claim.expiresAt) {
-		sessions.delete(sessionKey);
-		bypassedSessions.delete(sessionKey);
+		sessions.delete(key);
+		bypassedSessions.delete(key);
 		return undefined;
 	}
 
@@ -133,27 +145,29 @@ export function getSessionPath(sessionKey: string): RuntimePath | undefined {
 // ---------------------------------------------------------------------------
 
 /** Enable bypass for a session — hooks return empty no-op responses. */
-export function bypassSession(sessionKey: string): boolean {
-	if (!sessions.has(sessionKey)) {
-		logger.warn("session-tracker", "Bypass requested for unknown session", { sessionKey });
+export function bypassSession(sessionKey: string, opts?: { readonly allowUnknown?: boolean }): boolean {
+	const key = normalizeSessionKey(sessionKey);
+	if (!sessions.has(key) && opts?.allowUnknown !== true) {
+		logger.warn("session-tracker", "Bypass requested for unknown session", { sessionKey: key });
 		return false;
 	}
-	bypassedSessions.add(sessionKey);
-	logger.info("session-tracker", "Session bypassed", { sessionKey });
+	bypassedSessions.add(key);
+	logger.info("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;
 }
 
 /** Disable bypass for a session — hooks resume normal behavior. */
 export function unbypassSession(sessionKey: string): void {
-	const removed = bypassedSessions.delete(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const removed = bypassedSessions.delete(key);
 	if (removed) {
-		logger.info("session-tracker", "Session bypass removed", { sessionKey });
+		logger.info("session-tracker", "Session bypass removed", { sessionKey: key });
 	}
 }
 
 /** Check whether a session is currently bypassed. */
 export function isSessionBypassed(sessionKey: string): boolean {
-	return bypassedSessions.has(sessionKey);
+	return bypassedSessions.has(normalizeSessionKey(sessionKey));
 }
 
 /** Get the set of all bypassed session keys. */
@@ -191,7 +205,8 @@ export function getActiveSessions(): readonly SessionInfo[] {
  */
 export function getExpiryWarning(sessionKey: string): string | null {
 	if (isSessionBypassed(sessionKey)) return null;
-	const claim = sessions.get(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const claim = sessions.get(key);
 	if (!claim) return null;
 	const remaining = claim.expiresAt - Date.now();
 	if (remaining <= 0) return "session has expired — reconnect to start a new session";
@@ -207,18 +222,19 @@ export function getExpiryWarning(sessionKey: string): string | null {
  * if the session is not found.
  */
 export function renewSession(sessionKey: string): string | null {
-	const claim = sessions.get(sessionKey);
+	const key = normalizeSessionKey(sessionKey);
+	const claim = sessions.get(key);
 	if (!claim) return null;
 	// Reject renewal of already-expired sessions — caller should re-claim
 	if (claim.expiresAt <= Date.now()) {
-		sessions.delete(sessionKey);
-		bypassedSessions.delete(sessionKey);
-		warnedSessions.delete(sessionKey);
+		sessions.delete(key);
+		bypassedSessions.delete(key);
+		warnedSessions.delete(key);
 		return null;
 	}
 	claim.expiresAt = Date.now() + STALE_SESSION_MS;
-	warnedSessions.delete(sessionKey);
-	logger.info("session-tracker", "Session renewed", { sessionKey });
+	warnedSessions.delete(key);
+	logger.info("session-tracker", "Session renewed", { sessionKey: key });
 	return new Date(claim.expiresAt).toISOString();
 }
 

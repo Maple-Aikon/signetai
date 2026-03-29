@@ -83,6 +83,10 @@ pub enum ClaimResult {
 }
 
 impl SessionTracker {
+    fn normalize_key<'a>(key: &'a str) -> &'a str {
+        key.strip_prefix("session:").unwrap_or(key)
+    }
+
     pub fn new() -> Self {
         Self {
             claims: Mutex::new(HashMap::new()),
@@ -92,6 +96,7 @@ impl SessionTracker {
     /// Claim a session for a runtime path. Returns Ok if claimed successfully
     /// or conflict if claimed by another path.
     pub fn claim(&self, key: &str, path: RuntimePath) -> ClaimResult {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
 
         if let Some(claim) = claims.get_mut(key) {
@@ -122,12 +127,14 @@ impl SessionTracker {
 
     /// Release a session.
     pub fn release(&self, key: &str) {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         claims.remove(key);
     }
 
     /// Get the runtime path for a session.
     pub fn get_path(&self, key: &str) -> Option<RuntimePath> {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get(key) {
             if claim.is_stale() {
@@ -142,6 +149,7 @@ impl SessionTracker {
 
     /// Check if session path matches, returns conflict response if not.
     pub fn check(&self, key: &str, path: RuntimePath) -> Option<RuntimePath> {
+        let key = Self::normalize_key(key);
         let claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get(key)
             && !claim.is_stale()
@@ -157,6 +165,7 @@ impl SessionTracker {
     /// Mirrors TS renewSession() — called on checkpoint-extract to keep
     /// long-lived sessions (Discord bots) alive without ending them.
     pub fn renew(&self, key: &str) -> bool {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get_mut(key) {
             if claim.is_stale() {
@@ -172,6 +181,7 @@ impl SessionTracker {
 
     /// Bypass a session.
     pub fn bypass(&self, key: &str) {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get_mut(key) {
             claim.bypassed = true;
@@ -180,6 +190,7 @@ impl SessionTracker {
 
     /// Unbypass a session.
     pub fn unbypass(&self, key: &str) {
+        let key = Self::normalize_key(key);
         let mut claims = self.claims.lock().unwrap();
         if let Some(claim) = claims.get_mut(key) {
             claim.bypassed = false;
@@ -188,6 +199,7 @@ impl SessionTracker {
 
     /// Check if session is bypassed.
     pub fn is_bypassed(&self, key: &str) -> bool {
+        let key = Self::normalize_key(key);
         let claims = self.claims.lock().unwrap();
         claims.get(key).map(|c| c.bypassed).unwrap_or(false)
     }

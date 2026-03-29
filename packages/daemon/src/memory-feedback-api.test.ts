@@ -98,15 +98,19 @@ describe("memory feedback API", () => {
 			ok?: boolean;
 			recorded?: number;
 			accepted?: number;
+			rejected?: number;
 			propagated?: number;
 			fallback?: boolean;
+			acceptanceRule?: string;
 		};
 
 		expect(res.status).toBe(200);
 		expect(json.ok).toBe(true);
 		expect(json.recorded).toBe(2);
 		expect(json.accepted).toBe(1);
+		expect(json.rejected).toBe(1);
 		expect(json.propagated).toBe(1);
+		expect(json.acceptanceRule).toContain("recorded for this session");
 		expect(json.fallback).toBeUndefined();
 	});
 });

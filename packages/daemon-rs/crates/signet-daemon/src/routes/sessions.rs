@@ -63,6 +63,7 @@ pub async fn bypass(
     Path(key): Path<String>,
     Json(body): Json<BypassBody>,
 ) -> axum::response::Response {
+    let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
     let enabled = body.enabled.unwrap_or(true);
 
     if enabled {

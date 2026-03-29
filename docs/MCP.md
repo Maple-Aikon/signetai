@@ -229,7 +229,12 @@ predictor scorer's training pipeline and the aspect feedback loop.
 Score interpretation: `1` = directly helpful, `0` = unused/neutral,
 `−1` = harmful or misleading.
 
-**Returns:** Object with `ok: true` and `recorded` count.
+**Returns:** Object with `ok: true`, `recorded`, `accepted`, `rejected`,
+and `propagated` counts.
+
+`recorded` is the number of ratings submitted. `accepted` is the subset
+whose memory IDs were actually recorded for the given session and agent.
+`propagated` is the subset that also produced path-based graph updates.
 
 **Example:**
 
@@ -324,7 +329,7 @@ hooks are silenced.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `session_key` | string | yes | Session key to toggle bypass for |
+| `session_key` | string | yes | Session key to toggle bypass for, raw or `session:<uuid>` |
 | `enabled` | boolean | yes | `true` to enable bypass, `false` to disable |
 
 **Returns:** Object with `key` and `bypassed` fields confirming the new state.

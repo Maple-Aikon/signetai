@@ -63,6 +63,33 @@ interface DependencyRow {
 	readonly name: string;
 }
 
+const MAX_BLOCK_CHARS = 900;
+
+function cleanValue(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
+}
+
+function isNoise(value: string): boolean {
+	const text = cleanValue(value).toLowerCase();
+	if (text.length < 3) return true;
+	if (/^\*+\s*:/.test(text)) return true;
+	if (text.includes("[[memory/")) return true;
+	if (/(^|[\s|])(session|source|latest|node|project|harness|compaction)=/.test(text)) return true;
+	if (/(^|[\s|])(session|source|latest|node|project|harness):/.test(text)) return true;
+	if (text.includes("#source:")) return true;
+	return false;
+}
+
+function trimBlock(text: string): { text: string; truncated: boolean } {
+	if (text.length <= MAX_BLOCK_CHARS) {
+		return { text, truncated: false };
+	}
+	return {
+		text: `${text.slice(0, Math.max(1, MAX_BLOCK_CHARS - 3)).trimEnd()}...`,
+		truncated: true,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Score normalization
 // ---------------------------------------------------------------------------
@@ -123,13 +150,14 @@ export function constructContextBlocks(
 				)
 				.all(asp.id, agentId) as AttributeRow[];
 
-			if (attrs.length === 0) continue;
+			const values = attrs.map((a) => cleanValue(a.content)).filter((value) => !isNoise(value));
+			if (values.length === 0) continue;
 
 			aspectIds.push(asp.id);
 			aspectNames.push(asp.name);
-			totalAttrs += attrs.length;
+			totalAttrs += values.length;
 
-			const vals = attrs.map((a) => a.content).join("; ");
+			const vals = values.join("; ");
 			lines.push(`- ${asp.name}: ${vals}`);
 		}
 
@@ -145,8 +173,9 @@ export function constructContextBlocks(
 			)
 			.all(ent.id, agentId) as ConstraintRow[];
 
-		if (constraints.length > 0) {
-			const vals = constraints.map((c) => c.content).join("; ");
+		const cleanConstraints = constraints.map((c) => cleanValue(c.content)).filter((value) => !isNoise(value));
+		if (cleanConstraints.length > 0) {
+			const vals = cleanConstraints.join("; ");
 			lines.push(`- Constraints: ${vals}`);
 		}
 
@@ -168,8 +197,9 @@ export function constructContextBlocks(
 
 		if (lines.length === 0) continue;
 
-		const text = `[${ent.name} (${ent.entity_type})]\n${lines.join("\n")}`;
-		const score = densityScore(aspectIds.length, totalAttrs, constraints.length);
+		const built = trimBlock(`[${ent.name} (${ent.entity_type})]\n${lines.join("\n")}`);
+		const text = built.text;
+		const score = densityScore(aspectIds.length, totalAttrs, cleanConstraints.length);
 
 		blocks.push({
 			content: text,

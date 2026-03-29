@@ -12,8 +12,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
+import { probeServer, removeProbeResult, storeProbeResult } from "../mcp-probe.js";
 import { getSecret } from "../secrets.js";
-import { probeServer, storeProbeResult, removeProbeResult } from "../mcp-probe.js";
 
 const CATALOG_PAGE_SIZE = 30;
 const CATALOG_MAX_PAGES = 10;
@@ -134,7 +134,7 @@ const DEFAULT_EXPOSURE_POLICY: MarketplaceMcpExposurePolicy = {
 	mode: "hybrid",
 	maxExpandedTools: 12,
 	maxSearchResults: 8,
-	updatedAt: new Date(0).toISOString(),
+	updatedAt: new Date().toISOString(),
 };
 
 const catalogCache = new Map<number, { fetchedAt: number; page: ParsedCatalogPage }>();
@@ -596,7 +596,10 @@ export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpC
 		while ((m = re.exec(tpSection)) !== null) {
 			const name = m[1].trim();
 			const url = m[2].trim();
-			const desc = m[3].replace(/<[^>]*>/g, "").replace(/!\[[^\]]*\]\([^)]*\)/g, "").trim();
+			const desc = m[3]
+				.replace(/<[^>]*>/g, "")
+				.replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+				.trim();
 			if (!name || !url) continue;
 			const ghMatch = url.match(/github\.com\/([a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)/);
 			if (!ghMatch) continue;
@@ -766,7 +769,12 @@ export function extractStandardMcpConfig(markdown: string): DetailConfig {
 function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | null {
 	if (!isRecord(value)) return null;
 	if (typeof value.id !== "string") return null;
-	if (value.source !== "mcpservers.org" && value.source !== "modelcontextprotocol/servers" && value.source !== "manual" && value.source !== "github")
+	if (
+		value.source !== "mcpservers.org" &&
+		value.source !== "modelcontextprotocol/servers" &&
+		value.source !== "manual" &&
+		value.source !== "github"
+	)
 		return null;
 	if (typeof value.name !== "string") return null;
 	if (typeof value.description !== "string") return null;
@@ -859,7 +867,7 @@ const MAX_README_BYTES = 2 * 1024 * 1024; // 2 MB cap on fetched READMEs
 /** Read response body with a size cap to prevent memory exhaustion. */
 async function readCapped(res: Response): Promise<string> {
 	const len = res.headers.get("content-length");
-	if (len && parseInt(len, 10) > MAX_README_BYTES) {
+	if (len && Number.parseInt(len, 10) > MAX_README_BYTES) {
 		throw new Error(`response too large: ${len} bytes`);
 	}
 	const text = await res.text();
@@ -1333,9 +1341,11 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			writeInstalledServers(next);
 			invalidateMarketplaceToolsCache();
 			// Fire-and-forget probe on install/update
-			void probeServer(updated).then(storeProbeResult).catch((err) => {
-				logger.warn("probe", `Post-install probe failed for ${updated.id}: ${err}`);
-			});
+			void probeServer(updated)
+				.then(storeProbeResult)
+				.catch((err) => {
+					logger.warn("probe", `Post-install probe failed for ${updated.id}: ${err}`);
+				});
 			return c.json({ success: true, server: updated, updated: true });
 		}
 
@@ -1368,9 +1378,11 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
 		// Fire-and-forget probe on new install
-		void probeServer(server).then(storeProbeResult).catch((err) => {
-			logger.warn("probe", `Post-install probe failed for ${server.id}: ${err}`);
-		});
+		void probeServer(server)
+			.then(storeProbeResult)
+			.catch((err) => {
+				logger.warn("probe", `Post-install probe failed for ${server.id}: ${err}`);
+			});
 		return c.json({ success: true, server, updated: false });
 	});
 
@@ -1412,9 +1424,11 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
 		// Fire-and-forget probe on manual register
-		void probeServer(server).then(storeProbeResult).catch((err) => {
-			logger.warn("probe", `Post-register probe failed for ${server.id}: ${err}`);
-		});
+		void probeServer(server)
+			.then(storeProbeResult)
+			.catch((err) => {
+				logger.warn("probe", `Post-register probe failed for ${server.id}: ${err}`);
+			});
 		return c.json({ success: true, server });
 	});
 
@@ -1519,17 +1533,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		const context = extractContextFromRequest(c);
 		const installed = readInstalledServers();
-		const server = installed.find(
-			(s) =>
-				s.id === body.serverId &&
-				s.enabled &&
-				scopeMatches(s.scope, context),
-		);
+		const server = installed.find((s) => s.id === body.serverId && s.enabled && scopeMatches(s.scope, context));
 		if (!server) {
-			return c.json(
-				{ error: "Server not found, disabled, or out of scope" },
-				404,
-			);
+			return c.json({ error: "Server not found, disabled, or out of scope" }, 404);
 		}
 
 		try {
@@ -1538,8 +1544,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			});
 			return c.json({ success: true, contents: result });
 		} catch (error) {
-			const msg =
-				error instanceof Error ? error.message : String(error);
+			const msg = error instanceof Error ? error.message : String(error);
 			return c.json({ success: false, error: msg }, 500);
 		}
 	});

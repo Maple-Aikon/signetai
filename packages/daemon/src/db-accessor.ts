@@ -315,6 +315,10 @@ export function getVectorRuntimeStatus(): VectorRuntimeStatus {
 	};
 }
 
+export function isVectorRuntimeUsable(): boolean {
+	return vecLoaded && vecLoadError === null;
+}
+
 const MAX_MIGRATION_BACKUPS = 5;
 
 /**
@@ -399,8 +403,10 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 		try {
 			ensureVecTable(writeConn);
 			backfillVecEmbeddings(writeConn);
-		} catch {
-			// vec0 not usable — vector search will be disabled
+		} catch (err) {
+			vecLoaded = false;
+			vecLoadError = err instanceof Error ? err.message : String(err);
+			console.warn("[db-accessor] vec0 unavailable after extension load:", vecLoadError);
 		}
 	}
 
