@@ -6815,7 +6815,10 @@ app.get("/api/synthesis/status", (c) => {
 // Session API
 // ============================================================================
 
-// List active sessions with bypass status
+// List active sessions for the requesting agent with bypass status.
+// Cross-agent session visibility is intentionally served by
+// /api/cross-agent/presence — surfacing other agents' sessions here
+// would violate per-agent data scoping (CLAUDE.md §agent-scoping).
 app.get("/api/sessions", (c) => {
 	const scopedAgent = resolveScopedAgentId(c, undefined, "default");
 	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
