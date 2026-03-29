@@ -1391,10 +1391,10 @@ impl Default for RerankerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            model: "nomic-embed-text".to_string(),
+            model: String::new(),
             use_extraction_model: false,
-            top_n: 10,
-            timeout_ms: 5_000,
+            top_n: 20,
+            timeout_ms: 2_000,
         }
     }
 }

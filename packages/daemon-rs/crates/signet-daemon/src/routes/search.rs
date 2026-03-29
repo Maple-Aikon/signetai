@@ -370,46 +370,47 @@ pub async fn recall(
                         std::mem::swap(&mut resp.results, &mut reordered);
                     }
 
-                    // Inject summary card: drop last real memory to stay within
-                    // limit, then prepend. Matches TS daemon parity contract.
-                    if let Some(text) = summary {
-                        let content = format!(
-                            "[model summary, verify against source memories] {text}"
-                        );
-                        let top_score = resp.results.first().map(|h| h.score).unwrap_or(0.5);
-                        let score = top_score.clamp(0.01, 1.0);
+                    // Inject summary card only when limit >= 2: one slot for
+                    // the summary, at least one slot for a real memory to
+                    // verify against. Matches TS daemon parity contract.
+                    if limit >= 2 {
+                        if let Some(text) = summary {
+                            let content = format!(
+                                "[model summary, verify against source memories] {text}"
+                            );
+                            let top_score =
+                                resp.results.first().map(|h| h.score).unwrap_or(0.5);
+                            let score = top_score.clamp(0.01, 1.0);
 
-                        // SHA-1 digest of query for stable id, matching TS daemon.
-                        use sha1::Digest;
-                        let hash = sha1::Sha1::digest(resp.query.as_bytes());
-                        let digest = format!("{hash:x}");
-                        let digest = &digest[..12];
+                            // SHA-1 digest of query for stable id, matching TS daemon.
+                            use sha1::Digest;
+                            let hash = sha1::Sha1::digest(resp.query.as_bytes());
+                            let digest = format!("{hash:x}");
+                            let digest = &digest[..12];
 
-                        // Only drop a real memory to make room when limit > 1.
-                        // At limit=1 the summary is supplementary — caller
-                        // always gets at least one real memory to verify against.
-                        if limit > 1 && resp.results.len() >= limit {
-                            resp.results.pop();
+                            if resp.results.len() >= limit {
+                                resp.results.pop();
+                            }
+                            resp.results.insert(
+                                0,
+                                RecallHit {
+                                    id: format!("summary:{digest}"),
+                                    content: content.clone(),
+                                    content_length: content.len(),
+                                    truncated: false,
+                                    score,
+                                    source: "llm_summary".to_string(),
+                                    memory_type: "semantic".to_string(),
+                                    tags: None,
+                                    pinned: false,
+                                    importance: 0.9,
+                                    who: None,
+                                    project: None,
+                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                    supplementary: Some(true),
+                                },
+                            );
                         }
-                        resp.results.insert(
-                            0,
-                            RecallHit {
-                                id: format!("summary:{digest}"),
-                                content: content.clone(),
-                                content_length: content.len(),
-                                truncated: false,
-                                score,
-                                source: "llm_summary".to_string(),
-                                memory_type: "semantic".to_string(),
-                                tags: None,
-                                pinned: false,
-                                importance: 0.9,
-                                who: None,
-                                project: None,
-                                created_at: chrono::Utc::now().to_rfc3339(),
-                                supplementary: Some(true),
-                            },
-                        );
                     }
                 }
             }
