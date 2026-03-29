@@ -1004,8 +1004,7 @@ specs:
     success_criteria:
       - "hybridRecall preserves reranker-calibrated scores instead of synthesizing from rank position"
       - "userPromptSubmit injects only memories with top score >= hooks.userPromptSubmit.minScore (default 0.8)"
-      - "daemon-rs exposes HooksConfig + UserPromptSubmitHookConfig for config contract parity"
-      - "daemon-rs behavioral gate deferred until prompt_submit integrates calibrated hybrid scoring (importance is not a query-relevance proxy)"
+      - "daemon-rs mirrors gate via term-coverage proxy (matched_terms/total_terms) until full hybrid scoring lands"
     decision: "Targeted bug fix + config surface. No dedicated spec file. PR #396."
 
   - id: docker-self-hosting-stack

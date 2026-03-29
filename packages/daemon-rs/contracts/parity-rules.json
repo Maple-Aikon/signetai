@@ -117,7 +117,7 @@
 			"POST /api/hooks/user-prompt-submit": {
 				"deterministic": ["injections"],
 				"ignoreFields": [],
-				"note": "TS path applies a calibrated hybridRecall minScore gate (hooks.userPromptSubmit.minScore, default 0.8); daemon-rs prompt_submit path uses LIKE matching without calibrated scoring, so the behavioral gate is deferred until hybrid scoring lands there. Config struct HooksConfig is present for contract surface parity."
+				"note": "TS path gates on calibrated hybridRecall score; daemon-rs path gates on term-coverage (matched_needles/total_needles). Both respect hooks.userPromptSubmit.minScore (default 0.8). Score semantics differ: update this note when daemon-rs integrates full hybrid scoring."
 			},
 			"POST /api/hooks/session-end": {
 				"deterministic": ["status"],
