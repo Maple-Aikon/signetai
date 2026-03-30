@@ -8,8 +8,8 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { LlmGenerateResult, LlmProvider } from "@signet/core";
@@ -202,15 +202,15 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 	readonly env: Record<string, string | undefined>;
 	cleanup(): void;
 } {
-	const root = join(homedir(), ".cache", "signet");
+	const root = join(tmpdir(), "signet-codex-home-");
 	mkdirSync(root, { recursive: true });
-	const home = mkdtempSync(join(root, "codex-home-"));
+	const home = mkdtempSync(root);
 	const codexHome = join(home, ".codex");
 	mkdirSync(codexHome, { recursive: true });
 
 	const auth = join(homedir(), ".codex", "auth.json");
 	if (existsSync(auth)) {
-		cpSync(auth, join(codexHome, "auth.json"));
+		symlinkSync(auth, join(codexHome, "auth.json"));
 	}
 
 	const version = join(homedir(), ".codex", "version.json");

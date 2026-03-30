@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -336,7 +336,7 @@ describe("createCodexProvider", () => {
 		expect(typeof capturedEnv?.CODEX_HOME).toBe("string");
 	});
 
-	it("spawns Codex with a sterile temp home and copied auth", async () => {
+	it("spawns Codex with a sterile temp home and linked auth", async () => {
 		const root = join(tmpdir(), `signet-codex-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const home = join(root, "home");
 		const codex = join(home, ".codex");
@@ -352,12 +352,13 @@ describe("createCodexProvider", () => {
 			capturedEnv = opts?.env;
 			const srcAuth = join(homedir(), ".codex", "auth.json");
 			const srcVersion = join(homedir(), ".codex", "version.json");
+			const dstAuth = join(capturedEnv?.CODEX_HOME ?? "", "auth.json");
 			expect(capturedEnv?.CODEX_HOME).toBe(join(capturedEnv?.HOME ?? "", ".codex"));
-			expect(existsSync(join(capturedEnv?.CODEX_HOME ?? "", "auth.json"))).toBe(existsSync(srcAuth));
+			expect(capturedEnv?.HOME?.startsWith(tmpdir())).toBe(true);
+			expect(existsSync(dstAuth)).toBe(existsSync(srcAuth));
 			if (existsSync(srcAuth)) {
-				expect(readFileSync(join(capturedEnv?.CODEX_HOME ?? "", "auth.json"), "utf8")).toBe(
-					readFileSync(srcAuth, "utf8"),
-				);
+				expect(lstatSync(dstAuth).isSymbolicLink()).toBe(true);
+				expect(readFileSync(dstAuth, "utf8")).toBe(readFileSync(srcAuth, "utf8"));
 			}
 			expect(existsSync(join(capturedEnv?.CODEX_HOME ?? "", "version.json"))).toBe(existsSync(srcVersion));
 			return {
