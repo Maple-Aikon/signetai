@@ -336,7 +336,7 @@ describe("createCodexProvider", () => {
 		expect(typeof capturedEnv?.CODEX_HOME).toBe("string");
 	});
 
-	it("spawns Codex with a sterile temp home and linked auth", async () => {
+	it("spawns Codex with a sterile temp home and readonly copied auth", async () => {
 		const root = join(tmpdir(), `signet-codex-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const home = join(root, "home");
 		const codex = join(home, ".codex");
@@ -357,8 +357,9 @@ describe("createCodexProvider", () => {
 			expect(capturedEnv?.HOME?.startsWith(tmpdir())).toBe(true);
 			expect(existsSync(dstAuth)).toBe(existsSync(srcAuth));
 			if (existsSync(srcAuth)) {
-				expect(lstatSync(dstAuth).isSymbolicLink() || lstatSync(dstAuth).nlink > 1).toBe(true);
+				expect(lstatSync(dstAuth).isSymbolicLink()).toBe(false);
 				expect(readFileSync(dstAuth, "utf8")).toBe(readFileSync(srcAuth, "utf8"));
+				expect(lstatSync(dstAuth).mode & 0o200).toBe(0);
 			}
 			expect(existsSync(join(capturedEnv?.CODEX_HOME ?? "", "version.json"))).toBe(existsSync(srcVersion));
 			return {

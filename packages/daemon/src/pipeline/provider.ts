@@ -8,7 +8,7 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -202,24 +202,21 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 	readonly env: Record<string, string | undefined>;
 	cleanup(): void;
 } {
-	const root = join(tmpdir(), "signet-codex-home-");
+	const root = join(tmpdir(), "signet-codex-home");
 	mkdirSync(root, { recursive: true });
-	const home = mkdtempSync(root);
+	for (const name of readdirSync(root)) {
+		if (!name.startsWith("home-")) continue;
+		rmSync(join(root, name), { recursive: true, force: true });
+	}
+	const home = mkdtempSync(join(root, "home-"));
 	const codexHome = join(home, ".codex");
 	mkdirSync(codexHome, { recursive: true });
 
 	const auth = join(homedir(), ".codex", "auth.json");
 	if (existsSync(auth)) {
 		const authDst = join(codexHome, "auth.json");
-		try {
-			if (process.platform === "win32") {
-				linkSync(auth, authDst);
-			} else {
-				symlinkSync(auth, authDst);
-			}
-		} catch {
-			cpSync(auth, authDst);
-		}
+		cpSync(auth, authDst);
+		chmodSync(authDst, 0o400);
 	}
 
 	const version = join(homedir(), ".codex", "version.json");
