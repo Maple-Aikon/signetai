@@ -384,7 +384,7 @@ describe("createCodexProvider", () => {
 			expect(capturedEnv?.XDG_CONFIG_HOME).toBe(join(capturedEnv?.HOME ?? "", ".config"));
 		} finally {
 			if (prevHome === undefined) {
-				process.env.HOME = undefined;
+				delete process.env.HOME;
 			} else {
 				process.env.HOME = prevHome;
 			}
