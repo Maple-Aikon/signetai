@@ -6,7 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
@@ -313,7 +313,7 @@ function listSignetOfficialSkills(): SkillBrowseResult[] {
 				return [
 					{
 						name: d.name,
-						fullName: `signet@${d.name}`,
+						fullName: "Signet-AI/signetai",
 						installs: isBuiltin ? "built-in" : "--",
 						installsRaw: isBuiltin ? 100_000 : 10_000,
 						popularityScore: isBuiltin ? 200_000 : 50_000,
@@ -763,41 +763,20 @@ export function mountSkillsRoutes(app: Hono): void {
 			return c.json({ error: "Invalid skill name" }, 400);
 		}
 
-		// Signet official skills are bundled in the installed package's skills/ dir.
-		// prebuild copies root skills/ into packages/signetai/skills/, and the
-		// files array includes it — so npm-installed users have them too.
-		// Dev: __dirname -> packages/daemon/src/routes/ -> walks up to repo root skills/
-		// Installed: __dirname -> dist/ -> walks to sibling skills/ in the package
-		if (source?.startsWith("signet@")) {
-			const signetDir = getSignetSkillsSourceDir();
-			if (signetDir) {
-				const src = join(signetDir, name);
-				if (existsSync(join(src, "SKILL.md"))) {
-					try {
-						const dest = join(getSkillsDir(), name);
-						mkdirSync(dest, { recursive: true });
-						cpSync(src, dest, { recursive: true });
-						logger.info("skills", "Signet skill installed", { name });
-						onSkillInstalled(name).catch((e) => {
-							logger.error("skills", "Post-install graph hook failed", e as Error);
-						});
-						return c.json({ success: true, name });
-					} catch (e) {
-						logger.error("skills", "Failed to install signet skill", e as Error);
-						return c.json({ success: false, error: (e as Error).message }, 500);
-					}
-				}
-			}
-			return c.json({ success: false, error: `Signet skill '${name}' not found` }, 404);
-		}
-
 		const pkg = source || name;
 		logger.info("skills", "Installing skill", { name, pkg });
 		const packageManager = resolvePrimaryPackageManager({
 			agentsDir: getAgentsDir(),
 			env: process.env,
 		});
-		const skillsCommand = getSkillsRunnerCommand(packageManager.family, ["add", pkg, "--global", "--yes"]);
+		// For multi-skill repo sources (owner/repo format), pass --skill to
+		// target a specific skill. This handles Signet-AI/signetai and any
+		// other GitHub repo that bundles multiple skills.
+		const args = ["add", pkg, "--global", "--yes"];
+		if (source && source !== name && /^[\w-]+\/[\w.-]+$/.test(source)) {
+			args.push("--skill", name);
+		}
+		const skillsCommand = getSkillsRunnerCommand(packageManager.family, args);
 
 		logger.info("skills", "Using package manager", {
 			command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,

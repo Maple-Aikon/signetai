@@ -1,7 +1,8 @@
 ---
 name: skill-creator
-last_verified: 2026-03-21
 description: Guide for discovering, installing, and creating effective skills. This skill should be used when users want to discover and install existing skills (e.g., "how do I do X", "find a skill for X", "is there a skill that can...") or create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations.
+metadata:
+  last_verified: 2026-03-21
 ---
 
 # Skill Creator

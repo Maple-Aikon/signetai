@@ -40,7 +40,7 @@ def validate_skill(skill_path):
     # Define allowed properties
     ALLOWED_PROPERTIES = {
         'name', 'description', 'license', 'allowed-tools', 'metadata',
-        'builtin', 'user_invocable', 'arg_hint', 'last_verified',
+        'builtin', 'user_invocable', 'arg_hint',
     }
 
     # Check for unexpected properties (excluding nested keys under metadata)

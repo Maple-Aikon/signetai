@@ -1,6 +1,5 @@
 ---
 name: agent-architect
-last_verified: 2026-03-21
 description: >
   Design agents with genuine humanity — craft SOUL.md, IDENTITY.md, USER.md,
   and AGENTS.md files that produce agents people actually connect with. Use
@@ -10,6 +9,8 @@ description: >
   authenticity and diagnosing why an agent feels robotic or hollow, (5) the user
   says "design an agent," "shape their personality," "make them feel more real,"
   "agent identity," "soul file," or "agent architect."
+metadata:
+  last_verified: 2026-03-21
 ---
 
 # Agent Architect

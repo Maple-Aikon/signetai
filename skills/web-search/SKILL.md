@@ -1,7 +1,8 @@
 ---
 name: web-search
-last_verified: 2026-03-21
 description: "Search the web and scrape pages using the local tool stack: SearXNG (meta-search), Lightpanda (fast headless fetch), and Agent-Browser (full browser automation). This is your DEFAULT web skill — use it whenever you need to look something up, research a topic, fetch a webpage, extract content from a URL, check current information, find documentation, do competitive research, or answer any question that benefits from live web data. Triggers on any form of: search for, look up, google, find out, research, what's the latest on, fetch this page, scrape this site, check this URL, pull info from, web search, or any task where current web information would improve your answer. Even if the user doesn't explicitly ask you to search — if answering well requires current info you don't have, use this skill. NOT for interactive browser automation like form filling or clicking (use [[agent-browser]] or [[browser-use]])."
+metadata:
+  last_verified: 2026-03-21
 ---
 
 # Web Search & Scrape
