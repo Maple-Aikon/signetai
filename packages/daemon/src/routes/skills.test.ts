@@ -482,6 +482,29 @@ This is a test skill.`,
 		});
 		expect(res.status).toBe(400);
 	});
+
+	// Regression: signet skills should appear in browse results when the
+	// bundled skills dir is resolvable (dev environment)
+	it.skipIf(!existsSync(join(__dirname, "..", "..", "..", "..", "skills")))(
+		"GET /api/skills/browse includes signet provider skills",
+		async () => {
+			const res = await app.request("/api/skills/browse");
+			expect(res.status).toBe(200);
+			const body = await res.json();
+			const signetSkills = body.results.filter((s: { provider: string }) => s.provider === "signet");
+			expect(signetSkills.length).toBeGreaterThan(0);
+
+			// Verify signet skills use repo path as fullName, not signet@ prefix
+			for (const skill of signetSkills) {
+				expect(skill.fullName).toBe("Signet-AI/signetai");
+				expect(skill.official).toBe(true);
+			}
+
+			// Builtin skills should be marked
+			const builtins = signetSkills.filter((s: { builtin: boolean }) => s.builtin);
+			expect(builtins.length).toBeGreaterThan(0);
+		},
+	);
 });
 
 // ---------------------------------------------------------------------------
