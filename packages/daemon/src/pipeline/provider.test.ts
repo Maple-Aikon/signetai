@@ -339,19 +339,21 @@ describe("createCodexProvider", () => {
 	it("spawns Codex with a sterile temp home and readonly copied auth", async () => {
 		const root = join(tmpdir(), `signet-codex-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const home = join(root, "home");
-		const codex = join(home, ".codex");
-		mkdirSync(codex, { recursive: true });
-		writeFileSync(join(codex, "auth.json"), '{"provider":"test"}');
-		writeFileSync(join(codex, "version.json"), '{"version":"1"}');
+		const liveCodex = join(root, "live-codex");
+		mkdirSync(liveCodex, { recursive: true });
+		writeFileSync(join(liveCodex, "auth.json"), '{"provider":"test"}');
+		writeFileSync(join(liveCodex, "version.json"), '{"version":"1"}');
 
 		const prevHome = process.env.HOME;
+		const prevCodexHome = process.env.CODEX_HOME;
 		process.env.HOME = home;
+		process.env.CODEX_HOME = liveCodex;
 
 		let capturedEnv: Record<string, string | undefined> | undefined;
 		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
 			capturedEnv = opts?.env;
-			const srcAuth = join(homedir(), ".codex", "auth.json");
-			const srcVersion = join(homedir(), ".codex", "version.json");
+			const srcAuth = join(liveCodex, "auth.json");
+			const srcVersion = join(liveCodex, "version.json");
 			const dstAuth = join(capturedEnv?.CODEX_HOME ?? "", "auth.json");
 			expect(capturedEnv?.CODEX_HOME).toBe(join(capturedEnv?.HOME ?? "", ".codex"));
 			expect(capturedEnv?.HOME?.startsWith(tmpdir())).toBe(true);
@@ -389,6 +391,11 @@ describe("createCodexProvider", () => {
 				delete process.env.HOME;
 			} else {
 				process.env.HOME = prevHome;
+			}
+			if (prevCodexHome === undefined) {
+				delete process.env.CODEX_HOME;
+			} else {
+				process.env.CODEX_HOME = prevCodexHome;
 			}
 			rmSync(root, { recursive: true, force: true });
 		}
