@@ -394,6 +394,43 @@ describe("createCodexProvider", () => {
 		}
 	});
 
+	it("does not delete sibling sterile homes while Codex is running", async () => {
+		const root = join(tmpdir(), "signet-codex-home");
+		mkdirSync(root, { recursive: true });
+		const sibling = join(root, `home-sibling-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const marker = join(sibling, "marker.txt");
+		mkdirSync(sibling, { recursive: true });
+		writeFileSync(marker, "keep");
+
+		let capturedEnv: Record<string, string | undefined> | undefined;
+		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
+			capturedEnv = opts?.env;
+			expect(existsSync(marker)).toBe(true);
+			expect(capturedEnv?.HOME).not.toBe(sibling);
+			return {
+				stdout: streamFromString(
+					'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+				),
+				stderr: streamFromString(""),
+				exited: Promise.resolve(0),
+				kill() {},
+			};
+		}) as typeof Bun.spawn;
+
+		try {
+			const provider = createCodexProvider({ model: "gpt-5.3-codex" });
+			if (!provider.generateWithUsage) {
+				throw new Error("expected generateWithUsage on Codex provider");
+			}
+
+			await provider.generateWithUsage("test");
+
+			expect(existsSync(marker)).toBe(true);
+		} finally {
+			rmSync(sibling, { recursive: true, force: true });
+		}
+	});
+
 	it("generate() throws on non-zero exit", async () => {
 		Bun.spawn = mock((_args: string[]) => ({
 			stdout: streamFromString(""),
