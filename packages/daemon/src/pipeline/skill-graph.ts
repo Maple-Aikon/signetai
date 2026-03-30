@@ -77,8 +77,23 @@ function buildEmbeddingText(fm: SkillFrontmatter): string {
 	return parts.join(" — ");
 }
 
+function normalizeList(values: readonly string[] | undefined): readonly string[] {
+	if (!values || values.length === 0) return [];
+	return [...values];
+}
+
 export function skillFingerprint(fm: SkillFrontmatter): string {
-	return buildEmbeddingText(fm);
+	return JSON.stringify({
+		name: fm.name,
+		description: fm.description,
+		version: fm.version ?? null,
+		author: fm.author ?? null,
+		license: fm.license ?? null,
+		triggers: normalizeList(fm.triggers),
+		tags: normalizeList(fm.tags),
+		permissions: normalizeList(fm.permissions),
+		role: fm.role ?? null,
+	});
 }
 
 export function skillFingerprintHash(fm: SkillFrontmatter): string {

@@ -119,4 +119,98 @@ this skill helps with reconciliation loop debugging and metadata enrichment.`,
 
 		expect(pass).toEqual({ installed: 0, updated: 0, removed: 0 });
 	});
+
+	it("updates skill metadata when a non-embedding frontmatter field changes on disk", async () => {
+		const paths = setup();
+		root = paths.root;
+		db = paths.db;
+		initDbAccessor(db);
+
+		const skill = "meta-skill";
+		const dir = join(root, "skills", skill);
+		const file = join(dir, "SKILL.md");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			file,
+			`---
+name: ${skill}
+description: metadata drift test
+version: 1.0.0
+author: nicholai
+---
+this skill helps verify metadata reconciliation.`,
+		);
+
+		const raw = {
+			name: skill,
+			description: "metadata drift test",
+			version: "1.0.0",
+			author: "nicholai",
+		} as const;
+
+		const first = await installSkillNode(
+			{
+				frontmatter: raw,
+				body: "this skill helps verify metadata reconciliation.",
+				source: "reconciler",
+				fsPath: file,
+			},
+			getDbAccessor(),
+			cfg(),
+			emb,
+			async () => [0.1, 0.2, 0.3],
+			null,
+		);
+
+		expect(
+			getDbAccessor().withReadDb(
+				(dbh) =>
+					dbh
+						.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
+						.get(first.entityId) as { content_hash: string } | undefined,
+			)?.content_hash,
+		).toBe(skillFingerprintHash(raw));
+
+		writeFileSync(
+			file,
+			`---
+name: ${skill}
+description: metadata drift test
+version: 1.0.1
+author: nicholai
+---
+this skill helps verify metadata reconciliation.`,
+		);
+
+		let calls = 0;
+		const pass = await reconcileOnce({
+			accessor: getDbAccessor(),
+			pipelineConfig: cfg(),
+			embeddingConfig: emb,
+			fetchEmbedding: async () => {
+				calls++;
+				return [0.4, 0.5, 0.6];
+			},
+			getProvider: () => null,
+			agentsDir: root,
+		});
+
+		expect(pass).toEqual({ installed: 0, updated: 1, removed: 0 });
+		expect(calls).toBe(1);
+		expect(
+			getDbAccessor().withReadDb(
+				(dbh) =>
+					dbh
+						.prepare(
+							"SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
+						)
+						.get(first.entityId) as { content_hash: string } | undefined,
+			)?.content_hash,
+		).toBe(
+			skillFingerprintHash({
+				...raw,
+				version: "1.0.1",
+			}),
+		);
+	});
 });
