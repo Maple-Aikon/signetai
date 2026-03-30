@@ -6,7 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
@@ -759,6 +759,30 @@ export function mountSkillsRoutes(app: Hono): void {
 		// Sanitize: allow alphanumeric, dash, underscore, slash (for owner/repo)
 		if (!/^[\w\-./]+$/.test(name)) {
 			return c.json({ error: "Invalid skill name" }, 400);
+		}
+
+		// Signet official skills: copy from source dir instead of package manager
+		if (source?.startsWith("signet@")) {
+			const signetDir = getSignetSkillsSourceDir();
+			if (signetDir) {
+				const srcPath = join(signetDir, name);
+				if (existsSync(join(srcPath, "SKILL.md"))) {
+					try {
+						const destPath = join(getSkillsDir(), name);
+						mkdirSync(destPath, { recursive: true });
+						cpSync(srcPath, destPath, { recursive: true });
+						logger.info("skills", "Signet skill installed from source", { name });
+						onSkillInstalled(name).catch((e) => {
+							logger.error("skills", "Post-install graph hook failed", e as Error);
+						});
+						return c.json({ success: true, name, output: `Copied from signet source: ${name}` });
+					} catch (e) {
+						logger.error("skills", "Failed to copy signet skill", e as Error);
+						return c.json({ success: false, error: (e as Error).message }, 500);
+					}
+				}
+			}
+			return c.json({ success: false, error: `Signet skill '${name}' not found in source` }, 404);
 		}
 
 		const pkg = source || name;
