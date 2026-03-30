@@ -207,7 +207,8 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 	const home = mkdtempSync(join(root, "home-"));
 	const codexHome = join(home, ".codex");
 	mkdirSync(codexHome, { recursive: true });
-	const liveCodexHome = baseEnv.CODEX_HOME ?? join(homedir(), ".codex");
+	const liveHome = baseEnv.HOME ?? homedir();
+	const liveCodexHome = baseEnv.CODEX_HOME ?? join(liveHome, ".codex");
 
 	const auth = join(liveCodexHome, "auth.json");
 	if (existsSync(auth)) {

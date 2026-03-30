@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MAX_CONTEXT_TOKENS,
