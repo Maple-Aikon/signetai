@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { DEFAULT_PIPELINE_V2, type EmbeddingConfig, type PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
-import { installSkillNode, skillFingerprintHash } from "./skill-graph";
+import { installSkillNode, skillEmbeddingHash } from "./skill-graph";
 import { reconcileOnce } from "./skill-reconciler";
 
 function setup(): { root: string; db: string } {
@@ -103,7 +103,7 @@ this skill helps with reconciliation loop debugging and metadata enrichment.`,
 					| undefined,
 		);
 
-		expect(row?.content_hash).toBe(skillFingerprintHash(raw));
+		expect(row?.content_hash).toBe(skillEmbeddingHash(result.entityId, raw));
 		expect(row?.chunk_text).toContain("debug a reconciliation loop");
 
 		const pass = await reconcileOnce({
@@ -169,7 +169,7 @@ this skill helps verify metadata reconciliation.`,
 						.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
 						.get(first.entityId) as { content_hash: string } | undefined,
 			)?.content_hash,
-		).toBe(skillFingerprintHash(raw));
+		).toBe(skillEmbeddingHash(first.entityId, raw));
 
 		writeFileSync(
 			file,
@@ -205,9 +205,9 @@ this skill helps verify metadata reconciliation.`,
 							"SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
 						)
 						.get(first.entityId) as { content_hash: string } | undefined,
-			)?.content_hash,
+					)?.content_hash,
 		).toBe(
-			skillFingerprintHash({
+			skillEmbeddingHash(first.entityId, {
 				...raw,
 				version: "1.0.1",
 			}),

@@ -18,7 +18,7 @@ import { logger } from "../logger.js";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config.js";
 import type { LlmProvider } from "./provider.js";
 import { parseSkillFile } from "./skill-frontmatter.js";
-import { installSkillNode, skillFingerprintHash, uninstallSkillNode } from "./skill-graph.js";
+import { installSkillNode, skillEmbeddingHash, uninstallSkillNode } from "./skill-graph.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,7 +126,7 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 							.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
 							.get(actualId) as { content_hash: string } | undefined,
 				);
-				const rawHash = skillFingerprintHash(parsed.frontmatter);
+				const rawHash = skillEmbeddingHash(actualId, parsed.frontmatter);
 
 				// Compare the raw on-disk frontmatter fingerprint. Installs may
 				// enrich description/triggers before generating embeddings, so
@@ -291,7 +291,6 @@ async function reconcileSkill(skillName: string, mdPath: string, deps: Reconcile
 		if (!parsed) return;
 
 		const entityId = `skill:default:${skillName}`;
-		const rawHash = skillFingerprintHash(parsed.frontmatter);
 
 		// Look up by id or name (entity may have been adopted from extraction)
 		const existingEntity = deps.accessor.withReadDb(
@@ -301,7 +300,7 @@ async function reconcileSkill(skillName: string, mdPath: string, deps: Reconcile
 					.get(entityId, skillName) as { id: string } | undefined,
 		);
 		const lookupId = existingEntity?.id ?? entityId;
-
+		const rawHash = skillEmbeddingHash(lookupId, parsed.frontmatter);
 		const storedEmb = deps.accessor.withReadDb(
 			(db) =>
 				db.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?").get(lookupId) as
