@@ -77,6 +77,14 @@ function buildEmbeddingText(fm: SkillFrontmatter): string {
 	return parts.join(" — ");
 }
 
+export function skillFingerprint(fm: SkillFrontmatter): string {
+	return buildEmbeddingText(fm);
+}
+
+export function skillFingerprintHash(fm: SkillFrontmatter): string {
+	return contentHash(skillFingerprint(fm));
+}
+
 function contentHash(text: string): string {
 	const h = new Bun.CryptoHasher("sha256");
 	h.update(text);
@@ -99,6 +107,7 @@ export async function installSkillNode(
 	let entityId = skillEntityId(agentId, input.frontmatter.name);
 	const now = new Date().toISOString();
 	const procCfg = config.procedural;
+	const rawHash = skillFingerprintHash(input.frontmatter);
 
 	let fm = input.frontmatter;
 	let enriched = false;
@@ -253,7 +262,6 @@ export async function installSkillNode(
 
 	if (embVec && embVec.length > 0) {
 		const embId = crypto.randomUUID();
-		const hash = contentHash(embeddingText);
 		const blob = vectorToBlob(embVec);
 
 		accessor.withWriteTx((db) => {
@@ -280,11 +288,11 @@ export async function installSkillNode(
 				   dimensions = excluded.dimensions,
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text`,
-			).run(embId, hash, blob, embVec.length, entityId, embeddingText, now);
+			).run(embId, rawHash, blob, embVec.length, entityId, embeddingText, now);
 
 			// Query back the actual row id — on conflict SQLite keeps the
 			// existing id, not the one we generated above.
-			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(hash) as { id: string };
+			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(rawHash) as { id: string };
 			syncVecInsert(db, actualRow.id, embVec);
 		});
 
