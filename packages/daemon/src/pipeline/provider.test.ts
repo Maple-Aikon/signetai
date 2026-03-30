@@ -357,7 +357,7 @@ describe("createCodexProvider", () => {
 			expect(capturedEnv?.HOME?.startsWith(tmpdir())).toBe(true);
 			expect(existsSync(dstAuth)).toBe(existsSync(srcAuth));
 			if (existsSync(srcAuth)) {
-				expect(lstatSync(dstAuth).isSymbolicLink()).toBe(true);
+				expect(lstatSync(dstAuth).isSymbolicLink() || lstatSync(dstAuth).nlink > 1).toBe(true);
 				expect(readFileSync(dstAuth, "utf8")).toBe(readFileSync(srcAuth, "utf8"));
 			}
 			expect(existsSync(join(capturedEnv?.CODEX_HOME ?? "", "version.json"))).toBe(existsSync(srcVersion));

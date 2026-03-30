@@ -8,7 +8,7 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -210,7 +210,16 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 
 	const auth = join(homedir(), ".codex", "auth.json");
 	if (existsSync(auth)) {
-		symlinkSync(auth, join(codexHome, "auth.json"));
+		const authDst = join(codexHome, "auth.json");
+		try {
+			if (process.platform === "win32") {
+				linkSync(auth, authDst);
+			} else {
+				symlinkSync(auth, authDst);
+			}
+		} catch {
+			cpSync(auth, authDst);
+		}
 	}
 
 	const version = join(homedir(), ".codex", "version.json");
