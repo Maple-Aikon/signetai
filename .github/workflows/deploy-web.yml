@@ -5,7 +5,8 @@ on:
     branches: [main]
     paths:
       - 'web/**'
-      - '!web/**/*.md'
+      - 'docs/**'
+      - '!**/*.test.*'
 
 jobs:
   deploy:
@@ -24,7 +25,10 @@ jobs:
         run: cd web && bun run build
 
       - name: Deploy to Cloudflare
-        run: cd web && npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: a19f770b9be1b20e78b8d25bdcfd3bbd
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: a19f770b9be1b20e78b8d25bdcfd3bbd
+          workingDirectory: web
+          command: deploy
+          packageManager: bun

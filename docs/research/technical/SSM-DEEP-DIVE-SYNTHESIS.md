@@ -1,3 +1,7 @@
+---
+title: "Signet SSM Deep Dive: Complete Architecture Synthesis"
+---
+
 # Signet SSM Deep Dive: Complete Architecture Synthesis
 
 **Prepared for:** Nicholai (creator) and Jake (co-founder)  

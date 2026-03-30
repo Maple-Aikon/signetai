@@ -1,3 +1,7 @@
+---
+title: "Agent Loop Comparison: Forge, Codex, Hermes"
+---
+
 # Agent Loop Comparison: Forge, Codex, Hermes
 
 Comparative analysis of agentic loop architectures across three harnesses,
