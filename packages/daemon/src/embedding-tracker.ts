@@ -44,6 +44,18 @@ interface StaleRow {
 	readonly currentModel: string | null;
 }
 
+interface FailureState {
+	readonly count: number;
+	readonly retryAt: number;
+}
+
+export function computeEmbeddingRetryBackoffMs(count: number, pollMs: number): number {
+	if (count <= 1) return Math.max(pollMs * 5, 60_000);
+	if (count === 2) return Math.max(pollMs * 25, 5 * 60_000);
+	if (count === 3) return Math.max(pollMs * 150, 30 * 60_000);
+	return Math.max(pollMs * 300, 60 * 60_000);
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -64,6 +76,7 @@ export function startEmbeddingTracker(
 	let skippedCycles = 0;
 	let lastCycleAt: string | null = null;
 	let lastQueueDepth = 0;
+	const failures = new Map<string, FailureState>();
 
 	async function tick(): Promise<void> {
 		if (!running) return;
@@ -80,11 +93,18 @@ export function startEmbeddingTracker(
 			const staleRows = accessor.withReadDb((db) => {
 				return listStaleEmbeddingRows(db, embeddingCfg.model, trackerCfg.batchSize) as StaleRow[];
 			});
+			const now = Date.now();
+			const readyRows = staleRows.filter((row) => {
+				const state = failures.get(row.id);
+				if (!state) return true;
+				if (state.retryAt <= now) return true;
+				return false;
+			});
 
-			lastQueueDepth = staleRows.length;
+			lastQueueDepth = readyRows.length;
 			lastCycleAt = new Date().toISOString();
 
-			if (staleRows.length === 0) return;
+			if (readyRows.length === 0) return;
 
 			// 3. Fetch embeddings sequentially (outside transaction, 30s timeout each)
 			const results: Array<{
@@ -93,13 +113,26 @@ export function startEmbeddingTracker(
 				readonly contentHash: string;
 			}> = [];
 
-			for (const row of staleRows) {
+			for (const row of readyRows) {
 				if (!running) break;
 				const vec = await fetchEmbeddingFn(row.content, embeddingCfg);
 				if (vec !== null) {
 					results.push({ row, vector: vec, contentHash: row.contentHash });
+					failures.delete(row.id);
 				} else {
 					failed++;
+					const next = (failures.get(row.id)?.count ?? 0) + 1;
+					const wait = computeEmbeddingRetryBackoffMs(next, trackerCfg.pollMs);
+					failures.set(row.id, {
+						count: next,
+						retryAt: now + wait,
+					});
+					logger.warn("embedding-tracker", "Embedding refresh failed, suppressing retries", {
+						memoryId: row.id,
+						contentHash: row.contentHash,
+						attempt: next,
+						retryAfterMs: wait,
+					});
 				}
 			}
 
