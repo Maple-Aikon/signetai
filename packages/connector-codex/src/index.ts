@@ -196,10 +196,10 @@ function unpatchConfigToml(path: string): boolean {
 			inSection = true;
 			continue;
 		}
-		// Skip key=value lines belonging to the signet section
+		// Skip all lines belonging to the signet section until next header
 		if (inSection) {
-			if (line.match(/^\s*\w+\s*=/) || line.trim() === "") continue;
-			inSection = false;
+			if (line.match(/^\[/)) inSection = false;
+			else continue;
 		}
 		filtered.push(line);
 	}

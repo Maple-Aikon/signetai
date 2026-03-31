@@ -135,6 +135,39 @@ describe("CodexConnector.uninstall — config.toml cleanup", () => {
 		expect(content).toContain("[model]");
 		expect(content).not.toContain("[mcp_servers.signet]");
 	});
+
+	test("handles multi-line TOML args without corrupting surrounding sections (regression: unpatchConfigToml)", async () => {
+		// A user who hand-edited args to multi-line form would have had
+		// continuation lines left in the file by the old section-end detection.
+		writeFileSync(
+			configPath,
+			[
+				"[other]",
+				"key = 'val'",
+				"",
+				"# Signet MCP server",
+				"[mcp_servers.signet]",
+				"command = 'signet-mcp'",
+				"args = [",
+				"  '--verbose'",
+				"]",
+				"",
+				"[after]",
+				"key = 'val'",
+				"",
+			].join("\n"),
+		);
+
+		const c = connector();
+		await c.uninstall();
+
+		const content = readFileSync(configPath, "utf-8");
+		expect(content).not.toContain("[mcp_servers.signet]");
+		// Continuation lines must not leak into the output
+		expect(content).not.toContain("--verbose");
+		expect(content).toContain("[other]");
+		expect(content).toContain("[after]");
+	});
 });
 
 // buildMcpBlock is tested directly here because resolveSignetMcp() always
