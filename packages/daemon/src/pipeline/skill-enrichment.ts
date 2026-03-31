@@ -110,7 +110,7 @@ export async function enrichSkillFrontmatter(
 			logger.warn("pipeline", "Failed to parse skill enrichment output", {
 				skill: input.name,
 				preview: raw.slice(0, 500),
-			length: raw.length,
+				length: raw.length,
 			});
 			return null;
 		}

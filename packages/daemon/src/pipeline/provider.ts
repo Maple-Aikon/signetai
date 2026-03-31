@@ -1528,7 +1528,6 @@ const OPENCODE_JSON_SCHEMA: Record<string, unknown> = {
 	additionalProperties: true,
 };
 
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -1628,9 +1627,7 @@ function hasUsableOpenCodeText(data: OpenCodeMessageResponse): boolean {
  */
 function extractOpenCodeText(data: OpenCodeMessageResponse): string {
 	if (data.info.structured !== undefined) {
-		return typeof data.info.structured === "string"
-			? data.info.structured
-			: JSON.stringify(data.info.structured);
+		return typeof data.info.structured === "string" ? data.info.structured : JSON.stringify(data.info.structured);
 	}
 	const textParts: string[] = [];
 	for (const part of data.parts) {
@@ -1794,7 +1791,8 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			model: { providerID, modelID },
 		};
 		if (structured && structuredOutputSupported) {
-			body.system = "You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+			body.system =
+				"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
 			body.format = {
 				type: "json_schema",
 				schema: OPENCODE_JSON_SCHEMA,
@@ -1899,29 +1897,31 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			};
 
 			let res = await postMessage(sid);
+			let consumedBody: string | null = null;
 
 			// Older OpenCode versions may not support the format field.
 			// If we get a validation error, disable structured output and retry.
 			if (!res.ok && structuredOutputSupported && (res.status === 400 || res.status === 422)) {
-				const body = await res.text().catch(() => "");
-				if (body.includes("format") || body.includes("schema") || body.includes("validation")) {
+				consumedBody = await res.text().catch(() => "");
+				if (consumedBody.includes("format") || consumedBody.includes("schema") || consumedBody.includes("validation")) {
 					logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
 						status: res.status,
 					});
 					structuredOutputSupported = false;
 					sessionId = null;
+					consumedBody = null;
 					const retrySid = await getOrCreateSession();
 					res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: buildMessageBody(prompt, true),
+						body: buildMessageBody(prompt, false),
 						signal: controller.signal,
 					});
 				}
 			}
 
 			if (!res.ok) {
-				const body = await res.text().catch(() => "");
+				const body = consumedBody ?? (await res.text().catch(() => ""));
 				// Session expired/invalid — reset and retry once
 				if (res.status === 404 || res.status === 410) {
 					sessionId = null;

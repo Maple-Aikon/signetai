@@ -966,6 +966,25 @@ describe("createOpenCodeProvider", () => {
 		expect(lastBody.format).toBeUndefined();
 	});
 
+	it("generate() preserves error body on non-format 400", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_400",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return new Response("bad request: missing required field", { status: 400 });
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		await expect(provider.generate("test")).rejects.toThrow(/bad request: missing required field/);
+	});
+
 	it("generate() parses github-copilot provider/model format", () => {
 		const provider = createOpenCodeProvider({ model: "github-copilot/gpt-4o" });
 		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
