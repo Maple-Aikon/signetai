@@ -1758,9 +1758,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		}
 	}
 
-	async function getOrCreateSession(): Promise<string> {
-		if (sessionId) return sessionId;
-
+	async function createSession(): Promise<string> {
 		const res = await fetch(`${cfg.baseUrl}/session`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -1778,9 +1776,14 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		if (typeof id !== "string") {
 			throw new Error("OpenCode session response missing 'id' field");
 		}
-		sessionId = id;
 		logger.debug("pipeline", "OpenCode session created", { id });
 		return id;
+	}
+
+	async function getOrCreateSession(): Promise<string> {
+		if (sessionId) return sessionId;
+		sessionId = await createSession();
+		return sessionId;
 	}
 
 	let structuredOutputSupported = true;
@@ -1914,9 +1917,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						});
 						structuredOutputSupported = false;
 					}
-					sessionId = null;
 					consumedBody = null;
-					const retrySid = await getOrCreateSession();
+					// Use createSession() (not getOrCreateSession()) so concurrent callers
+					// each get their own session, preventing message ordering issues from
+					// two callers POSTing to the same session ID simultaneously.
+					const retrySid = await createSession();
+					sessionId = retrySid;
 					res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
