@@ -2,16 +2,18 @@
 //!
 //! Cron-based task CRUD, run history, manual trigger, and SSE streaming.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde::Deserialize;
 
+use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -96,23 +98,49 @@ pub struct CreateTask {
     pub skill_mode: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AgentScopeParams {
+    pub agent_id: Option<String>,
+}
+
 /// POST /api/tasks — create a scheduled task
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<CreateTask>,
 ) -> impl IntoResponse {
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
+
     if !VALID_HARNESSES.contains(&body.harness.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": format!("invalid harness: {}", body.harness)})),
-        );
+        )
+            .into_response();
     }
 
     if body.name.is_empty() || body.prompt.is_empty() || body.cron_expression.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "name, prompt, and cronExpression are required"})),
-        );
+        )
+            .into_response();
     }
 
     // Validate skill_name (no path traversal)
@@ -122,7 +150,8 @@ pub async fn create(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "invalid skill name"})),
-        );
+        )
+            .into_response();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -154,9 +183,9 @@ pub async fn create(
                     )?;
                     conn.execute(
                         "INSERT INTO task_scope_hints (task_id, agent_id, created_at, updated_at)
-                         VALUES (?1, 'default', ?2, ?2)
-                         ON CONFLICT(task_id) DO UPDATE SET updated_at = excluded.updated_at",
-                        rusqlite::params![id, now],
+                         VALUES (?1, ?2, ?3, ?3)
+                         ON CONFLICT(task_id) DO UPDATE SET agent_id = excluded.agent_id, updated_at = excluded.updated_at",
+                        rusqlite::params![id, agent_id, now],
                     )?;
                     Ok(serde_json::json!({"id": id, "nextRunAt": now}))
                 }
@@ -165,11 +194,12 @@ pub async fn create(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::CREATED, Json(val)),
+        Ok(val) => (StatusCode::CREATED, Json(val)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("{e}")})),
-        ),
+        )
+            .into_response(),
     }
 }
 

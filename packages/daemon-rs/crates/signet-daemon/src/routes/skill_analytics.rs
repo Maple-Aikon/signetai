@@ -1,15 +1,18 @@
 //! Skill invocation analytics routes.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde::Deserialize;
 
+use crate::auth::middleware::{authenticate_headers, require_permission_guard, resolve_scoped_agent};
+use crate::auth::types::Permission;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -27,14 +30,47 @@ fn pct(sorted: &[i64], p: usize) -> i64 {
     *sorted.get(idx).unwrap_or(&0)
 }
 
+fn is_iso_instant(value: &str) -> bool {
+    value.ends_with('Z') && chrono::DateTime::parse_from_rfc3339(value).is_ok()
+}
+
 /// GET /api/skills/analytics
 pub async fn summary(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SkillAnalyticsQuery>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let agent_id = params.agent_id.unwrap_or_else(|| "default".to_string());
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    if let Err(e) = require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local) {
+        return *e;
+    }
+    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     let since = params.since;
     let limit = params.limit.unwrap_or(10).clamp(1, 100);
+
+    if let Some(ref since) = since {
+        if !is_iso_instant(since) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "since must be an ISO 8601 UTC timestamp"})),
+            )
+                .into_response();
+        }
+    }
 
     let result = state
         .pool
@@ -138,10 +174,11 @@ pub async fn summary(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::OK, Json(val)),
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("{e}")})),
-        ),
+        )
+            .into_response(),
     }
 }
