@@ -324,7 +324,6 @@ export async function executeTask(
 	if (task.skill_name) {
 		deps.recordSkillInvocation({
 			skillName: task.skill_name,
-			agentId: "default",
 			source: "scheduler",
 			latencyMs: Date.now() - startedMs,
 			success: status === "completed",

@@ -5,7 +5,7 @@ export type SkillInvocationSource = "agent" | "scheduler" | "api";
 
 export interface SkillInvocationRecord {
 	readonly skillName: string;
-	readonly agentId: string;
+	readonly agentId?: string;
 	readonly source: SkillInvocationSource;
 	readonly latencyMs: number;
 	readonly success: boolean;
@@ -21,6 +21,29 @@ function clampLatency(value: number): number {
 	return Math.round(value);
 }
 
+export function resolveSkillAgentId(skillName: string, fallback?: string): string | undefined {
+	const skill = normalizeSkillName(skillName);
+	if (skill.length === 0) return undefined;
+	if (fallback && fallback.trim().length > 0) return fallback;
+
+	return getDbAccessor().withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT DISTINCT sm.agent_id AS agentId
+				 FROM skill_meta sm
+				 INNER JOIN entities e
+				   ON e.id = sm.entity_id
+				  AND e.agent_id = sm.agent_id
+				 WHERE sm.uninstalled_at IS NULL
+				   AND lower(e.name) = ?`,
+			)
+			.all(skill) as ReadonlyArray<{ agentId: string }>;
+
+		if (rows.length !== 1) return undefined;
+		return rows[0]?.agentId;
+	});
+}
+
 export function recordSkillInvocation(record: SkillInvocationRecord): void {
 	const skill = normalizeSkillName(record.skillName);
 	if (skill.length === 0) return;
@@ -30,12 +53,21 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 	const latency = clampLatency(record.latencyMs);
 
 	try {
+		const agentId = resolveSkillAgentId(skill, record.agentId);
+		if (!agentId) {
+			logger.warn("skills", "Skipping skill invocation with unresolved agent scope", {
+				skillName: skill,
+				source: record.source,
+			});
+			return;
+		}
+
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO skill_invocations
 				 (id, skill_name, agent_id, source, latency_ms, success, error_text, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(id, skill, record.agentId, record.source, latency, record.success ? 1 : 0, record.errorText ?? null, now);
+			).run(id, skill, agentId, record.source, latency, record.success ? 1 : 0, record.errorText ?? null, now);
 
 			db.prepare(
 				`UPDATE skill_meta
@@ -47,7 +79,7 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 					   SELECT id FROM entities
 					   WHERE agent_id = ? AND lower(name) = ?
 				   )`,
-			).run(now, now, record.agentId, record.agentId, skill);
+			).run(now, now, agentId, agentId, skill);
 		});
 	} catch (err) {
 		logger.warn("skills", "Failed to record skill invocation", err instanceof Error ? err : undefined);

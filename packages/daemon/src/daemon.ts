@@ -23,7 +23,6 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAdaptorServer, type serve } from "@hono/node-server";
-import { bindWithRetry } from "./bind-with-retry";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
 	type AgentDefinition,
@@ -66,6 +65,7 @@ import {
 	requireRateLimit,
 	requireScope,
 } from "./auth";
+import { bindWithRetry } from "./bind-with-retry";
 import { migrateConfig } from "./config-migration";
 import { createFilesystemConnector } from "./connectors/filesystem";
 import {
@@ -1699,6 +1699,18 @@ app.use("/api/analytics", async (c, next) => {
 	return requirePermission("analytics", authConfig)(c, next);
 });
 app.use("/api/analytics/*", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+app.use("/api/mcp/analytics", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+app.use("/api/mcp/analytics/*", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+app.use("/api/skills/analytics", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+app.use("/api/skills/analytics/*", async (c, next) => {
 	return requirePermission("analytics", authConfig)(c, next);
 });
 
@@ -7540,6 +7552,8 @@ app.delete("/api/tasks/:id", (c) => {
 // Trigger an immediate manual run
 app.post("/api/tasks/:id/run", async (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgentId(c, undefined);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const task = getDbAccessor().withReadDb((db) =>
 		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
@@ -7647,7 +7661,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 					void import("./skill-invocations.js").then((skills) => {
 						skills.recordSkillInvocation({
 							skillName: taskSkillName,
-							agentId: "default",
+							agentId: scoped.agentId,
 							source: "api",
 							latencyMs: Date.now() - startedMs,
 							success: status === "completed",
