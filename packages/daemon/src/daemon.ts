@@ -237,6 +237,7 @@ import {
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
 import { createSingleFlightRunner } from "./single-flight-runner";
 import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
+import { readScopedTask, readTaskAgentId } from "./task-scope";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { expandTemporalNode } from "./temporal-expand";
 import { upsertThreadHead } from "./thread-heads";
@@ -7564,8 +7565,8 @@ app.post("/api/tasks/:id/run", async (c) => {
 	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const task = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
-	) as Record<string, unknown> | undefined;
+		readScopedTask(db, taskId, scoped.agentId, shouldEnforceAuthScope(c)),
+	);
 
 	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
@@ -7610,12 +7611,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
-	const taskAgentId = getDbAccessor().withReadDb((db) => {
-		const row = db.prepare("SELECT agent_id FROM task_scope_hints WHERE task_id = ?").get(taskId) as
-			| { agent_id: string }
-			| undefined;
-		return typeof row?.agent_id === "string" && row.agent_id.length > 0 ? row.agent_id : scoped.agentId;
-	});
+	const taskAgentId = readTaskAgentId(task, scoped.agentId);
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);

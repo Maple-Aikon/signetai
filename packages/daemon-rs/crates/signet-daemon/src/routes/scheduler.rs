@@ -29,6 +29,51 @@ const CRON_PRESETS: &[(&str, &str)] = &[
     ("Weekly Mon 9am", "0 9 * * 1"),
 ];
 
+fn normalize_skill_name(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn record_skill_invocation(
+    conn: &rusqlite::Connection,
+    skill_name: &str,
+    agent_id: &str,
+    source: &str,
+    latency_ms: i64,
+    success: bool,
+    error_text: Option<&str>,
+    now: &str,
+) -> rusqlite::Result<()> {
+    let skill = normalize_skill_name(skill_name);
+    if skill.is_empty() || agent_id.trim().is_empty() {
+        return Ok(());
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let latency = latency_ms.max(0);
+
+    conn.execute(
+        "INSERT INTO skill_invocations
+         (id, skill_name, agent_id, source, latency_ms, success, error_text, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![id, skill, agent_id, source, latency, success, error_text, now],
+    )?;
+
+    conn.execute(
+        "UPDATE skill_meta
+         SET use_count = COALESCE(use_count, 0) + 1,
+             last_used_at = ?1,
+             updated_at = ?1
+         WHERE agent_id = ?2
+           AND entity_id IN (
+               SELECT id FROM entities
+               WHERE agent_id = ?2 AND lower(name) = ?3
+           )",
+        rusqlite::params![now, agent_id, skill],
+    )?;
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -390,34 +435,73 @@ pub async fn delete(
 pub async fn trigger(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let scoped_agent = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
+    let enforce_scope = state.auth_mode != crate::auth::types::AuthMode::Local
+        && !(state.auth_mode == crate::auth::types::AuthMode::Hybrid && is_local && !auth.result.authenticated);
 
     let result = state
         .pool
         .write(signet_core::db::Priority::High, {
             let run_id = run_id.clone();
             let id = id.clone();
+            let now = now.clone();
+            let scoped_agent = scoped_agent.clone();
             move |conn| {
-                // Check task exists
-                let exists: bool = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM scheduled_tasks WHERE id = ?1",
-                        [&id],
-                        |r| r.get::<_, i64>(0),
+                let sql = "SELECT t.skill_name, COALESCE(h.agent_id, 'default') AS agent_id
+                           FROM scheduled_tasks t
+                           LEFT JOIN task_scope_hints h ON h.task_id = t.id
+                           WHERE t.id = ?1";
+                let task = if enforce_scope {
+                    conn.query_row(
+                        &format!("{sql} AND COALESCE(h.agent_id, 'default') = ?2"),
+                        rusqlite::params![id, scoped_agent],
+                        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
                     )
-                    .map(|c| c > 0)
-                    .unwrap_or(false);
+                    .ok()
+                } else {
+                    conn.query_row(sql, [&id], |r| {
+                        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .ok()
+                };
 
-                if !exists {
+                let Some((skill_name, task_agent)) = task else {
                     return Ok(serde_json::json!({"error": "not_found"}));
-                }
+                };
 
                 conn.execute(
                     "INSERT INTO task_runs (id, task_id, status, started_at) VALUES (?1, ?2, 'pending', ?3)",
                     rusqlite::params![run_id, id, now],
                 )?;
+
+                conn.execute(
+                    "UPDATE scheduled_tasks SET last_run_at = ?1, updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, id],
+                )?;
+
+                if let Some(skill_name) = skill_name.filter(|value| !value.trim().is_empty()) {
+                    record_skill_invocation(conn, &skill_name, &task_agent, "api", 0, true, None, &now)?;
+                }
 
                 Ok(serde_json::json!({"runId": run_id, "status": "pending"}))
             }
@@ -425,12 +509,15 @@ pub async fn trigger(
         .await;
 
     match result {
-        Ok(val) if val.get("error").is_some() => (StatusCode::NOT_FOUND, Json(val)),
-        Ok(val) => (StatusCode::ACCEPTED, Json(val)),
+        Ok(val) if val.get("error").is_some() => {
+            (StatusCode::NOT_FOUND, Json(val)).into_response()
+        }
+        Ok(val) => (StatusCode::ACCEPTED, Json(val)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("{e}")})),
-        ),
+        )
+            .into_response(),
     }
 }
 
