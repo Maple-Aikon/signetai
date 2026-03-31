@@ -158,16 +158,26 @@ function patchConfigToml(path: string, mcp: { command: string; args: string[] })
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 
+	const block = buildMcpBlock(mcp);
+
 	if (!existsSync(path)) {
-		writeFileSync(path, buildMcpBlock(mcp));
+		writeFileSync(path, block);
 		return true;
 	}
 
 	const content = readFileSync(path, "utf-8");
-	if (content.includes("[mcp_servers.signet]")) return false;
 
-	const appended = content.trimEnd() + "\n\n" + buildMcpBlock(mcp);
-	writeFileSync(path, appended);
+	if (!content.includes("[mcp_servers.signet]")) {
+		writeFileSync(path, content.trimEnd() + "\n\n" + block);
+		return true;
+	}
+
+	// Section exists but may be stale (e.g. old array-format command).
+	// Remove and re-add with correct format.
+	unpatchConfigToml(path);
+	const updated = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
+	const prefix = updated.length > 0 ? updated + "\n\n" : "";
+	writeFileSync(path, prefix + block);
 	return true;
 }
 
