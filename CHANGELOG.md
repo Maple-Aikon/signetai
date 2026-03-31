@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.0] - 2026-03-31
+
+### Bug Fixes
+
+- **daemon**: preserve multiline markdown for embeddings (#419)
+
+
 ## [0.90.0] - 2026-03-31
 
 ### Features
