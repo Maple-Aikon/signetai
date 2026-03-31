@@ -2,6 +2,23 @@
 
 All notable changes to Signet are documented here.
 
+## [0.88.1] - 2026-03-31
+
+### Features
+
+- **web**: redesign homepage, docs, and blog for readability and standard layout
+
+### Bug Fixes
+
+- **daemon**: ignore .db files in watcher + retry port bind on EADDRINUSE (#414)
+- **web**: make docs title optional and remove stale docs breaking CI build
+- **web**: fix CI deploy pipeline with wrangler-action and missing frontmatter
+
+### Docs
+
+- add StarRank badge to README
+
+
 ## [0.88.0] - 2026-03-30
 
 ### Bug Fixes
