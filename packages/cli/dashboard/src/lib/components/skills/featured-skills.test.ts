@@ -14,13 +14,26 @@ const items = [
 		provider: "skills.sh",
 	},
 	{
-		name: "official-built-in",
+		name: "official-built-in-low",
 		fullName: "Signet-AI/signetai",
 		installs: "built-in",
 		installsRaw: 100000,
 		popularityScore: 200000,
 		useCount: 2,
-		description: "official built in",
+		description: "official built in low",
+		installed: false,
+		provider: "signet",
+		official: true,
+		builtin: true,
+	},
+	{
+		name: "official-built-in-high",
+		fullName: "Signet-AI/signetai",
+		installs: "built-in",
+		installsRaw: 100000,
+		popularityScore: 100000,
+		useCount: 8,
+		description: "official built in high",
 		installed: false,
 		provider: "signet",
 		official: true,
@@ -53,22 +66,32 @@ const items = [
 ];
 
 describe("featured official skills", () => {
-	it("prefers actual usage over fallback popularity and built-in status", () => {
-		const featured = getFeaturedOfficialSkills(items, 3);
-		expect(featured.map((item) => item.name)).toEqual(["official-high", "official-built-in", "official-low"]);
+	it("keeps built-in official skills ahead of other official skills", () => {
+		const featured = getFeaturedOfficialSkills(items, 4);
+		expect(featured.map((item) => item.name)).toEqual([
+			"official-built-in-high",
+			"official-built-in-low",
+			"official-high",
+			"official-low",
+		]);
 	});
 
-	it("falls back to built-in plus popularity ordering when usage data is absent", () => {
+	it("uses popularity fallback ordering when usage data is absent within each built-in bucket", () => {
 		const featured = getFeaturedOfficialSkills(
-			items.map((item) => ({ ...item, useCount: undefined, lastUsedAt: undefined })),
-			3,
+			items.map((item) => ({ ...item, useCount: undefined, lastUsedAt: undefined, featuredScore: undefined })),
+			4,
 		);
-		expect(featured.map((item) => item.name)).toEqual(["official-built-in", "official-high", "official-low"]);
+		expect(featured.map((item) => item.name)).toEqual([
+			"official-built-in-low",
+			"official-built-in-high",
+			"official-high",
+			"official-low",
+		]);
 	});
 
 	it("removes featured skills from the main browse grid", () => {
 		const featured = getFeaturedOfficialSkills(items, 2);
 		const rest = omitFeaturedSkills(items, featured);
-		expect(rest.map((item) => item.name)).toEqual(["community-top", "official-low"]);
+		expect(rest.map((item) => item.name)).toEqual(["community-top", "official-high", "official-low"]);
 	});
 });

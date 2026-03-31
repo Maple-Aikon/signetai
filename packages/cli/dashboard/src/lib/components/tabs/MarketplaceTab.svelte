@@ -5,6 +5,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
+import { getSkillsProviderLabel, normalizeSkillsProviderFilter } from "$lib/components/tabs/marketplace-filters";
 import {
 	fetchMarketplaceMcpCatalog,
 	fetchMarketplaceMcpInstalled,
@@ -103,10 +104,7 @@ const activeSortLabel = $derived.by(() => {
 
 const activeSecondarySortLabel = $derived.by(() => {
 	if (section === "skills") {
-		if (sk.providerFilter === "signet") return "Signet";
-		if (sk.providerFilter === "skills.sh") return "skills.sh";
-		if (sk.providerFilter === "clawhub") return "ClawHub";
-		return "All providers";
+		return getSkillsProviderLabel(sk.providerFilter);
 	}
 	if (mcpMarket.source === "mcpservers.org") return "MCP Registry";
 	if (mcpMarket.source === "modelcontextprotocol/servers") return "MCP GitHub";
@@ -153,11 +151,7 @@ function applySort(value: string): void {
 
 function applySecondarySort(value: string): void {
 	if (section === "skills") {
-		if (value === "signet" || value === "skills.sh" || value === "clawhub") {
-			sk.providerFilter = value;
-			return;
-		}
-		sk.providerFilter = "all";
+		sk.providerFilter = normalizeSkillsProviderFilter(value);
 		return;
 	}
 	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers" || value === "github") {

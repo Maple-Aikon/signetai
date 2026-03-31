@@ -54,8 +54,9 @@ main grid. The section sources its entries from catalog items where:
 Ordering contract:
 
 1. built-in official skills first
-2. remaining official skills by existing popularity score
-3. stable name tie-break
+2. within the built-in and non-built-in groups, prefer explicit featured or usage signals when present
+3. fall back to existing popularity score
+4. stable name tie-break
 
 The section is capped to a small number of cards so it stays curated and
 scan-friendly.

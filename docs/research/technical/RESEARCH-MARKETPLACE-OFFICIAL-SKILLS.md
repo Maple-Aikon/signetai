@@ -44,8 +44,9 @@ The marketplace should do two things simultaneously:
 - Add a dedicated featured strip for official Signet skills at the top
   of the browse view when the user is not actively searching.
 - Cap the featured strip so it highlights a handful of curated skills,
-  with built-in skills ordered first and the rest by existing
-  popularity score.
+  with built-in skills ordered first, then usage-aware ordering
+  inside the built-in and non-built-in groups, with popularity as the
+  fallback.
 - Keep the main catalog below the strip and remove duplicate cards so
   featured entries are not shown twice in the same viewport.
 - Expose `Signet` as a provider filter anywhere the marketplace embeds

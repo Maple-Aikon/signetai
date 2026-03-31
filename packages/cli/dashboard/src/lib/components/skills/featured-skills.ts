@@ -12,24 +12,28 @@ function parseTime(input: string | undefined): number {
 }
 
 function fallbackWeight(item: SkillSearchResult): number {
-	const builtIn = item.builtin ? 1 : 0;
-	const pop = item.popularityScore ?? item.installsRaw ?? 0;
-	return pop * 10 + builtIn;
+	return item.popularityScore ?? item.installsRaw ?? 0;
+}
+
+function compareUsage(a: SkillSearchResult, b: SkillSearchResult): number {
+	const featuredDiff = (b.featuredScore ?? 0) - (a.featuredScore ?? 0);
+	if (featuredDiff !== 0) return featuredDiff;
+	const useDiff = (b.useCount ?? 0) - (a.useCount ?? 0);
+	if (useDiff !== 0) return useDiff;
+	const timeDiff = parseTime(b.lastUsedAt) - parseTime(a.lastUsedAt);
+	if (timeDiff !== 0) return timeDiff;
+	const fallbackDiff = fallbackWeight(b) - fallbackWeight(a);
+	if (fallbackDiff !== 0) return fallbackDiff;
+	return a.name.localeCompare(b.name);
 }
 
 export function getFeaturedOfficialSkills(items: readonly SkillSearchResult[], limit = 6): SkillSearchResult[] {
 	return [...items]
 		.filter(isOfficialSkill)
 		.sort((a, b) => {
-			const featuredDiff = (b.featuredScore ?? 0) - (a.featuredScore ?? 0);
-			if (featuredDiff !== 0) return featuredDiff;
-			const useDiff = (b.useCount ?? 0) - (a.useCount ?? 0);
-			if (useDiff !== 0) return useDiff;
-			const timeDiff = parseTime(b.lastUsedAt) - parseTime(a.lastUsedAt);
-			if (timeDiff !== 0) return timeDiff;
-			const fallbackDiff = fallbackWeight(b) - fallbackWeight(a);
-			if (fallbackDiff !== 0) return fallbackDiff;
-			return a.name.localeCompare(b.name);
+			const builtInDiff = Number(b.builtin === true) - Number(a.builtin === true);
+			if (builtInDiff !== 0) return builtInDiff;
+			return compareUsage(a, b);
 		})
 		.slice(0, limit);
 }
