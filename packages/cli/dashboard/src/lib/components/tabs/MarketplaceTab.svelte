@@ -103,6 +103,7 @@ const activeSortLabel = $derived.by(() => {
 
 const activeSecondarySortLabel = $derived.by(() => {
 	if (section === "skills") {
+		if (sk.providerFilter === "signet") return "Signet";
 		if (sk.providerFilter === "skills.sh") return "skills.sh";
 		if (sk.providerFilter === "clawhub") return "ClawHub";
 		return "All providers";
@@ -152,7 +153,7 @@ function applySort(value: string): void {
 
 function applySecondarySort(value: string): void {
 	if (section === "skills") {
-		if (value === "skills.sh" || value === "clawhub") {
+		if (value === "signet" || value === "skills.sh" || value === "clawhub") {
 			sk.providerFilter = value;
 			return;
 		}
@@ -812,6 +813,7 @@ $effect(() => {
 							<Select.Content class="section-select-content">
 								{#if section === "skills"}
 									<Select.Item value="all" label="All providers" class="section-select-item" />
+									<Select.Item value="signet" label="Signet" class="section-select-item" />
 									<Select.Item value="skills.sh" label="skills.sh" class="section-select-item" />
 									<Select.Item value="clawhub" label="ClawHub" class="section-select-item" />
 								{:else}
