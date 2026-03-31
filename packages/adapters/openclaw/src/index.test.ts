@@ -22,7 +22,7 @@ mock.module("@signet/core", () => ({
 // Import after mock so the module picks up the stub.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore } = signet;
+const { memoryStore, _resetRegistration } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -272,6 +272,7 @@ afterEach(async () => {
 	for (const service of registeredServices) {
 		await service.stop();
 	}
+	_resetRegistration();
 });
 
 describe("signet-memory-openclaw lifecycle hooks", () => {
@@ -1517,7 +1518,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 	});
 });
 
-describe("cli-metadata registration mode (#422)", () => {
+describe("registration guard (#422)", () => {
 	it("skips tools, hooks, and services when registrationMode is cli-metadata", () => {
 		const { api, hooks, tools } = createMockApi({ registrationMode: "cli-metadata" });
 		signetPlugin.register(api);
@@ -1536,13 +1537,37 @@ describe("cli-metadata registration mode (#422)", () => {
 		expect(registeredServices.length).toBeGreaterThan(0);
 	});
 
+	it("second full-mode register() call is a no-op", () => {
+		const first = createMockApi();
+		const second = createMockApi();
+
+		signetPlugin.register(first.api);
+		signetPlugin.register(second.api);
+
+		expect(first.tools.length).toBeGreaterThan(0);
+		expect(first.hooks.size).toBeGreaterThan(0);
+
+		expect(second.tools.length).toBe(0);
+		expect(second.hooks.size).toBe(0);
+	});
+
+	it("second full-mode register() does not create duplicate services", () => {
+		const first = createMockApi();
+		const second = createMockApi();
+
+		signetPlugin.register(first.api);
+		const count = registeredServices.length;
+
+		signetPlugin.register(second.api);
+		expect(registeredServices.length).toBe(count);
+	});
+
 	it("does not register session:compact:before or session:compact:after hooks", () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
 		expect(hooks.has("session:compact:before")).toBeFalse();
 		expect(hooks.has("session:compact:after")).toBeFalse();
-		// Plugin-facing compaction hooks should still be registered
 		expect(hooks.has("before_compaction")).toBeTrue();
 		expect(hooks.has("after_compaction")).toBeTrue();
 	});

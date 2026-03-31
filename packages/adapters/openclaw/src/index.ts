@@ -1123,6 +1123,12 @@ async function registerMarketplaceProxyTools(
 // Plugin definition (OpenClaw register(api) pattern)
 // ============================================================================
 
+// Defensive backstop: even if registrationMode is absent or "full", never
+// run the full registration body more than once per process. OpenClaw's
+// documented double-call is mode-gated below, but older hosts or future
+// loader changes could call with "full" twice.
+let registered = false;
+
 const signetPlugin = {
 	id: "signet-memory-openclaw",
 	name: "Signet Memory",
@@ -1136,6 +1142,12 @@ const signetPlugin = {
 		// only needs registerCli(); skip tools, hooks, and services to avoid
 		// duplicate registrations that stall the gateway and block providers.
 		if (api.registrationMode === "cli-metadata") return;
+
+		if (registered) {
+			api.logger.warn("signet-memory: register() called twice with non-cli mode, skipping duplicate");
+			return;
+		}
+		registered = true;
 
 		const cfg = signetConfigSchema.parse(api.pluginConfig);
 		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
@@ -2027,5 +2039,12 @@ const signetPlugin = {
 		});
 	},
 };
+
+/** @internal Test-only: reset the module-level registration guard. No-op in production. */
+export function _resetRegistration(): void {
+	if (process.env.NODE_ENV === "test") {
+		registered = false;
+	}
+}
 
 export default signetPlugin;
