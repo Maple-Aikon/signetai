@@ -2034,9 +2034,11 @@ const signetPlugin = {
 	},
 };
 
-/** @internal Test-only: reset the module-level registration guard. */
+/** @internal Test-only: reset the module-level registration guard. No-op in production. */
 export function _resetRegistration(): void {
-	registered = false;
+	if (process.env.NODE_ENV === "test") {
+		registered = false;
+	}
 }
 
 export default signetPlugin;
