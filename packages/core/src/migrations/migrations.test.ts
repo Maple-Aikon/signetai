@@ -647,6 +647,29 @@ describe("migration framework", () => {
 		expect(colNames).toContain("created_at");
 	});
 
+	test("skill_invocations table exists with expected columns after migration 053", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const tables = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_invocations'")
+			.all() as Array<{
+			name: string;
+		}>;
+		expect(tables.length).toBe(1);
+
+		const cols = db.query("PRAGMA table_info(skill_invocations)").all() as Array<{ name: string }>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("id");
+		expect(colNames).toContain("skill_name");
+		expect(colNames).toContain("agent_id");
+		expect(colNames).toContain("source");
+		expect(colNames).toContain("latency_ms");
+		expect(colNames).toContain("success");
+		expect(colNames).toContain("error_text");
+		expect(colNames).toContain("created_at");
+	});
+
 	test("entities table has graph-extended columns after migration", () => {
 		db = createFreshDb();
 		runMigrations(db);

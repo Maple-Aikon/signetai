@@ -12,6 +12,7 @@ import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import type { WorkerHandle } from "../pipeline/worker";
+import { recordSkillInvocation } from "../skill-invocations";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
 import { type SpawnResult, spawnTask } from "./spawn";
@@ -101,6 +102,7 @@ type ExecuteTaskDeps = {
 	readonly emitTaskStream: typeof emitTaskStream;
 	readonly logger: typeof logger;
 	readonly resolveTaskModel: typeof resolveTaskModel;
+	readonly recordSkillInvocation: typeof recordSkillInvocation;
 };
 
 const DEFAULT_EXECUTE_TASK_DEPS: ExecuteTaskDeps = {
@@ -110,6 +112,7 @@ const DEFAULT_EXECUTE_TASK_DEPS: ExecuteTaskDeps = {
 	emitTaskStream,
 	logger,
 	resolveTaskModel,
+	recordSkillInvocation,
 };
 
 /** Start the scheduler worker. Returns a handle to stop it. */
@@ -240,6 +243,7 @@ export async function executeTask(
 
 	// Spawn the process
 	let result: SpawnResult;
+	const startedMs = Date.now();
 	try {
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
@@ -316,4 +320,15 @@ export async function executeTask(
 		exitCode: result.exitCode,
 		timedOut: result.timedOut,
 	});
+
+	if (task.skill_name) {
+		deps.recordSkillInvocation({
+			skillName: task.skill_name,
+			agentId: "default",
+			source: "scheduler",
+			latencyMs: Date.now() - startedMs,
+			success: status === "completed",
+			errorText: result.error ?? undefined,
+		});
+	}
 }

@@ -1,6 +1,6 @@
 //! Database migration runner for Signet's SQLite schema.
 //!
-//! Embeds all 30 migrations as SQL strings. Each migration runs inside a
+//! Embeds schema migrations as SQL strings. Each migration runs inside a
 //! SAVEPOINT for safe rollback on failure. Idempotent — safe to run on
 //! every startup.
 
@@ -231,9 +231,14 @@ static MIGRATIONS: &[Migration] = &[
         name: "memory-md-rolling-window-lineage",
         sql: include_str!("sql/037-memory-md-rolling-window-lineage.sql"),
     },
+    Migration {
+        version: 38,
+        name: "skill-invocations",
+        sql: include_str!("sql/038-skill-invocations.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 37;
+pub const LATEST_SCHEMA_VERSION: u32 = 38;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {

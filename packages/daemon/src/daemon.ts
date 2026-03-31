@@ -5311,7 +5311,7 @@ app.get("/api/connectors/:id/health", (c) => {
 import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconciler.js";
 // Skills routes (extracted to routes/skills.ts)
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-mountSkillsRoutes(app);
+mountSkillsRoutes(app, authConfig.mode);
 setFetchEmbedding(fetchEmbedding);
 
 // Marketplace routes (MCP servers catalog + routing)
@@ -5320,6 +5320,9 @@ mountMarketplaceRoutes(app, authConfig.mode);
 
 import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
 mountMcpAnalyticsRoutes(app, authConfig.mode);
+
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+mountSkillAnalyticsRoutes(app, authConfig.mode);
 
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 mountAppTrayRoutes(app);
@@ -7588,6 +7591,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
+	const startedMs = Date.now();
 
 	// Spawn in background (don't await)
 	import("./scheduler/spawn").then((mod) => {
@@ -7638,6 +7642,19 @@ app.post("/api/tasks/:id/run", async (c) => {
 					error: result.error,
 					timestamp: new Date().toISOString(),
 				});
+
+				if (taskSkillName) {
+					void import("./skill-invocations.js").then((skills) => {
+						skills.recordSkillInvocation({
+							skillName: taskSkillName,
+							agentId: "default",
+							source: "api",
+							latencyMs: Date.now() - startedMs,
+							success: status === "completed",
+							errorText: result.error ?? undefined,
+						});
+					});
+				}
 			});
 	});
 
