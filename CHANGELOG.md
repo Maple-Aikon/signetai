@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.90.0] - 2026-03-31
+
+### Features
+
+- **dashboard**: show real overview usage analytics (#416)
+
+
 ## [0.89.0] - 2026-03-31
 
 ### Features
