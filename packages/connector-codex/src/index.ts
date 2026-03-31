@@ -221,7 +221,7 @@ export class CodexConnector extends BaseConnector {
 	readonly name = "Codex";
 	readonly harnessId = "codex";
 
-	private getCodexHome(): string {
+	protected getCodexHome(): string {
 		return join(homedir(), ".codex");
 	}
 
