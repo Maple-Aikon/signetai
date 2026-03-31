@@ -54,10 +54,11 @@ export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): Reado
 
 	return db
 		.prepare(
-			`SELECT t.id, t.agent_id, t.name, t.prompt, t.cron_expression,
+			`SELECT t.id, COALESCE(h.agent_id, 'default') AS agent_id, t.name, t.prompt, t.cron_expression,
 			        t.harness, t.working_directory,
 			        t.skill_name, t.skill_mode
 			 FROM scheduled_tasks t
+			 LEFT JOIN task_scope_hints h ON h.task_id = t.id
 			 WHERE t.enabled = 1
 			   AND t.next_run_at IS NOT NULL
 			   AND t.next_run_at <= ?

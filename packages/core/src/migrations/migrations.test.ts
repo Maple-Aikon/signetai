@@ -168,12 +168,14 @@ describe("migration framework", () => {
 		expect(fts.length).toBeGreaterThanOrEqual(1);
 	});
 
-	test("scheduled_tasks has agent_id after migration 054", () => {
+	test("task_scope_hints exists after migration 054", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
-		const cols = db.query("PRAGMA table_info(scheduled_tasks)").all() as Array<{ name: string }>;
-		expect(cols.map((col) => col.name)).toContain("agent_id");
+		const rows = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='task_scope_hints'")
+			.all() as Array<{ name: string }>;
+		expect(rows).toHaveLength(1);
 	});
 
 	test("schema_migrations_audit records are created", () => {

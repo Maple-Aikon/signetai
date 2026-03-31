@@ -522,7 +522,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "task-agent-scope",
 		up: taskAgentScope,
 		artifacts: {
-			columns: [{ table: "scheduled_tasks", column: "agent_id" }],
+			tables: ["task_scope_hints"],
 		},
 	},
 ];

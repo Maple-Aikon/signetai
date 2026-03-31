@@ -354,15 +354,6 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 /// Execute a single migration's SQL. Migrations that need programmatic
 /// logic (ADD COLUMN IF MISSING) use the helper.
 fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> {
-    if m.version == 39 {
-        add_column_if_missing(
-            conn,
-            "scheduled_tasks",
-            "agent_id",
-            "TEXT NOT NULL DEFAULT 'default'",
-        );
-    }
-
     // Most migrations are pure SQL with IF NOT EXISTS guards
     conn.execute_batch(m.sql)?;
 

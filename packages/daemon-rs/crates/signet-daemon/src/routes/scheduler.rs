@@ -152,6 +152,12 @@ pub async fn create(
                             body.skill_mode,
                         ],
                     )?;
+                    conn.execute(
+                        "INSERT INTO task_scope_hints (task_id, agent_id, created_at, updated_at)
+                         VALUES (?1, 'default', ?2, ?2)
+                         ON CONFLICT(task_id) DO UPDATE SET updated_at = excluded.updated_at",
+                        rusqlite::params![id, now],
+                    )?;
                     Ok(serde_json::json!({"id": id, "nextRunAt": now}))
                 }
             },
