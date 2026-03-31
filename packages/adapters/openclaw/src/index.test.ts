@@ -22,7 +22,7 @@ mock.module("@signet/core", () => ({
 // Import after mock so the module picks up the stub.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore, _resetRegistration } = signet;
+const { memoryStore } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -84,7 +84,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
-function createMockApi(): {
+function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 	api: OpenClawPluginApi;
 	hooks: Map<string, HookHandler>;
 	hookOptions: Map<string, unknown>;
@@ -99,6 +99,7 @@ function createMockApi(): {
 			enabled: true,
 			daemonUrl: "http://daemon.test",
 		},
+		registrationMode: "full",
 		logger: {
 			info() {
 				// no-op in tests
@@ -132,6 +133,7 @@ function createMockApi(): {
 		resolvePath(input) {
 			return input;
 		},
+		...overrides,
 	};
 
 	return { api, hooks, hookOptions, tools };
@@ -270,7 +272,6 @@ afterEach(async () => {
 	for (const service of registeredServices) {
 		await service.stop();
 	}
-	_resetRegistration();
 });
 
 describe("signet-memory-openclaw lifecycle hooks", () => {
@@ -1516,42 +1517,23 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 	});
 });
 
-describe("double registration guard (#422)", () => {
-	it("second register() call is a no-op", () => {
-		const first = createMockApi();
-		const second = createMockApi();
+describe("cli-metadata registration mode (#422)", () => {
+	it("skips tools, hooks, and services when registrationMode is cli-metadata", () => {
+		const { api, hooks, tools } = createMockApi({ registrationMode: "cli-metadata" });
+		signetPlugin.register(api);
 
-		signetPlugin.register(first.api);
-		signetPlugin.register(second.api);
-
-		// First call should register tools and hooks normally
-		expect(first.tools.length).toBeGreaterThan(0);
-		expect(first.hooks.size).toBeGreaterThan(0);
-
-		// Second call should register nothing
-		expect(second.tools.length).toBe(0);
-		expect(second.hooks.size).toBe(0);
+		expect(tools.length).toBe(0);
+		expect(hooks.size).toBe(0);
+		expect(registeredServices.length).toBe(0);
 	});
 
-	it("second register() logs a warning", () => {
-		const first = createMockApi();
-		const second = createMockApi();
+	it("registers normally when registrationMode is full", () => {
+		const { api, hooks, tools } = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(api);
 
-		signetPlugin.register(first.api);
-		signetPlugin.register(second.api);
-
-		expect(warnMessages.some((msg) => msg.includes("called twice"))).toBeTrue();
-	});
-
-	it("second register() does not create duplicate services", () => {
-		const first = createMockApi();
-		const second = createMockApi();
-
-		signetPlugin.register(first.api);
-		const serviceCount = registeredServices.length;
-
-		signetPlugin.register(second.api);
-		expect(registeredServices.length).toBe(serviceCount);
+		expect(tools.length).toBeGreaterThan(0);
+		expect(hooks.size).toBeGreaterThan(0);
+		expect(registeredServices.length).toBeGreaterThan(0);
 	});
 
 	it("does not register session:compact:before or session:compact:after hooks", () => {
@@ -1560,7 +1542,7 @@ describe("double registration guard (#422)", () => {
 
 		expect(hooks.has("session:compact:before")).toBeFalse();
 		expect(hooks.has("session:compact:after")).toBeFalse();
-		// Legacy compaction hooks should still be registered
+		// Plugin-facing compaction hooks should still be registered
 		expect(hooks.has("before_compaction")).toBeTrue();
 		expect(hooks.has("after_compaction")).toBeTrue();
 	});
