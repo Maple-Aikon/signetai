@@ -1910,7 +1910,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			// fall through to the throw path.
 			if (!res.ok && res.status === 422) {
 				consumedBody = await res.text().catch(() => "");
-				if (consumedBody.includes('"format"')) {
+				// Match Hono/Zod's path array notation: {"path":["format"],...}
+				// Avoids triggering on error messages that contain "format" as a value.
+				if (consumedBody.includes('["format"]')) {
 					if (structuredOutputSupported) {
 						logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
 							status: res.status,
