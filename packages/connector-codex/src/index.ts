@@ -146,7 +146,7 @@ function tomlInlineArray(items: string[]): string {
 	return `[${items.map(tomlQuote).join(", ")}]`;
 }
 
-function buildMcpBlock(mcp: { command: string; args: string[] }): string {
+export function buildMcpBlock(mcp: { command: string; args: string[] }): string {
 	let block = `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${tomlQuote(mcp.command)}\n`;
 	if (mcp.args.length > 0) {
 		block += `args = ${tomlInlineArray(mcp.args)}\n`;

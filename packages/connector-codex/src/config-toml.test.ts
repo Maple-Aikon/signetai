@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CodexConnector } from "./index.js";
+import { CodexConnector, buildMcpBlock } from "./index.js";
 
 class TempConnector extends CodexConnector {
 	constructor(private home: string) {
@@ -134,5 +134,37 @@ describe("CodexConnector.uninstall — config.toml cleanup", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[model]");
 		expect(content).not.toContain("[mcp_servers.signet]");
+	});
+});
+
+// buildMcpBlock is tested directly here because resolveSignetMcp() always
+// returns the non-Windows path on Linux, so Windows quoting can't be
+// exercised through install().
+describe("buildMcpBlock — TOML quoting", () => {
+	test("produces string command, not array", () => {
+		const block = buildMcpBlock({ command: "signet-mcp", args: [] });
+		expect(block).toContain("command = 'signet-mcp'");
+		expect(block).not.toContain("command = [");
+	});
+
+	test("Windows paths with backslashes are quoted correctly", () => {
+		const block = buildMcpBlock({
+			command: "C:\\Program Files\\node.exe",
+			args: ["C:\\signet\\mcp-stdio.js"],
+		});
+		// No single-quote in the path, so literal single-quote TOML strings are used
+		expect(block).toContain("command = 'C:\\Program Files\\node.exe'");
+		expect(block).toContain("args = ['C:\\signet\\mcp-stdio.js']");
+		expect(block).not.toContain("command = [");
+	});
+
+	test("omits args line when args is empty", () => {
+		const block = buildMcpBlock({ command: "signet-mcp", args: [] });
+		expect(block).not.toContain("args");
+	});
+
+	test("includes args line when args are present", () => {
+		const block = buildMcpBlock({ command: "node", args: ["mcp.js", "--port", "3000"] });
+		expect(block).toContain("args = ['mcp.js', '--port', '3000']");
 	});
 });
