@@ -70,9 +70,12 @@ export type PluginHookAfterCompactionEvent = {
 // Plugin API
 // ============================================================================
 
+export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
+
 export interface OpenClawPluginApi {
 	readonly pluginConfig?: Record<string, unknown>;
 	readonly config?: unknown;
+	readonly registrationMode?: PluginRegistrationMode;
 	readonly logger: {
 		info(msg: string): void;
 		warn(msg: string): void;

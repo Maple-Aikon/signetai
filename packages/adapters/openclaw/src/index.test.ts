@@ -22,7 +22,7 @@ mock.module("@signet/core", () => ({
 // Import after mock so the module picks up the stub.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore } = signet;
+const { memoryStore, _resetRegistration } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -84,7 +84,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
-function createMockApi(): {
+function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 	api: OpenClawPluginApi;
 	hooks: Map<string, HookHandler>;
 	hookOptions: Map<string, unknown>;
@@ -99,6 +99,7 @@ function createMockApi(): {
 			enabled: true,
 			daemonUrl: "http://daemon.test",
 		},
+		registrationMode: "full",
 		logger: {
 			info() {
 				// no-op in tests
@@ -132,6 +133,7 @@ function createMockApi(): {
 		resolvePath(input) {
 			return input;
 		},
+		...overrides,
 	};
 
 	return { api, hooks, hookOptions, tools };
@@ -270,6 +272,7 @@ afterEach(async () => {
 	for (const service of registeredServices) {
 		await service.stop();
 	}
+	_resetRegistration();
 });
 
 describe("signet-memory-openclaw lifecycle hooks", () => {
@@ -483,14 +486,12 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(result?.inject).not.toContain("daemon offline");
 	});
 
-	it("fires pre-compaction hooks once across both OpenClaw compaction event names", async () => {
+	it("fires pre-compaction hook and deduplicates identical calls", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
 		const beforeCompaction = hooks.get("before_compaction");
-		const sessionCompactBefore = hooks.get("session:compact:before");
 		expect(beforeCompaction).toBeDefined();
-		expect(sessionCompactBefore).toBeDefined();
 
 		const event = { messageCount: 12, tokenCount: 240, compactingCount: 8 };
 		const ctx = {
@@ -500,7 +501,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		};
 
 		await beforeCompaction?.(event, ctx);
-		await sessionCompactBefore?.(event, ctx);
+		await beforeCompaction?.(event, ctx);
 
 		expect(getHits("/api/hooks/pre-compaction")).toBe(1);
 		expect(lastPreCompactionBody).toMatchObject({
@@ -597,9 +598,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		signetPlugin.register(api);
 
 		const afterCompaction = hooks.get("after_compaction");
-		const sessionCompactAfter = hooks.get("session:compact:after");
 		expect(afterCompaction).toBeDefined();
-		expect(sessionCompactAfter).toBeDefined();
 
 		const sessionFile = join(testDir, "session-after.jsonl");
 		writeFileSync(
@@ -623,7 +622,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		};
 
 		await afterCompaction?.(event, ctx);
-		await sessionCompactAfter?.(event, ctx);
+		await afterCompaction?.(event, ctx);
 
 		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
 		expect(lastCompactionBody).toMatchObject({
@@ -723,14 +722,12 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
-	it("deduplicates duplicate compaction-complete writes even when session file visibility differs across hook aliases", async () => {
+	it("deduplicates duplicate compaction-complete writes for the same session", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
 		const afterCompaction = hooks.get("after_compaction");
-		const sessionCompactAfter = hooks.get("session:compact:after");
 		expect(afterCompaction).toBeDefined();
-		expect(sessionCompactAfter).toBeDefined();
 
 		const sessionFile = join(testDir, "session-after-dedupe.jsonl");
 		writeFileSync(
@@ -750,7 +747,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			{ summary: "Stable recovered summary.", sessionFile },
 			{ sessionKey: "session-after-dedupe", sessionFile, agentId: "agent-1" },
 		);
-		await sessionCompactAfter?.(
+		await afterCompaction?.(
 			{ summary: "Stable recovered summary." },
 			{ sessionKey: "session-after-dedupe", agentId: "agent-1" },
 		);
@@ -1518,5 +1515,60 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(refreshedNames.filter((name) => name === "signet_server_a_beta").length).toBe(1);
 		expect(refreshedNames.some((name) => name === "signet_server_a_alpha_2")).toBeFalse();
 		expect(refreshedNames.some((name) => name === "signet_server_a_beta_2")).toBeFalse();
+	});
+});
+
+describe("registration guard (#422)", () => {
+	it("skips tools, hooks, and services when registrationMode is cli-metadata", () => {
+		const { api, hooks, tools } = createMockApi({ registrationMode: "cli-metadata" });
+		signetPlugin.register(api);
+
+		expect(tools.length).toBe(0);
+		expect(hooks.size).toBe(0);
+		expect(registeredServices.length).toBe(0);
+	});
+
+	it("registers normally when registrationMode is full", () => {
+		const { api, hooks, tools } = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(api);
+
+		expect(tools.length).toBeGreaterThan(0);
+		expect(hooks.size).toBeGreaterThan(0);
+		expect(registeredServices.length).toBeGreaterThan(0);
+	});
+
+	it("second full-mode register() call is a no-op", () => {
+		const first = createMockApi();
+		const second = createMockApi();
+
+		signetPlugin.register(first.api);
+		signetPlugin.register(second.api);
+
+		expect(first.tools.length).toBeGreaterThan(0);
+		expect(first.hooks.size).toBeGreaterThan(0);
+
+		expect(second.tools.length).toBe(0);
+		expect(second.hooks.size).toBe(0);
+	});
+
+	it("second full-mode register() does not create duplicate services", () => {
+		const first = createMockApi();
+		const second = createMockApi();
+
+		signetPlugin.register(first.api);
+		const count = registeredServices.length;
+
+		signetPlugin.register(second.api);
+		expect(registeredServices.length).toBe(count);
+	});
+
+	it("does not register session:compact:before or session:compact:after hooks", () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		expect(hooks.has("session:compact:before")).toBeFalse();
+		expect(hooks.has("session:compact:after")).toBeFalse();
+		expect(hooks.has("before_compaction")).toBeTrue();
+		expect(hooks.has("after_compaction")).toBeTrue();
 	});
 });

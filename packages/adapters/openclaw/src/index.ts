@@ -1123,6 +1123,12 @@ async function registerMarketplaceProxyTools(
 // Plugin definition (OpenClaw register(api) pattern)
 // ============================================================================
 
+// Defensive backstop: even if registrationMode is absent or "full", never
+// run the full registration body more than once per process. OpenClaw's
+// documented double-call is mode-gated below, but older hosts or future
+// loader changes could call with "full" twice.
+let registered = false;
+
 const signetPlugin = {
 	id: "signet-memory-openclaw",
 	name: "Signet Memory",
@@ -1131,6 +1137,18 @@ const signetPlugin = {
 	configSchema: signetConfigSchema,
 
 	register(api: OpenClawPluginApi): void {
+		// OpenClaw calls register() twice: once for the full runtime pass and
+		// once for CLI metadata (registrationMode "cli-metadata"). The CLI pass
+		// only needs registerCli(); skip tools, hooks, and services to avoid
+		// duplicate registrations that stall the gateway and block providers.
+		if (api.registrationMode === "cli-metadata") return;
+
+		if (registered) {
+			api.logger.warn("signet-memory: register() called twice with non-cli mode, skipping duplicate");
+			return;
+		}
+		registered = true;
+
 		const cfg = signetConfigSchema.parse(api.pluginConfig);
 		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
 		const opts = {
@@ -1973,14 +1991,10 @@ const signetPlugin = {
 			return undefined;
 		});
 
-		api.on("session:compact:before", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
-			return handleBeforeCompaction(event, ctx);
-		});
-
-		api.on("session:compact:after", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
-			await handleAfterCompaction(event, ctx);
-			return undefined;
-		});
+		// NOTE: session:compact:before / session:compact:after are not yet
+		// recognized by OpenClaw (as of 2026.3.28). The legacy hooks above
+		// (before_compaction / after_compaction) cover the same logic. Re-add
+		// the modern names when OpenClaw ships support for them.
 
 		// ==================================================================
 		// Service
@@ -2025,5 +2039,12 @@ const signetPlugin = {
 		});
 	},
 };
+
+/** @internal Test-only: reset the module-level registration guard. No-op in production. */
+export function _resetRegistration(): void {
+	if (process.env.NODE_ENV === "test") {
+		registered = false;
+	}
+}
 
 export default signetPlugin;
