@@ -21,11 +21,7 @@
       "dist/index.js"
     ]
   },
-  "clawdbot": {
-    "extensions": [
-      "dist/index.js"
-    ]
-  },
+  "clawdbot": {},
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node && tsc --emitDeclarationOnly --declaration --outDir dist",
     "prepack": "bun run build",

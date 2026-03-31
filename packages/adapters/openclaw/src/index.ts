@@ -1123,6 +1123,12 @@ async function registerMarketplaceProxyTools(
 // Plugin definition (OpenClaw register(api) pattern)
 // ============================================================================
 
+// Module-level guard: OpenClaw may load the extension twice (e.g. both
+// openclaw.extensions and clawdbot.extensions resolve to the same entry
+// point). Duplicate register() calls produce duplicate tools, services,
+// and timers which stall the gateway and block downstream providers.
+let registered = false;
+
 const signetPlugin = {
 	id: "signet-memory-openclaw",
 	name: "Signet Memory",
@@ -1131,6 +1137,12 @@ const signetPlugin = {
 	configSchema: signetConfigSchema,
 
 	register(api: OpenClawPluginApi): void {
+		if (registered) {
+			api.logger.warn("signet-memory: register() called twice, skipping duplicate");
+			return;
+		}
+		registered = true;
+
 		const cfg = signetConfigSchema.parse(api.pluginConfig);
 		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
 		const opts = {
@@ -1973,14 +1985,10 @@ const signetPlugin = {
 			return undefined;
 		});
 
-		api.on("session:compact:before", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
-			return handleBeforeCompaction(event, ctx);
-		});
-
-		api.on("session:compact:after", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
-			await handleAfterCompaction(event, ctx);
-			return undefined;
-		});
+		// NOTE: session:compact:before / session:compact:after are not yet
+		// recognized by OpenClaw (as of 2026.3.28). The legacy hooks above
+		// (before_compaction / after_compaction) cover the same logic. Re-add
+		// the modern names when OpenClaw ships support for them.
 
 		// ==================================================================
 		// Service
@@ -2025,5 +2033,10 @@ const signetPlugin = {
 		});
 	},
 };
+
+/** @internal Test-only: reset the module-level registration guard. */
+export function _resetRegistration(): void {
+	registered = false;
+}
 
 export default signetPlugin;
