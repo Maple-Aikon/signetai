@@ -1,4 +1,5 @@
 ---
+import { getCollection } from "astro:content";
 import Base from "./Base.astro";
 import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
@@ -56,57 +57,41 @@ const formattedDate = date.toLocaleDateString("en-US", {
 
 const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
 const hasToc = tocHeadings.length > 2;
+
+// Build blog post list for left sidebar
+const allPosts = (await getCollection("blog"))
+	.filter((p) => !p.data.draft)
+	.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
 ---
 
 <Base title={`${title} — SignetAI Blog`} description={description} image={image} type="article">
   <Nav />
 
   <div class="blog-shell">
-    <div class:list={["blog-content-grid", { "has-toc": hasToc }]}>
-      {hasToc ? (
-        <aside class="blog-toc-rail">
-          <div class="blog-sidebar-sticky">
-            <nav class="blog-toc-scroll" aria-label="Table of contents">
-              <p class="blog-toc-label">On this page</p>
-              <ul class="blog-toc-list">
-                {tocHeadings.map((h) => (
-                  <li class:list={[{ "blog-toc-sub": h.depth === 3 }]}>
-                    <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-            {recommendedPosts.length > 0 ? (
-              <div class="blog-recommended">
-                <p class="blog-toc-label">Recommended</p>
-                <ul class="blog-recommended-list">
-                  {recommendedPosts.map((rec) => (
-                    <li>
-                      <a href={rec.url} class="blog-recommended-link">
-                        {rec.image ? (
-                          <img
-                            class="blog-recommended-img"
-                            src={rec.image}
-                            alt=""
-                            width="220"
-                            height="110"
-                            loading="lazy"
-                          />
-                        ) : null}
-                        <span class="blog-recommended-title">{rec.title}</span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {currentSlug ? (
-              <GraphViewer client:idle currentSlug={currentSlug} collection="blog" mode="local" />
-            ) : null}
-          </div>
-        </aside>
-      ) : null}
+    <div class="blog-content-grid">
+      <!-- Left rail: blog post list -->
+      <aside class="blog-nav-rail">
+        <div class="blog-nav-rail-sticky">
+          <p class="docs-rail-label">
+            <a href="/blog" class="blog-nav-back">All Posts</a>
+          </p>
+          <ul class="blog-nav-list">
+            {allPosts.map((post) => (
+              <li>
+                <a
+                  href={`/blog/${post.id}/`}
+                  class="blog-nav-link"
+                  aria-current={post.id === currentSlug ? "page" : undefined}
+                >
+                  {post.data.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </aside>
 
+      <!-- Main content -->
       <main class="blog-main">
         {image ? (
           <img class="blog-hero-image" src={image} alt="" width="1408" height="768" loading="eager" />
@@ -149,27 +134,25 @@ const hasToc = tocHeadings.length > 2;
         </article>
 
         {recommendedPosts.length > 0 ? (
-          <div class="blog-recommended-mobile">
+          <div class="blog-recommended-section">
             <p class="blog-toc-label">Recommended</p>
-            <ul class="blog-recommended-list">
+            <div class="blog-recommended-grid">
               {recommendedPosts.map((rec) => (
-                <li>
-                  <a href={rec.url} class="blog-recommended-link">
-                    {rec.image ? (
-                      <img
-                        class="blog-recommended-img"
-                        src={rec.image}
-                        alt=""
-                        width="400"
-                        height="200"
-                        loading="lazy"
-                      />
-                    ) : null}
-                    <span class="blog-recommended-title">{rec.title}</span>
-                  </a>
-                </li>
+                <a href={rec.url} class="blog-recommended-card">
+                  {rec.image ? (
+                    <img
+                      class="blog-recommended-img"
+                      src={rec.image}
+                      alt=""
+                      width="400"
+                      height="200"
+                      loading="lazy"
+                    />
+                  ) : null}
+                  <span class="blog-recommended-title">{rec.title}</span>
+                </a>
               ))}
-            </ul>
+            </div>
           </div>
         ) : null}
 
@@ -191,6 +174,28 @@ const hasToc = tocHeadings.length > 2;
           </nav>
         ) : null}
       </main>
+
+      <!-- Right rail: TOC + graph -->
+      {hasToc ? (
+        <aside class="blog-toc-rail">
+          <div class="blog-toc-rail-sticky">
+            <nav aria-label="Table of contents">
+              <p class="docs-rail-label">On this page</p>
+              <ul class="docs-rail-toc-list">
+                {tocHeadings.map((h) => (
+                  <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
+                    <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+
+            {currentSlug ? (
+              <GraphViewer client:idle currentSlug={currentSlug} collection="blog" mode="local" />
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
     </div>
   </div>
 

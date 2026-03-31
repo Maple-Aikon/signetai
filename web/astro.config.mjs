@@ -11,6 +11,13 @@ export default defineConfig({
 	site: "https://signetai.sh",
 	markdown: {
 		remarkPlugins: [remarkWikilinks],
+		shikiConfig: {
+			themes: {
+				light: "github-light",
+				dark: "github-dark",
+			},
+			defaultColor: "dark",
+		},
 	},
 	integrations: [mdx(), react(), sitemap(), graphIndex()],
 	vite: {

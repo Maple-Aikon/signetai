@@ -42,6 +42,7 @@
 	--radius-md: calc(0.5rem - 2px);
 
 	--font-display: "Diamond Grotesk", "Chakra Petch", sans-serif;
+	--font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 	--font-mono: "Geist Mono", "IBM Plex Mono", monospace;
 
 	--color-highlight: #c8ff00;
@@ -536,127 +537,181 @@ section {
 }
 
 .nav-search {
+	position: relative;
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
-	gap: 0;
-	height: 34px;
-	min-width: 32px;
-	border: 1px solid transparent;
+}
+
+.nav-search-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border: 1px solid var(--color-border-strong);
+	border-radius: 4px;
 	background: transparent;
-	transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease), width 260ms var(--ease);
+	color: var(--color-text-muted);
+	cursor: pointer;
+	font-family: var(--font-body);
+	font-size: 12px;
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
-.nav-search.is-open {
-	padding-right: 4px;
-	border-color: var(--color-border-strong);
-	background: var(--color-bg);
-}
-
-.nav-search.is-open:focus-within {
+.nav-search-trigger:hover {
+	color: var(--color-text-bright);
 	border-color: var(--color-text-muted);
 }
 
-.nav-search-trigger[data-slot="button"] {
-	width: 32px;
-	height: 32px;
-	padding: 0;
-	border-radius: 3px;
-	border: none;
-	background: transparent;
-	color: var(--color-text-muted);
-	box-shadow: none;
-	transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+.nav-search-trigger svg {
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
 }
 
-.nav-search-trigger[data-slot="button"]:hover {
-	color: var(--color-text-bright);
-	background: var(--color-surface-raised);
+.nav-search-hint {
+	opacity: 0.7;
 }
 
-.nav-search-form {
-	display: flex;
-	align-items: center;
-	width: 0;
-	overflow: hidden;
-	opacity: 0;
-	transform: translateX(6px);
-	transition: width 260ms var(--ease), opacity 220ms var(--ease), transform 260ms var(--ease);
-}
-
-.nav-search.is-open .nav-search-form {
-	width: 232px;
-	opacity: 1;
-	transform: translateX(0);
-}
-
-.nav-search-input[data-slot="input"] {
-	height: 30px;
-	border: none;
-	border-radius: 3px;
-	background: transparent;
-	color: var(--color-text-bright);
+.nav-search-kbd {
 	font-family: var(--font-mono);
-	font-size: 0.75rem;
-	letter-spacing: 0.04em;
-	text-transform: none;
-	padding: 0 10px 0 6px;
-	box-shadow: none;
+	font-size: 10px;
+	color: var(--color-text-muted);
+	border: 1px solid var(--color-border-strong);
+	padding: 0 4px;
+	border-radius: 3px;
+	line-height: 1.6;
 }
 
-.nav-search-input[data-slot="input"]::placeholder {
-	text-transform: none;
-	letter-spacing: 0.02em;
+.nav-search-dropdown {
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	width: 360px;
+	background: var(--color-bg);
+	border: 1px solid var(--color-border-strong);
+	border-radius: 6px;
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+	z-index: 100;
+	overflow: hidden;
 }
 
-.nav-search-input[data-slot="input"]:focus-visible {
+.nav-search-input {
+	width: 100%;
+	padding: 10px 14px;
 	border: none;
+	border-bottom: 1px solid var(--color-border);
+	background: transparent;
+	color: var(--color-text-bright);
+	font-family: var(--font-body);
+	font-size: 14px;
 	outline: none;
-	box-shadow: none;
+}
+
+.nav-search-input::placeholder {
+	color: var(--color-text-muted);
+}
+
+.nav-search-results {
+	list-style: none;
+	padding: 4px;
+	margin: 0;
+	max-height: 320px;
+	overflow-y: auto;
+}
+
+.nav-search-results li {
+	margin: 0;
+}
+
+.nav-search-results li a {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 10px;
+	text-decoration: none;
+	border-radius: 4px;
+	transition: background-color var(--dur) var(--ease);
+}
+
+.nav-search-results li:hover a,
+.nav-search-results li.selected a {
+	background: var(--color-glow);
+}
+
+.nav-search-result-title {
+	font-family: var(--font-body);
+	font-size: 13px;
+	color: var(--color-text-bright);
+}
+
+.nav-search-result-section {
+	font-family: var(--font-body);
+	font-size: 11px;
+	color: var(--color-text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.nav-search-empty {
+	padding: 16px;
+	text-align: center;
+	font-family: var(--font-body);
+	font-size: 13px;
+	color: var(--color-text-muted);
 }
 
 .nav-theme-switch {
 	display: inline-flex;
 	align-items: center;
-	height: 34px;
-	border: 1px solid var(--color-border-strong);
-	border-radius: 3px;
-	background: var(--color-surface);
-	padding: 2px;
-	gap: 2px;
+	gap: 6px;
 	flex-shrink: 0;
 }
 
-.nav-theme-btn {
-	height: 28px;
-	min-width: 50px;
-	padding: 0 10px;
-	border-radius: 2px;
-	border: 1px solid transparent;
-	background: transparent;
-	color: var(--color-text-muted);
-	font-family: var(--font-mono);
-	font-size: 0.625rem;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
+.nav-theme-dot {
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: none;
+	background: none;
 	cursor: pointer;
-	transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: opacity var(--dur) var(--ease);
+	opacity: 0.4;
+}
+.nav-theme-dot:hover {
+	opacity: 0.7;
+}
+.nav-theme-dot.is-active {
+	opacity: 1;
 }
 
-.nav-theme-btn:hover {
-	color: var(--color-text-bright);
-	border-color: var(--color-border-strong);
+.nav-dot-ring {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	border: 1.5px solid var(--color-text-muted);
+	background: transparent;
 }
-
-.nav-theme-btn.is-active {
-	background: var(--color-text-bright);
+.nav-theme-dot.is-active .nav-dot-ring {
 	border-color: var(--color-text-bright);
-	color: var(--color-bg);
 }
 
-.nav-theme-btn:focus-visible {
+.nav-dot-fill {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--color-text-muted);
+}
+.nav-theme-dot.is-active .nav-dot-fill {
+	background: var(--color-text-bright);
+}
+
+.nav-theme-dot:focus-visible {
 	outline: 1px solid var(--color-text-muted);
-	outline-offset: 1px;
+	outline-offset: 2px;
 }
 
 .nav-github:hover {

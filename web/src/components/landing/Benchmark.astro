@@ -1,0 +1,36 @@
+---
+const stats = [
+  { value: "87.5%", label: "Answer Accuracy", context: "LoCoMo long-conversation benchmark, 8-question full-stack sample" },
+  { value: "100%", label: "Hit@10 Retrieval", context: "Every relevant memory found in the top 10 candidates" },
+  { value: "0.615", label: "MRR", context: "Mean Reciprocal Rank — how high the right answer appears" },
+  { value: "LOCAL", label: "No LLM at Search Time", context: "Retrieval and ranking run entirely on-device" }
+];
+
+---
+
+<section id="benchmark" class="container" style="border-top: 1px solid var(--color-border)">
+  <div class="section-header reveal">
+    <div class="crosshair"></div>
+    <span class="section-label">BENCHMARK</span>
+    <span class="section-index">03 / 04</span>
+  </div>
+
+  <p class="lp-label reveal" style="margin-bottom: var(--space-md);">
+    Early results on the LoCoMo long-conversation benchmark. Only local-first, open-source system in the top 10.
+  </p>
+
+  <div class="benchmark-stats reveal">
+    {stats.map((stat) => (
+      <div class="benchmark-stat">
+        <span class="lp-readout">{stat.value}</span>
+        <span class="lp-eyebrow">{stat.label}</span>
+        <span class="benchmark-context">{stat.context}</span>
+      </div>
+    ))}
+  </div>
+
+  <p class="benchmark-caveat reveal">
+    Larger evaluation runs in progress. These numbers will change.
+  </p>
+  <a href="/docs/benchmarks" class="benchmark-link reveal">Methodology and full results &rarr;</a>
+</section>

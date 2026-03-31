@@ -14,9 +14,7 @@ import NavSearch from "./NavSearch.tsx";
 
     <div class="nav-links">
       <a href="/docs">Docs</a>
-      <a href="/how-it-works">How It Works</a>
       <a href="/blog">Blog</a>
-      <a href="https://github.com/Signet-AI/signetai/tree/main/spec">Spec</a>
     </div>
 
     <div class="nav-divider" aria-hidden="true"></div>
@@ -24,11 +22,11 @@ import NavSearch from "./NavSearch.tsx";
     <NavSearch client:idle />
 
     <div class="nav-theme-switch" role="group" aria-label="Theme mode">
-      <button type="button" class="nav-theme-btn" data-theme-value="light" aria-pressed="false">
-        Light
+      <button type="button" class="nav-theme-dot nav-theme-dot--light" data-theme-value="light" aria-pressed="false" aria-label="Light mode">
+        <span class="nav-dot-ring"></span>
       </button>
-      <button type="button" class="nav-theme-btn" data-theme-value="dark" aria-pressed="false">
-        Dark
+      <button type="button" class="nav-theme-dot nav-theme-dot--dark" data-theme-value="dark" aria-pressed="false" aria-label="Dark mode">
+        <span class="nav-dot-fill"></span>
       </button>
     </div>
 
@@ -46,9 +44,7 @@ import NavSearch from "./NavSearch.tsx";
   <div id="nav-mobile-menu" class="nav-mobile-menu" aria-hidden="true">
     <div class="nav-mobile-links">
       <a href="/docs" class="nav-mobile-link">Docs</a>
-      <a href="/how-it-works" class="nav-mobile-link">How It Works</a>
       <a href="/blog" class="nav-mobile-link">Blog</a>
-      <a href="https://github.com/Signet-AI/signetai/tree/main/spec" class="nav-mobile-link">Spec</a>
       <a href="https://github.com/Signet-AI/signetai" class="nav-mobile-link">
         GitHub
         <svg class="nav-mobile-link-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>

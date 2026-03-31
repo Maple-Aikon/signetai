@@ -38,30 +38,10 @@ const hasToc = tocHeadings.length > 2;
 
   <div class="docs-shell">
     <div class="docs-content-grid">
-      <!-- Left rail: docs nav + TOC + graph -->
+      <!-- Left rail: docs nav -->
       <aside class="docs-rail">
         <div class="docs-rail-sticky">
-          <!-- Docs navigation (collapsible sections) -->
           <Sidebar currentSlug={currentSlug} />
-
-          <!-- On this page TOC -->
-          {hasToc ? (
-            <nav class="docs-rail-toc" aria-label="Table of contents">
-              <p class="docs-rail-label">On this page</p>
-              <ul class="docs-rail-toc-list">
-                {tocHeadings.map((h) => (
-                  <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
-                    <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-          ) : null}
-
-          <!-- Graph viewer -->
-          {currentSlug ? (
-            <GraphViewer client:idle currentSlug={currentSlug} collection="docs" mode="local" />
-          ) : null}
         </div>
       </aside>
 
@@ -111,6 +91,25 @@ const hasToc = tocHeadings.length > 2;
 
         <Footer />
       </main>
+
+      <!-- Right rail: TOC + graph -->
+      {hasToc ? (
+        <aside class="docs-toc-rail">
+          <div class="docs-toc-rail-sticky">
+            <nav aria-label="Table of contents">
+              <p class="docs-rail-label">On this page</p>
+              <ul class="docs-rail-toc-list">
+                {tocHeadings.map((h) => (
+                  <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
+                    <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+
+          </div>
+        </aside>
+      ) : null}
     </div>
   </div>
 

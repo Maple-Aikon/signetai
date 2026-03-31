@@ -1,0 +1,55 @@
+---
+const features = [
+  {
+    title: "Ambient Memory",
+    desc: "Every session is automatically distilled into structured memory. No tool calls, no manual saves. Your agent wakes up knowing what happened yesterday.",
+  },
+  {
+    title: "Knowledge Graph",
+    desc: "People, projects, tools, and decisions extracted as entities with relationships. Retrieved via graph traversal, not just embedding similarity.",
+  },
+  {
+    title: "Inspect Everything",
+    desc: "Memory is not a black box. Browse, search, edit, and delete through the dashboard. See provenance for every memory. Repair when the model gets it wrong.",
+  },
+];
+
+const more = [
+  "Cross-platform — Claude Code, OpenCode, OpenClaw, Codex, Forge, Oh My Pi",
+  "Multi-agent — isolated, shared, or group visibility across agents",
+  "Encrypted secrets — libsodium at rest, agents use without seeing plaintext",
+  "Predictive scorer — learned reranking that improves over time",
+  "SDK & React hooks — typed client with Vercel AI SDK middleware",
+  "Docker self-hosting — first-party compose stack with persistent volumes",
+  "Skills marketplace — install from skills.sh and ClawHub",
+  "Dashboard — web UI for memory inspection, search, and management",
+  "Git sync — version identity and memory in your own remote",
+];
+---
+
+<section id="capabilities" class="container" style="border-top: 1px solid var(--color-border)">
+  <div class="section-header reveal">
+    <div class="crosshair"></div>
+    <span class="section-label">CAPABILITIES</span>
+    <span class="section-index">02 / 04</span>
+  </div>
+
+  <div class="features-list reveal">
+    {features.map((f, i) => (
+      <div class="feature-row">
+        <div class="feature-num">{String(i + 1).padStart(2, '0')}</div>
+        <h3 class="feature-title">{f.title}</h3>
+        <p class="feature-desc">{f.desc}</p>
+      </div>
+    ))}
+  </div>
+
+  <div class="more-list reveal">
+    <h4 class="more-heading">And also</h4>
+    <ul class="more-grid">
+      {more.map((item) => (
+        <li class="more-item">{item}</li>
+      ))}
+    </ul>
+  </div>
+</section>

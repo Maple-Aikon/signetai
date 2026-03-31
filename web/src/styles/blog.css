@@ -13,8 +13,8 @@
    ========================================================================== */
 .blog-main {
 	min-width: 0;
-	padding: var(--space-xl) clamp(var(--space-xl), 5vw, 80px) var(--space-2xl);
-	max-width: 960px;
+	padding: var(--space-xl) var(--space-2xl) var(--space-2xl);
+	max-width: 760px;
 	width: 100%;
 	margin: 0 auto;
 }
@@ -63,7 +63,7 @@
 	margin: 0;
 	font-family: var(--font-display);
 	text-transform: none;
-	font-size: clamp(1.5rem, 3.5vw, 2rem);
+	font-size: clamp(24px, 3.5vw, 32px);
 	letter-spacing: 0.01em;
 	line-height: 1.25;
 	color: var(--color-text-bright);
@@ -86,8 +86,8 @@
 .blog-description {
 	margin: var(--space-md) 0 0;
 	max-width: 65ch;
-	font-family: var(--font-mono);
-	font-size: 0.875rem;
+	font-family: var(--font-body);
+	font-size: 0.9375rem;
 	color: var(--color-text-muted);
 	line-height: 1.7;
 }
@@ -120,55 +120,105 @@
 }
 
 /* ==========================================================================
-   BLOG CONTENT GRID (two-column with TOC rail)
+   BLOG CONTENT GRID — 3-column: nav | content | toc
    ========================================================================== */
 .blog-content-grid {
 	max-width: 1400px;
 	width: 100%;
 	margin: 0 auto;
-}
-
-.blog-content-grid.has-toc {
 	display: grid;
-	grid-template-columns: 220px 1fr;
-	gap: 0 var(--space-xl);
+	grid-template-columns: 200px minmax(0, 1fr) 200px;
+	gap: 0;
 }
 
 /* ==========================================================================
-   BLOG TOC RAIL (sticky left column on desktop)
+   BLOG LEFT RAIL — post navigation
    ========================================================================== */
-.blog-toc-rail {
-	display: none;
+.blog-nav-rail {
+	display: block;
 }
 
-/* Sticky container: flex column so TOC scrolls and recommended pins bottom */
-.blog-sidebar-sticky {
+.blog-nav-rail-sticky {
 	position: sticky;
 	top: 80px;
-	display: flex;
-	flex-direction: column;
 	max-height: calc(100vh - 96px);
+	overflow-y: auto;
 	padding: var(--space-xl) 0 var(--space-lg) var(--space-lg);
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border-strong) transparent;
 }
 
-/* TOC scroll zone: takes available space, scrolls when long */
-.blog-toc-scroll {
-	flex: 1 1 auto;
-	min-height: 0;
+.blog-nav-back {
+	font-family: var(--font-body);
+	color: var(--color-text-muted);
+	text-decoration: none;
+	transition: color var(--dur) var(--ease);
+}
+
+.blog-nav-back:hover {
+	color: var(--color-text-bright);
+}
+
+.blog-nav-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.blog-nav-list li {
+	margin: 0;
+}
+
+.blog-nav-link {
+	display: block;
+	padding: 4px 0 4px 0;
+	font-family: var(--font-body);
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--color-text-muted);
+	text-decoration: none;
+	border-left: 2px solid transparent;
+	padding-left: 10px;
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.blog-nav-link:hover {
+	color: var(--color-text-bright);
+}
+
+.blog-nav-link[aria-current="page"] {
+	color: var(--color-text-bright);
+	border-left-color: var(--color-text-bright);
+}
+
+/* ==========================================================================
+   BLOG RIGHT RAIL — TOC + graph (reuses docs-rail-toc styles)
+   ========================================================================== */
+.blog-toc-rail {
+	display: block;
+}
+
+.blog-toc-rail-sticky {
+	position: sticky;
+	top: 80px;
+	max-height: calc(100vh - 96px);
 	overflow-y: auto;
+	padding: var(--space-xl) var(--space-lg) var(--space-lg) 0;
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border-strong) transparent;
 }
 
 .blog-toc-label {
-	margin: 0 0 var(--space-md);
-	font-family: var(--font-display);
-	font-size: 0.625rem;
-	letter-spacing: 0.12em;
+	margin: 0 0 12px;
+	font-family: var(--font-body);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
 	text-transform: uppercase;
 	color: var(--color-text-muted);
 }
 
+/* Blog inline TOC uses same font as docs */
 .blog-toc-list {
 	list-style: none;
 	padding: 0;
@@ -181,9 +231,9 @@
 
 .blog-toc-list a {
 	display: block;
-	padding: 4px 0 4px var(--space-sm);
-	font-family: var(--font-mono);
-	font-size: 0.6875rem;
+	padding: 3px 0 3px 10px;
+	font-family: var(--font-body);
+	font-size: 12px;
 	line-height: 1.5;
 	color: var(--color-text-muted);
 	text-decoration: none;
@@ -201,8 +251,8 @@
 }
 
 .blog-toc-sub a {
-	padding-left: calc(var(--space-sm) + var(--space-sm));
-	font-size: 0.625rem;
+	padding-left: 20px;
+	font-size: 11px;
 }
 
 /* ==========================================================================
@@ -218,78 +268,10 @@
 
 /* ==========================================================================
    BLOG PROSE OVERRIDES
-   Softer, more readable styling for long-form blog content.
-   These override the docs .prose defaults without touching them.
+   Blog inherits docs .prose styles. Only override what differs.
    ========================================================================== */
 .blog-prose p {
-	font-family: var(--font-mono);
-	font-size: 0.9375rem;
-	line-height: 1.85;
-	color: var(--color-text);
-	margin-bottom: var(--space-lg);
-}
-
-.blog-prose h2 {
-	font-size: 1.125rem;
-	text-transform: none;
-	letter-spacing: 0.02em;
-	margin-top: var(--space-2xl);
-	margin-bottom: var(--space-md);
-	padding: 0 0 var(--space-sm);
-	border-bottom: 1px solid var(--color-border);
-}
-
-.blog-prose h2::before {
-	display: none;
-}
-
-.blog-prose h3 {
-	font-size: 0.9375rem;
-	text-transform: none;
-	letter-spacing: 0.02em;
-	margin-top: var(--space-xl);
-	border-left: none;
-	padding-left: 0;
-}
-
-.blog-prose h4 {
-	font-size: 0.9375rem;
-}
-
-.blog-prose li {
-	font-size: 0.9375rem;
-	line-height: 1.85;
-	margin-bottom: 6px;
-}
-
-.blog-prose strong {
-	color: var(--color-text-bright);
-	font-weight: 600;
-}
-
-.blog-prose a {
-	color: var(--color-text-bright);
-	text-decoration: underline;
-	text-underline-offset: 3px;
-	text-decoration-color: var(--color-border-strong);
-	transition: text-decoration-color var(--dur) var(--ease);
-}
-
-.blog-prose a:hover {
-	color: var(--color-accent);
-	text-decoration-color: var(--color-accent);
-}
-
-.blog-prose code {
-	font-size: 0.875rem;
-}
-
-.blog-prose pre code {
-	font-size: 0.875rem;
-}
-
-.blog-prose blockquote p {
-	font-size: 0.9375rem;
+	margin-bottom: 24px;
 }
 
 /* ==========================================================================
@@ -444,38 +426,47 @@
 	gap: var(--space-xs);
 }
 
-/* Prose readability at 13px base */
-.blog-prose {
-	font-size: 15px;
-}
+/* Blog prose uses same styles as docs prose */
 
 /* ==========================================================================
    RESPONSIVE
    ========================================================================== */
 
-/* Desktop: show TOC rail, hide inline TOC */
-@media (min-width: 1025px) {
-	.blog-toc-rail {
-		display: block;
-	}
-
+/* Desktop wide: 3-column, hide inline TOC */
+@media (min-width: 1201px) {
 	.blog-toc-inline {
 		display: none;
 	}
 }
 
-/* Tablet and below: collapse to single column */
+/* Desktop narrow: hide right TOC rail */
+@media (max-width: 1200px) {
+	.blog-content-grid {
+		grid-template-columns: 200px minmax(0, 1fr);
+	}
+
+	.blog-toc-rail {
+		display: none;
+	}
+}
+
+/* Tablet: collapse to single column */
 @media (max-width: 1024px) {
-	.blog-content-grid.has-toc {
+	.blog-content-grid {
 		display: block;
+	}
+
+	.blog-nav-rail {
+		display: none;
 	}
 
 	.blog-toc-rail {
 		display: none;
 	}
 
-	.has-toc .blog-main {
+	.blog-main {
 		margin: 0 auto;
+		max-width: 700px;
 	}
 }
 
@@ -550,36 +541,27 @@
 	border-color: var(--color-success);
 }
 
-/* ── Recommended posts ─────────────────────────── */
+/* ── Recommended posts (inline after article) ─── */
 
-.blog-recommended {
-	flex: 0 0 auto;
-	margin-top: var(--space-md);
-	padding-top: var(--space-md);
+.blog-recommended-section {
+	margin-top: 48px;
+	padding-top: 24px;
 	border-top: 1px solid var(--color-border);
 }
 
-.blog-recommended-list {
-	list-style: none;
-	padding: 0;
-	margin: 0;
+.blog-recommended-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 16px;
 }
 
-.blog-recommended-list li {
-	margin: 0;
-}
-
-.blog-recommended-list li + li {
-	margin-top: var(--space-sm);
-}
-
-.blog-recommended-link {
+.blog-recommended-card {
 	display: block;
 	text-decoration: none;
 	transition: opacity var(--dur) var(--ease);
 }
 
-.blog-recommended-link:hover {
+.blog-recommended-card:hover {
 	opacity: 0.85;
 }
 
@@ -590,43 +572,19 @@
 	aspect-ratio: 2 / 1;
 	object-fit: cover;
 	border: 1px solid var(--color-border);
-	margin-bottom: 6px;
+	border-radius: var(--radius-sm);
+	margin-bottom: 8px;
 }
 
 .blog-recommended-title {
 	display: block;
-	font-family: var(--font-mono);
-	font-size: 0.6875rem;
+	font-family: var(--font-body);
+	font-size: 13px;
 	line-height: 1.4;
 	color: var(--color-text-muted);
 	transition: color var(--dur) var(--ease);
 }
 
-.blog-recommended-link:hover .blog-recommended-title {
+.blog-recommended-card:hover .blog-recommended-title {
 	color: var(--color-text-bright);
-}
-
-/* Mobile recommended (after article, hidden on desktop) */
-.blog-recommended-mobile {
-	margin-top: var(--space-xl);
-	padding: var(--space-lg);
-	border: 1px solid var(--color-border);
-	border-radius: 0.5rem;
-	background: var(--color-surface);
-}
-
-.blog-recommended-mobile .blog-recommended-list {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-	gap: var(--space-md);
-}
-
-.blog-recommended-mobile .blog-recommended-title {
-	font-size: 0.8125rem;
-}
-
-@media (min-width: 1025px) {
-	.blog-recommended-mobile {
-		display: none;
-	}
 }
