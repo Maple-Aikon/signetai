@@ -1507,6 +1507,7 @@ interface OpenCodeAssistantMessage {
 	readonly role?: string;
 	readonly cost?: number;
 	readonly tokens?: OpenCodeTokens;
+	readonly structured?: unknown;
 }
 
 interface OpenCodeMessageResponse {
@@ -1515,6 +1516,18 @@ interface OpenCodeMessageResponse {
 }
 
 const OPENCODE_EXTRACTION_FALLBACK = '{"facts":[],"entities":[]}';
+
+/**
+ * Permissive JSON schema for OpenCode's structured output.
+ * Accepts any JSON object — the pipeline's own validation handles
+ * schema enforcement. The value here is forcing the model to use
+ * OpenCode's StructuredOutput tool rather than free-text responding.
+ */
+const OPENCODE_JSON_SCHEMA: Record<string, unknown> = {
+	type: "object",
+	additionalProperties: true,
+};
+
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -1557,6 +1570,7 @@ function parseOpenCodeMessageResponse(value: unknown): OpenCodeMessageResponse |
 		...(typeof infoRecord.role === "string" ? { role: infoRecord.role } : {}),
 		...(typeof infoRecord.cost === "number" ? { cost: infoRecord.cost } : {}),
 		...(parseOpenCodeTokens(infoRecord.tokens) ? { tokens: parseOpenCodeTokens(infoRecord.tokens) } : {}),
+		...(infoRecord.structured !== undefined ? { structured: infoRecord.structured } : {}),
 	};
 
 	return { info, parts };
@@ -1598,6 +1612,7 @@ function buildOpenCodeFallbackResponse(): OpenCodeMessageResponse {
 }
 
 function hasUsableOpenCodeText(data: OpenCodeMessageResponse): boolean {
+	if (data.info.structured !== undefined) return true;
 	for (const part of data.parts) {
 		if (part.type !== "text") continue;
 		if (typeof part.text !== "string") continue;
@@ -1608,10 +1623,15 @@ function hasUsableOpenCodeText(data: OpenCodeMessageResponse): boolean {
 
 /**
  * Extract assistant text from an OpenCode message response.
- * Response shape: `{ info: AssistantMessage, parts: Part[] }`
- * Text lives in parts where `type === "text"`.
+ * Prefers `info.structured` (set when json_schema format is used),
+ * falls back to concatenating `type === "text"` parts.
  */
 function extractOpenCodeText(data: OpenCodeMessageResponse): string {
+	if (data.info.structured !== undefined) {
+		return typeof data.info.structured === "string"
+			? data.info.structured
+			: JSON.stringify(data.info.structured);
+	}
 	const textParts: string[] = [];
 	for (const part of data.parts) {
 		if (part.type === "text" && typeof part.text === "string") {
@@ -1766,11 +1786,22 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		return id;
 	}
 
-	function buildMessageBody(prompt: string): string {
-		return JSON.stringify({
+	let structuredOutputSupported = true;
+
+	function buildMessageBody(prompt: string, structured?: boolean): string {
+		const body: Record<string, unknown> = {
 			parts: [{ type: "text", text: prompt }],
 			model: { providerID, modelID },
-		});
+		};
+		if (structured && structuredOutputSupported) {
+			body.system = "You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+			body.format = {
+				type: "json_schema",
+				schema: OPENCODE_JSON_SCHEMA,
+				retryCount: 1,
+			};
+		}
+		return JSON.stringify(body);
 	}
 
 	async function sendMessage(
@@ -1788,7 +1819,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				fetch(`${cfg.baseUrl}/session/${sid}/message`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: buildMessageBody(prompt),
+					body: buildMessageBody(prompt, true),
 					signal: controller.signal,
 				});
 
@@ -1867,7 +1898,27 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				return pollForAssistantMessage(forSessionId);
 			};
 
-			const res = await postMessage(sid);
+			let res = await postMessage(sid);
+
+			// Older OpenCode versions may not support the format field.
+			// If we get a validation error, disable structured output and retry.
+			if (!res.ok && structuredOutputSupported && (res.status === 400 || res.status === 422)) {
+				const body = await res.text().catch(() => "");
+				if (body.includes("format") || body.includes("schema") || body.includes("validation")) {
+					logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
+						status: res.status,
+					});
+					structuredOutputSupported = false;
+					sessionId = null;
+					const retrySid = await getOrCreateSession();
+					res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: buildMessageBody(prompt, true),
+						signal: controller.signal,
+					});
+				}
+			}
 
 			if (!res.ok) {
 				const body = await res.text().catch(() => "");

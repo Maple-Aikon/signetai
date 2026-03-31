@@ -706,6 +706,13 @@ describe("createOpenCodeProvider", () => {
 
 		expect(capturedBody.parts).toEqual([{ type: "text", text: "my prompt" }]);
 		expect(capturedBody.model).toEqual({ providerID: "google", modelID: "gemini-2.5-flash" });
+		// Structured output fields are included by default
+		expect(capturedBody.format).toEqual({
+			type: "json_schema",
+			schema: { type: "object", additionalProperties: true },
+			retryCount: 1,
+		});
+		expect(typeof capturedBody.system).toBe("string");
 	});
 
 	it("generate() joins multiple text parts", async () => {
@@ -865,6 +872,103 @@ describe("createOpenCodeProvider", () => {
 		expect(seenUrls).toContain("http://172.17.0.1:11434/api/generate");
 		const fallbackOptions = fallbackBody ? getObjectField(fallbackBody, "options") : undefined;
 		expect(fallbackOptions ? getNumberField(fallbackOptions, "num_ctx") : undefined).toBe(2048);
+	});
+
+	it("generate() prefers info.structured over text parts", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_structured",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return Response.json({
+				info: {
+					role: "assistant",
+					id: "msg_s",
+					sessionID: "ses_structured",
+					cost: 0,
+					tokens: { input: 10, output: 5 },
+					structured: { facts: [{ content: "from structured", type: "fact", confidence: 0.9 }], entities: [] },
+				},
+				parts: [
+					{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" },
+				],
+			});
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test");
+		const parsed = JSON.parse(result);
+		expect(parsed.facts[0].content).toBe("from structured");
+	});
+
+	it("generate() returns info.structured as string when it is a string", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_str",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return Response.json({
+				info: {
+					role: "assistant",
+					id: "msg_str",
+					sessionID: "ses_str",
+					cost: 0,
+					tokens: { input: 0, output: 0 },
+					structured: '{"description":"test skill","triggers":["run tests"],"tags":["testing"]}',
+				},
+				parts: [],
+			});
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test");
+		expect(JSON.parse(result).description).toBe("test skill");
+	});
+
+	it("generate() disables structured output on 400 and retries without format", async () => {
+		let attempts = 0;
+		let lastBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_compat_${attempts}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			attempts++;
+			lastBody = JSON.parse(init?.body as string);
+			if (attempts === 1) {
+				return new Response('{"error":"validation failed for format field"}', { status: 400 });
+			}
+			return Response.json(openCodeResponse("fallback works"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test");
+		expect(result).toBe("fallback works");
+		// After disabling, subsequent calls should not include format
+		expect(lastBody.format).toBeUndefined();
+	});
+
+	it("generate() parses github-copilot provider/model format", () => {
+		const provider = createOpenCodeProvider({ model: "github-copilot/gpt-4o" });
+		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
 	});
 });
 
