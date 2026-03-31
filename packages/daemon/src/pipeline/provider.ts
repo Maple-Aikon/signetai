@@ -1901,15 +1901,19 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 			// Older OpenCode versions may not support the format field.
 			// 422 is the Hono/Zod schema validation rejection for unknown fields.
-			// Only trigger on 422 to avoid false-positives from unrelated 400 errors
-			// (e.g. missing model, bad parts) that contain common words like "format".
-			if (!res.ok && structuredOutputSupported && res.status === 422) {
+			// Check status/body before reading structuredOutputSupported so that
+			// concurrent callers both hitting 422 both retry correctly — if A sets
+			// structuredOutputSupported=false first, B must still retry rather than
+			// fall through to the throw path.
+			if (!res.ok && res.status === 422) {
 				consumedBody = await res.text().catch(() => "");
 				if (consumedBody.includes('"format"')) {
-					logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
-						status: res.status,
-					});
-					structuredOutputSupported = false;
+					if (structuredOutputSupported) {
+						logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
+							status: res.status,
+						});
+						structuredOutputSupported = false;
+					}
 					sessionId = null;
 					consumedBody = null;
 					const retrySid = await getOrCreateSession();
