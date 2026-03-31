@@ -1900,10 +1900,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			let consumedBody: string | null = null;
 
 			// Older OpenCode versions may not support the format field.
-			// If we get a validation error, disable structured output and retry.
-			if (!res.ok && structuredOutputSupported && (res.status === 400 || res.status === 422)) {
+			// 422 is the Hono/Zod schema validation rejection for unknown fields.
+			// Only trigger on 422 to avoid false-positives from unrelated 400 errors
+			// (e.g. missing model, bad parts) that contain common words like "format".
+			if (!res.ok && structuredOutputSupported && res.status === 422) {
 				consumedBody = await res.text().catch(() => "");
-				if (consumedBody.includes("format") || consumedBody.includes("schema") || consumedBody.includes("validation")) {
+				if (consumedBody.includes('"format"')) {
 					logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
 						status: res.status,
 					});

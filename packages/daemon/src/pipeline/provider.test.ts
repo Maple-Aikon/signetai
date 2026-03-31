@@ -937,9 +937,9 @@ describe("createOpenCodeProvider", () => {
 		expect(JSON.parse(result).description).toBe("test skill");
 	});
 
-	it("generate() disables structured output on 400 and retries without format", async () => {
+	it("generate() disables structured output on 422 and retries without format", async () => {
 		let attempts = 0;
-		let lastBody: Record<string, unknown> = {};
+		const bodies: Record<string, unknown>[] = [];
 		mockFetch(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
@@ -952,18 +952,50 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			attempts++;
-			lastBody = JSON.parse(init?.body as string);
+			bodies.push(JSON.parse(init?.body as string));
 			if (attempts === 1) {
-				return new Response('{"error":"validation failed for format field"}', { status: 400 });
+				// 422 with "format" JSON key — signals structured output unsupported
+				return new Response('{"issues":[{"path":["format"],"message":"Unrecognized key"}]}', { status: 422 });
 			}
 			return Response.json(openCodeResponse("fallback works"));
 		});
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
-		const result = await provider.generate("test");
-		expect(result).toBe("fallback works");
-		// After disabling, subsequent calls should not include format
-		expect(lastBody.format).toBeUndefined();
+		const first = await provider.generate("test");
+		expect(first).toBe("fallback works");
+		// The retry within the same call should omit format
+		expect(bodies[1]?.format).toBeUndefined();
+
+		// A subsequent call should also omit format (structured output stays disabled)
+		await provider.generate("second call");
+		expect(bodies[2]?.format).toBeUndefined();
+	});
+
+	it("generate() does not disable structured output on an unrelated 400", async () => {
+		let attempts = 0;
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_unrelated_${attempts}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			attempts++;
+			if (attempts === 1) {
+				// 400 with "format" word but not a structured-output rejection
+				return new Response('{"error":"Invalid request format: parts array is missing"}', { status: 400 });
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		// Should throw, not silently disable structured output and retry
+		await expect(provider.generate("test")).rejects.toThrow(/OpenCode HTTP 400/);
+		expect(attempts).toBe(1);
 	});
 
 	it("generate() preserves error body on non-format 400", async () => {
