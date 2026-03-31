@@ -7268,9 +7268,11 @@ app.post("/api/update/run", async (c) => {
 
 app.get("/api/tasks/:id/stream", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const taskExists = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ?").get(taskId),
+		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
 	);
 
 	if (!taskExists) {
@@ -7366,6 +7368,9 @@ app.get("/api/tasks/:id/stream", (c) => {
 
 // List all tasks (joined with last run status)
 app.get("/api/tasks", (c) => {
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+
 	const tasks = getDbAccessor().withReadDb((db) =>
 		db
 			.prepare(
@@ -7378,9 +7383,10 @@ app.get("/api/tasks", (c) => {
 				     WHERE task_id = t.id
 				     ORDER BY started_at DESC LIMIT 1
 				 )
+				 WHERE t.agent_id = ?
 				 ORDER BY t.created_at DESC`,
 			)
-			.all(),
+			.all(scoped.agentId),
 	);
 
 	return c.json({ tasks, presets: CRON_PRESETS });
@@ -7388,6 +7394,9 @@ app.get("/api/tasks", (c) => {
 
 // Create a new task
 app.post("/api/tasks", async (c) => {
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+
 	const body = await c.req.json();
 	const { name, prompt, cronExpression, harness, workingDirectory, skillName, skillMode } = body;
 
@@ -7428,11 +7437,12 @@ app.post("/api/tasks", async (c) => {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO scheduled_tasks
-			 (id, name, prompt, cron_expression, harness, working_directory,
+			 (id, agent_id, name, prompt, cron_expression, harness, working_directory,
 			  enabled, next_run_at, skill_name, skill_mode, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
 		).run(
 			id,
+			scoped.agentId,
 			name,
 			prompt,
 			cronExpression,
@@ -7453,8 +7463,12 @@ app.post("/api/tasks", async (c) => {
 // Get a single task + recent runs
 app.get("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
-	const task = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId));
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
+	);
 
 	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
@@ -7477,10 +7491,12 @@ app.get("/api/tasks/:id", (c) => {
 // Update a task
 app.patch("/api/tasks/:id", async (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 	const body = await c.req.json();
 
 	const existing = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
 	) as Record<string, unknown> | undefined;
 
 	if (!existing) {
@@ -7540,9 +7556,11 @@ app.patch("/api/tasks/:id", async (c) => {
 // Delete a task (cascade deletes runs)
 app.delete("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const result = getDbAccessor().withWriteTx((db) => {
-		const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
+		const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ? AND agent_id = ?").run(taskId, scoped.agentId);
 		return info;
 	});
 
@@ -7552,11 +7570,11 @@ app.delete("/api/tasks/:id", (c) => {
 // Trigger an immediate manual run
 app.post("/api/tasks/:id/run", async (c) => {
 	const taskId = c.req.param("id");
-	const scoped = resolveScopedAgentId(c, undefined);
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
 	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const task = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
 	) as Record<string, unknown> | undefined;
 
 	if (!task) {
@@ -7602,6 +7620,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
+	const taskAgentId = typeof task.agent_id === "string" && task.agent_id.length > 0 ? task.agent_id : scoped.agentId;
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
@@ -7661,7 +7680,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 					void import("./skill-invocations.js").then((skills) => {
 						skills.recordSkillInvocation({
 							skillName: taskSkillName,
-							agentId: scoped.agentId,
+							agentId: taskAgentId,
 							source: "api",
 							latencyMs: Date.now() - startedMs,
 							success: status === "completed",
@@ -7678,8 +7697,17 @@ app.post("/api/tasks/:id/run", async (c) => {
 // Get paginated run history for a task
 app.get("/api/tasks/:id/runs", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 	const limit = Number(c.req.query("limit") ?? 20);
 	const offset = Number(c.req.query("offset") ?? 0);
+
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
+	);
+	if (!task) {
+		return c.json({ error: "Task not found" }, 404);
+	}
 
 	const runs = getDbAccessor().withReadDb((db) =>
 		db

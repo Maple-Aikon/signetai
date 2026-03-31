@@ -44,6 +44,7 @@ describe("executeTask", () => {
 			accessor,
 			{
 				id: "task-1",
+				agent_id: "default",
 				name: "task-task-1",
 				prompt: "test prompt",
 				cron_expression: "*/15 * * * *",
@@ -89,7 +90,7 @@ describe("executeTask", () => {
 	});
 
 	it("records skill usage when a task runs with a skill", async () => {
-		const used: Array<{ skillName: string; source: string; success: boolean }> = [];
+		const used: Array<{ skillName: string; agentId: string; source: string; success: boolean }> = [];
 		const now = "2026-03-06T15:55:00.000Z";
 		db.prepare(
 			`INSERT INTO scheduled_tasks
@@ -112,6 +113,7 @@ describe("executeTask", () => {
 			accessor,
 			{
 				id: "task-2",
+				agent_id: "agent-a",
 				name: "task-task-2",
 				prompt: "test prompt",
 				cron_expression: "*/15 * * * *",
@@ -141,6 +143,7 @@ describe("executeTask", () => {
 				recordSkillInvocation(input) {
 					used.push({
 						skillName: input.skillName,
+						agentId: input.agentId,
 						source: input.source,
 						success: input.success,
 					});
@@ -148,6 +151,6 @@ describe("executeTask", () => {
 			},
 		);
 
-		expect(used).toEqual([{ skillName: "web-search", source: "scheduler", success: true }]);
+		expect(used).toEqual([{ skillName: "web-search", agentId: "agent-a", source: "scheduler", success: true }]);
 	});
 });

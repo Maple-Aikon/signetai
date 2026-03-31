@@ -2907,7 +2907,8 @@ Scheduled Tasks
 
 ### GET /api/tasks
 
-List all scheduled tasks with their last run status.
+List scheduled tasks for the scoped agent with their last run status.
+Supports optional `agent_id` for explicitly scoped callers.
 
 **Response**
 
@@ -2915,6 +2916,7 @@ List all scheduled tasks with their last run status.
 {
   "tasks": [{
     "id": "uuid",
+    "agent_id": "default",
     "name": "Review open PRs",
     "prompt": "Review all open pull requests",
     "cron_expression": "0 9 * * *",
@@ -2937,7 +2939,8 @@ List all scheduled tasks with their last run status.
 
 ### POST /api/tasks
 
-Create a new scheduled task.
+Create a new scheduled task for the scoped agent. Supports optional
+`agent_id` for explicitly scoped callers.
 
 **Request body**
 
@@ -2959,30 +2962,36 @@ Create a new scheduled task.
 
 ### GET /api/tasks/:id
 
-Get a single task with its 20 most recent runs.
+Get a single task with its 20 most recent runs. Supports optional
+`agent_id` for explicitly scoped callers.
 
 ### PATCH /api/tasks/:id
 
 Update a task's name, prompt, cron, harness, working directory, or enabled state.
+Supports optional `agent_id` for explicitly scoped callers.
 
 ### DELETE /api/tasks/:id
 
-Delete a task and all its run history (cascade).
+Delete a task and all its run history (cascade). Supports optional
+`agent_id` for explicitly scoped callers.
 
 ### POST /api/tasks/:id/run
 
 Trigger an immediate manual run. Returns 202 with `runId`. Returns 409 if
-the task already has a running execution.
+the task already has a running execution. Supports optional `agent_id`
+for explicitly scoped callers. Skill usage analytics are attributed to
+the task owner's `agent_id`, not the caller.
 
 ### GET /api/tasks/:id/runs
 
-Paginated run history. Supports `limit` and `offset` query parameters.
+Paginated run history. Supports `limit`, `offset`, and optional `agent_id`
+query parameters.
 
 ### GET /api/tasks/:id/stream
 
 Server-Sent Events stream of live task output. Replays buffered output on
 connect, then streams new events in real time. Sends keepalive comments
-every 15 seconds.
+every 15 seconds. Supports optional `agent_id` for explicitly scoped callers.
 
 **Event types**
 

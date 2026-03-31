@@ -37,11 +37,12 @@ describe("recordSkillInvocation", () => {
 		rmSync(path, { force: true });
 	});
 
-	it("resolves the agent from installed skill metadata when one owner exists", () => {
+	it("records usage under the provided agent and updates matching skill metadata", () => {
 		seedSkill(db, { id: "skill-a", name: "web-search", agentId: "agent-a" });
 
 		recordSkillInvocation({
 			skillName: "web-search",
+			agentId: "agent-a",
 			source: "scheduler",
 			latencyMs: 123,
 			success: true,
@@ -62,23 +63,21 @@ describe("recordSkillInvocation", () => {
 		expect(meta?.last_used_at).not.toBeNull();
 	});
 
-	it("skips recording when no installed skill owner exists", () => {
-		seedSkill(db, { id: "skill-a", name: "web-search", agentId: "agent-a" });
-
+	it("keeps historical rows even when skill metadata is missing", () => {
 		recordSkillInvocation({
 			skillName: "browser-use",
+			agentId: "agent-b",
 			source: "scheduler",
 			latencyMs: 50,
 			success: true,
 		});
 
-		const total = db.prepare("SELECT COUNT(*) AS count FROM skill_invocations").get() as { count: number };
-		expect(total.count).toBe(0);
-
-		const counts = db.prepare("SELECT agent_id, use_count FROM skill_meta ORDER BY agent_id").all() as ReadonlyArray<{
-			agent_id: string;
-			use_count: number;
-		}>;
-		expect(counts).toEqual([{ agent_id: "agent-a", use_count: 0 }]);
+		const row = db.prepare("SELECT agent_id, skill_name FROM skill_invocations").get() as
+			| { agent_id: string; skill_name: string }
+			| undefined;
+		expect(row).toEqual({
+			agent_id: "agent-b",
+			skill_name: "browser-use",
+		});
 	});
 });

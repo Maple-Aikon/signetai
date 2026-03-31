@@ -39,6 +39,7 @@ function isTaskHarness(value: string): value is TaskHarness {
 
 export interface DueTaskRow {
 	readonly id: string;
+	readonly agent_id: string;
 	readonly name: string;
 	readonly prompt: string;
 	readonly cron_expression: string;
@@ -53,7 +54,7 @@ export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): Reado
 
 	return db
 		.prepare(
-			`SELECT t.id, t.name, t.prompt, t.cron_expression,
+			`SELECT t.id, t.agent_id, t.name, t.prompt, t.cron_expression,
 			        t.harness, t.working_directory,
 			        t.skill_name, t.skill_mode
 			 FROM scheduled_tasks t
@@ -324,6 +325,7 @@ export async function executeTask(
 	if (task.skill_name) {
 		deps.recordSkillInvocation({
 			skillName: task.skill_name,
+			agentId: task.agent_id,
 			source: "scheduler",
 			latencyMs: Date.now() - startedMs,
 			success: status === "completed",

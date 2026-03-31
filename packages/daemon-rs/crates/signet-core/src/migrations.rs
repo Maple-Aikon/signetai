@@ -44,7 +44,7 @@ fn add_column_if_missing(conn: &Connection, table: &str, column: &str, typedef: 
     }
 }
 
-/// All 30 migrations in order. SQL is idempotent (IF NOT EXISTS / IF MISSING).
+/// All schema migrations in order. SQL is idempotent (IF NOT EXISTS / IF MISSING).
 static MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -236,9 +236,14 @@ static MIGRATIONS: &[Migration] = &[
         name: "skill-invocations",
         sql: include_str!("sql/038-skill-invocations.sql"),
     },
+    Migration {
+        version: 39,
+        name: "task-agent-scope",
+        sql: include_str!("sql/039-task-agent-scope.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 38;
+pub const LATEST_SCHEMA_VERSION: u32 = 39;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -349,6 +354,15 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 /// Execute a single migration's SQL. Migrations that need programmatic
 /// logic (ADD COLUMN IF MISSING) use the helper.
 fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> {
+    if m.version == 39 {
+        add_column_if_missing(
+            conn,
+            "scheduled_tasks",
+            "agent_id",
+            "TEXT NOT NULL DEFAULT 'default'",
+        );
+    }
+
     // Most migrations are pure SQL with IF NOT EXISTS guards
     conn.execute_batch(m.sql)?;
 

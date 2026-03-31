@@ -168,6 +168,14 @@ describe("migration framework", () => {
 		expect(fts.length).toBeGreaterThanOrEqual(1);
 	});
 
+	test("scheduled_tasks has agent_id after migration 054", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(scheduled_tasks)").all() as Array<{ name: string }>;
+		expect(cols.map((col) => col.name)).toContain("agent_id");
+	});
+
 	test("schema_migrations_audit records are created", () => {
 		db = createFreshDb();
 		runMigrations(db);
