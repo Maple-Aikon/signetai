@@ -13,28 +13,12 @@ pub struct NormalizedMemoryContent {
 
 #[napi]
 pub fn normalize_content_for_storage(content: String) -> String {
-    let trimmed = content.trim();
-    let mut result = String::with_capacity(trimmed.len());
-    let mut prev_whitespace = false;
-
-    for ch in trimmed.chars() {
-        if ch.is_whitespace() {
-            if !prev_whitespace {
-                result.push(' ');
-            }
-            prev_whitespace = true;
-        } else {
-            result.push(ch);
-            prev_whitespace = false;
-        }
-    }
-
-    result
+    content.replace("\r\n", "\n").replace('\r', "\n").trim().to_string()
 }
 
 #[napi]
 pub fn derive_normalized_content(storage_content: String) -> String {
-    let lowered = storage_content.to_lowercase();
+    let lowered = collapse_whitespace(&storage_content.to_lowercase());
     // Parity: TS uses /[.,!?;:]+$/ regex. trim_end_matches char-by-char
     // is equivalent here since input is already trimmed of whitespace.
     let trimmed = lowered.trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':'));
@@ -61,5 +45,59 @@ pub fn normalize_and_hash_content(content: String) -> NormalizedMemoryContent {
         normalized_content,
         hash_basis,
         content_hash,
+    }
+}
+
+fn collapse_whitespace(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_whitespace = false;
+
+    for ch in input.chars() {
+        if ch.is_whitespace() {
+            if !prev_whitespace {
+                out.push(' ');
+            }
+            prev_whitespace = true;
+        } else {
+            out.push(ch);
+            prev_whitespace = false;
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_normalized_content, normalize_and_hash_content, normalize_content_for_storage};
+
+    #[test]
+    fn storage_preserves_multiline_markdown() {
+        let input = "  ## Session Logs\r\n\r\n| id | kind |\r\n|----|------|\r\n| a | summary |\r\n";
+        let result = normalize_content_for_storage(input.to_string());
+        assert_eq!(
+            result,
+            "## Session Logs\n\n| id | kind |\n|----|------|\n| a | summary |"
+        );
+    }
+
+    #[test]
+    fn semantic_normalization_collapses_whitespace() {
+        let result = derive_normalized_content("## Session Logs\n\n| a | b |".to_string());
+        assert_eq!(result, "## session logs | a | b |");
+    }
+
+    #[test]
+    fn formatting_only_differences_keep_same_hash() {
+        let multi = normalize_and_hash_content(
+            "## Session Logs\n\n| id | kind |\n|----|------|\n| a | summary |".to_string(),
+        );
+        let flat = normalize_and_hash_content(
+            "## Session Logs | id | kind | |----|------| | a | summary |".to_string(),
+        );
+
+        assert!(multi.storage_content.contains('\n'));
+        assert_eq!(multi.normalized_content, flat.normalized_content);
+        assert_eq!(multi.content_hash, flat.content_hash);
     }
 }

@@ -140,6 +140,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `openclaw-workspace-protection-plan`, `openclaw-workspace-protection` | RESEARCH-OPENCLAW-WORKSPACE-PROTECTION | How should Signet prevent data loss when OpenClaw uninstall deletes a workspace that points at `.agents`? |
 | `dogfood-hardening-2026-03-29` | RESEARCH-DOGFOOD-HARDENING-2026-03-29 | Which runtime, MCP, and knowledge-surface regressions from the March 29, 2026 dogfood run need durable hardening? |
 | `marketplace-official-skills` | RESEARCH-MARKETPLACE-OFFICIAL-SKILLS | How should the dashboard marketplace spotlight Signet official skills without hiding the broader community catalog? |
+| `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
 
 ### Research Adoption Ledger (high-impact)
 
@@ -722,6 +723,7 @@ Legend:
 | `api-contract-snapshots` | planning | `docs/specs/planning/api-contract-snapshots.md` | `signet-runtime` | - | Stub: response contract snapshot guards |
 | `developer-doctor-command` | planning | `docs/specs/planning/developer-doctor-command.md` | `signet-runtime` | - | Stub: one-command local health checks |
 | `macos-sqlite-runtime-discovery` | planning | `docs/specs/planning/macos-sqlite-runtime-discovery.md` | `signet-runtime` | - | Incident-driven stub for issue #336: broaden macOS SQLite dylib discovery and surface explicit degraded-mode guidance |
+| `markdown-embedding-normalization-hardening` | planning | `docs/specs/planning/markdown-embedding-normalization-hardening.md` | `memory-pipeline-v2` | - | Incident-driven stub for issue #418: preserve multiline markdown for embeddings and bound poison-pill retry spam |
 | `desktop-packaging-distribution` | approved | `docs/specs/approved/desktop-packaging-distribution.md` | `signet-runtime` | - | Desktop packaging contract for macOS/Windows/Ubuntu/Arch, bundled daemon fallback path, signing-mode resolution (official/self-signed), and Arch package validation |
 | `golden-path-docs` | planning | `docs/specs/planning/golden-path-docs.md` | `developer-doctor-command` | - | Stub: short contributor golden paths |
 | `code-ownership-sla` | planning | `docs/specs/planning/code-ownership-sla.md` | `multi-agent-support` | - | Stub: ownership map and review SLA |

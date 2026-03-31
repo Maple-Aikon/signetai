@@ -18,14 +18,16 @@ try {
 }
 
 const TRAILING_PUNCTUATION = /[.,!?;:]+$/;
+const CRLF = /\r\n?/g;
+const COLLAPSE_WHITESPACE = /\s+/g;
 
 function tsNormalizeContentForStorage(content: string): string {
-	return content.trim().replace(/\s+/g, " ");
+	return content.replace(CRLF, "\n").trim();
 }
 
 function tsDeriveNormalizedContent(storageContent: string): string {
 	const lowered = storageContent.toLowerCase();
-	return lowered.replace(TRAILING_PUNCTUATION, "").trim();
+	return lowered.replace(COLLAPSE_WHITESPACE, " ").replace(TRAILING_PUNCTUATION, "").trim();
 }
 
 function tsNormalizeAndHashContent(content: string): NormalizedMemoryContent {

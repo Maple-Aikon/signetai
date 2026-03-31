@@ -975,6 +975,21 @@ specs:
       - "Regression tests lock the macOS SQLite discovery order and degraded-mode messaging"
     decision: null
 
+  - id: markdown-embedding-normalization-hardening
+    status: planning
+    path: docs/specs/planning/markdown-embedding-normalization-hardening.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION.md
+    success_criteria:
+      - "Stored memory content preserves multiline markdown structure needed for embedding providers and downstream rendering"
+      - "Semantic dedupe/hash normalization remains whitespace-insensitive so newline-preserving storage does not create duplicate memories"
+      - "Persistent embedding failures are retried with bounded backoff and include enough row context to identify the poison-pill payload"
+    decision: null
+
   - id: desktop-packaging-distribution
     status: approved
     path: docs/specs/approved/desktop-packaging-distribution.md

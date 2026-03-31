@@ -1,8 +1,8 @@
 //! Content normalization and hashing for memory deduplication.
 //!
 //! Mirrors the TS `normalizeAndHashContent` logic:
-//! 1. Storage normalization: trim + collapse whitespace
-//! 2. Semantic normalization: lowercase + strip trailing punctuation
+//! 1. Storage normalization: normalize line endings + trim outer whitespace
+//! 2. Semantic normalization: lowercase + collapse whitespace + strip trailing punctuation
 //! 3. Hash basis: semantic normalized, or storage lowercased if empty
 //! 4. SHA-256 hex digest of the hash basis
 
@@ -21,11 +21,11 @@ pub struct NormalizedContent {
 
 /// Normalize content and compute its hash.
 pub fn normalize_and_hash(content: &str) -> NormalizedContent {
-    // Step 1: Storage normalization — trim + collapse whitespace
-    let storage = collapse_whitespace(content.trim());
+    // Step 1: Storage normalization — preserve line structure
+    let storage = normalize_storage(content);
 
-    // Step 2: Semantic normalization — lowercase + strip trailing punctuation
-    let lowered = storage.to_lowercase();
+    // Step 2: Semantic normalization — lowercase + collapse whitespace
+    let lowered = collapse_whitespace(&storage.to_lowercase());
     let normalized = strip_trailing_punct(&lowered).trim().to_string();
 
     // Step 3: Hash basis
@@ -45,6 +45,10 @@ pub fn normalize_and_hash(content: &str) -> NormalizedContent {
         normalized,
         hash,
     }
+}
+
+fn normalize_storage(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n").trim().to_string()
 }
 
 fn collapse_whitespace(s: &str) -> String {
@@ -75,7 +79,7 @@ mod tests {
     #[test]
     fn basic_normalization() {
         let r = normalize_and_hash("  Hello   World!  ");
-        assert_eq!(r.storage, "Hello World!");
+        assert_eq!(r.storage, "Hello   World!");
         assert_eq!(r.normalized, "hello world");
         assert!(!r.hash.is_empty());
         assert_eq!(r.hash.len(), 64); // SHA-256 hex
@@ -109,5 +113,18 @@ mod tests {
         assert!(r.normalized.is_empty());
         // Hash is based on lowered storage
         assert!(!r.hash.is_empty());
+    }
+
+    #[test]
+    fn storage_preserves_multiline_markdown() {
+        let r = normalize_and_hash("  ## Session Logs\r\n\r\n| id | kind |\r\n|----|------|\r\n| a | summary |\r\n");
+        assert_eq!(
+            r.storage,
+            "## Session Logs\n\n| id | kind |\n|----|------|\n| a | summary |"
+        );
+        assert_eq!(
+            r.normalized,
+            "## session logs | id | kind | |----|------| | a | summary |"
+        );
     }
 }

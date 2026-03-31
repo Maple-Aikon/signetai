@@ -44,6 +44,93 @@ interface StaleRow {
 	readonly currentModel: string | null;
 }
 
+interface FailureState {
+	readonly count: number;
+	readonly retryAt: number;
+}
+
+type FailureMap = Map<string, FailureState>;
+
+interface CycleSuccess {
+	readonly row: StaleRow;
+	readonly vector: readonly number[];
+	readonly contentHash: string;
+}
+
+interface CycleResult {
+	readonly queueDepth: number;
+	readonly failed: number;
+	readonly results: readonly CycleSuccess[];
+}
+
+export function computeEmbeddingRetryBackoffMs(count: number, pollMs: number): number {
+	if (count <= 1) return Math.max(pollMs * 5, 60_000);
+	if (count === 2) return Math.max(pollMs * 25, 5 * 60_000);
+	if (count === 3) return Math.max(pollMs * 150, 30 * 60_000);
+	return Math.max(pollMs * 300, 60 * 60_000);
+}
+
+function failureKey(row: StaleRow, model: string): string {
+	return `${row.id}:${row.contentHash}:${model}`;
+}
+
+function clearRowFailures(failures: FailureMap, row: StaleRow, model: string): void {
+	const prefix = `${row.id}:`;
+	for (const key of failures.keys()) {
+		if (!key.startsWith(prefix)) continue;
+		if (!key.endsWith(`:${model}`)) continue;
+		failures.delete(key);
+	}
+}
+
+export async function processEmbeddingCycle(
+	rows: readonly StaleRow[],
+	failures: FailureMap,
+	embeddingCfg: EmbeddingConfig,
+	pollMs: number,
+	fetchEmbeddingFn: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	now: number = Date.now(),
+): Promise<CycleResult> {
+	const readyRows = rows.filter((row) => {
+		const state = failures.get(failureKey(row, embeddingCfg.model));
+		if (!state) return true;
+		return state.retryAt <= now;
+	});
+
+	const results: CycleSuccess[] = [];
+	let failed = 0;
+
+	for (const row of readyRows) {
+		const key = failureKey(row, embeddingCfg.model);
+		const vec = await fetchEmbeddingFn(row.content, embeddingCfg);
+		if (vec !== null) {
+			clearRowFailures(failures, row, embeddingCfg.model);
+			results.push({ row, vector: vec, contentHash: row.contentHash });
+			continue;
+		}
+
+		failed++;
+		const next = (failures.get(key)?.count ?? 0) + 1;
+		const wait = computeEmbeddingRetryBackoffMs(next, pollMs);
+		failures.set(key, {
+			count: next,
+			retryAt: now + wait,
+		});
+		logger.warn("embedding-tracker", "Embedding refresh failed, suppressing retries", {
+			memoryId: row.id,
+			contentHash: row.contentHash,
+			attempt: next,
+			retryAfterMs: wait,
+		});
+	}
+
+	return {
+		queueDepth: readyRows.length,
+		failed,
+		results,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -64,6 +151,7 @@ export function startEmbeddingTracker(
 	let skippedCycles = 0;
 	let lastCycleAt: string | null = null;
 	let lastQueueDepth = 0;
+	const failures = new Map<string, FailureState>();
 
 	async function tick(): Promise<void> {
 		if (!running) return;
@@ -80,34 +168,18 @@ export function startEmbeddingTracker(
 			const staleRows = accessor.withReadDb((db) => {
 				return listStaleEmbeddingRows(db, embeddingCfg.model, trackerCfg.batchSize) as StaleRow[];
 			});
+			const cycle = await processEmbeddingCycle(staleRows, failures, embeddingCfg, trackerCfg.pollMs, fetchEmbeddingFn);
 
-			lastQueueDepth = staleRows.length;
+			lastQueueDepth = cycle.queueDepth;
 			lastCycleAt = new Date().toISOString();
 
-			if (staleRows.length === 0) return;
+			failed += cycle.failed;
 
-			// 3. Fetch embeddings sequentially (outside transaction, 30s timeout each)
-			const results: Array<{
-				readonly row: StaleRow;
-				readonly vector: readonly number[];
-				readonly contentHash: string;
-			}> = [];
-
-			for (const row of staleRows) {
-				if (!running) break;
-				const vec = await fetchEmbeddingFn(row.content, embeddingCfg);
-				if (vec !== null) {
-					results.push({ row, vector: vec, contentHash: row.contentHash });
-				} else {
-					failed++;
-				}
-			}
-
-			if (results.length === 0) return;
+			if (cycle.results.length === 0) return;
 
 			// 4. Batch write in a single write transaction
 			accessor.withWriteTx((db) => {
-				for (const { row, vector, contentHash } of results) {
+				for (const { row, vector, contentHash } of cycle.results) {
 					// Delete stale embeddings for this source
 					syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
 
@@ -140,7 +212,7 @@ export function startEmbeddingTracker(
 				}
 			});
 
-			logger.debug("embedding-tracker", `Refreshed ${results.length} embeddings`);
+			logger.debug("embedding-tracker", `Refreshed ${cycle.results.length} embeddings`);
 		} catch (err) {
 			logger.warn("embedding-tracker", "Cycle error", err instanceof Error ? err : new Error(String(err)));
 		}
