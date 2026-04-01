@@ -1910,9 +1910,25 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			// fall through to the throw path.
 			if (!res.ok && res.status === 422) {
 				consumedBody = await res.text().catch(() => "");
-				// Match Hono/Zod's path array notation: {"path":["format"],...}
-				// Avoids triggering on error messages that contain "format" as a value.
-				if (consumedBody.includes('["format"]')) {
+				// Parse the Hono/Zod rejection body to check whether "format" is the
+				// offending field. Unambiguous vs. substring matching and immune to
+				// future body shape changes that happen to contain "format" elsewhere.
+				const isFormatRejection = (() => {
+					try {
+						const parsed = JSON.parse(consumedBody) as Record<string, unknown>;
+						const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+						return issues.some(
+							(i): boolean =>
+								typeof i === "object" &&
+								i !== null &&
+								Array.isArray((i as Record<string, unknown>).path) &&
+								((i as Record<string, unknown>).path as unknown[])[0] === "format",
+						);
+					} catch {
+						return false;
+					}
+				})();
+				if (isFormatRejection) {
 					if (structuredOutputSupported) {
 						logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
 							status: res.status,
