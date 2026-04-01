@@ -510,7 +510,7 @@ pub async fn session_start(
             Json(serde_json::json!({
                 "identity": { "name": state.config.manifest.agent.name },
                 "memories": [],
-                "inject": format!("{}\n[memory active | /remember | /recall]\nCurrent date: {}", build_signet_system_prompt(), now.format("%Y-%m-%d %H:%M")),
+                "inject": format!("{}[memory active | /remember | /recall]\nCurrent date: {}", build_signet_system_prompt(), now.format("%Y-%m-%d %H:%M")),
                 "deduped": true,
             })),
         )
@@ -551,7 +551,6 @@ pub async fn session_start(
             let now = chrono::Utc::now();
             let mut inject = String::new();
             inject.push_str(build_signet_system_prompt());
-            inject.push('\n');
             inject.push_str("[memory active | /remember | /recall]\n");
             inject.push_str(&format!("Current date: {}\n", now.format("%Y-%m-%d %H:%M")));
 
