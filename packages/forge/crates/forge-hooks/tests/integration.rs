@@ -336,7 +336,7 @@ mod hook_input_constructors {
     fn session_start_has_session_id() {
         let input = HookInput::session_start("sess-abc", Some("/home"));
         assert_eq!(input.event, HookEvent::SessionStart);
-        assert_eq!(input.payload["sessionId"], "sess-abc");
+        assert_eq!(input.payload["sessionKey"], "sess-abc");
         assert_eq!(input.payload["cwd"], "/home");
     }
 

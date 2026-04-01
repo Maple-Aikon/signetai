@@ -68,11 +68,12 @@ impl HookExecutor for CommandExecutor {
             return HookOutput::allow();
         }
 
-        // Read stdout/stderr handles before waiting (avoids ownership issue with kill)
+        // Take stdout/stderr handles — child stays outside the async block so
+        // we can call child.kill() if the timeout fires.
         let stdout_handle = child.stdout.take();
         let stderr_handle = child.stderr.take();
 
-        let read_output = async {
+        let read_streams = async move {
             let stdout = match stdout_handle {
                 Some(mut out) => {
                     let mut buf = Vec::new();
@@ -89,15 +90,13 @@ impl HookExecutor for CommandExecutor {
                 }
                 None => Vec::new(),
             };
-            let status = child.wait().await?;
-            Ok::<_, std::io::Error>((status, stdout, stderr))
+            Ok::<_, std::io::Error>((stdout, stderr))
         };
 
-        // Wait with timeout
-        let result = tokio::time::timeout(self.timeout, read_output).await;
-
-        match result {
+        match tokio::time::timeout(self.timeout, read_streams).await {
             Err(_) => {
+                // Kill the child to avoid zombie processes
+                let _ = child.kill().await;
                 warn!(
                     "Command hook timed out after {:?}: {}",
                     self.timeout, self.command
@@ -107,10 +106,12 @@ impl HookExecutor for CommandExecutor {
                     self.timeout.as_secs()
                 ))
             }
-            Ok(Err(e)) => {
-                HookOutput::error(format!("Command execution failed: {e}"))
-            }
-            Ok(Ok((status, stdout, stderr))) => {
+            Ok(Err(e)) => HookOutput::error(format!("Command execution failed: {e}")),
+            Ok(Ok((stdout, stderr))) => {
+                let status = match child.wait().await {
+                    Ok(s) => s,
+                    Err(e) => return HookOutput::error(format!("Failed to wait for command: {e}")),
+                };
                 let code = status.code().unwrap_or(-1);
                 let stdout = String::from_utf8_lossy(&stdout).to_string();
                 let stderr = String::from_utf8_lossy(&stderr).to_string();

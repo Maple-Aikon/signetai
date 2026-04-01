@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use forge_core::hook::{
-    HookConfig, HookEntry, HookEvent, HookInput, HookOutput, HookType, Matcher,
+    AggregatedResult, HookConfig, HookDecision, HookEntry, HookEvent, HookInput, HookOutput,
+    HookType, Matcher,
 };
 use tracing::{debug, info, warn};
 
@@ -163,6 +164,66 @@ impl HookRegistry {
     /// Total number of registered hooks across all events.
     pub fn count(&self) -> usize {
         self.hooks.values().map(|v| v.len()).sum()
+    }
+
+    /// Dispatch hooks for an event directly on an owned/borrowed registry.
+    ///
+    /// For production code behind a `SharedRegistry` (Arc<RwLock<>>), prefer
+    /// the free `dispatch()` function which releases the read lock before async
+    /// execution. This method is ergonomic for tests and single-owner contexts.
+    pub async fn dispatch(&self, event: HookEvent, input: HookInput) -> AggregatedResult {
+        use crate::matcher::matches;
+        use futures::future::join_all;
+
+        let hooks = self.get(event);
+        if hooks.is_empty() {
+            return AggregatedResult::default();
+        }
+        let target = input.match_target().map(|s| s.to_string());
+        let matching: Vec<RegisteredHook> = hooks
+            .iter()
+            .filter(|h| matches(&h.entry.matcher, target.as_deref()))
+            .cloned()
+            .collect();
+
+        if matching.is_empty() {
+            return AggregatedResult::default();
+        }
+
+        let daemon_url = self.daemon_url().map(str::to_string);
+        debug!(
+            "Dispatching {:?}: {} matching hooks (of {} registered)",
+            event,
+            matching.len(),
+            hooks.len()
+        );
+
+        let futures: Vec<_> = matching
+            .iter()
+            .map(|hook| {
+                let input = input.clone();
+                let entry = hook.entry.clone();
+                let headers = hook.headers.clone();
+                let daemon = daemon_url.clone();
+                async move { execute_hook(&entry, &headers, &input, daemon.as_deref()).await }
+            })
+            .collect();
+
+        let outputs = join_all(futures).await;
+        let result = AggregatedResult::aggregate(outputs);
+
+        if result.decision == HookDecision::Block && !event.supports_blocking() {
+            warn!(
+                "Hook returned Block for {:?} which doesn't support blocking — treating as Allow",
+                event
+            );
+            return AggregatedResult {
+                decision: HookDecision::Allow,
+                ..result
+            };
+        }
+
+        result
     }
 }
 
