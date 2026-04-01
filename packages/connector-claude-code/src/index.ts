@@ -474,9 +474,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 		}
 	}
 
-	/**
-	 * Expand ~ to home directory
-	 */
 }
 
 // ============================================================================
