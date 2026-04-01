@@ -18,7 +18,7 @@ use forge_agent::{
 };
 use forge_provider::{self, Provider};
 use forge_core::hook::{HookEvent, HookInput};
-use forge_hooks::SharedRegistry;
+use forge_hooks::{self, SharedRegistry};
 use forge_signet::secrets::{
     apply_local_cli_auth_env, discover_available_providers, refresh_daemon_model_registry,
     resolve_api_key,
@@ -442,7 +442,7 @@ impl App {
         let mut memories_injected = 0;
         if let Some(registry) = &hooks {
             let input = HookInput::session_start(&session_id, cwd.as_deref());
-            let output = registry.read().await.dispatch(HookEvent::SessionStart, input).await;
+            let output = forge_hooks::dispatch(registry, HookEvent::SessionStart, input).await;
             if let Some(context) = &output.inject {
                 if !context.is_empty() {
                     let count = output
@@ -2667,7 +2667,7 @@ impl App {
 
         if let Some(registry) = &self.hook_registry {
             let input = HookInput::session_end(&session_id, &transcript);
-            let output = registry.read().await.dispatch(HookEvent::SessionEnd, input).await;
+            let output = forge_hooks::dispatch(registry, HookEvent::SessionEnd, input).await;
             if output.decision == forge_core::hook::HookDecision::Error {
                 let reason = output.reason.unwrap_or_else(|| "unknown".to_string());
                 info!("Session-end hook failed (non-fatal): {reason}");

@@ -239,7 +239,7 @@ impl HookRegistry {
 }
 
 /// Execute a single hook entry, building the appropriate executor.
-async fn execute_hook(
+pub(crate) async fn execute_hook(
     entry: &HookEntry,
     headers: &HashMap<String, String>,
     input: &HookInput,

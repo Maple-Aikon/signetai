@@ -1,7 +1,7 @@
 use crate::session::SharedSession;
 use forge_core::Message;
 use forge_core::hook::{HookEvent, HookInput};
-use forge_hooks::SharedRegistry;
+use forge_hooks::{self, SharedRegistry};
 use forge_provider::{CompletionOpts, Provider};
 use futures::StreamExt;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ impl ContextManager {
         // have their output silently ignored until this is wired up.
         let _hook_instructions = if let Some(registry) = hooks {
             let input = HookInput::pre_compact(&session_id);
-            let output = registry.read().await.dispatch(HookEvent::PreCompact, input).await;
+            let output = forge_hooks::dispatch(registry, HookEvent::PreCompact, input).await;
             match output.inject {
                 Some(instructions) if !instructions.is_empty() => {
                     debug!("Pre-compaction hook returned {} bytes", instructions.len());
@@ -160,7 +160,7 @@ impl ContextManager {
         // PostCompact hook — notify observers of successful compaction
         if let Some(registry) = hooks {
             let input = HookInput::post_compact(&summary_text, compacted_count);
-            registry.read().await.dispatch(HookEvent::PostCompact, input).await;
+            forge_hooks::dispatch(registry, HookEvent::PostCompact, input).await;
         }
 
         Ok(())

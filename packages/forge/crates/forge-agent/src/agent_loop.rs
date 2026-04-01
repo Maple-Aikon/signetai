@@ -3,7 +3,7 @@ use crate::permissions::{PermissionManager, PermissionRequest, PermissionRespons
 use crate::session::SharedSession;
 use forge_core::{Message, MessageContent, ToolCall, ToolDefinition, TokenUsage};
 use forge_provider::{CompletionOpts, Provider, ReasoningEffort, StreamEvent};
-use forge_hooks::SharedRegistry;
+use forge_hooks::{self, SharedRegistry};
 use forge_core::hook::{HookDecision, HookEvent, HookInput};
 use forge_tools::{self, Tool as _};
 use futures::StreamExt;
@@ -151,7 +151,7 @@ impl AgentLoop {
             let input = HookInput::prompt_submit(&session_id, user_input);
             let reg = Arc::clone(registry);
             let recall_future = async move {
-                reg.read().await.dispatch(HookEvent::UserPromptSubmit, input).await
+                forge_hooks::dispatch(&reg, HookEvent::UserPromptSubmit, input).await
             };
             let preconnect_future = self.provider.preconnect();
 
@@ -239,7 +239,7 @@ impl AgentLoop {
                     // Notification hook — surface provider errors externally
                     if let Some(registry) = &self.hooks {
                         let input = HookInput::notification(&e.to_string(), "error");
-                        registry.read().await.dispatch(HookEvent::Notification, input).await;
+                        forge_hooks::dispatch(registry, HookEvent::Notification, input).await;
                     }
                     return;
                 }
@@ -327,7 +327,7 @@ impl AgentLoop {
                         let _ = self.event_tx.send(AgentEvent::Error(e.clone())).await;
                         if let Some(registry) = &self.hooks {
                             let input = HookInput::notification(&e, "error");
-                            registry.read().await.dispatch(HookEvent::Notification, input).await;
+                            forge_hooks::dispatch(registry, HookEvent::Notification, input).await;
                         }
                         return;
                     }
@@ -370,7 +370,7 @@ impl AgentLoop {
                         s.id.clone()
                     };
                     let input = HookInput::stop(&session_id);
-                    registry.read().await.dispatch(HookEvent::Stop, input).await;
+                    forge_hooks::dispatch(registry, HookEvent::Stop, input).await;
                 }
 
                 let estimated_tokens = {
@@ -390,7 +390,7 @@ impl AgentLoop {
                         warn!("Context compaction failed: {e}");
                         if let Some(registry) = &self.hooks {
                             let input = HookInput::notification(&e, "warning");
-                            registry.read().await.dispatch(HookEvent::Notification, input).await;
+                            forge_hooks::dispatch(registry, HookEvent::Notification, input).await;
                         }
                     }
                 }
@@ -418,7 +418,7 @@ impl AgentLoop {
                     // Notification hook — surface doom-loop errors externally
                     if let Some(registry) = &self.hooks {
                         let input = HookInput::notification(&msg, "error");
-                        registry.read().await.dispatch(HookEvent::Notification, input).await;
+                        forge_hooks::dispatch(registry, HookEvent::Notification, input).await;
                     }
                     let _ = self.event_tx.send(AgentEvent::TurnComplete).await;
                     return;
@@ -457,7 +457,7 @@ impl AgentLoop {
                     if let Some(registry) = &self.hooks {
                         let level = format!("{:?}", permission_level);
                         let input = HookInput::permission_request(&tc.name, &tc.input, &level);
-                        let hook_result = registry.read().await.dispatch(HookEvent::PermissionRequest, input).await;
+                        let hook_result = forge_hooks::dispatch(registry, HookEvent::PermissionRequest, input).await;
                         if hook_result.decision == HookDecision::Block {
                             let reason = hook_result.reason.unwrap_or_else(|| "Denied by policy hook".to_string());
                             let result = forge_core::ToolResult::error(&tc.id, &reason);
@@ -510,7 +510,7 @@ impl AgentLoop {
                             // PermissionDenied hook — audit trail
                             if let Some(registry) = &self.hooks {
                                 let input = HookInput::permission_denied(&tc.name, &tc.input);
-                                registry.read().await.dispatch(HookEvent::PermissionDenied, input).await;
+                                forge_hooks::dispatch(registry, HookEvent::PermissionDenied, input).await;
                             }
                             let result = forge_core::ToolResult::error(
                                 &tc.id,
@@ -540,7 +540,7 @@ impl AgentLoop {
                 // PreToolUse hook — allows external hooks to block tool execution
                 if let Some(registry) = &self.hooks {
                     let input = HookInput::pre_tool_use(&tc.name, &tc.input, &tc.id);
-                    let pre = registry.read().await.dispatch(HookEvent::PreToolUse, input).await;
+                    let pre = forge_hooks::dispatch(registry, HookEvent::PreToolUse, input).await;
                     if pre.decision == HookDecision::Block {
                         let reason = pre
                             .reason
@@ -586,7 +586,7 @@ impl AgentLoop {
                 // regardless of success/failure. PostToolUseFailure is additive, not a replacement.
                 if let Some(registry) = &self.hooks {
                     let input = HookInput::post_tool_use(&tc.name, &tc.input, &result);
-                    registry.read().await.dispatch(HookEvent::PostToolUse, input).await;
+                    forge_hooks::dispatch(registry, HookEvent::PostToolUse, input).await;
                 }
 
                 // PostToolUseFailure hook — fires when tool execution returned an error.
@@ -595,7 +595,7 @@ impl AgentLoop {
                         let input = HookInput::post_tool_use_failure(
                             &tc.name, &tc.input, &result.content, &tc.id,
                         );
-                        registry.read().await.dispatch(HookEvent::PostToolUseFailure, input).await;
+                        forge_hooks::dispatch(registry, HookEvent::PostToolUseFailure, input).await;
                     }
                 }
 

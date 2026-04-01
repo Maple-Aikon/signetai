@@ -310,7 +310,7 @@ async fn main() -> Result<()> {
 
     // Non-interactive mode: send prompt, print response, exit
     if let Some(prompt) = prompt_arg {
-        return run_non_interactive(provider, signet_client, system_prompt, &prompt).await;
+        return run_non_interactive(provider, system_prompt, &prompt, Some(Arc::clone(&registry))).await;
     }
 
     // Interactive TUI mode
@@ -793,37 +793,89 @@ fn infer_provider_from_model(model: &str) -> &'static str {
     }
 }
 
-/// Non-interactive mode: single prompt → streamed response → exit
+/// Non-interactive mode: single prompt → streamed response → exit.
+///
+/// Fires SessionStart, UserPromptSubmit (blocking), and SessionEnd hooks so
+/// that daemon memory recall works identically to interactive mode.
 async fn run_non_interactive(
     provider: Arc<dyn forge_provider::Provider>,
-    _signet_client: Option<SignetClient>,
     system_prompt: String,
     prompt: &str,
+    hooks: Option<SharedRegistry>,
 ) -> Result<()> {
+    use forge_core::hook::{HookDecision, HookEvent, HookInput};
     use forge_core::Message;
     use forge_provider::{CompletionOpts, StreamEvent};
     use forge_tools;
     use futures::StreamExt;
 
+    // Stable session identifier for hook payloads.
+    let session_id = format!(
+        "ni-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+
+    // SessionStart hook (non-blocking).
+    if let Some(ref reg) = hooks {
+        let input = HookInput::session_start(&session_id, std::env::current_dir().ok().as_ref().and_then(|p| p.to_str()));
+        forge_hooks::dispatch(reg, HookEvent::SessionStart, input).await;
+    }
+
+    // UserPromptSubmit hook (blocking + memory injection).
+    let mut memory_context = String::new();
+    if let Some(ref reg) = hooks {
+        let input = HookInput::prompt_submit(&session_id, prompt);
+        let result = forge_hooks::dispatch(reg, HookEvent::UserPromptSubmit, input).await;
+        if result.decision == HookDecision::Block {
+            let reason = result.reason.unwrap_or_else(|| "Blocked by hook".to_string());
+            eprintln!("Blocked: {reason}");
+            // SessionEnd before exit.
+            let end_input = HookInput::session_end(&session_id, "");
+            forge_hooks::dispatch(reg, HookEvent::SessionEnd, end_input).await;
+            return Ok(());
+        }
+        if let Some(inject) = result.inject {
+            if !inject.is_empty() {
+                memory_context = inject;
+            }
+        }
+    }
+
+    // Prepend injected memories to the system prompt.
+    let effective_system = if memory_context.is_empty() {
+        system_prompt
+    } else {
+        format!("{system_prompt}\n\n{memory_context}")
+    };
+
     let messages = vec![Message::user(prompt)];
     let tools = forge_tools::all_definitions();
 
     let opts = CompletionOpts {
-        system_prompt: Some(system_prompt),
+        system_prompt: Some(effective_system),
         max_tokens: Some(8192),
         ..Default::default()
     };
 
+    let mut response_text = String::new();
     let stream = provider.complete(&messages, &tools, &opts).await?;
     let mut stream = std::pin::pin!(stream);
 
     while let Some(event) = stream.next().await {
         match event {
             StreamEvent::TextDelta(text) => {
+                response_text.push_str(&text);
                 print!("{text}");
             }
             StreamEvent::Error(e) => {
                 eprintln!("\nError: {e}");
+                if let Some(ref reg) = hooks {
+                    let input = HookInput::session_end(&session_id, &response_text);
+                    forge_hooks::dispatch(reg, HookEvent::SessionEnd, input).await;
+                }
                 std::process::exit(1);
             }
             StreamEvent::Done => break,
@@ -832,6 +884,13 @@ async fn run_non_interactive(
     }
 
     println!();
+
+    // SessionEnd hook.
+    if let Some(ref reg) = hooks {
+        let input = HookInput::session_end(&session_id, &response_text);
+        forge_hooks::dispatch(reg, HookEvent::SessionEnd, input).await;
+    }
+
     Ok(())
 }
 
@@ -863,8 +922,6 @@ fn build_hook_registry(
     signet_client: &Option<SignetClient>,
     config: &forge_signet::config::AgentConfig,
 ) -> SharedRegistry {
-    use forge_hooks::HookEvent;
-
     let mut registry = HookRegistry::new();
 
     // Register built-in daemon HTTP hooks (replicates SessionHooks endpoints)
@@ -872,28 +929,7 @@ fn build_hook_registry(
         let base = client.base_url();
         let headers = build_daemon_headers(client);
 
-        registry.register_builtin_http(
-            HookEvent::SessionStart,
-            &format!("{base}/api/hooks/session-start"),
-            headers.clone(),
-        );
-        registry.register_builtin_http(
-            HookEvent::UserPromptSubmit,
-            &format!("{base}/api/hooks/user-prompt-submit"),
-            headers.clone(),
-        );
-        registry.register_builtin_http(
-            HookEvent::PreCompact,
-            &format!("{base}/api/hooks/pre-compaction"),
-            headers.clone(),
-        );
-        registry.register_builtin_http(
-            HookEvent::SessionEnd,
-            &format!("{base}/api/hooks/session-end"),
-            headers,
-        );
-
-        info!("Registered 4 built-in daemon hooks at {base}");
+        registry.register_builtin(base, headers);
     }
 
     // Register user-configured hooks from agent.yaml

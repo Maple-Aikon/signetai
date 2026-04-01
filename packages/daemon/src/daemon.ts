@@ -6875,10 +6875,18 @@ async function handleHookEval(
 	}
 
 	const full = `${EVAL_SYSTEM}\n\n${p}`;
-	const raw = await provider.generate(full, {
-		timeoutMs: 30_000,
-		maxTokens: 512,
-	});
+	let raw: string;
+	try {
+		raw = await provider.generate(full, {
+			timeoutMs: 30_000,
+			maxTokens: 512,
+		});
+	} catch (e) {
+		// Network failure, timeout, or provider error — fail open so hooks don't block execution.
+		logger.warn("hooks", `${tag}: LLM call failed, failing open`,
+			e instanceof Error ? e : new Error(String(e)));
+		return { ok: true, reason: null, inject: null };
+	}
 
 	try {
 		const result = parseEvalResult(raw);
