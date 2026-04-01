@@ -233,10 +233,6 @@ export class OpenCodeConnector extends BaseConnector {
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
-		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
-		if (strippedAgentsPath !== null) {
-			filesWritten.push(strippedAgentsPath);
-		}
 
 		if (!hasValidIdentity(expandedBasePath)) {
 			return {
@@ -244,6 +240,11 @@ export class OpenCodeConnector extends BaseConnector {
 				message: `No valid Signet identity found at ${expandedBasePath}`,
 				filesWritten,
 			};
+		}
+
+		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+		if (strippedAgentsPath !== null) {
+			filesWritten.push(strippedAgentsPath);
 		}
 
 		const opencodePath = this.getOpenCodePath();

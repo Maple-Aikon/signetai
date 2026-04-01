@@ -271,7 +271,7 @@ export class CodexConnector extends BaseConnector {
 		filesWritten.push(hooksPath);
 
 		// 2. Symlink skills directory
-		const skillsResult = this.symlinkSkills(basePath, codexHome);
+		const skillsResult = this.symlinkSkills(expandedBasePath, codexHome);
 		if (!skillsResult) {
 			warnings.push("Failed to symlink skills directory");
 		}
