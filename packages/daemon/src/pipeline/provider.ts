@@ -1915,15 +1915,10 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				// future body shape changes that happen to contain "format" elsewhere.
 				const isFormatRejection = (() => {
 					try {
-						const parsed = JSON.parse(consumedBody) as Record<string, unknown>;
+						const parsed: unknown = JSON.parse(consumedBody);
+						if (!isRecord(parsed)) return false;
 						const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
-						return issues.some(
-							(i): boolean =>
-								typeof i === "object" &&
-								i !== null &&
-								Array.isArray((i as Record<string, unknown>).path) &&
-								((i as Record<string, unknown>).path as unknown[])[0] === "format",
-						);
+						return issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "format");
 					} catch {
 						return false;
 					}
