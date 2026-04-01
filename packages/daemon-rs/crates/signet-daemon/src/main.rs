@@ -294,6 +294,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/hooks/session-checkpoint-extract",
             axum::routing::post(routes::hooks::session_checkpoint_extract),
         )
+        .route(
+            "/api/hooks/prompt-eval",
+            axum::routing::post(routes::hooks::prompt_eval),
+        )
+        .route(
+            "/api/hooks/agent-eval",
+            axum::routing::post(routes::hooks::agent_eval),
+        )
         // Agent roster routes (multi-agent support — migration 043)
         .route(
             "/api/agents",

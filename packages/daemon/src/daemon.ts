@@ -1751,6 +1751,19 @@ app.use("/api/repair/*", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
 });
 
+// Hook LLM eval — recall permission + rate limit (triggers LLM inference)
+const authHookEvalLimiter = new AuthRateLimiter(60_000, 30);
+app.use("/api/hooks/prompt-eval", async (c, next) => {
+	const perm = requirePermission("recall", authConfig);
+	const rate = requireRateLimit("hook-eval", authHookEvalLimiter, authConfig);
+	return perm(c, () => rate(c, next));
+});
+app.use("/api/hooks/agent-eval", async (c, next) => {
+	const perm = requirePermission("recall", authConfig);
+	const rate = requireRateLimit("hook-eval", authHookEvalLimiter, authConfig);
+	return perm(c, () => rate(c, next));
+});
+
 // Secrets — admin only (can exec commands, exfiltrate secrets)
 app.use("/api/secrets", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
@@ -5959,11 +5972,16 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 		stampHarness(body.harness);
 
 		if (checkBypass(body)) {
-			return c.json({ inject: "", memoryCount: 0, bypassed: true });
+			// HookOutput-compatible: decision + data.memoryCount so Rust HttpExecutor can
+			// parse this as a typed HookOutput. Legacy fields (inject, memoryCount) kept
+			// at top level for backward compat with TypeScript connectors.
+			return c.json({ decision: "Allow", inject: "", memoryCount: 0, data: { memoryCount: 0 }, bypassed: true });
 		}
 
 		const result = await handleUserPromptSubmit(body);
-		return c.json({ ...result, sessionKnown: known });
+		// HookOutput-compatible shape: Rust HttpExecutor parses decision+inject+data directly.
+		// Legacy top-level memoryCount preserved for TypeScript connector backward compat.
+		return c.json({ decision: "Allow", ...result, sessionKnown: known, data: { memoryCount: result.memoryCount } });
 	} catch (e) {
 		logger.error("hooks", "User prompt submit hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);

@@ -2335,6 +2335,47 @@ pub async fn session_checkpoint_extract(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hook LLM evaluation endpoints (parity with TS daemon)
+//
+// These delegate prompt/agent hook evaluation to the synthesis provider.
+// The shadow proxy logs divergences; full implementation mirrors daemon.ts.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub struct HookEvalBody {
+    pub prompt: String,
+}
+
+/// Stub handler for `/api/hooks/prompt-eval`.
+/// Parity with daemon.ts:6898. Full LLM delegation is tracked in the
+/// forge-hook-system-expansion spec (Phase 4).
+pub async fn prompt_eval(Json(body): Json<HookEvalBody>) -> axum::response::Response {
+    if body.prompt.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "prompt is required"})),
+        )
+            .into_response();
+    }
+    // Fail-open: no synthesis provider wired in daemon-rs yet.
+    (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()
+}
+
+/// Stub handler for `/api/hooks/agent-eval`.
+/// Parity with daemon.ts:6920. Currently delegates to prompt_eval semantics.
+pub async fn agent_eval(Json(body): Json<HookEvalBody>) -> axum::response::Response {
+    if body.prompt.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "prompt is required"})),
+        )
+            .into_response();
+    }
+    // Fail-open: no synthesis provider wired in daemon-rs yet.
+    (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

@@ -157,8 +157,8 @@ impl AgentLoop {
 
             if let Some(injection) = &recall_result.inject {
                 if !injection.is_empty() {
-                    // Daemon returns "memoryCount" (camelCase) in the response body,
-                    // stored in AggregatedResult.data by the HTTP executor fallback path.
+                    // Daemon endpoint returns HookOutput-shaped JSON with data.memoryCount.
+                    // The top-level inject field carries the memory text; data carries metadata.
                     let count = recall_result
                         .data
                         .get("memoryCount")
