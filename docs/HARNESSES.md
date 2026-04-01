@@ -153,7 +153,7 @@ Signet writes [[hooks]] to `~/.claude/settings.json` that fire at session lifecy
       "hooks": [{
         "type": "command",
         "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
-        "timeout": 5000
+        "timeout": 7000
       }]
     }],
     "SessionEnd": [{
@@ -166,6 +166,11 @@ Signet writes [[hooks]] to `~/.claude/settings.json` that fire at session lifecy
   }
 }
 ```
+
+Prompt-submit timeout note: `SIGNET_PROMPT_SUBMIT_TIMEOUT` defaults to
+`5000` (daemon wait budget). Claude Code hook config adds a `+2000ms`
+grace buffer when written to `settings.json`, so the installed
+`UserPromptSubmit` timeout default is `7000`.
 
 **SessionStart** — loads memories and context, outputs them as text that Claude Code injects into the system prompt.
 

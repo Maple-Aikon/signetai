@@ -1019,6 +1019,33 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
 	});
 
+	it("strips orphaned </signet-memory> tags from extracted user message", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "<signet-memory>old</signet-memory>real question</signet-memory>",
+				messages: [
+					{
+						role: "user",
+						content: "<signet-memory>old</signet-memory>real question</signet-memory>",
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-orphan-close",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real question");
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================

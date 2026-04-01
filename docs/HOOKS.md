@@ -350,7 +350,7 @@ Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call t
       "hooks": [{
         "type": "command",
         "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
-        "timeout": 5000
+        "timeout": 7000
       }]
     }],
     "SessionEnd": [{
@@ -363,6 +363,11 @@ Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call t
   }
 }
 ```
+
+Prompt-submit timeout note: `SIGNET_PROMPT_SUBMIT_TIMEOUT` defaults to
+`5000` (daemon wait budget). Claude Code hook config adds a `+2000ms`
+grace buffer when written to `settings.json`, so the installed
+`UserPromptSubmit` timeout default is `7000`.
 
 The CLI calls the daemon's hook endpoints and outputs context that Claude Code injects into the session.
 

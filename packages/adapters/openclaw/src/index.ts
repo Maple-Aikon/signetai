@@ -79,13 +79,14 @@ const SIGNET_MEMORY_OPEN = "<signet-memory";
 const SIGNET_MEMORY_CLOSE = "</signet-memory>";
 
 function stripSignetMemory(content: string): string {
+	const clean = (text: string): string => text.replaceAll(SIGNET_MEMORY_CLOSE, "").trim();
 	let text = content;
 	while (true) {
 		const lower = text.toLowerCase();
 		const start = lower.indexOf(SIGNET_MEMORY_OPEN);
-		if (start === -1) return text.trim();
+		if (start === -1) return clean(text);
 		const end = lower.indexOf(SIGNET_MEMORY_CLOSE, start);
-		if (end === -1) return text.trim();
+		if (end === -1) return clean(text);
 		const stop = end + SIGNET_MEMORY_CLOSE.length;
 		text = text.slice(0, start) + text.slice(stop);
 	}
