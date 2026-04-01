@@ -236,7 +236,7 @@ import {
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
 import { createSingleFlightRunner } from "./single-flight-runner";
-import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
+import { closeSynthesisProvider, getSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { readScopedTask, readTaskAgentId } from "./task-scope";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { expandTemporalNode } from "./temporal-expand";
@@ -6829,6 +6829,111 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 	} catch (e) {
 		logger.error("hooks", "Synthesis complete failed", e instanceof Error ? e : new Error(String(e)));
 		return c.json({ error: "Failed to save MEMORY.md" }, 500);
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Forge hook evaluation endpoints
+// ---------------------------------------------------------------------------
+
+const EVAL_SYSTEM = [
+	"You are evaluating a hook condition.",
+	'Respond with a JSON object: {"ok": true} if the condition passes,',
+	'or {"ok": false, "reason": "explanation"} if it fails.',
+	"Only return the JSON, nothing else.",
+].join(" ");
+
+/**
+ * Parse a JSON eval result from raw LLM text, tolerating markdown
+ * fences and leading/trailing whitespace.
+ */
+function parseEvalResult(raw: string): { ok: boolean; reason?: string } {
+	const trimmed = raw
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```\s*$/, "")
+		.trim();
+	const parsed: unknown = JSON.parse(trimmed);
+	if (typeof parsed !== "object" || parsed === null) {
+		throw new Error("LLM returned non-object JSON");
+	}
+	const obj: Record<string, unknown> = Object.assign({}, parsed);
+	return {
+		ok: Boolean(obj.ok),
+		reason: typeof obj.reason === "string" ? obj.reason : undefined,
+	};
+}
+
+/** Shared handler for prompt-eval and agent-eval endpoints. */
+async function handleHookEval(
+	tag: string,
+	prompt: string,
+): Promise<{ ok: boolean; reason: string | null; inject: string | null }> {
+	let provider: ReturnType<typeof getSynthesisProvider> | null = null;
+	try {
+		provider = getSynthesisProvider();
+	} catch {
+		logger.debug("hooks", `${tag}: no synthesis provider, allowing`);
+		return { ok: true, reason: null, inject: null };
+	}
+
+	const full = `${EVAL_SYSTEM}\n\n${prompt}`;
+	const raw = await provider.generate(full, {
+		timeoutMs: 30_000,
+		maxTokens: 512,
+	});
+
+	try {
+		const result = parseEvalResult(raw);
+		return { ok: result.ok, reason: result.reason ?? null, inject: null };
+	} catch {
+		logger.warn("hooks", `${tag}: failed to parse LLM response`, {
+			raw: raw.slice(0, 200),
+		});
+		// LLM returned unparseable output — fail open
+		return { ok: true, reason: null, inject: null };
+	}
+}
+
+// Delegate LLM evaluation of a hook prompt to the synthesis provider
+app.post("/api/hooks/prompt-eval", async (c) => {
+	try {
+		const body = (await c.req.json()) as {
+			prompt?: string;
+			event?: string;
+			input?: unknown;
+		};
+
+		if (!body.prompt || typeof body.prompt !== "string") {
+			return c.json({ error: "prompt is required" }, 400);
+		}
+
+		const result = await handleHookEval("prompt-eval", body.prompt);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "prompt-eval failed", e instanceof Error ? e : new Error(String(e)));
+		return c.json({ error: "Hook evaluation failed" }, 500);
+	}
+});
+
+// Multi-turn agent evaluation — currently delegates to prompt-eval.
+// Multi-turn agent capability will be added in a future iteration.
+app.post("/api/hooks/agent-eval", async (c) => {
+	try {
+		const body = (await c.req.json()) as {
+			prompt?: string;
+			event?: string;
+			input?: unknown;
+		};
+
+		if (!body.prompt || typeof body.prompt !== "string") {
+			return c.json({ error: "prompt is required" }, 400);
+		}
+
+		const result = await handleHookEval("agent-eval", body.prompt);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "agent-eval failed", e instanceof Error ? e : new Error(String(e)));
+		return c.json({ error: "Hook evaluation failed" }, 500);
 	}
 });
 

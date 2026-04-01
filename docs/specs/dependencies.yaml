@@ -1087,6 +1087,24 @@ specs:
       - "daemon-rs mirrors gate via term-coverage proxy (matched_terms/total_terms) until full hybrid scoring lands"
     decision: "Targeted bug fix + config surface. No dedicated spec file. PR #396."
 
+  - id: forge-hook-system-expansion
+    status: complete
+    path: docs/specs/complete/forge-hook-system-expansion.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - references/claude-code/
+    success_criteria:
+      - "forge-hooks crate compiles and passes 158+ tests covering matchers, executors, dispatch, and config parsing"
+      - "12 lifecycle events dispatch from agent_loop.rs, context.rs, and app.rs with correct blocking semantics"
+      - "Command hooks can block tool execution via exit code 2, HTTP hooks generalize existing daemon calls"
+      - "Prompt/agent hooks delegate LLM evaluation to daemon endpoints with fail-open semantics"
+      - "Hot reload propagates agent.yaml hook config changes without restart"
+      - "Existing 4 daemon hooks work identically with zero user configuration (backward compat)"
+    decision: "Ported Claude Code hook architecture to Rust, adapted for Signet-native operation"
+
   - id: docker-self-hosting-stack
     status: planning
     path: docs/specs/planning/docker-self-hosting-stack.md

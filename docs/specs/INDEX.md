@@ -685,6 +685,7 @@ Legend:
 | `openclaw-workspace-protection-plan` | planning | `docs/specs/planning/openclaw-workspace-protection-plan.md` | `openclaw-hardening` | `openclaw-workspace-protection` | Incident-driven planning stub for OpenClaw uninstall workspace-loss risk |
 | `openclaw-workspace-protection` | approved | `docs/specs/approved/openclaw-workspace-protection.md` | `openclaw-hardening`, `openclaw-workspace-protection-plan` | - | Setup soft gate + status/doctor visibility for unprotected OpenClaw-linked workspaces |
 | `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 and DP-18 COMPLETE, DP-19 prototype shipped, DP-20 pending (reference repo analysis: Ori-Mnemos, Zikkaron) |
+| `forge-hook-system-expansion` | complete | `docs/specs/complete/forge-hook-system-expansion.md` | `memory-pipeline-v2` | - | 14 lifecycle events, 4 hook types (command/HTTP/prompt/agent), forge-hooks crate, daemon prompt-eval/agent-eval endpoints, hot reload, 158 tests |
 | `notebook-dump-2026-02-25` | reference | `docs/research/technical/notebook-dump-2026-02-25.md` | - | - | |
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |
 | `predictor-agent-feedback` | approved | `docs/specs/approved/predictor-agent-feedback.md` | `predictive-memory-scorer` | - | |

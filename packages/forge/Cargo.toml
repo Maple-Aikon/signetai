@@ -7,6 +7,7 @@ members = [
     "crates/forge-signet",
     "crates/forge-agent",
     "crates/forge-tui",
+    "crates/forge-hooks",
     "crates/forge-cli",
 ]
 resolver = "2"
@@ -79,6 +80,7 @@ forge-provider = { path = "crates/forge-provider" }
 forge-tools = { path = "crates/forge-tools" }
 forge-mcp = { path = "crates/forge-mcp" }
 forge-signet = { path = "crates/forge-signet" }
+forge-hooks = { path = "crates/forge-hooks" }
 forge-agent = { path = "crates/forge-agent" }
 forge-tui = { path = "crates/forge-tui", default-features = false }
 

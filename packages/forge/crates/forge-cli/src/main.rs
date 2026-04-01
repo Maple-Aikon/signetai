@@ -10,6 +10,7 @@ use crossterm::{
     terminal,
 };
 use forge_provider::create_provider;
+use forge_hooks::{HookRegistry, SharedRegistry};
 use forge_signet::config::{build_agent_identity_prompt, build_identity_prompt, load_agent_config};
 use forge_signet::secrets::{
     apply_local_cli_auth_env, default_model_for_provider, discover_available_providers,
@@ -18,6 +19,7 @@ use forge_signet::secrets::{
 };
 use forge_signet::SignetClient;
 use forge_tui::App;
+use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -142,7 +144,7 @@ async fn main() -> Result<()> {
     std::env::set_var("FORGE_SIGNET_ACTOR_TYPE", "agent");
 
     // Load Signet agent config
-    let _agent_config = load_agent_config().unwrap_or_default();
+    let agent_config = load_agent_config().unwrap_or_default();
 
     // Connect to Signet daemon
     let signet_client = if cli.no_daemon {
@@ -303,6 +305,9 @@ async fn main() -> Result<()> {
         identity_prompt
     };
 
+    // Build HookRegistry — replaces direct SessionHooks construction
+    let registry = build_hook_registry(&signet_client, &agent_config);
+
     // Non-interactive mode: send prompt, print response, exit
     if let Some(prompt) = prompt_arg {
         return run_non_interactive(provider, signet_client, system_prompt, &prompt).await;
@@ -318,6 +323,7 @@ async fn main() -> Result<()> {
         &cli_with_defaults.theme,
         agent_arg,
         connected_providers,
+        Some(Arc::clone(&registry)),
     )
     .await;
 
@@ -846,4 +852,87 @@ fn find_cli_path(provider_name: &str, available: &[DiscoveredProvider]) -> Optio
 
 fn has_non_ollama_provider(available: &[DiscoveredProvider]) -> bool {
     available.iter().any(|p| p.provider != "ollama")
+}
+
+/// Build HookRegistry with built-in daemon hooks and user-configured hooks.
+///
+/// The 4 existing daemon endpoints (session-start, user-prompt-submit,
+/// pre-compaction, session-end) are registered as built-in HTTP hooks.
+/// User hooks from agent.yaml's `hooks` section are layered on top.
+fn build_hook_registry(
+    signet_client: &Option<SignetClient>,
+    config: &forge_signet::config::AgentConfig,
+) -> SharedRegistry {
+    use forge_hooks::HookEvent;
+
+    let mut registry = HookRegistry::new();
+
+    // Register built-in daemon HTTP hooks (replicates SessionHooks endpoints)
+    if let Some(client) = signet_client {
+        let base = client.base_url();
+        let headers = build_daemon_headers(client);
+
+        registry.register_builtin_http(
+            HookEvent::SessionStart,
+            &format!("{base}/api/hooks/session-start"),
+            headers.clone(),
+        );
+        registry.register_builtin_http(
+            HookEvent::UserPromptSubmit,
+            &format!("{base}/api/hooks/user-prompt-submit"),
+            headers.clone(),
+        );
+        registry.register_builtin_http(
+            HookEvent::PreCompact,
+            &format!("{base}/api/hooks/pre-compaction"),
+            headers.clone(),
+        );
+        registry.register_builtin_http(
+            HookEvent::SessionEnd,
+            &format!("{base}/api/hooks/session-end"),
+            headers,
+        );
+
+        info!("Registered 4 built-in daemon hooks at {base}");
+    }
+
+    // Register user-configured hooks from agent.yaml
+    if let Some(ref hook_config) = config.hooks {
+        registry.register_from_config(hook_config);
+        let count: usize = hook_config.events.values().map(|v| v.len()).sum();
+        if count > 0 {
+            info!("Registered {count} user hooks from agent.yaml");
+        }
+    }
+
+    Arc::new(tokio::sync::RwLock::new(registry))
+}
+
+/// Build auth headers matching what SignetClient uses for daemon calls.
+/// These are passed to the HttpExecutor for built-in hooks so they
+/// authenticate identically to the old SessionHooks.
+fn build_daemon_headers(client: &SignetClient) -> HashMap<String, String> {
+    let reqwest_headers = forge_signet::daemon_auth_headers(
+        std::env::var("FORGE_SIGNET_TOKEN").ok().as_deref(),
+        std::env::var("FORGE_SIGNET_ACTOR")
+            .ok()
+            .as_deref()
+            .or(client.agent_id()),
+        std::env::var("FORGE_SIGNET_ACTOR_TYPE").ok().as_deref(),
+    );
+
+    let mut headers = HashMap::new();
+    for (name, value) in &reqwest_headers {
+        if let Ok(v) = value.to_str() {
+            headers.insert(name.to_string(), v.to_string());
+        }
+    }
+
+    // Always include runtime path header — Forge is plugin-native
+    headers.insert(
+        "x-signet-runtime-path".to_string(),
+        "plugin".to_string(),
+    );
+
+    headers
 }

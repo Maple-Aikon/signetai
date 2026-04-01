@@ -3,7 +3,8 @@ use crate::permissions::{PermissionManager, PermissionRequest, PermissionRespons
 use crate::session::SharedSession;
 use forge_core::{Message, MessageContent, ToolCall, ToolDefinition, TokenUsage};
 use forge_provider::{CompletionOpts, Provider, ReasoningEffort, StreamEvent};
-use forge_signet::hooks::SessionHooks;
+use forge_hooks::SharedRegistry;
+use forge_core::hook::{HookDecision, HookEvent, HookInput};
 use forge_tools::{self, Tool as _};
 use futures::StreamExt;
 use std::collections::VecDeque;
@@ -45,7 +46,7 @@ pub enum AgentEvent {
 /// The core agentic loop
 pub struct AgentLoop {
     provider: Arc<dyn Provider>,
-    hooks: Option<SessionHooks>,
+    hooks: Option<SharedRegistry>,
     event_tx: mpsc::Sender<AgentEvent>,
     /// Channel for sending permission requests to the TUI
     permission_tx: mpsc::Sender<PermissionRequest>,
@@ -68,7 +69,7 @@ impl AgentLoop {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn Provider>,
-        hooks: Option<SessionHooks>,
+        hooks: Option<SharedRegistry>,
         event_tx: mpsc::Sender<AgentEvent>,
         permission_tx: mpsc::Sender<PermissionRequest>,
         permissions: Arc<Mutex<PermissionManager>>,
@@ -105,6 +106,11 @@ impl AgentLoop {
         }
     }
 
+    /// Get the hook registry (for reuse when rebuilding with a new provider)
+    pub fn hooks(&self) -> Option<SharedRegistry> {
+        self.hooks.clone()
+    }
+
     /// Refresh MCP tool definitions from connected servers
     pub async fn refresh_mcp_tools(&mut self) {
         for client in &self.mcp_clients {
@@ -129,20 +135,33 @@ impl AgentLoop {
 
         // 2. Run memory recall + provider preconnect in PARALLEL
         let mut memory_context = String::new();
-        if let Some(hooks) = &self.hooks {
+        if let Some(registry) = &self.hooks {
             let _ = self
                 .event_tx
                 .send(AgentEvent::Status("◇ Recalling memories...".to_string()))
                 .await;
 
             // Overlap: recall memories while warming the provider connection
-            let recall_future = hooks.prompt_submit(user_input);
+            let session_id = {
+                let s = session.lock().await;
+                s.id.clone()
+            };
+            let input = HookInput::prompt_submit(&session_id, user_input);
+            let reg = Arc::clone(registry);
+            let recall_future = async move {
+                reg.read().await.dispatch(HookEvent::UserPromptSubmit, input).await
+            };
             let preconnect_future = self.provider.preconnect();
 
             let (recall_result, _) = tokio::join!(recall_future, preconnect_future);
 
-            match recall_result {
-                Ok((injection, count)) if !injection.is_empty() => {
+            if let Some(injection) = &recall_result.inject {
+                if !injection.is_empty() {
+                    let count = recall_result
+                        .data
+                        .get("memory_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize;
                     debug!(
                         "Memory injection: {} bytes, {} memories",
                         injection.len(),
@@ -152,15 +171,11 @@ impl AgentLoop {
                         .event_tx
                         .send(AgentEvent::MemoryCount(count))
                         .await;
-                    memory_context = injection;
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    debug!("Prompt hook failed (non-fatal): {e}");
+                    memory_context = injection.clone();
                 }
             }
         } else {
-            // No daemon — still preconnect to provider
+            // No hooks — still preconnect to provider
             self.provider.preconnect().await;
         }
 
@@ -207,6 +222,11 @@ impl AgentLoop {
                 Err(e) => {
                     error!("Provider error: {e}");
                     let _ = self.event_tx.send(AgentEvent::Error(e.to_string())).await;
+                    // Notification hook — surface provider errors externally
+                    if let Some(registry) = &self.hooks {
+                        let input = HookInput::notification(&e.to_string(), "error");
+                        registry.read().await.dispatch(HookEvent::Notification, input).await;
+                    }
                     return;
                 }
             };
@@ -290,7 +310,11 @@ impl AgentLoop {
                     }
                     StreamEvent::Done => break,
                     StreamEvent::Error(e) => {
-                        let _ = self.event_tx.send(AgentEvent::Error(e)).await;
+                        let _ = self.event_tx.send(AgentEvent::Error(e.clone())).await;
+                        if let Some(registry) = &self.hooks {
+                            let input = HookInput::notification(&e, "error");
+                            registry.read().await.dispatch(HookEvent::Notification, input).await;
+                        }
                         return;
                     }
                 }
@@ -323,8 +347,18 @@ impl AgentLoop {
                 s.add_message(assistant_msg);
             }
 
-            // 7. If no tool calls, we're done — check compaction first
+            // 7. If no tool calls, we're done — fire Stop hook, check compaction
             if tool_calls.is_empty() {
+                // Stop hook — signals turn complete to external observers
+                if let Some(registry) = &self.hooks {
+                    let session_id = {
+                        let s = session.lock().await;
+                        s.id.clone()
+                    };
+                    let input = HookInput::stop(&session_id);
+                    registry.read().await.dispatch(HookEvent::Stop, input).await;
+                }
+
                 let estimated_tokens = {
                     let s = session.lock().await;
                     ContextManager::estimate_tokens(&s.messages)
@@ -340,6 +374,10 @@ impl AgentLoop {
                         .await
                     {
                         warn!("Context compaction failed: {e}");
+                        if let Some(registry) = &self.hooks {
+                            let input = HookInput::notification(&e, "warning");
+                            registry.read().await.dispatch(HookEvent::Notification, input).await;
+                        }
                     }
                 }
                 let _ = self.event_tx.send(AgentEvent::TurnComplete).await;
@@ -362,7 +400,12 @@ impl AgentLoop {
                         output: msg.clone(),
                         is_error: true,
                     }).await;
-                    let _ = self.event_tx.send(AgentEvent::Error(msg)).await;
+                    let _ = self.event_tx.send(AgentEvent::Error(msg.clone())).await;
+                    // Notification hook — surface doom-loop errors externally
+                    if let Some(registry) = &self.hooks {
+                        let input = HookInput::notification(&msg, "error");
+                        registry.read().await.dispatch(HookEvent::Notification, input).await;
+                    }
                     let _ = self.event_tx.send(AgentEvent::TurnComplete).await;
                     return;
                 }
@@ -396,6 +439,29 @@ impl AgentLoop {
                 };
 
                 if !approved {
+                    // PermissionRequest hook — policy hooks can auto-deny
+                    if let Some(registry) = &self.hooks {
+                        let level = format!("{:?}", permission_level);
+                        let input = HookInput::permission_request(&tc.name, &tc.input, &level);
+                        let hook_result = registry.read().await.dispatch(HookEvent::PermissionRequest, input).await;
+                        if hook_result.decision == HookDecision::Block {
+                            let reason = hook_result.reason.unwrap_or_else(|| "Denied by policy hook".to_string());
+                            let result = forge_core::ToolResult::error(&tc.id, &reason);
+                            let _ = self.event_tx.send(AgentEvent::ToolResult {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                output: result.content.clone(),
+                                is_error: true,
+                            }).await;
+                            tool_results_content.push(MessageContent::ToolResult {
+                                tool_use_id: result.tool_use_id,
+                                content: result.content,
+                                is_error: result.is_error,
+                            });
+                            continue;
+                        }
+                    }
+
                     let _ = self
                         .event_tx
                         .send(AgentEvent::ToolApproval(
@@ -427,6 +493,11 @@ impl AgentLoop {
                             perms.approve_for_session(&tc.name);
                         }
                         PermissionResponse::Deny => {
+                            // PermissionDenied hook — audit trail
+                            if let Some(registry) = &self.hooks {
+                                let input = HookInput::permission_denied(&tc.name, &tc.input);
+                                registry.read().await.dispatch(HookEvent::PermissionDenied, input).await;
+                            }
                             let result = forge_core::ToolResult::error(
                                 &tc.id,
                                 "Permission denied by user",
@@ -452,6 +523,33 @@ impl AgentLoop {
 
                 info!("Executing tool: {} (id: {})", tc.name, tc.id);
 
+                // PreToolUse hook — allows external hooks to block tool execution
+                if let Some(registry) = &self.hooks {
+                    let input = HookInput::pre_tool_use(&tc.name, &tc.input, &tc.id);
+                    let pre = registry.read().await.dispatch(HookEvent::PreToolUse, input).await;
+                    if pre.decision == HookDecision::Block {
+                        let reason = pre
+                            .reason
+                            .unwrap_or_else(|| "Blocked by hook".to_string());
+                        let result = forge_core::ToolResult::error(&tc.id, &reason);
+                        let _ = self
+                            .event_tx
+                            .send(AgentEvent::ToolResult {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                output: result.content.clone(),
+                                is_error: true,
+                            })
+                            .await;
+                        tool_results_content.push(MessageContent::ToolResult {
+                            tool_use_id: result.tool_use_id,
+                            content: result.content,
+                            is_error: result.is_error,
+                        });
+                        continue;
+                    }
+                }
+
                 let result = if let Some(tool) = tool_impl {
                     tool.execute(tc).await
                 } else {
@@ -467,6 +565,22 @@ impl AgentLoop {
                         forge_core::ToolResult::error(&tc.id, format!("Unknown tool: {}", tc.name))
                     })
                 };
+
+                // PostToolUse hook — observe-only, never blocks
+                if let Some(registry) = &self.hooks {
+                    let input = HookInput::post_tool_use(&tc.name, &tc.input, &result);
+                    registry.read().await.dispatch(HookEvent::PostToolUse, input).await;
+                }
+
+                // PostToolUseFailure hook — fires when tool execution returned an error
+                if result.is_error {
+                    if let Some(registry) = &self.hooks {
+                        let input = HookInput::post_tool_use_failure(
+                            &tc.name, &tc.input, &result.content, &tc.id,
+                        );
+                        registry.read().await.dispatch(HookEvent::PostToolUseFailure, input).await;
+                    }
+                }
 
                 let _ = self
                     .event_tx

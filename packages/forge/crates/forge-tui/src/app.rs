@@ -17,7 +17,8 @@ use forge_agent::{
     SessionStore, SharedSession,
 };
 use forge_provider::{self, Provider};
-use forge_signet::hooks::SessionHooks;
+use forge_core::hook::{HookEvent, HookInput};
+use forge_hooks::SharedRegistry;
 use forge_signet::secrets::{
     apply_local_cli_auth_env, discover_available_providers, refresh_daemon_model_registry,
     resolve_api_key,
@@ -229,6 +230,8 @@ pub struct App {
     speculative_handle: Option<tokio::task::JoinHandle<()>>,
     last_keystroke: std::time::Instant,
     recall_cache: forge_signet::recall_cache::RecallCache,
+    /// Hook registry (built by CLI, shared with agent loop)
+    hook_registry: Option<SharedRegistry>,
     /// Pipeline summary (extraction + embedding models)
     pipeline_info: String,
     /// Agent display name from IDENTITY.md
@@ -409,6 +412,7 @@ impl App {
         theme_name: &str,
         active_agent: Option<String>,
         connected_providers: Vec<String>,
+        hook_registry: Option<SharedRegistry>,
     ) -> Self {
         let model = provider.model().to_string();
         let provider_name = provider.name().to_string();
@@ -424,18 +428,9 @@ impl App {
         let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(256);
         let (permission_tx, permission_rx) = mpsc::channel::<PermissionRequest>(8);
 
-        // Shared recall cache — used by both agent hooks and TUI speculative recall
-        let recall_cache = forge_signet::recall_cache::RecallCache::new();
-
-        // Set up session hooks if daemon is available
-        let hooks = signet_client.as_ref().map(|client| {
-            SessionHooks::with_cache(
-                client.clone(),
-                session_id,
-                cwd.clone(),
-                recall_cache.clone(),
-            )
-        });
+        // Hook registry is built by the CLI and passed in.
+        // Clone for the agent; keep the original for App's own field.
+        let hooks = hook_registry.clone();
 
         let daemon_healthy = if let Some(client) = &signet_client {
             client.is_available().await
@@ -445,17 +440,18 @@ impl App {
 
         // Call session-start hook to get initial context
         let mut memories_injected = 0;
-        if let Some(hooks) = &hooks {
-            match hooks.session_start().await {
-                Ok((context, count)) if !context.is_empty() => {
+        if let Some(registry) = &hooks {
+            let input = HookInput::session_start(&session_id, cwd.as_deref());
+            let output = registry.read().await.dispatch(HookEvent::SessionStart, input).await;
+            if let Some(context) = &output.inject {
+                if !context.is_empty() {
+                    let count = output
+                        .data
+                        .get("memory_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize;
                     debug!("Session start: {} bytes, {} memories", context.len(), count);
                     memories_injected = count;
-                }
-                Ok(_) => {
-                    debug!("Session start hook returned empty context");
-                }
-                Err(e) => {
-                    debug!("Session start hook failed (non-fatal): {e}");
                 }
             }
         }
@@ -505,6 +501,8 @@ impl App {
                 None
             }
         };
+
+        let recall_cache = forge_signet::recall_cache::RecallCache::new();
 
         // Load pipeline info from agent config
         let pipeline_info = forge_signet::config::load_agent_config()
@@ -590,6 +588,7 @@ impl App {
             speculative_handle: None,
             last_keystroke: std::time::Instant::now(),
             recall_cache,
+            hook_registry,
             voice_recorder: None,
             voice_recording: false,
             voice_model_path: None,
@@ -758,7 +757,13 @@ impl App {
                     match event {
                         ConfigEvent::Reloaded(config) => {
                             self.pipeline_info = config.pipeline_summary();
-                            // Silent update — no chat spam
+                            // Hot-reload hooks from updated config
+                            if let Some(registry) = &self.hook_registry {
+                                if let Some(hook_config) = &config.hooks {
+                                    registry.write().await.reload(hook_config);
+                                    debug!("Hot-reloaded hooks from config change");
+                                }
+                            }
                         }
                         ConfigEvent::Error(_) => {
                             // Ignore config errors silently
@@ -2384,15 +2389,8 @@ impl App {
             }
         };
 
-        // Rebuild agent with new provider
-        let cwd = std::env::current_dir()
-            .ok()
-            .map(|p| p.display().to_string());
-        let session_id = self.session.lock().await.id.clone();
-
-        let hooks = self.signet_client.as_ref().map(|client| {
-            SessionHooks::new(client.clone(), session_id, cwd)
-        });
+        // Rebuild agent with new provider, reuse existing hook registry
+        let hooks = self.agent.hooks();
 
         let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(256);
         let (permission_tx, permission_rx) = mpsc::channel::<PermissionRequest>(8);
@@ -2655,13 +2653,14 @@ impl App {
 
         let transcript = s.transcript();
         let session_id = s.id.clone();
-        let project = s.project.clone();
         drop(s); // Release lock before async call
 
-        if let Some(client) = &self.signet_client {
-            let hooks = SessionHooks::new(client.clone(), session_id, project);
-            if let Err(e) = hooks.session_end(&transcript).await {
-                info!("Session-end hook failed (non-fatal): {e}");
+        if let Some(registry) = &self.hook_registry {
+            let input = HookInput::session_end(&session_id, &transcript);
+            let output = registry.read().await.dispatch(HookEvent::SessionEnd, input).await;
+            if output.decision == forge_core::hook::HookDecision::Error {
+                let reason = output.reason.unwrap_or_else(|| "unknown".to_string());
+                info!("Session-end hook failed (non-fatal): {reason}");
             }
         }
     }

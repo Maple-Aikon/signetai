@@ -1,10 +1,11 @@
 use crate::session::SharedSession;
 use forge_core::Message;
+use forge_core::hook::{HookEvent, HookInput};
+use forge_hooks::SharedRegistry;
 use forge_provider::{CompletionOpts, Provider};
-use forge_signet::hooks::SessionHooks;
 use futures::StreamExt;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Manages context window and handles compaction
 pub struct ContextManager {
@@ -48,21 +49,24 @@ impl ContextManager {
         &self,
         session: &SharedSession,
         provider: &Arc<dyn Provider>,
-        hooks: Option<&SessionHooks>,
+        hooks: Option<&SharedRegistry>,
     ) -> Result<(), String> {
         info!("Context compaction triggered");
 
         // Call pre-compaction hook if available
-        let _hook_instructions = if let Some(hooks) = hooks {
-            match hooks.pre_compaction().await {
-                Ok(instructions) => {
+        let session_id = {
+            let s = session.lock().await;
+            s.id.clone()
+        };
+        let _hook_instructions = if let Some(registry) = hooks {
+            let input = HookInput::pre_compact(&session_id);
+            let output = registry.read().await.dispatch(HookEvent::PreCompact, input).await;
+            match output.inject {
+                Some(instructions) if !instructions.is_empty() => {
                     debug!("Pre-compaction hook returned {} bytes", instructions.len());
                     instructions
                 }
-                Err(e) => {
-                    warn!("Pre-compaction hook failed: {e}");
-                    String::new()
-                }
+                _ => String::new(),
             }
         } else {
             String::new()
@@ -136,6 +140,7 @@ impl ContextManager {
             "[Context Summary]\n\n{summary_text}"
         ));
 
+        let compacted_count = to_summarize.len();
         {
             let mut s = session.lock().await;
             s.messages.clear();
@@ -143,9 +148,15 @@ impl ContextManager {
             s.messages.extend_from_slice(to_keep);
             info!(
                 "Compacted {} messages into summary + {} kept messages",
-                to_summarize.len(),
+                compacted_count,
                 to_keep.len()
             );
+        }
+
+        // PostCompact hook — notify observers of successful compaction
+        if let Some(registry) = hooks {
+            let input = HookInput::post_compact(&summary_text, compacted_count);
+            registry.read().await.dispatch(HookEvent::PostCompact, input).await;
         }
 
         Ok(())

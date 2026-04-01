@@ -8,6 +8,7 @@ forge-core = { workspace = true }
 forge-agent = { workspace = true }
 forge-provider = { workspace = true }
 forge-signet = { workspace = true }
+forge-hooks = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }

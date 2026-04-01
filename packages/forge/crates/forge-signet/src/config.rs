@@ -1,3 +1,4 @@
+use forge_core::hook::HookConfig;
 use forge_core::ForgeError;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -26,6 +27,11 @@ pub struct AgentConfig {
     pub memory: Option<MemoryConfig>,
     #[serde(default)]
     pub embedding: Option<EmbeddingConfig>,
+    /// User-configured hooks from the `hooks` section of agent.yaml.
+    /// Maps HookEvent names to lists of HookEntry definitions.
+    /// Optional — omitting it entirely is the default (no user hooks).
+    #[serde(default)]
+    pub hooks: Option<HookConfig>,
     // Flat keys written by dashboard (take precedence over nested)
     #[serde(default, rename = "extractionProvider")]
     pub extraction_provider_flat: Option<String>,

@@ -6,6 +6,15 @@ use tracing::debug;
 
 /// Manages Signet session lifecycle hooks.
 ///
+/// **DEPRECATED**: This struct is being replaced by `forge_hooks::HookRegistry`,
+/// which provides a generalized hook system supporting command, HTTP, prompt,
+/// and agent hook types with matching and parallel dispatch. The existing
+/// daemon HTTP endpoints are registered as built-in HTTP hooks in the registry.
+///
+/// During the migration window, both `SessionHooks` and `HookRegistry` may
+/// coexist. Once all call sites in `forge-agent` and `forge-tui` are migrated
+/// to use `HookRegistry`, this struct will be removed.
+///
 /// These hooks communicate with the Signet daemon to:
 /// - Inject memories at session start and per-prompt
 /// - Trigger extraction pipeline on session end

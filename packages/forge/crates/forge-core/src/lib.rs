@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod hook;
 pub mod message;
 pub mod tool;
 
