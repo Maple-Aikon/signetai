@@ -142,13 +142,23 @@ impl HookExecutor for HttpExecutor {
                 self.url,
                 &body[..body.len().min(200)]
             );
+            // On non-2xx, only accept a well-formed HookOutput JSON.
+            // Falling through to raw-text inject would pollute model context with
+            // error bodies like "Service Unavailable" from temporarily-down hooks.
+            return match serde_json::from_str::<HookOutput>(&body) {
+                Ok(output) => output,
+                Err(_) => HookOutput::error(format!(
+                    "HTTP hook returned status {}: {}",
+                    status,
+                    body.trim().chars().take(200).collect::<String>()
+                )),
+            };
         }
 
-        // Parse body as HookOutput regardless of status code (mirrors Claude Code behavior)
+        // 2xx: parse body as HookOutput, falling back to raw JSON or plain text.
         match serde_json::from_str::<HookOutput>(&body) {
             Ok(output) => output,
             Err(_) => {
-                // If not valid HookOutput JSON, try to extract inject/data from raw response
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
                     let inject = val
                         .get("inject")

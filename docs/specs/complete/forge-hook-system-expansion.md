@@ -37,11 +37,11 @@ Engine for hook matching, dispatch, and execution. Located at
 - `UserPromptSubmit` (agent_loop.rs, blocking)
 - `PreCompact`, `PostCompact` (context.rs)
 - `PreToolUse` (agent_loop.rs, blocking)
-- `PostToolUse` (agent_loop.rs, observe-only)
+- `PostToolUse` (agent_loop.rs, observe-only, fires on both success **and** error)
 - `Stop` (agent_loop.rs, on turn complete)
 
 **Tier 2 (4 events, all wired):**
-- `PostToolUseFailure` (agent_loop.rs, on tool error)
+- `PostToolUseFailure` (agent_loop.rs, additional event on tool error — additive to PostToolUse)
 - `PermissionRequest` (agent_loop.rs, blocking, auto-deny)
 - `PermissionDenied` (agent_loop.rs, audit trail)
 - `Notification` (agent_loop.rs, on errors and compaction failures)
@@ -81,6 +81,13 @@ hooks:
 
 Both return `{ok, reason, inject}` and fail open (allow) when no
 synthesis provider is configured.
+
+**daemon-rs parity note**: The Rust daemon (`packages/daemon-rs/`) returns
+a hardcoded `{ok: true}` stub for both eval endpoints — real LLM evaluation
+is deferred to Phase 4. Forge instances running against daemon-rs will
+silently allow all prompt/agent-eval hooks without LLM evaluation until
+Phase 4 lands. This is intentional and tracked; the shadow proxy logs
+divergences for monitoring.
 
 ### Hot reload
 
