@@ -1068,6 +1068,32 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(0);
 	});
 
+	it("falls back to most recent real user message when trailing user messages are injection-only", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "fallback message should come from structured messages",
+				messages: [
+					{ role: "user", content: "real question" },
+					{ role: "assistant", content: "answer" },
+					{ role: "user", content: "<signet-memory>injection</signet-memory>" },
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-fallback-older-real",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real question");
+	});
+
 	it("drops trailing text from an unclosed <signet-memory block", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);

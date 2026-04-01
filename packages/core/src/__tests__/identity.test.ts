@@ -113,6 +113,9 @@ describe("resolvePromptSubmitTimeoutMs", () => {
 	test("returns the default when unset or invalid", () => {
 		expect(resolvePromptSubmitTimeoutMs()).toBe(5000);
 		expect(resolvePromptSubmitTimeoutMs("oops")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("NaN")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("0")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("-100")).toBe(5000);
 		expect(resolvePromptSubmitTimeoutMs("250")).toBe(5000);
 	});
 
