@@ -183,6 +183,13 @@ async fn main() -> anyhow::Result<()> {
     // Independent limiter for LLM-enabled recall — separate from admin so
     // the two buckets don't share state and operators can tune them independently.
     let recall_llm_limiter = AuthRateLimiter::from_rules(&merged);
+    // Dedicated limiter for hook prompt/agent-eval endpoints.
+    // Mirrors TS daemon's authHookEvalLimiter(60_000, 30): 30 requests per 60s window.
+    let hook_eval_limiter = {
+        let mut rules = std::collections::HashMap::new();
+        rules.insert("hook-eval".to_string(), RateLimitRule { window_ms: 60_000, max: 30 });
+        AuthRateLimiter::from_rules(&rules)
+    };
 
     let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
@@ -197,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         auth_secret,
         auth_admin_limiter,
         recall_llm_limiter,
+        hook_eval_limiter,
     ));
 
     // Run extraction preflight synchronously before serving requests.

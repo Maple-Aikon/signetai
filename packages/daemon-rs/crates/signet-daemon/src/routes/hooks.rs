@@ -2362,7 +2362,7 @@ fn guard_hook_eval(
     let is_local = is_loopback(peer);
     let auth = authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), headers, is_local)?;
     require_permission_guard(&auth, Permission::Recall, state.auth_mode, is_local)?;
-    require_rate_limit_guard(&auth, "hook-eval", &state.recall_llm_limiter, state.auth_mode, None)?;
+    require_rate_limit_guard(&auth, "hook-eval", &state.hook_eval_limiter, state.auth_mode, None)?;
     Ok(())
 }
 

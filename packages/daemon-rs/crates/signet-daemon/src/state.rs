@@ -47,6 +47,9 @@ pub struct AppState {
     pub auth_admin_limiter: AuthRateLimiter,
     /// Independent limiter for the LLM-enabled recall path.
     pub recall_llm_limiter: AuthRateLimiter,
+    /// Dedicated limiter for hook prompt/agent-eval endpoints.
+    /// Mirrors TS daemon's authHookEvalLimiter(60_000, 30).
+    pub hook_eval_limiter: AuthRateLimiter,
     pub sessions: SessionTracker,
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
@@ -96,6 +99,7 @@ impl AppState {
         auth_secret: Option<Vec<u8>>,
         auth_admin_limiter: AuthRateLimiter,
         recall_llm_limiter: AuthRateLimiter,
+        hook_eval_limiter: AuthRateLimiter,
     ) -> Self {
         let paused = config
             .manifest
@@ -137,6 +141,7 @@ impl AppState {
             auth_secret,
             auth_admin_limiter,
             recall_llm_limiter,
+            hook_eval_limiter,
             sessions: SessionTracker::new(),
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
