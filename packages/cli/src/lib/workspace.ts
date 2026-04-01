@@ -27,10 +27,6 @@ export function expandUserPath(pathValue: string): string {
 		return join(homedir(), trimmed.slice(2));
 	}
 
-	if (trimmed.startsWith("~")) {
-		return join(homedir(), trimmed.slice(1));
-	}
-
 	return trimmed;
 }
 

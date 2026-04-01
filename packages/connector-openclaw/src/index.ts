@@ -1228,9 +1228,6 @@ configured by rejecting session claims from the second path (HTTP 409).
 			return join(this.getHomeDir(), path.slice(2));
 		}
 
-		if (path.startsWith("~")) {
-			return join(this.getHomeDir(), path.slice(1));
-		}
 		return path;
 	}
 }
