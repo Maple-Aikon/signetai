@@ -81,11 +81,12 @@ function stripSignetMemory(content: string): string {
 	const clean = (text: string): string => text.replace(/<\/signet-memory>/gi, "").trim();
 	let text = content;
 	while (true) {
-		const start = text.search(/<signet-memory\b/i);
+		const start = text.search(/<signet-memory(?=[\s/>])/i);
 		if (start === -1) return clean(text);
 		const closeOffset = text.slice(start).search(/<\/signet-memory>/i);
 		if (closeOffset === -1) return clean(text.slice(0, start));
 		const end = start + closeOffset;
+		// Closing tag length is case-invariant for ASCII `</signet-memory>`.
 		const stop = end + SIGNET_MEMORY_CLOSE.length;
 		text = text.slice(0, start) + text.slice(stop);
 	}
@@ -2060,26 +2061,30 @@ const signetPlugin = {
 					knownPid = pid;
 				}, 60_000);
 			},
-				stop() {
-					api.logger.info("signet-memory: service stopped");
-					try {
-						if (healthTimer) {
-							clearInterval(healthTimer);
-							healthTimer = null;
-						}
-						if (marketplaceProxyTimer) {
-							clearInterval(marketplaceProxyTimer);
-							marketplaceProxyTimer = null;
-						}
-					} finally {
-						// Always release the process-level registration guard so a
-						// later full registration pass can reinitialize cleanly.
-						writeRegistered(false);
+			stop() {
+				api.logger.info("signet-memory: service stopped");
+				try {
+					if (healthTimer) {
+						clearInterval(healthTimer);
+						healthTimer = null;
 					}
-				},
+					if (marketplaceProxyTimer) {
+						clearInterval(marketplaceProxyTimer);
+						marketplaceProxyTimer = null;
+					}
+				} finally {
+					// Always release the process-level registration guard so a
+					// later full registration pass can reinitialize cleanly.
+					writeRegistered(false);
+				}
+			},
 			});
 		} catch (err) {
-			if (claimed) writeRegistered(false);
+			if (claimed) {
+				api.logger.error("signet-memory: registration failed after guard was claimed; restart host before retry", {
+					error: String(err),
+				});
+			}
 			throw err;
 		}
 	},

@@ -1121,6 +1121,35 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
 	});
 
+	it("does not match hyphenated non-signet tags", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "real user question <signet-memory-anything> keep this",
+				messages: [
+					{
+						role: "user",
+						content: "real user question <signet-memory-anything> keep this",
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-hyphenated-non-signet",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe(
+			"real user question <signet-memory-anything> keep this",
+		);
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================
