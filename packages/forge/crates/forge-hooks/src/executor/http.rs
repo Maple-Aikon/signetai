@@ -135,7 +135,16 @@ impl HookExecutor for HttpExecutor {
 
         debug!("HTTP hook response: status={}, body_len={}", status, body.len());
 
-        // Parse body as HookOutput regardless of status code
+        if !status.is_success() {
+            warn!(
+                "HTTP hook returned non-2xx status {} for {}: body={:?}",
+                status,
+                self.url,
+                &body[..body.len().min(200)]
+            );
+        }
+
+        // Parse body as HookOutput regardless of status code (mirrors Claude Code behavior)
         match serde_json::from_str::<HookOutput>(&body) {
             Ok(output) => output,
             Err(_) => {

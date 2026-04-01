@@ -2613,6 +2613,16 @@ impl App {
             AgentEvent::MemoryCount(count) => {
                 self.memories_injected = count;
             }
+            AgentEvent::Blocked(reason) => {
+                // Hook policy denial — shown as a status notice, not an error,
+                // so the user understands it was intentional rather than a crash.
+                self.streaming_text.clear();
+                self.pending_text.clear();
+                self.turn_complete_pending = false;
+                self.entries.push(ChatEntry::Status(format!("↯ Blocked: {reason}")));
+                self.processing = false;
+                self.processing_phase = ProcessingPhase::Idle;
+            }
         }
     }
 
