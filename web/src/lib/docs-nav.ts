@@ -7,9 +7,17 @@ export const SECTION_ORDER = [
 	"Infrastructure",
 	"Features",
 	"Project",
+] as const;
+
+/** Sections not shown in the public sidebar */
+const HIDDEN_SECTIONS = new Set([
 	"Specs",
 	"Research",
-] as const;
+	"Architecture",
+	"Development",
+	"Internal",
+	"Other",
+]);
 
 export interface DocNavItem {
 	readonly title: string;
@@ -82,6 +90,7 @@ export function buildDocsNav(docs: readonly CollectionEntry<"docs">[]): {
 	}
 
 	for (const [label, items] of grouped) {
+		if (HIDDEN_SECTIONS.has(label)) continue;
 		sections.push({ label, items });
 	}
 

@@ -1,0 +1,331 @@
+---
+const slides = [
+  { src: "/UI01.png", alt: "Signet Agent Overview — dashboard showing agent health, memory scoring, and session insights", label: "Agent Overview" },
+  { src: "/UI02.png", alt: "Signet Skills Marketplace — browse and install AI skills with trust profiles and reviews", label: "Skills Marketplace" },
+  { src: "/UI03.png", alt: "Signet Ontology Explorer — constellation graph view of knowledge entities and relationships", label: "Knowledge Graph" },
+];
+---
+
+<svg class="showcase-filters" aria-hidden="true">
+  <defs>
+    <filter id="glass-grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="4" stitchTiles="stitch" result="noise" />
+      <feColorMatrix type="saturate" values="0" in="noise" result="mono" />
+      <feBlend in="SourceGraphic" in2="mono" mode="overlay" result="grained" />
+    </filter>
+    <filter id="light-warp">
+      <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="3" seed="2" stitchTiles="stitch" result="warp" />
+      <feDisplacementMap in="SourceGraphic" in2="warp" scale="8" xChannelSelector="R" yChannelSelector="G" />
+    </filter>
+  </defs>
+</svg>
+
+<section class="showcase">
+  <div class="showcase-inner">
+    <div class="showcase-frame" id="showcase-frame">
+      {slides.map((slide, i) => (
+        <img
+          class:list={["showcase-img", { active: i === 0 }]}
+          src={slide.src}
+          alt={slide.alt}
+          loading="eager"
+          draggable="false"
+          data-index={i}
+        />
+      ))}
+    </div>
+
+    <div class="showcase-nav" id="showcase-nav">
+      {slides.map((slide, i) => (
+        <button
+          class:list={["showcase-tab", { active: i === 0 }]}
+          data-index={i}
+          aria-label={`Show ${slide.label}`}
+        >
+          <span class="showcase-tab-label">{slide.label}</span>
+          <span class="showcase-tab-bar"></span>
+        </button>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .showcase-filters {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+  }
+
+  .showcase {
+    position: relative;
+    padding: var(--space-3xl) 0 var(--space-2xl);
+  }
+
+  /* Ambient lighting behind the card */
+  .showcase::before {
+    content: "";
+    position: absolute;
+    top: 45%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    height: 70%;
+    background:
+      radial-gradient(
+        ellipse 60% 50% at 50% 50%,
+        color-mix(in srgb, var(--color-accent) 11%, transparent) 0%,
+        color-mix(in srgb, var(--color-accent) 5%, transparent) 35%,
+        transparent 70%
+      ),
+      radial-gradient(
+        ellipse 40% 60% at 30% 40%,
+        color-mix(in srgb, var(--color-accent) 6%, transparent) 0%,
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 40% 60% at 70% 60%,
+        color-mix(in srgb, var(--color-accent) 5%, transparent) 0%,
+        transparent 60%
+      );
+    pointer-events: none;
+    z-index: 0;
+    filter: blur(80px);
+    animation: glow-pulse 8s ease-in-out infinite alternate;
+  }
+
+  @keyframes glow-pulse {
+    0% { opacity: 0.7; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+  }
+
+  .showcase-inner {
+    position: relative;
+    z-index: 1;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+
+  .showcase-frame {
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--color-surface) 30%, transparent);
+    box-shadow:
+      0 24px 80px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+    padding: 1px;
+  }
+
+  /* Glass border — thick frosted ring with light shining behind */
+  .showcase-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.08) 0%,
+        rgba(255, 255, 255, 0.02) 50%,
+        rgba(255, 255, 255, 0.06) 100%
+      );
+    filter: url(#glass-grain);
+    mix-blend-mode: multiply;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  /* Light beam shining behind the glass border */
+  .showcase-frame::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: 18px;
+    padding: 6px;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    background: conic-gradient(
+      from var(--border-angle, 0deg),
+      transparent 25%,
+      var(--color-accent) 50%,
+      transparent 75%
+    );
+    filter: blur(6px) url(#light-warp);
+    z-index: 1;
+    pointer-events: none;
+    animation: liquid-spin 8s linear infinite;
+  }
+
+  @property --border-angle {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+  }
+
+  @keyframes liquid-spin {
+    to { --border-angle: 360deg; }
+  }
+
+  [data-theme="light"] .showcase-frame {
+    box-shadow:
+      0 24px 80px rgba(0, 0, 0, 0.12),
+      0 0 0 1px rgba(0, 0, 0, 0.04) inset;
+  }
+
+  .showcase-img {
+    display: block;
+    width: 100%;
+    height: auto;
+    opacity: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    transition: opacity 0.5s ease;
+    pointer-events: none;
+  }
+
+  /* First image is in flow to set container height */
+  .showcase-img:first-child {
+    position: relative;
+  }
+
+  .showcase-img.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Nav tabs */
+  .showcase-nav {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin-top: var(--space-lg);
+  }
+
+  .showcase-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px 0;
+    outline: none;
+  }
+
+  .showcase-tab-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    transition: color 0.3s ease;
+  }
+
+  .showcase-tab:hover .showcase-tab-label {
+    color: var(--color-text-bright);
+  }
+
+  .showcase-tab.active .showcase-tab-label {
+    color: var(--color-accent);
+  }
+
+  .showcase-tab-bar {
+    display: block;
+    width: 40px;
+    height: 2px;
+    background: var(--color-border);
+    border-radius: 1px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .showcase-tab-bar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--color-accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.3s ease;
+  }
+
+  .showcase-tab.active .showcase-tab-bar::after {
+    transform: scaleX(1);
+    animation: showcase-fill 5s linear forwards;
+  }
+
+  @keyframes showcase-fill {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+
+  @media (max-width: 700px) {
+    .showcase {
+      padding: var(--space-2xl) 0 var(--space-xl);
+    }
+    .showcase-frame {
+      border-radius: 10px;
+    }
+    .showcase-nav {
+      gap: 20px;
+    }
+    .showcase-tab-label {
+      font-size: 10px;
+    }
+  }
+</style>
+
+<script>
+  const frame = document.getElementById("showcase-frame");
+  const nav = document.getElementById("showcase-nav");
+  if (frame && nav) {
+    const imgs = frame.querySelectorAll<HTMLImageElement>(".showcase-img");
+    const tabs = nav.querySelectorAll<HTMLButtonElement>(".showcase-tab");
+    let current = 0;
+    let timer: ReturnType<typeof setInterval>;
+
+    function goTo(idx: number) {
+      current = idx;
+      imgs.forEach((img, i) => img.classList.toggle("active", i === idx));
+      tabs.forEach((tab, i) => tab.classList.toggle("active", i === idx));
+    }
+
+    function advance() {
+      goTo((current + 1) % imgs.length);
+    }
+
+    function resetTimer() {
+      clearInterval(timer);
+      timer = setInterval(advance, 5000);
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        goTo(Number(tab.dataset.index));
+        resetTimer();
+      });
+    });
+
+    resetTimer();
+  }
+</script>

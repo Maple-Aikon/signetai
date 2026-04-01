@@ -107,6 +107,9 @@ const hasToc = tocHeadings.length > 2;
               </ul>
             </nav>
 
+            {currentSlug ? (
+              <GraphViewer client:idle currentSlug={currentSlug} collection="docs" mode="local" />
+            ) : null}
           </div>
         </aside>
       ) : null}

@@ -11,6 +11,17 @@ const posts = (await getCollection("blog"))
 	.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
 
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
+
+const featured = posts[0];
+const rest = posts.slice(1);
+
+function formatDate(date: Date) {
+	return date.toLocaleDateString('en-US', {
+		year: 'numeric',
+		month: 'long',
+		day: 'numeric',
+	});
+}
 ---
 
 <Base title="Blog — SignetAI" description="Updates, ideas, and technical writing from the Signet team.">
@@ -18,14 +29,8 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
 
   <div class="blog-shell">
     <main class="blog-main blog-main--index">
-      <div class="section-header">
-        <div class="crosshair"></div>
-        <span class="section-label">Blog</span>
-      </div>
-
       <header class="blog-index-header">
         <h1>Blog</h1>
-        <p>Updates, ideas, and technical writing from the Signet team.</p>
       </header>
 
       <StructuredData data={{
@@ -40,36 +45,38 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
         },
       }} />
 
-      <div class="blog-index">
-        {posts.map((post) => {
-          const formattedDate = post.data.date.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          });
-          return (
-            <a class="blog-card" href={`/blog/${post.id}/`}>
-              {post.data.image ? (
-                <img class="blog-card-image" src={post.data.image} alt="" width="780" height="400" loading="lazy" />
-              ) : null}
-              <p class="blog-card-date">{formattedDate}</p>
+      {/* Featured post */}
+      {featured ? (
+        <a class="blog-featured" href={`/blog/${featured.id}/`}>
+          {featured.data.image ? (
+            <img class="blog-featured-image" src={featured.data.image} alt="" width="780" height="400" loading="eager" />
+          ) : null}
+          <div class="blog-featured-body">
+            <h2>{featured.data.title}</h2>
+            <p>{featured.data.description}</p>
+            <div class="blog-featured-meta">
+              <time datetime={featured.data.date.toISOString().slice(0, 10)}>{formatDate(featured.data.date)}</time>
+            </div>
+          </div>
+        </a>
+      ) : null}
+
+      {/* Post grid */}
+      <div class="blog-grid">
+        {rest.map((post) => (
+          <a class="blog-grid-card" href={`/blog/${post.id}/`}>
+            <div class="blog-grid-card-body">
               <h2>{post.data.title}</h2>
               <p>{post.data.description}</p>
-              {post.data.tags.length > 0 ? (
-                <div class="blog-card-tags">
-                  {post.data.tags.map((tag) => (
-                    <span class="blog-tag">{tag}</span>
-                  ))}
-                </div>
-              ) : null}
-            </a>
-          );
-        })}
+            </div>
+            <div class="blog-grid-card-footer">
+              <time datetime={post.data.date.toISOString().slice(0, 10)}>{formatDate(post.data.date)}</time>
+            </div>
+          </a>
+        ))}
       </div>
     </main>
   </div>
 
   <Footer />
-
-  <script src="../../scripts/masonry-layout.ts"></script>
 </Base>

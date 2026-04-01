@@ -1,4 +1,21 @@
-// initLatentTopology: ASCII dither background + latent topology graph + hex stream.
+// initLatentTopology: ASCII dither background + latent topology graph + machined bars.
+
+export type AnimState = {
+	ctx: CanvasRenderingContext2D;
+	width: number;
+	height: number;
+	time: number;
+	isDark: boolean;
+	lowPowerMode: boolean;
+};
+
+type Renderer = (state: AnimState) => void;
+const renderers: Set<Renderer> = new Set();
+
+export function registerRenderer(fn: Renderer): () => void {
+	renderers.add(fn);
+	return () => { renderers.delete(fn); };
+}
 
 type Node = {
 	id: string;
@@ -9,44 +26,10 @@ type Node = {
 	baseX: number;
 	baseY: number;
 	isHub: boolean;
+	pulse: number;
 };
-
-export type AnimState = {
-	ctx: CanvasRenderingContext2D;
-	asciiCtx: CanvasRenderingContext2D;
-	width: number;
-	height: number;
-	time: number;
-	mouse: { x: number; y: number };
-	nodes: Node[];
-	isDark: boolean;
-	lowPowerMode: boolean;
-	highlightColor: string;
-	nodeColor: string;
-	edgeColor: string;
-	surfaceColor: string;
-};
-
-export type CanvasRenderer = (state: AnimState) => void;
-
-const renderers: CanvasRenderer[] = [];
-
-export function registerRenderer(fn: CanvasRenderer): () => void {
-	renderers.push(fn);
-	return () => {
-		const idx = renderers.indexOf(fn);
-		if (idx >= 0) renderers.splice(idx, 1);
-	};
-}
-
-declare global {
-	interface Window {
-		initLatentTopology?: () => void;
-	}
-}
 
 let topologyCleanup: (() => void) | null = null;
-let lifecycleBound = false;
 
 function cleanupLatentTopology() {
 	if (typeof topologyCleanup === "function") {
@@ -60,46 +43,55 @@ function initLatentTopology() {
 
 	const canvasEl = document.getElementById("latent-topology");
 	const asciiCanvasEl = document.getElementById("ascii-dither");
+	const barsCanvasEl = document.getElementById("hero-bg-bars");
+	
 	if (!(canvasEl instanceof HTMLCanvasElement)) return;
 	if (!(asciiCanvasEl instanceof HTMLCanvasElement)) return;
+	if (!(barsCanvasEl instanceof HTMLCanvasElement)) return;
 
-	const canvas: HTMLCanvasElement = canvasEl;
-	const asciiCanvas: HTMLCanvasElement = asciiCanvasEl;
-	const ctxMaybe = canvas.getContext("2d");
-	const asciiCtxMaybe = asciiCanvas.getContext("2d");
-	if (!ctxMaybe || !asciiCtxMaybe) return;
-
-	const ctx: CanvasRenderingContext2D = ctxMaybe;
-	const asciiCtx: CanvasRenderingContext2D = asciiCtxMaybe;
+	const ctx = canvasEl.getContext("2d")!;
+	const asciiCtx = asciiCanvasEl.getContext("2d")!;
+	const barsCtx = barsCanvasEl.getContext("2d")!;
 
 	let width = window.innerWidth;
 	let height = window.innerHeight;
 
 	const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-	const nodeColor = isDark ? "rgba(138, 138, 150, 0.8)" : "rgba(106, 102, 96, 0.8)";
-	const edgeColor = isDark ? "rgba(255, 255, 255, 0.15)" : "rgba(0, 0, 0, 0.15)";
-	const highlightColor = isDark ? "rgba(240, 240, 242, 1)" : "rgba(10, 10, 12, 1)";
-	const ditherColor = isDark ? "rgba(255, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.04)";
-	const surfaceColor = isDark ? "#0e0e12" : "#dbd5cd";
+	const accentColor = getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim() || "#c8ff00";
+	
+	const nodeColor = isDark ? "rgba(138, 138, 150, 0.4)" : "rgba(106, 102, 96, 0.4)";
+	const edgeColor = isDark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)";
+	const highlightColor = accentColor;
+	const ditherColor = isDark ? "rgba(255, 255, 255, 0.02)" : "rgba(0, 0, 0, 0.03)";
+	
 	const lowPowerMode =
 		window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
 		window.matchMedia("(max-width: 900px)").matches ||
 		navigator.hardwareConcurrency <= 4;
 
-	const numNodes = lowPowerMode ? 36 : 96;
+	// Machined Bars Setup - Lower opacity and fewer bars for subtler look
+	const bars: { x: number; width: number; speed: number; opacity: number }[] = [];
+	const numBars = 10;
+	for (let i = 0; i < numBars; i++) {
+		bars.push({
+			x: (i / numBars) * width * 2,
+			width: 60 + Math.random() * 120,
+			speed: 0.1 + Math.random() * 0.3,
+			opacity: 0.04 + Math.random() * 0.08
+		});
+	}
+
+	// Nodes Setup
+	const numNodes = lowPowerMode ? 40 : 120;
+	const nodes: Node[] = [];
 	const clusters = [
-		{ x: width * 0.62, y: height * 0.24, r: 160 },
-		{ x: width * 0.78, y: height * 0.52, r: 210 },
-		{ x: width * 0.56, y: height * 0.76, r: 140 },
-		{ x: width * 0.88, y: height * 0.36, r: 120 },
-		{ x: width * 0.9, y: height * 0.74, r: 150 },
-		{ x: width * 0.2, y: height * 0.3, r: 180 },
-		{ x: width * 0.3, y: height * 0.8, r: 150 },
+		{ x: width * 0.62, y: height * 0.24, r: 200 },
+		{ x: width * 0.78, y: height * 0.52, r: 250 },
+		{ x: width * 0.56, y: height * 0.76, r: 180 },
+		{ x: width * 0.2, y: height * 0.3, r: 220 },
+		{ x: width * 0.3, y: height * 0.8, r: 180 },
 	];
 
-	// Node type is declared at module scope for export
-
-	const nodes: Node[] = [];
 	for (let i = 0; i < numNodes; i++) {
 		const cluster = clusters[Math.floor(Math.random() * clusters.length)];
 		const u = 1 - Math.random();
@@ -107,334 +99,189 @@ function initLatentTopology() {
 		const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 
 		nodes.push({
-			id: `0x${Math.floor(Math.random() * 65535)
-				.toString(16)
-				.toUpperCase()
-				.padStart(4, "0")}`,
+			id: `0x${Math.floor(Math.random() * 65535).toString(16).toUpperCase().padStart(4, "0")}`,
 			x: cluster.x + z * (cluster.r / 2),
 			y: cluster.y + (Math.random() - 0.5) * cluster.r,
-			vx: (Math.random() - 0.5) * 0.2,
-			vy: (Math.random() - 0.5) * 0.2,
+			vx: (Math.random() - 0.5) * 0.1,
+			vy: (Math.random() - 0.5) * 0.1,
 			baseX: 0,
 			baseY: 0,
-			isHub: Math.random() > 0.95,
+			isHub: Math.random() > 0.92,
+			pulse: Math.random() * Math.PI * 2,
 		});
 		nodes[i].baseX = nodes[i].x;
 		nodes[i].baseY = nodes[i].y;
 	}
 
 	function resize() {
-		const nextWidth = window.innerWidth;
-		const nextHeight = window.innerHeight;
+		const dpr = Math.min(window.devicePixelRatio || 1, 2);
+		width = window.innerWidth;
+		height = window.innerHeight;
 
-		const oldWidth = width || nextWidth;
-		const oldHeight = height || nextHeight;
-
-		width = nextWidth;
-		height = nextHeight;
-
-		const scaleX = oldWidth ? width / oldWidth : 1;
-		const scaleY = oldHeight ? height / oldHeight : 1;
-
-		nodes.forEach((node) => {
-			node.x *= scaleX;
-			node.y *= scaleY;
-			node.baseX *= scaleX;
-			node.baseY *= scaleY;
+		[canvasEl, asciiCanvasEl, barsCanvasEl].forEach(c => {
+			c.width = width * dpr;
+			c.height = height * dpr;
+			const context = c.getContext("2d")!;
+			context.setTransform(dpr, 0, 0, dpr, 0, 0);
 		});
-
-		const dpr = Math.min(window.devicePixelRatio || 1, lowPowerMode ? 1 : 1.5);
-
-		canvas.width = Math.max(1, Math.floor(width * dpr));
-		canvas.height = Math.max(1, Math.floor(height * dpr));
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-		asciiCanvas.width = Math.max(1, Math.floor(width * dpr));
-		asciiCanvas.height = Math.max(1, Math.floor(height * dpr));
-		asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 	}
 
-	const onResize = () => resize();
-	window.addEventListener("resize", onResize);
+	window.addEventListener("resize", resize);
 	resize();
 
 	const mouse = { x: -1000, y: -1000 };
-	const onMouseMove = (e: MouseEvent) => {
+	document.addEventListener("mousemove", (e) => {
 		mouse.x = e.clientX;
 		mouse.y = e.clientY;
-	};
-	const onMouseLeave = () => {
-		mouse.x = -1000;
-		mouse.y = -1000;
-	};
+	});
 
-	if (!lowPowerMode) {
-		document.addEventListener("mousemove", onMouseMove);
-		document.addEventListener("mouseleave", onMouseLeave);
-	}
-
-	const chars = "01_.*+=".split("");
 	let time = 0;
 	let rafId: number | null = null;
 	let lastAsciiDraw = 0;
-	let animationActive = !document.hidden;
 
-	// 1. ASCII Dithering Background (throttled for perf)
+	function drawBars() {
+		barsCtx.clearRect(0, 0, width, height);
+		
+		barsCtx.save();
+		barsCtx.rotate(-Math.PI / 4);
+		barsCtx.translate(-width, 0);
+
+		bars.forEach((bar) => {
+			bar.x += bar.speed * (isDark ? 0.5 : -0.5);
+			if (bar.x > width * 3) bar.x = -width;
+			if (bar.x < -width) bar.x = width * 3;
+
+			const gradient = barsCtx.createLinearGradient(bar.x, 0, bar.x + bar.width, 0);
+			const baseColor = accentColor;
+			
+			// Softer gradient transition
+			gradient.addColorStop(0, "transparent");
+			gradient.addColorStop(0.5, `${baseColor}${Math.floor(bar.opacity * 255).toString(16).padStart(2, '0')}`);
+			gradient.addColorStop(1, "transparent");
+
+			barsCtx.fillStyle = gradient;
+			barsCtx.fillRect(bar.x, -height * 2, bar.width, height * 4);
+		});
+		barsCtx.restore();
+
+		// More aggressive vignette mask for atmospheric focus
+		const mask = barsCtx.createRadialGradient(width / 2, height * 0.3, width * 0.1, width / 2, height * 0.3, width * 0.6);
+		mask.addColorStop(0, "rgba(0,0,0,0.8)");
+		mask.addColorStop(1, "rgba(0,0,0,0)");
+		
+		barsCtx.globalCompositeOperation = "destination-in";
+		barsCtx.fillStyle = mask;
+		barsCtx.fillRect(0, 0, width, height);
+		barsCtx.globalCompositeOperation = "source-over";
+	}
+
 	function drawAscii() {
 		const now = performance.now();
-		const minIntervalMs = lowPowerMode ? 150 : 70;
-		if (now - lastAsciiDraw > minIntervalMs) {
-			lastAsciiDraw = now;
-			asciiCtx.clearRect(0, 0, width, height);
-			asciiCtx.fillStyle = ditherColor;
-			asciiCtx.font = '500 10px "IBM Plex Mono", monospace';
+		if (now - lastAsciiDraw < 80) return;
+		lastAsciiDraw = now;
 
-			const step = lowPowerMode ? 44 : 32;
-			for (let y = 0; y < height; y += step) {
-				for (let x = 0; x < width; x += step) {
-					const noise = Math.sin(x * 0.003 + time) * Math.cos(y * 0.003 + time);
-					if (Math.abs(noise) > 0.4) {
-						const char = chars[Math.floor(Math.abs(noise) * chars.length) % chars.length];
-						asciiCtx.fillText(char, x, y);
-					}
+		asciiCtx.clearRect(0, 0, width, height);
+		asciiCtx.fillStyle = ditherColor;
+		asciiCtx.font = '500 9px "IBM Plex Mono", monospace';
+
+		const step = 32;
+		for (let y = 0; y < height; y += step) {
+			for (let x = 0; x < width; x += step) {
+				const noise = Math.sin(x * 0.002 + time * 0.5) * Math.cos(y * 0.002 + time * 0.5);
+				if (Math.abs(noise) > 0.5) {
+					asciiCtx.fillText("01_.*+=".split("")[Math.floor(Math.abs(noise) * 7) % 7], x, y);
 				}
 			}
 		}
 	}
 
-	// 2. Nodes and connections
 	function drawNodes() {
-		if (!animationActive) {
-			rafId = null;
-			return;
-		}
-
+		time += 0.005;
+		drawBars();
 		drawAscii();
 		ctx.clearRect(0, 0, width, height);
-		time += 0.01;
 
 		let hoveredNode: Node | null = null;
-		let minDist = Number.POSITIVE_INFINITY;
+		let minDist = 60;
 
-		for (let i = 0; i < numNodes; i++) {
-			const n = nodes[i];
-			n.x += n.vx;
-			n.y += n.vy;
-			n.x += (n.baseX - n.x) * 0.005;
-			n.y += (n.baseY - n.y) * 0.005;
+		nodes.forEach(n => {
+			n.x += n.vx; n.y += n.vy;
+			n.x += (n.baseX - n.x) * 0.01;
+			n.y += (n.baseY - n.y) * 0.01;
+			n.pulse += 0.02;
 
 			const dx = mouse.x - n.x;
 			const dy = mouse.y - n.y;
-			const dist = Math.sqrt(dx * dx + dy * dy);
-
-			if (dist < 120 && dist > 0.001) {
-				n.x -= (dx / dist) * 1.5;
-				n.y -= (dy / dist) * 1.5;
+			const d = Math.sqrt(dx * dx + dy * dy);
+			if (d < 150) {
+				n.x -= (dx / d) * 0.5;
+				n.y -= (dy / d) * 0.5;
+				if (d < minDist) { minDist = d; hoveredNode = n; }
 			}
+		});
 
-			if (dist < 40 && dist < minDist) {
-				minDist = dist;
-				hoveredNode = n;
-			}
-		}
-
-		ctx.lineWidth = 1;
-		for (let i = 0; i < numNodes; i++) {
+		ctx.lineWidth = 0.5;
+		for (let i = 0; i < nodes.length; i++) {
 			let connections = 0;
-			for (let j = i + 1; j < numNodes; j++) {
-				const dx = nodes[i].x - nodes[j].x;
-				const dy = nodes[i].y - nodes[j].y;
-				const dist = dx * dx + dy * dy;
-
-				if (dist < 12000 && connections < 4) {
-					const a = nodes[i];
-					const b = nodes[j];
-
-					// Quadratic bezier with 12% offset
-					const mx = (a.x + b.x) / 2 + dy * 0.12;
-					const my = (a.y + b.y) / 2 - dx * 0.12;
-
-					ctx.beginPath();
-					ctx.moveTo(a.x, a.y);
-					ctx.quadraticCurveTo(mx, my, b.x, b.y);
-
+			for (let j = i + 1; j < nodes.length; j++) {
+				const a = nodes[i], b = nodes[j];
+				const dx = a.x - b.x, dy = a.y - b.y;
+				if (dx * dx + dy * dy < 15000 && connections < 3) {
 					const isHoveredEdge = hoveredNode === a || hoveredNode === b;
-
-					if (isHoveredEdge) {
-						ctx.strokeStyle = highlightColor;
-						ctx.lineWidth = 1.5;
-						ctx.setLineDash([]);
-					} else {
-						ctx.strokeStyle = edgeColor;
-						ctx.lineWidth = 1;
-						// Fix flicker: use deterministic dash based on node indices
-						ctx.setLineDash((i + j) % 3 === 0 ? [4, 6] : []);
+					ctx.strokeStyle = isHoveredEdge ? highlightColor : edgeColor;
+					ctx.globalAlpha = isHoveredEdge ? 0.4 : 0.3;
+					ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+					if (isHoveredEdge || (i + j) % 11 === 0) {
+						const speed = 3000;
+						const t = ((Date.now() + i * 500) % speed) / speed;
+						ctx.fillStyle = isHoveredEdge ? highlightColor : accentColor;
+						ctx.globalAlpha = isHoveredEdge ? 0.8 : 0.2;
+						ctx.beginPath(); ctx.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, isHoveredEdge ? 2 : 1, 0, Math.PI * 2); ctx.fill();
 					}
-
-					ctx.stroke();
-
-					// Fix flicker: use deterministic packet spawning
-					if (isHoveredEdge || (i * j) % 7 === 0) {
-						// Stable speed and offset so packets don't jump around
-						const speed = 2000 + ((i + j) % 3) * 1000;
-						const offset = (i * j * 333) % speed;
-						const t = ((Date.now() + offset) % speed) / speed;
-
-						const px = (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * mx + t * t * b.x;
-						const py = (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * my + t * t * b.y;
-
-						ctx.beginPath();
-						ctx.arc(px, py, isHoveredEdge ? 2 : 1.5, 0, Math.PI * 2);
-						ctx.fillStyle = isHoveredEdge ? highlightColor : nodeColor;
-						ctx.fill();
-					}
-
 					connections++;
 				}
-				if (connections >= 4) break;
 			}
 		}
-		ctx.setLineDash([]);
 
-		for (let i = 0; i < numNodes; i++) {
-			const n = nodes[i];
+		ctx.globalAlpha = 1;
+		nodes.forEach(n => {
 			const isHovered = n === hoveredNode;
-
 			ctx.strokeStyle = isHovered ? highlightColor : nodeColor;
 			ctx.lineWidth = isHovered ? 1.5 : 1;
-
-			const size = isHovered ? 8 : n.isHub ? 6 : 4;
-
-			// Draw Crosshair
-			ctx.beginPath();
-			ctx.moveTo(n.x - size, n.y);
-			ctx.lineTo(n.x + size, n.y);
-			ctx.moveTo(n.x, n.y - size);
-			ctx.lineTo(n.x, n.y + size);
-			ctx.stroke();
-
-			// Draw Hub Circle
+			const size = n.isHub ? 4 : 2;
+			const p = Math.sin(n.pulse) * 2;
 			if (n.isHub || isHovered) {
-				ctx.beginPath();
-				ctx.arc(n.x, n.y, size + 4, 0, Math.PI * 2);
-				ctx.strokeStyle = isHovered ? highlightColor : edgeColor;
-				ctx.stroke();
+				ctx.beginPath(); ctx.arc(n.x, n.y, size + 2 + p, 0, Math.PI * 2);
+				ctx.strokeStyle = isHovered ? highlightColor : edgeColor; ctx.stroke();
 			}
-
-			// Draw Hover HUD
+			ctx.beginPath(); ctx.moveTo(n.x - size, n.y); ctx.lineTo(n.x + size, n.y);
+			ctx.moveTo(n.x, n.y - size); ctx.lineTo(n.x, n.y + size); ctx.stroke();
 			if (isHovered) {
-				ctx.save();
-				ctx.translate(n.x, n.y);
-				ctx.rotate(time * 2);
-				ctx.beginPath();
-				ctx.arc(0, 0, 18, 0, Math.PI * 2);
-				ctx.setLineDash([4, 4]);
-				ctx.strokeStyle = highlightColor;
-				ctx.stroke();
-				ctx.restore();
-
-				ctx.fillStyle = surfaceColor;
-				ctx.strokeStyle = highlightColor;
-				ctx.setLineDash([]);
-				ctx.fillRect(n.x - 40, n.y - 45, 80, 26);
-				ctx.strokeRect(n.x - 40, n.y - 45, 80, 26);
-
-				ctx.beginPath();
-				ctx.moveTo(n.x, n.y - 19);
-				ctx.lineTo(n.x, n.y - 12);
-				ctx.stroke();
-
-				ctx.fillStyle = highlightColor;
-				ctx.font = '8px "IBM Plex Mono", monospace';
-				ctx.textAlign = "center";
-				ctx.fillText(`MEM: ${n.id}`, n.x, n.y - 34);
-				ctx.fillText("STS: ACTIVE", n.x, n.y - 24);
+				ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.strokeStyle = highlightColor;
+				ctx.beginPath(); ctx.roundRect(n.x + 10, n.y - 40, 90, 30, 4); ctx.fill(); ctx.stroke();
+				ctx.fillStyle = highlightColor; ctx.font = '700 8px "IBM Plex Mono", monospace';
+				ctx.fillText(`ID: ${n.id}`, n.x + 18, n.y - 28);
+				ctx.font = '400 7px "IBM Plex Mono", monospace';
+				ctx.fillText(`LOC: ${Math.round(n.x)},${Math.round(n.y)}`, n.x + 18, n.y - 18);
 			}
-		}
+		});
 
-		// Run registered renderer plugins
-		if (renderers.length > 0) {
-			const state: AnimState = {
-				ctx, asciiCtx, width, height, time, mouse, nodes,
-				isDark, lowPowerMode,
-				highlightColor, nodeColor, edgeColor, surfaceColor,
-			};
-			for (const render of renderers) render(state);
-		}
+		// Dispatch to registered external renderers
+		const state: AnimState = { ctx, width, height, time, isDark, lowPowerMode };
+		for (const fn of renderers) fn(state);
 
 		rafId = requestAnimationFrame(drawNodes);
 	}
 
-	function startLoops() {
-		if (rafId !== null) return;
-		rafId = requestAnimationFrame(drawNodes);
-	}
-
-	function stopLoops() {
-		if (rafId !== null) {
-			cancelAnimationFrame(rafId);
-			rafId = null;
-		}
-	}
-
-	const onVisibilityChange = () => {
-		animationActive = !document.hidden;
-		if (animationActive) {
-			startLoops();
-			return;
-		}
-		stopLoops();
-	};
-
-	document.addEventListener("visibilitychange", onVisibilityChange);
-	startLoops();
-
-	// Populate Hex Stream using safe DOM methods (all content is programmatically generated)
-	const hexContent = document.querySelector(".hex-content");
-	if (hexContent) {
-		const frag = document.createDocumentFragment();
-		// Duplicate rows for seamless CSS scroll loop
-		const rows = lowPowerMode ? 40 : 80;
-		for (let rep = 0; rep < 2; rep++) {
-			for (let i = 0; i < rows; i++) {
-				const addr = `0x${Math.floor(Math.random() * 65535)
-					.toString(16)
-					.padStart(4, "0")
-					.toUpperCase()}`;
-				const data1 = Math.random().toString(16).substring(2, 10).toUpperCase();
-				const data2 = Math.random().toString(16).substring(2, 10).toUpperCase();
-				const ascii = Math.random()
-					.toString(36)
-					.substring(2, 10)
-					.replace(/[^a-z]/g, ".");
-				const line = document.createElement("div");
-				line.textContent = `${addr}  ${data1} ${data2}  [${ascii}]`;
-				frag.appendChild(line);
-			}
-		}
-		hexContent.appendChild(frag);
-	}
+	rafId = requestAnimationFrame(drawNodes);
 
 	topologyCleanup = () => {
-		stopLoops();
-		document.removeEventListener("visibilitychange", onVisibilityChange);
-		window.removeEventListener("resize", onResize);
-		if (!lowPowerMode) {
-			document.removeEventListener("mousemove", onMouseMove);
-			document.removeEventListener("mouseleave", onMouseLeave);
-		}
+		if (rafId) cancelAnimationFrame(rafId);
+		window.removeEventListener("resize", resize);
 	};
 }
 
-// Expose globally so theme toggle can reinitialize with correct colors
 window.initLatentTopology = initLatentTopology;
-
-if (!lifecycleBound) {
-	lifecycleBound = true;
-	document.addEventListener("astro:page-load", () => {
-		window.initLatentTopology?.();
-	});
-	document.addEventListener("astro:before-swap", cleanupLatentTopology);
-}
-
+document.addEventListener("astro:page-load", () => window.initLatentTopology?.());
+document.addEventListener("astro:before-swap", cleanupLatentTopology);
 initLatentTopology();

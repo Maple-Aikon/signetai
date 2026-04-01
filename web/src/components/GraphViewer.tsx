@@ -146,16 +146,17 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 
 		// ─── Colors ──────────────────────────────────────────────
 		const isLocal = activeMode === "local";
+		const accentColor = getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim() || "#c8ff00";
 
 		// Node colors by role
-		const COL_CURRENT = "#f0f0f2"; // bright white for current
-		const COL_DOC = "#8b8b94"; // muted for docs
-		const COL_BLOG = "#a0a0aa"; // slightly brighter for blog
-		const COL_LINK = "rgba(255,255,255,0.08)"; // subtle links
-		const COL_LINK_HIGHLIGHT = "rgba(255,255,255,0.25)"; // highlighted links
-		const COL_LABEL = "#d4d4d8";
+		const COL_CURRENT = accentColor; 
+		const COL_DOC = "#8b8b94"; 
+		const COL_BLOG = "#a0a0aa"; 
+		const COL_LINK = "rgba(255,255,255,0.06)"; 
+		const COL_LINK_HIGHLIGHT = "rgba(200,255,0,0.25)"; 
+		const COL_LABEL = "#f0f0f2";
 		const COL_LABEL_MUTED = "#6b6b73";
-		const COL_GLOW = "rgba(255,255,255,0.06)"; // current node glow
+		const COL_GLOW = "rgba(200,255,0,0.08)"; 
 
 		// Build adjacency for hover highlighting
 		const adjacency = new Map<string, Set<string>>();
@@ -174,11 +175,11 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 				"link",
 				forceLink<GraphNode, GraphLink>(links)
 					.id((d) => d.id)
-					.distance(isLocal ? 70 : 80),
+					.distance(isLocal ? 80 : 100),
 			)
-			.force("charge", forceManyBody().strength(isLocal ? -180 : -120))
+			.force("charge", forceManyBody().strength(isLocal ? -250 : -150))
 			.force("center", forceCenter(width / 2, height / 2))
-			.force("collide", forceCollide(isLocal ? 28 : 20));
+			.force("collide", forceCollide(isLocal ? 32 : 24));
 
 		simRef.current = sim;
 
@@ -205,15 +206,16 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			ctx.scale(transform.k, transform.k);
 
 			// ─── Draw links ──────────────────────────────────
+			ctx.lineCap = "round";
 			for (const link of links) {
 				const s = link.source;
 				const t = link.target;
 				if (s.x == null || s.y == null || t.x == null || t.y == null) continue;
 
-				const highlighted = !hoveredNode || (isHighlighted(s.id) && isHighlighted(t.id));
+				const highlighted = hoveredNode && (s.id === hoveredNode || t.id === hoveredNode);
 
 				ctx.strokeStyle = highlighted ? COL_LINK_HIGHLIGHT : COL_LINK;
-				ctx.lineWidth = highlighted ? 1.2 : 0.5;
+				ctx.lineWidth = highlighted ? 1.5 : 0.8;
 				ctx.beginPath();
 				ctx.moveTo(s.x, s.y);
 				ctx.lineTo(t.x, t.y);
@@ -221,7 +223,7 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			}
 
 			// ─── Draw nodes ──────────────────────────────────
-			const baseRadius = isLocal ? 6 : 4;
+			const baseRadius = isLocal ? 5 : 3.5;
 
 			for (const node of nodes) {
 				if (node.x == null || node.y == null) continue;
@@ -232,67 +234,54 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 
 				let radius = baseRadius;
 				if (node.isCurrent) radius = baseRadius + 3;
-				else if (isHovered) radius = baseRadius + 1;
+				else if (isHovered) radius = baseRadius + 1.5;
 
 				// Glow behind current node
-				if (node.isCurrent) {
+				if (node.isCurrent || isHovered) {
 					ctx.beginPath();
-					ctx.arc(node.x, node.y, radius + 8, 0, Math.PI * 2);
-					ctx.fillStyle = COL_GLOW;
-					ctx.fill();
-
-					ctx.beginPath();
-					ctx.arc(node.x, node.y, radius + 4, 0, Math.PI * 2);
-					ctx.fillStyle = COL_GLOW;
+					ctx.arc(node.x, node.y, radius + 12, 0, Math.PI * 2);
+					ctx.fillStyle = node.isCurrent ? COL_GLOW : "rgba(255,255,255,0.03)";
 					ctx.fill();
 				}
 
 				// Node circle
 				ctx.beginPath();
 				ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
-				ctx.fillStyle = highlighted ? color : `${color}33`;
+				ctx.fillStyle = highlighted ? color : `${color}22`;
 				ctx.fill();
 
-				// Ring on current node
-				if (node.isCurrent) {
-					ctx.strokeStyle = COL_CURRENT;
+				// Ring/Border
+				if (node.isCurrent || isHovered) {
+					ctx.strokeStyle = node.isCurrent ? COL_CURRENT : COL_LABEL;
 					ctx.lineWidth = 1.5;
-					ctx.stroke();
-				}
-
-				// Ring on hovered node
-				if (isHovered && !node.isCurrent) {
-					ctx.strokeStyle = color;
-					ctx.lineWidth = 1;
 					ctx.stroke();
 				}
 			}
 
 			// ─── Draw labels ─────────────────────────────────
 			const fontSize = isLocal ? 10 : 9;
-			ctx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+			ctx.font = `600 ${fontSize}px "IBM Plex Mono", monospace`;
 			ctx.textAlign = "center";
 			ctx.textBaseline = "top";
 
 			for (const node of nodes) {
 				if (node.x == null || node.y == null) continue;
 
-				// In local mode: show labels for current + hovered + hovered neighbors only
 				const showLabel =
 					node.isCurrent || node.id === hoveredNode || (hoveredNode && adjacency.get(hoveredNode)?.has(node.id));
 
 				if (!showLabel && isLocal) continue;
 				if (!isHighlighted(node.id) && !node.isCurrent && !isLocal) continue;
 
-				const maxLen = isLocal ? 16 : 14;
+				const maxLen = isLocal ? 20 : 16;
 				const label = node.title.length > maxLen ? `${node.title.slice(0, maxLen - 1)}..` : node.title;
 
-				const r = node.isCurrent ? baseRadius + 3 : baseRadius;
-				const y = node.y + r + 4;
+				const r = node.isCurrent ? baseRadius + 3 : isHovered ? baseRadius + 1.5 : baseRadius;
+				const y = node.y + r + 6;
 
 				ctx.fillStyle = node.isCurrent ? COL_CURRENT : node.id === hoveredNode ? COL_LABEL : COL_LABEL_MUTED;
-				ctx.globalAlpha = node.isCurrent ? 1 : node.id === hoveredNode ? 0.9 : 0.6;
-				ctx.fillText(label, node.x, y);
+				ctx.globalAlpha = node.isCurrent ? 1 : node.id === hoveredNode ? 1 : 0.5;
+				ctx.fillText(label.toUpperCase(), node.x, y);
 				ctx.globalAlpha = 1;
 			}
 

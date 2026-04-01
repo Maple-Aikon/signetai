@@ -6,10 +6,12 @@ import { buildDocsNav, getDocNeighbors } from "../../lib/docs-nav";
 
 export async function getStaticPaths() {
 	const docs = await getCollection("docs");
-	return docs.map((doc) => ({
-		params: { slug: doc.id.replace(/\.md$/, "").toLowerCase() },
-		props: { doc },
-	}));
+	return docs
+		.filter((doc) => doc.id != null)
+		.map((doc) => ({
+			params: { slug: doc.id.replace(/\.md$/, "").toLowerCase() },
+			props: { doc },
+		}));
 }
 
 const { doc } = Astro.props;
