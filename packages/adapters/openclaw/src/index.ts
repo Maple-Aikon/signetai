@@ -82,13 +82,11 @@ function stripSignetMemory(content: string): string {
 	const clean = (text: string): string => text.replace(/<\/signet-memory>/gi, "").trim();
 	let text = content;
 	while (true) {
-		const lower = text.toLowerCase();
-		// Indices computed from `lower` are applied to `text`; this is safe
-		// here because JavaScript simple case-folding is length-preserving.
-		const start = lower.indexOf(SIGNET_MEMORY_OPEN);
+		const start = text.search(/<signet-memory\b/i);
 		if (start === -1) return clean(text);
-		const end = lower.indexOf(SIGNET_MEMORY_CLOSE, start);
-		if (end === -1) return clean(text.slice(0, start));
+		const closeOffset = text.slice(start).search(/<\/signet-memory>/i);
+		if (closeOffset === -1) return clean(text.slice(0, start));
+		const end = start + closeOffset;
 		const stop = end + SIGNET_MEMORY_CLOSE.length;
 		text = text.slice(0, start) + text.slice(stop);
 	}
@@ -1150,16 +1148,7 @@ async function registerMarketplaceProxyTools(
 // documented double-call is mode-gated below, but older hosts or future
 // loader changes could call with "full" twice. Keep this state on globalThis
 // so hot-reload module re-imports still honor the guard.
-const REG_SCOPE = (() => {
-	try {
-		const url = import.meta.url;
-		if (typeof url !== "string" || url.length === 0) return "default";
-		return new URL(url).pathname;
-	} catch {
-		return "default";
-	}
-})();
-const REG_KEY = `__signet_openclaw_registered__${REG_SCOPE}`;
+const REG_KEY = "__signet_openclaw_registered__signet-memory-openclaw";
 
 function readRegistered(): boolean {
 	const value = Reflect.get(globalThis, REG_KEY);
@@ -1182,7 +1171,9 @@ const signetPlugin = {
 		// Only "full" should register runtime behavior. setup-only,
 		// setup-runtime, and cli-metadata are metadata/setup passes.
 		if (mode !== "full") {
-			api.logger.warn(`signet-memory: skipping runtime registration for mode=${mode}`);
+			if (!["cli-metadata", "setup-only", "setup-runtime"].includes(mode)) {
+				api.logger.warn(`signet-memory: skipping runtime registration for unknown mode=${mode}`);
+			}
 			return;
 		}
 

@@ -1724,12 +1724,17 @@ describe("registration guard (#422)", () => {
 
 		expect(setupRuntime.tools.length).toBe(0);
 		expect(setupRuntime.hooks.size).toBe(0);
-		expect(warnMessages).toContain("signet-memory: skipping runtime registration for mode=setup-runtime");
 
 		const full = createMockApi({ registrationMode: "full" });
 		signetPlugin.register(full.api);
 		expect(full.tools.length).toBeGreaterThan(0);
 		expect(full.hooks.size).toBeGreaterThan(0);
+	});
+
+	it("warns for unknown registration modes", () => {
+		const unknown = createMockApi({ registrationMode: "mystery-mode" as OpenClawPluginApi["registrationMode"] });
+		signetPlugin.register(unknown.api);
+		expect(warnMessages).toContain("signet-memory: skipping runtime registration for unknown mode=mystery-mode");
 	});
 
 	it("allows re-registration after service stop", async () => {
