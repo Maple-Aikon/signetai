@@ -2,6 +2,10 @@ import { homedir } from "os";
 import { join } from "path";
 
 export const DEFAULT_BASE_PATH = join(homedir(), ".agents");
+
+export function expandHome(path: string): string {
+	return path.replace(/^~(?=$|[/\\])/, homedir());
+}
 export const SCHEMA_VERSION = 3;
 export const SPEC_VERSION = "1.0";
 export const SCHEMA_ID = "signet/v1";

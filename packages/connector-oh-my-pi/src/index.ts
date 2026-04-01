@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, expandHome } from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
 import {
 	clearConfiguredOhMyPiAgentDir,
+	expandHome,
 	getOhMyPiConfigPath,
 	listOhMyPiAgentDirCandidates,
 	resolveOhMyPiAgentDir,

@@ -33,7 +33,6 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -231,14 +230,6 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 		} catch {}
 		throw err;
 	}
-}
-
-// ============================================================================
-// Path utilities
-// ============================================================================
-
-export function expandHome(path: string): string {
-	return path.replace(/^~(?=$|[/\\])/, homedir());
 }
 
 // ============================================================================
