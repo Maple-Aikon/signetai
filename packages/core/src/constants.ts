@@ -1,7 +1,9 @@
 import { homedir } from "os";
 import { join } from "path";
 
-export const DEFAULT_BASE_PATH = join(homedir(), ".agents");
+export function resolveDefaultBasePath(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
 
 export function expandHome(p: string, home = homedir()): string {
 	if (p === "~") return home;
