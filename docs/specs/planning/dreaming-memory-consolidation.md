@@ -342,6 +342,73 @@ This is tracked separately but is part of the same simplification
 effort.
 
 
+## Evidence: Manual Graph Audit (2026-04-01)
+
+A manual knowledge graph audit on the live database confirmed every
+problem this spec aims to solve. Key findings:
+
+### Entity Duplication
+
+A single person (Avery Felts) exists as **6 separate entities**:
+`Avery`, `Avery Felts`, `Avery's`, `Avery Felts\"**`,
+`Avery/AlexMondello`, `LMAO AVERY`. The possessive forms, markdown
+artifacts, and Discord message fragments were all extracted as
+distinct entities by pipeline workers that couldn't recognize them
+as the same person.
+
+Session lifecycle concepts split across 5+ entities:
+`session initialization`, `initialization commands`,
+`Signet startup hook`, `signet hook session-start command`,
+`Signet session-start hook`.
+
+Entity names with markdown formatting artifacts: `Signet Development**`,
+`Graph Bloat**`, `People's`.
+
+### Attribute Fragmentation
+
+The Nicholai entity's `general` aspect contains these attributes:
+- `"lives with"` (truncated mid-sentence)
+- `"**: Lead"` (markdown bold artifact)
+- `"shared his top 3 pen list: Pilot G-2 0"` (truncated at chunk boundary)
+
+The `properties` aspect is worse: `"Avery) consistently surface but
+are very large/noisy"`, `"entity) over explicit entity names passed
+as arguments"` — sentence fragments ripped from surrounding context.
+
+### Memory Duplication from MEMORY.md Backups
+
+The same "People" block existed in 4 copies (from successive
+MEMORY.md backup snapshots ingested by the file watcher). The same
+"Signet Development" block existed in 3 copies. The re-embedding
+test results existed in 3 copies. All from the feedback loop bug
+(PR #439), but demonstrating that even with the loop fixed, the
+existing data needs a compaction pass.
+
+### Traversal Scoring Dominance
+
+Live testing showed graph traversal scores (93-109 range) outweigh
+keyword relevance (under 1.0) by ~100x. A query for "Nuke" returned
+pen preferences and Discord allowlists as top results because they
+connect to hub entities (Nicholai, Biohazard) via graph edges.
+Direct keyword hits for Nuke-related memories were buried.
+
+### Manual Cleanup Results
+
+In one session, 18 junk/duplicate memories were identified and
+deleted via `memory_forget`. This required reading full memory
+content, cross-referencing for duplicates, and making judgment calls
+about supersession — exactly the kind of reasoning a dreaming agent
+would do automatically.
+
+### Implications for Backfill
+
+The audit confirms that `--compact` mode is not optional for
+existing users. The current graph state actively degrades search
+quality. First dreaming pass must run compaction. Estimated scope:
+13,000+ memories, potentially thousands of duplicate/junk entities
+requiring merge/delete.
+
+
 ## Open Questions
 
 1. **Model selection for dreaming.** Should this default to the same
@@ -353,3 +420,13 @@ effort.
 3. **Retention policy interaction.** Dreaming's delete operations need
    to respect pinned memories and retention policies. How does this
    compose with the existing retention decay system?
+4. **Chunked compaction.** With 13k+ memories, the full graph won't
+   fit in a single context window. Compaction may need to work in
+   entity-cluster batches (e.g. all entities related to "Signet",
+   then "Biohazard VFX", etc.) with a final merge-candidates pass
+   across clusters.
+5. **Entity deduplication heuristics.** The dreaming agent needs
+   guidance on recognizing possessive forms, markdown artifacts,
+   and name variants as the same entity. Should this be in the
+   dreaming prompt, or should there be a pre-processing normalization
+   step before the agent sees the graph?
