@@ -75,10 +75,20 @@ const METADATA_LINE_PREFIXES = [
 	"END_EXTERNAL_UNTRUSTED_CONTENT",
 ] as const;
 
-const SIGNET_MEMORY_BLOCK = /<signet-memory\b[^>]*>[\s\S]*?<\/signet-memory>/gi;
+const SIGNET_MEMORY_OPEN = "<signet-memory";
+const SIGNET_MEMORY_CLOSE = "</signet-memory>";
 
 function stripSignetMemory(content: string): string {
-	return content.replace(SIGNET_MEMORY_BLOCK, "").trim();
+	let text = content;
+	while (true) {
+		const lower = text.toLowerCase();
+		const start = lower.indexOf(SIGNET_MEMORY_OPEN);
+		if (start === -1) return text.trim();
+		const end = lower.indexOf(SIGNET_MEMORY_CLOSE, start);
+		if (end === -1) return text.trim();
+		const stop = end + SIGNET_MEMORY_CLOSE.length;
+		text = text.slice(0, start) + text.slice(stop);
+	}
 }
 
 /**
@@ -1159,7 +1169,10 @@ const signetPlugin = {
 		const mode = api.registrationMode ?? "full";
 		// Only "full" should register runtime behavior. setup-only,
 		// setup-runtime, and cli-metadata are metadata/setup passes.
-		if (mode !== "full") return;
+		if (mode !== "full") {
+			api.logger.warn(`signet-memory: skipping runtime registration for mode=${mode}`);
+			return;
+		}
 
 		if (readRegistered()) {
 			api.logger.warn("signet-memory: register() called twice with non-cli mode, skipping duplicate");

@@ -992,6 +992,33 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
 	});
 
+	it("strips signet-memory blocks when source contains >", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: '<signet-memory source="a > b">\nold injected memory\n</signet-memory>\nreal user question',
+				messages: [
+					{
+						role: "user",
+						content: '<signet-memory source="a > b">\nold injected memory\n</signet-memory>\nreal user question',
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-gt",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================
@@ -1595,6 +1622,7 @@ describe("registration guard (#422)", () => {
 
 		expect(setupRuntime.tools.length).toBe(0);
 		expect(setupRuntime.hooks.size).toBe(0);
+		expect(warnMessages).toContain("signet-memory: skipping runtime registration for mode=setup-runtime");
 
 		const full = createMockApi({ registrationMode: "full" });
 		signetPlugin.register(full.api);
