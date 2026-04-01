@@ -43,20 +43,27 @@ impl HttpExecutor {
 
     /// Interpolate environment variables in header values.
     /// Replaces `$VAR_NAME` with the env var value (empty string if missing).
+    /// Scans forward from after each substitution to avoid infinite loops when
+    /// a substituted value itself contains `$`.
     fn interpolate(value: &str) -> String {
         let mut result = value.to_string();
-        // Simple $VAR_NAME interpolation (word chars after $)
-        while let Some(pos) = result.find('$') {
+        let mut cursor = 0;
+        while let Some(rel) = result[cursor..].find('$') {
+            let pos = cursor + rel;
             let rest = &result[pos + 1..];
             let end = rest
                 .find(|c: char| !c.is_alphanumeric() && c != '_')
                 .unwrap_or(rest.len());
             if end == 0 {
-                break;
+                // Bare `$` with no valid var name — skip past it
+                cursor = pos + 1;
+                continue;
             }
             let var = &rest[..end];
             let val = std::env::var(var).unwrap_or_default();
             result = format!("{}{}{}", &result[..pos], val, &rest[end..]);
+            // Advance past the substituted value to avoid rescanning it
+            cursor = pos + val.len();
         }
         result
     }

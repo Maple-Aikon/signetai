@@ -157,9 +157,11 @@ impl AgentLoop {
 
             if let Some(injection) = &recall_result.inject {
                 if !injection.is_empty() {
+                    // Daemon returns "memoryCount" (camelCase) in the response body,
+                    // stored in AggregatedResult.data by the HTTP executor fallback path.
                     let count = recall_result
                         .data
-                        .get("memory_count")
+                        .get("memoryCount")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0) as usize;
                     debug!(
@@ -566,13 +568,16 @@ impl AgentLoop {
                     })
                 };
 
-                // PostToolUse hook — observe-only, never blocks
+                // PostToolUse hook — observe-only, never blocks.
+                // Intentional: both PostToolUse and PostToolUseFailure fire on error so that
+                // observers subscribed to PostToolUse always see the full tool result stream
+                // regardless of success/failure. PostToolUseFailure is additive, not a replacement.
                 if let Some(registry) = &self.hooks {
                     let input = HookInput::post_tool_use(&tc.name, &tc.input, &result);
                     registry.read().await.dispatch(HookEvent::PostToolUse, input).await;
                 }
 
-                // PostToolUseFailure hook — fires when tool execution returned an error
+                // PostToolUseFailure hook — fires when tool execution returned an error.
                 if result.is_error {
                     if let Some(registry) = &self.hooks {
                         let input = HookInput::post_tool_use_failure(

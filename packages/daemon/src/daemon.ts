@@ -6897,17 +6897,17 @@ async function handleHookEval(
 // Delegate LLM evaluation of a hook prompt to the synthesis provider
 app.post("/api/hooks/prompt-eval", async (c) => {
 	try {
-		const body = (await c.req.json()) as {
-			prompt?: string;
-			event?: string;
-			input?: unknown;
-		};
-
-		if (!body.prompt || typeof body.prompt !== "string") {
+		const raw: unknown = await c.req.json();
+		if (typeof raw !== "object" || raw === null) {
+			return c.json({ error: "prompt is required" }, 400);
+		}
+		const body = raw as Record<string, unknown>;
+		const prompt = body.prompt;
+		if (!prompt || typeof prompt !== "string") {
 			return c.json({ error: "prompt is required" }, 400);
 		}
 
-		const result = await handleHookEval("prompt-eval", body.prompt);
+		const result = await handleHookEval("prompt-eval", prompt);
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "prompt-eval failed", e instanceof Error ? e : new Error(String(e)));
@@ -6919,17 +6919,17 @@ app.post("/api/hooks/prompt-eval", async (c) => {
 // Multi-turn agent capability will be added in a future iteration.
 app.post("/api/hooks/agent-eval", async (c) => {
 	try {
-		const body = (await c.req.json()) as {
-			prompt?: string;
-			event?: string;
-			input?: unknown;
-		};
-
-		if (!body.prompt || typeof body.prompt !== "string") {
+		const raw: unknown = await c.req.json();
+		if (typeof raw !== "object" || raw === null) {
+			return c.json({ error: "prompt is required" }, 400);
+		}
+		const body = raw as Record<string, unknown>;
+		const prompt = body.prompt;
+		if (!prompt || typeof prompt !== "string") {
 			return c.json({ error: "prompt is required" }, 400);
 		}
 
-		const result = await handleHookEval("agent-eval", body.prompt);
+		const result = await handleHookEval("agent-eval", prompt);
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "agent-eval failed", e instanceof Error ? e : new Error(String(e)));

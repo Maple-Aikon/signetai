@@ -19,11 +19,15 @@ pub enum HookSource {
     User,
 }
 
-/// A registered hook with its source and entry configuration.
+/// A registered hook with its source, entry configuration, and optional headers.
+/// Headers are stored separately from HookEntry (which is YAML-serializable) so
+/// that auth headers injected at runtime don't pollute the config schema.
 #[derive(Debug, Clone)]
 pub struct RegisteredHook {
     pub source: HookSource,
     pub entry: HookEntry,
+    /// Extra headers forwarded to HttpExecutor (e.g. daemon auth headers for built-ins).
+    pub headers: HashMap<String, String>,
 }
 
 /// Shared, hot-reloadable hook registry behind a tokio RwLock.
@@ -65,13 +69,10 @@ impl HookRegistry {
             timeout: Some(10),
             fire_and_forget: false,
         };
-        // Store headers alongside — we don't use them in the entry struct,
-        // but the HttpExecutor will use the URL. Headers are passed at
-        // execution time via the executor construction.
-        let _ = headers; // TODO: store headers for executor use
         self.hooks.entry(event).or_default().push(RegisteredHook {
             source: HookSource::Builtin,
             entry,
+            headers,
         });
         debug!("Registered built-in HTTP hook for {:?}: {}", event, url);
     }
@@ -131,6 +132,7 @@ impl HookRegistry {
                 registered.push(RegisteredHook {
                     source: HookSource::User,
                     entry: entry.clone(),
+                    headers: HashMap::new(),
                 });
                 count += 1;
             }
@@ -183,8 +185,9 @@ impl HookRegistry {
             .map(|hook| {
                 let input = input.clone();
                 let entry = hook.entry.clone();
+                let headers = hook.headers.clone();
                 let daemon = self.daemon_url.clone();
-                async move { execute_hook(&entry, &input, daemon.as_deref()).await }
+                async move { execute_hook(&entry, &headers, &input, daemon.as_deref()).await }
             })
             .collect();
 
@@ -235,6 +238,7 @@ impl HookRegistry {
 /// Execute a single hook entry, building the appropriate executor.
 async fn execute_hook(
     entry: &HookEntry,
+    headers: &HashMap<String, String>,
     input: &HookInput,
     daemon_url: Option<&str>,
 ) -> HookOutput {
@@ -252,7 +256,8 @@ async fn execute_hook(
                 Some(u) => u.clone(),
                 None => return HookOutput::error("HTTP hook missing 'url' field"),
             };
-            let executor = HttpExecutor::new(url, entry.timeout);
+            let executor = HttpExecutor::new(url, entry.timeout)
+                .with_headers(headers.clone());
             executor.execute(input).await
         }
         HookType::Prompt | HookType::Agent => {
