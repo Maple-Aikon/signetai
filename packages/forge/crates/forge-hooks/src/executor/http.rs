@@ -14,6 +14,24 @@ use super::HookExecutor;
 /// - Supports custom headers with env var interpolation ($VAR_NAME)
 /// - Connection errors return Error (non-blocking, not fatal)
 /// - Non-2xx still parses body (like Claude Code behavior)
+/// Build the HTTP request body for a hook: flatten `input.payload` fields to
+/// the top level and add an `event` key.  Daemon endpoints (session-start,
+/// user-prompt-submit, etc.) parse their expected fields directly from the body
+/// root; the extra `event` key is ignored by them but available to user hooks.
+fn flatten_payload(input: &HookInput) -> serde_json::Value {
+    let event = format!("{:?}", input.event);
+    let mut map = match &input.payload {
+        serde_json::Value::Object(m) => m.clone(),
+        other => {
+            let mut m = serde_json::Map::new();
+            m.insert("payload".to_string(), other.clone());
+            m
+        }
+    };
+    map.insert("event".to_string(), serde_json::Value::String(event));
+    serde_json::Value::Object(map)
+}
+
 pub struct HttpExecutor {
     url: String,
     client: Client,
@@ -74,10 +92,16 @@ impl HookExecutor for HttpExecutor {
     async fn execute(&self, input: &HookInput) -> HookOutput {
         debug!("Executing HTTP hook: POST {}", self.url);
 
+        // Send payload fields flattened at top level, plus an `event` discriminator.
+        // This matches the shape daemon endpoints expect (e.g. {harness, userMessage, …})
+        // while still letting user hooks identify the event type.
+        // Sending the full HookInput envelope would break built-in daemon endpoints that
+        // parse `body.harness` / `body.userMessage` at the root.
+        let body = flatten_payload(input);
         let mut req = self
             .client
             .post(&self.url)
-            .json(input)
+            .json(&body)
             .timeout(self.timeout);
 
         for (key, value) in &self.headers {

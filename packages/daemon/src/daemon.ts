@@ -6892,21 +6892,19 @@ async function handleHookEval(
 	}
 }
 
+/** Extract and validate the prompt field from a raw eval request body. */
+function extractPrompt(raw: unknown): string | null {
+	if (typeof raw !== "object" || raw === null) return null;
+	const prompt = (raw as Record<string, unknown>).prompt;
+	return typeof prompt === "string" && prompt.length > 0 ? prompt : null;
+}
+
 // Delegate LLM evaluation of a hook prompt to the synthesis provider
 app.post("/api/hooks/prompt-eval", async (c) => {
 	try {
-		const raw: unknown = await c.req.json();
-		if (typeof raw !== "object" || raw === null) {
-			return c.json({ error: "prompt is required" }, 400);
-		}
-		const body = raw as Record<string, unknown>;
-		const prompt = body.prompt;
-		if (!prompt || typeof prompt !== "string") {
-			return c.json({ error: "prompt is required" }, 400);
-		}
-
-		const result = await handleHookEval("prompt-eval", prompt);
-		return c.json(result);
+		const prompt = extractPrompt(await c.req.json());
+		if (!prompt) return c.json({ error: "prompt is required" }, 400);
+		return c.json(await handleHookEval("prompt-eval", prompt));
 	} catch (e) {
 		logger.error("hooks", "prompt-eval failed", e instanceof Error ? e : new Error(String(e)));
 		return c.json({ error: "Hook evaluation failed" }, 500);
@@ -6917,18 +6915,9 @@ app.post("/api/hooks/prompt-eval", async (c) => {
 // Multi-turn agent capability will be added in a future iteration.
 app.post("/api/hooks/agent-eval", async (c) => {
 	try {
-		const raw: unknown = await c.req.json();
-		if (typeof raw !== "object" || raw === null) {
-			return c.json({ error: "prompt is required" }, 400);
-		}
-		const body = raw as Record<string, unknown>;
-		const prompt = body.prompt;
-		if (!prompt || typeof prompt !== "string") {
-			return c.json({ error: "prompt is required" }, 400);
-		}
-
-		const result = await handleHookEval("agent-eval", prompt);
-		return c.json(result);
+		const prompt = extractPrompt(await c.req.json());
+		if (!prompt) return c.json({ error: "prompt is required" }, 400);
+		return c.json(await handleHookEval("agent-eval", prompt));
 	} catch (e) {
 		logger.error("hooks", "agent-eval failed", e instanceof Error ? e : new Error(String(e)));
 		return c.json({ error: "Hook evaluation failed" }, 500);

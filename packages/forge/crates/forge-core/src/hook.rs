@@ -131,8 +131,11 @@ impl HookInput {
         Self {
             event: HookEvent::SessionStart,
             tool_name: None,
+            // harness:"forge" satisfies the daemon's required field; sessionKey mirrors
+            // the daemon's expected field name for session tracking.
             payload: serde_json::json!({
-                "sessionId": session_id,
+                "harness": "forge",
+                "sessionKey": session_id,
                 "cwd": cwd,
             }),
         }
@@ -143,7 +146,8 @@ impl HookInput {
             event: HookEvent::SessionEnd,
             tool_name: None,
             payload: serde_json::json!({
-                "sessionId": session_id,
+                "harness": "forge",
+                "sessionKey": session_id,
                 "transcript": transcript,
             }),
         }
@@ -154,7 +158,8 @@ impl HookInput {
             event: HookEvent::UserPromptSubmit,
             tool_name: None,
             payload: serde_json::json!({
-                "sessionId": session_id,
+                "harness": "forge",
+                "sessionKey": session_id,
                 "userMessage": message,
             }),
         }
@@ -194,7 +199,8 @@ impl HookInput {
             event: HookEvent::PreCompact,
             tool_name: None,
             payload: serde_json::json!({
-                "sessionId": session_id,
+                "harness": "forge",
+                "sessionKey": session_id,
             }),
         }
     }

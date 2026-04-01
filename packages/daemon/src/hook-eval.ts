@@ -39,9 +39,12 @@ export function parseEvalResult(raw: string): { ok: boolean; reason?: string } {
 
 /**
  * Truncate a prompt to the eval character limit.
+ * Uses Unicode code-point spread to avoid splitting UTF-16 surrogate pairs
+ * (emoji and some CJK characters occupy 2 JS code units / 1 code point).
  * Returns the original string if within bounds.
  */
 export function truncatePrompt(prompt: string): { prompt: string; truncated: boolean } {
-	if (prompt.length <= MAX_HOOK_EVAL_PROMPT_CHARS) return { prompt, truncated: false };
-	return { prompt: prompt.slice(0, MAX_HOOK_EVAL_PROMPT_CHARS), truncated: true };
+	const codePoints = [...prompt];
+	if (codePoints.length <= MAX_HOOK_EVAL_PROMPT_CHARS) return { prompt, truncated: false };
+	return { prompt: codePoints.slice(0, MAX_HOOK_EVAL_PROMPT_CHARS).join(""), truncated: true };
 }

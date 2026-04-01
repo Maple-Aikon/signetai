@@ -58,6 +58,10 @@ impl ContextManager {
             let s = session.lock().await;
             s.id.clone()
         };
+        // TODO(forge-hooks): apply hook_instructions as a bias prompt to the
+        // compaction summarizer (e.g. prepend to the summarization system prompt).
+        // Currently collected but unused — PreCompact hooks that return inject text
+        // have their output silently ignored until this is wired up.
         let _hook_instructions = if let Some(registry) = hooks {
             let input = HookInput::pre_compact(&session_id);
             let output = registry.read().await.dispatch(HookEvent::PreCompact, input).await;

@@ -33,8 +33,10 @@ pub enum AgentEvent {
     Usage(TokenUsage),
     /// Agent turn complete
     TurnComplete,
-    /// Error occurred
+    /// Error occurred (provider failure, doom-loop, etc.)
     Error(String),
+    /// Turn was blocked by a hook decision (distinct from errors — user-visible, not a crash)
+    Blocked(String),
     /// Retroactive detail for a running tool call (e.g. file path, command)
     ToolDetail { id: String, name: String, detail: String },
     /// Thinking/status message
@@ -160,7 +162,7 @@ impl AgentLoop {
                 let reason = recall_result
                     .reason
                     .unwrap_or_else(|| "Blocked by UserPromptSubmit hook".to_string());
-                let _ = self.event_tx.send(AgentEvent::Error(reason)).await;
+                let _ = self.event_tx.send(AgentEvent::Blocked(reason)).await;
                 let _ = self.event_tx.send(AgentEvent::TurnComplete).await;
                 return;
             }
