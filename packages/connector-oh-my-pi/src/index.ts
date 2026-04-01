@@ -58,6 +58,10 @@ function resolveAgentId(): string {
 	return readTrimmedEnv("SIGNET_AGENT_ID") ?? AGENT_ID_DEFAULT;
 }
 
+function expandHome(path: string): string {
+	return path.replace(/^~(?=$|[/\\])/, homedir());
+}
+
 function isSignetManagedExtensionFile(filePath: string): boolean {
 	if (!existsSync(filePath)) return false;
 	try {
@@ -157,6 +161,11 @@ export class OhMyPiConnector extends BaseConnector {
 
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
+		const expandedBasePath = expandHome(basePath || resolveWorkspacePath());
+		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+		if (strippedAgentsPath !== null) {
+			filesWritten.push(strippedAgentsPath);
+		}
 		const agentDir = resolveOhMyPiAgentDir();
 		const targetPath = managedExtensionPath(agentDir, OH_MY_PI_MANAGED_FILENAME);
 		const legacyPath = managedExtensionPath(agentDir, OH_MY_PI_LEGACY_MANAGED_FILENAME);
@@ -178,7 +187,7 @@ export class OhMyPiConnector extends BaseConnector {
 
 		mkdirSync(dirname(targetPath), { recursive: true });
 		const managedContent = buildManagedExtensionContent({
-			signetPath: basePath || resolveWorkspacePath(),
+			signetPath: expandedBasePath || resolveWorkspacePath(),
 			daemonUrl: resolveDaemonUrl() || DAEMON_URL_DEFAULT,
 			agentId: resolveAgentId(),
 		});

@@ -334,6 +334,10 @@ export class OpenClawConnector extends BaseConnector {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const warnings: string[] = [];
+		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+		if (strippedAgentsPath !== null) {
+			filesWritten.push(strippedAgentsPath);
+		}
 
 		const configureHooks = options.configureHooks ?? true;
 		const configureWorkspace = options.configureWorkspace ?? true;

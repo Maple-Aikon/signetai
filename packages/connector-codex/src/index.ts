@@ -28,6 +28,10 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 	return { command: "signet-mcp", args: [] };
 }
 
+function expandHome(path: string): string {
+	return path.replace(/^~(?=$|[/\\])/, homedir());
+}
+
 // ---------------------------------------------------------------------------
 // hooks.json management
 // ---------------------------------------------------------------------------
@@ -237,6 +241,11 @@ export class CodexConnector extends BaseConnector {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const warnings: string[] = [];
+		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
+		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+		if (strippedAgentsPath !== null) {
+			filesWritten.push(strippedAgentsPath);
+		}
 
 		const codexHome = this.getCodexHome();
 		mkdirSync(codexHome, { recursive: true });

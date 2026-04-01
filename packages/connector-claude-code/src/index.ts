@@ -108,6 +108,10 @@ export class ClaudeCodeConnector extends BaseConnector {
 	async install(basePath: string): Promise<InstallResult> {
 		const expandedBasePath = this.expandPath(basePath);
 		const filesWritten: string[] = [];
+		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+		if (strippedAgentsPath !== null) {
+			filesWritten.push(strippedAgentsPath);
+		}
 
 		// Configure hooks in settings.json
 		await this.configureHooks(expandedBasePath);
