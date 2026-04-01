@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
+import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
 // ============================================================================
 // Types
@@ -106,7 +106,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 	 * Install the connector into Claude Code
 	 */
 	async install(basePath: string): Promise<InstallResult> {
-		const expandedBasePath = this.expandPath(basePath);
+		const expandedBasePath = expandHome(basePath);
 		const filesWritten: string[] = [];
 		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
@@ -477,12 +477,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 	/**
 	 * Expand ~ to home directory
 	 */
-	private expandPath(path: string): string {
-		if (path.startsWith("~")) {
-			return join(homedir(), path.slice(1));
-		}
-		return path;
-	}
 }
 
 // ============================================================================
