@@ -83,6 +83,8 @@ function stripSignetMemory(content: string): string {
 	let text = content;
 	while (true) {
 		const lower = text.toLowerCase();
+		// Indices computed from `lower` are applied to `text`; this is safe
+		// here because JavaScript simple case-folding is length-preserving.
 		const start = lower.indexOf(SIGNET_MEMORY_OPEN);
 		if (start === -1) return clean(text);
 		const end = lower.indexOf(SIGNET_MEMORY_CLOSE, start);
@@ -1148,7 +1150,16 @@ async function registerMarketplaceProxyTools(
 // documented double-call is mode-gated below, but older hosts or future
 // loader changes could call with "full" twice. Keep this state on globalThis
 // so hot-reload module re-imports still honor the guard.
-const REG_KEY = `__signet_openclaw_registered__${new URL(import.meta.url).pathname}`;
+const REG_SCOPE = (() => {
+	try {
+		const url = import.meta.url;
+		if (typeof url !== "string" || url.length === 0) return "default";
+		return new URL(url).pathname;
+	} catch {
+		return "default";
+	}
+})();
+const REG_KEY = `__signet_openclaw_registered__${REG_SCOPE}`;
 
 function readRegistered(): boolean {
 	const value = Reflect.get(globalThis, REG_KEY);
