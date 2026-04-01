@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.8] - 2026-04-01
+
+### Bug Fixes
+
+- **cli**: restore homedir import for workspace resolution
+
+
 ## [0.91.7] - 2026-04-01
 
 ### Refactoring
