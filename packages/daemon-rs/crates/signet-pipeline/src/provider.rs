@@ -554,6 +554,11 @@ const DEFAULT_TIMEOUT_MS: u64 = 90_000;
 pub const DEFAULT_OLLAMA_MAX_CONTEXT_TOKENS: u32 = 8192;
 
 /// Resolve the Ollama context window size from env or default.
+///
+/// Reads `SIGNET_OLLAMA_FALLBACK_MAX_CTX` (kept for backwards compatibility).
+/// Despite the `FALLBACK` label, this value applies to **all** Ollama summary
+/// paths — both the degraded-fallback case and an explicitly-configured
+/// `synthesis.provider = ollama` deployment.
 pub fn resolve_ollama_max_context_tokens() -> u32 {
     std::env::var("SIGNET_OLLAMA_FALLBACK_MAX_CTX")
         .ok()
