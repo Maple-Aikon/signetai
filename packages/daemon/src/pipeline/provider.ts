@@ -1935,6 +1935,10 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					// each get their own session, preventing message ordering issues from
 					// two callers POSTing to the same session ID simultaneously.
 					const retrySid = await createSession();
+					// Known: concurrent callers both writing sessionId here is a benign
+					// last-writer-wins race — each caller uses its own retrySid local for
+					// the fetch below, so both retries are safe. The losing session is
+					// abandoned on the server (resource waste, not a correctness issue).
 					sessionId = retrySid;
 					res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 						method: "POST",
