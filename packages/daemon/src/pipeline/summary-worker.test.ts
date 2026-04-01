@@ -541,9 +541,10 @@ describe("resolveSummaryProvider", () => {
 
 		// Intercept fetch to verify num_ctx is included in the request
 		const original = globalThis.fetch;
-		let captured: Record<string, unknown> | null = null;
+		let captured: unknown = null;
 		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-			captured = JSON.parse(init?.body as string) as Record<string, unknown>;
+			if (typeof init?.body !== "string") throw new Error(`Expected string body, got: ${typeof init?.body}`);
+			captured = JSON.parse(init.body);
 			return new Response(JSON.stringify({ response: "{}", done: true }), { status: 200 });
 		}) as typeof fetch;
 
@@ -554,9 +555,12 @@ describe("resolveSummaryProvider", () => {
 		}
 
 		expect(captured).not.toBeNull();
-		const options = captured?.options as Record<string, unknown> | undefined;
-		expect(options).toBeDefined();
-		expect(typeof options?.num_ctx).toBe("number");
-		expect((options?.num_ctx as number) > 0).toBe(true);
+		if (typeof captured !== "object" || captured === null) throw new Error("Expected object body");
+		const body = captured as Record<string, unknown>;
+		const options = body.options;
+		if (typeof options !== "object" || options === null) throw new Error("Expected options object");
+		const opts = options as Record<string, unknown>;
+		expect(typeof opts.num_ctx).toBe("number");
+		expect(opts.num_ctx).toBeGreaterThanOrEqual(8192);
 	});
 });
