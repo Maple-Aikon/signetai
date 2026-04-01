@@ -58,7 +58,9 @@ impl HookExecutor for CommandExecutor {
 
         // Write input to stdin
         if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(json.as_bytes()).await;
+            if let Err(e) = stdin.write_all(json.as_bytes()).await {
+                debug!("Command hook: failed to write stdin (hook may not read it): {e}");
+            }
             drop(stdin);
         }
 

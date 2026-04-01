@@ -1974,6 +1974,52 @@ agent head, this route returns `409`.
 { "success": true }
 ```
 
+### POST /api/hooks/prompt-eval
+
+Evaluate a hook condition using a single-shot LLM call against the configured
+synthesis provider. Used by Forge prompt-type hooks to delegate evaluation to the
+daemon, which already has LLM provider access.
+
+Rate-limited: 30 requests per 60-second window.
+
+**Request body**
+
+```json
+{ "prompt": "Does this tool call look dangerous? Tool: Bash, Input: {\"command\": \"rm -rf /\"}" }
+```
+
+`prompt` is required and must be a non-empty string. Prompts longer than 16 000 characters are silently truncated.
+
+**Response**
+
+```json
+{ "ok": true, "reason": null, "inject": null }
+```
+
+`ok` — whether the condition passed. `reason` — human-readable explanation when `ok` is `false`. `inject` — reserved for future use (always `null`).
+
+Fails open: returns `{ "ok": true, "reason": null, "inject": null }` when no synthesis provider is configured, when the LLM call times out or errors, or when the LLM returns unparseable output.
+
+Returns `400` when `prompt` is missing or empty. Returns `429` when the rate limit is exceeded.
+
+### POST /api/hooks/agent-eval
+
+Multi-turn agent evaluation of a hook condition. Currently delegates to the same
+single-shot LLM evaluation as `prompt-eval`; multi-turn capability is deferred to
+a future phase.
+
+Rate-limited: same 30 requests per 60-second window as `prompt-eval`.
+
+**Request body**
+
+```json
+{ "prompt": "Review this session and determine if any sensitive data was exposed." }
+```
+
+**Response**
+
+Same shape as `/api/hooks/prompt-eval`.
+
 
 Sessions
 --------

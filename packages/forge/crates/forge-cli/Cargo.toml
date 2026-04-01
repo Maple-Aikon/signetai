@@ -27,6 +27,7 @@ dirs = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
+uuid = { workspace = true }
 
 [features]
 default = ["voice"]

@@ -809,16 +809,8 @@ async fn run_non_interactive(
     use forge_tools;
     use futures::StreamExt;
 
-    // Collision-safe session identifier: 8 random bytes (hex) avoids the
-    // millisecond-precision collision risk under concurrent invocations.
-    let session_id = {
-        use std::io::Read;
-        let mut buf = [0u8; 8];
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut f| f.read_exact(&mut buf).map(|_| ()))
-            .unwrap_or(());
-        format!("ni-{}", buf.iter().map(|b| format!("{b:02x}")).collect::<String>())
-    };
+    // Collision-safe session identifier using UUID v4.
+    let session_id = format!("ni-{}", uuid::Uuid::new_v4());
 
     // SessionStart hook (non-blocking).
     if let Some(ref reg) = hooks {
