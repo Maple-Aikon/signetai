@@ -69,6 +69,8 @@ function sessionStartHookTimeout(): number {
 }
 
 function userPromptSubmitHookTimeout(): number {
+	// Claude Code hooks are written once to settings.json at install time.
+	// This env is resolved during connector install/update, not per prompt.
 	return resolvePromptSubmitTimeoutMs(process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT);
 }
 

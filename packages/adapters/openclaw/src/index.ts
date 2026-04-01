@@ -75,7 +75,7 @@ const METADATA_LINE_PREFIXES = [
 	"END_EXTERNAL_UNTRUSTED_CONTENT",
 ] as const;
 
-const SIGNET_MEMORY_BLOCK = /<signet-memory\b[^>]*>[\s\S]*?(?:<\/signet-memory>|<\\\/signet-memory>)/gi;
+const SIGNET_MEMORY_BLOCK = /<signet-memory\b[^>]*>[\s\S]*?<\/signet-memory>/gi;
 
 function stripSignetMemory(content: string): string {
 	return content.replace(SIGNET_MEMORY_BLOCK, "").trim();
@@ -1137,7 +1137,7 @@ async function registerMarketplaceProxyTools(
 // documented double-call is mode-gated below, but older hosts or future
 // loader changes could call with "full" twice. Keep this state on globalThis
 // so hot-reload module re-imports still honor the guard.
-const REG_KEY = "__signet_openclaw_registered__";
+const REG_KEY = `__signet_openclaw_registered__${new URL(import.meta.url).pathname}`;
 
 function readRegistered(): boolean {
 	const value = Reflect.get(globalThis, REG_KEY);
