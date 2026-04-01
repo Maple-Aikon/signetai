@@ -478,15 +478,16 @@ export async function hybridRecall(
 									db
 										.prepare(
 											`SELECT source_id, vector FROM embeddings
-										 WHERE source_id IN (${ph})`,
+										 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
 										)
 										.all(...ids) as Array<{
 										source_id: string;
-										vector: Buffer;
+										vector: Buffer | null;
 									}>,
 							);
 							const qv = queryVecF32;
 							for (const row of embRows) {
+								if (!row.vector) continue;
 								const mv = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
 								// Cosine similarity (vectors are normalized by embedding model)
 								let dot = 0;

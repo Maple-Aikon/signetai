@@ -153,7 +153,7 @@ Signet writes [[hooks]] to `~/.claude/settings.json` that fire at session lifecy
       "hooks": [{
         "type": "command",
         "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
-        "timeout": 2000
+        "timeout": 5000
       }]
     }],
     "SessionEnd": [{

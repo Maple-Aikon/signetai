@@ -965,6 +965,33 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		);
 	});
 
+	it("strips prior <signet-memory> injection blocks from user message extraction", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: '<signet-memory source="auto-recall">\nold injected memory\n</signet-memory>\nreal user question',
+				messages: [
+					{
+						role: "user",
+						content: '<signet-memory source="auto-recall">\nold injected memory\n</signet-memory>\nreal user question',
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================
@@ -1560,6 +1587,36 @@ describe("registration guard (#422)", () => {
 
 		signetPlugin.register(second.api);
 		expect(registeredServices.length).toBe(count);
+	});
+
+	it("skips setup-runtime registration pass and still registers on full mode", () => {
+		const setupRuntime = createMockApi({ registrationMode: "setup-runtime" });
+		signetPlugin.register(setupRuntime.api);
+
+		expect(setupRuntime.tools.length).toBe(0);
+		expect(setupRuntime.hooks.size).toBe(0);
+
+		const full = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(full.api);
+		expect(full.tools.length).toBeGreaterThan(0);
+		expect(full.hooks.size).toBeGreaterThan(0);
+	});
+
+	it("allows re-registration after service stop", async () => {
+		const first = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(first.api);
+		expect(registeredServices.length).toBeGreaterThan(0);
+		expect(first.tools.length).toBeGreaterThan(0);
+
+		for (const service of registeredServices) {
+			await service.stop();
+		}
+		registeredServices = [];
+
+		const second = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(second.api);
+		expect(second.tools.length).toBeGreaterThan(0);
+		expect(second.hooks.size).toBeGreaterThan(0);
 	});
 
 	it("does not register session:compact:before or session:compact:after hooks", () => {

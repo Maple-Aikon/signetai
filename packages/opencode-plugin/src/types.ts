@@ -12,6 +12,7 @@ export const READ_TIMEOUT = 5000;
 export const WRITE_TIMEOUT = 10000;
 export const SESSION_START_TIMEOUT_ENV = "SIGNET_SESSION_START_TIMEOUT";
 export const FETCH_TIMEOUT_ENV = "SIGNET_FETCH_TIMEOUT";
+export const PROMPT_SUBMIT_TIMEOUT_ENV = "SIGNET_PROMPT_SUBMIT_TIMEOUT";
 
 export interface PluginConfig {
 	enabled?: boolean;

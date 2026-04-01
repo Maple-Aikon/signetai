@@ -162,6 +162,7 @@ export {
 	summarizeIdentity,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
+	resolvePromptSubmitTimeoutMs,
 	STATIC_IDENTITY_OFFLINE_STATUS,
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolveSignetForgeManagedPath,

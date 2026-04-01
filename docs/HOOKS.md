@@ -350,7 +350,7 @@ Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call t
       "hooks": [{
         "type": "command",
         "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
-        "timeout": 2000
+        "timeout": 5000
       }]
     }],
     "SessionEnd": [{
