@@ -460,6 +460,10 @@ impl AgentLoop {
                         let hook_result = forge_hooks::dispatch(registry, HookEvent::PermissionRequest, input).await;
                         if hook_result.decision == HookDecision::Block {
                             let reason = hook_result.reason.unwrap_or_else(|| "Denied by policy hook".to_string());
+                            // Fire PermissionDenied for audit trail — policy auto-deny is
+                            // symmetric with user interactive deny (both are denial events).
+                            let denied_input = HookInput::permission_denied(&tc.name, &tc.input);
+                            forge_hooks::dispatch(registry, HookEvent::PermissionDenied, denied_input).await;
                             let result = forge_core::ToolResult::error(&tc.id, &reason);
                             let _ = self.event_tx.send(AgentEvent::ToolResult {
                                 id: tc.id.clone(),

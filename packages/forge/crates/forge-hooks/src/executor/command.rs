@@ -95,8 +95,10 @@ impl HookExecutor for CommandExecutor {
 
         match tokio::time::timeout(self.timeout, read_streams).await {
             Err(_) => {
-                // Kill the child to avoid zombie processes
+                // Kill and wait to fully reap the child — kill() sends SIGKILL
+                // but wait() is required to remove the zombie entry.
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 warn!(
                     "Command hook timed out after {:?}: {}",
                     self.timeout, self.command

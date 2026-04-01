@@ -27,7 +27,7 @@ export function parseEvalResult(raw: string): { ok: boolean; reason?: string } {
 		.replace(/\s*```\s*$/, "")
 		.trim();
 	const parsed: unknown = JSON.parse(trimmed);
-	if (typeof parsed !== "object" || parsed === null) {
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
 		throw new Error("LLM returned non-object JSON");
 	}
 	const obj: Record<string, unknown> = Object.assign({}, parsed);

@@ -184,10 +184,13 @@ async fn main() -> anyhow::Result<()> {
     // the two buckets don't share state and operators can tune them independently.
     let recall_llm_limiter = AuthRateLimiter::from_rules(&merged);
     // Dedicated limiter for hook prompt/agent-eval endpoints.
-    // Mirrors TS daemon's authHookEvalLimiter(60_000, 30): 30 requests per 60s window.
+    // Mirrors TS daemon's authHookEvalLimiter(60_000, 30).
+    // Constants must stay in sync with daemon.ts — update both sides together.
+    const HOOK_EVAL_WINDOW_MS: u64 = 60_000;
+    const HOOK_EVAL_MAX: u32 = 30;
     let hook_eval_limiter = {
         let mut rules = std::collections::HashMap::new();
-        rules.insert("hook-eval".to_string(), RateLimitRule { window_ms: 60_000, max: 30 });
+        rules.insert("hook-eval".to_string(), RateLimitRule { window_ms: HOOK_EVAL_WINDOW_MS, max: HOOK_EVAL_MAX });
         AuthRateLimiter::from_rules(&rules)
     };
 

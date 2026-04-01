@@ -809,14 +809,16 @@ async fn run_non_interactive(
     use forge_tools;
     use futures::StreamExt;
 
-    // Stable session identifier for hook payloads.
-    let session_id = format!(
-        "ni-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-    );
+    // Collision-safe session identifier: 8 random bytes (hex) avoids the
+    // millisecond-precision collision risk under concurrent invocations.
+    let session_id = {
+        use std::io::Read;
+        let mut buf = [0u8; 8];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut buf).map(|_| ()))
+            .unwrap_or(());
+        format!("ni-{}", buf.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    };
 
     // SessionStart hook (non-blocking).
     if let Some(ref reg) = hooks {
@@ -833,7 +835,7 @@ async fn run_non_interactive(
             let reason = result.reason.unwrap_or_else(|| "Blocked by hook".to_string());
             eprintln!("Blocked: {reason}");
             // SessionEnd before exit.
-            let end_input = HookInput::session_end(&session_id, "");
+            let end_input = HookInput::session_end(&session_id, &format!("User: {prompt}"));
             forge_hooks::dispatch(reg, HookEvent::SessionEnd, end_input).await;
             return Ok(());
         }
@@ -873,7 +875,8 @@ async fn run_non_interactive(
             StreamEvent::Error(e) => {
                 eprintln!("\nError: {e}");
                 if let Some(ref reg) = hooks {
-                    let input = HookInput::session_end(&session_id, &response_text);
+                    let transcript = format!("User: {prompt}\n\nAssistant: {response_text}");
+                    let input = HookInput::session_end(&session_id, &transcript);
                     forge_hooks::dispatch(reg, HookEvent::SessionEnd, input).await;
                 }
                 std::process::exit(1);
@@ -885,9 +888,11 @@ async fn run_non_interactive(
 
     println!();
 
-    // SessionEnd hook.
+    // SessionEnd hook — include both sides of the conversation so the daemon's
+    // session-end memory extraction has the full context (not just the AI response).
     if let Some(ref reg) = hooks {
-        let input = HookInput::session_end(&session_id, &response_text);
+        let transcript = format!("User: {prompt}\n\nAssistant: {response_text}");
+        let input = HookInput::session_end(&session_id, &transcript);
         forge_hooks::dispatch(reg, HookEvent::SessionEnd, input).await;
     }
 

@@ -50,10 +50,10 @@ describe("parseEvalResult", () => {
 		expect(() => parseEvalResult("not json at all")).toThrow();
 	});
 
-	it("coerces JSON array to ok:false (no ok field)", () => {
-		// Object.assign({}, [true]) gives {0: true} — no "ok" key, coerces to false
-		const result = parseEvalResult("[true]");
-		expect(result.ok).toBe(false);
+	it("throws on JSON array (not a valid eval response)", () => {
+		// Arrays pass typeof/null checks but are not valid eval objects.
+		// Without Array.isArray guard they'd coerce to ok:false which violates fail-open.
+		expect(() => parseEvalResult("[true]")).toThrow();
 	});
 });
 
