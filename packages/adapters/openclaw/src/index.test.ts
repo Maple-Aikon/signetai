@@ -1760,6 +1760,14 @@ describe("registration guard (#422)", () => {
 		expect(full.hooks.size).toBeGreaterThan(0);
 	});
 
+	it("skips setup-only registration pass", () => {
+		const setupOnly = createMockApi({ registrationMode: "setup-only" });
+		signetPlugin.register(setupOnly.api);
+		expect(setupOnly.tools.length).toBe(0);
+		expect(setupOnly.hooks.size).toBe(0);
+		expect(registeredServices.length).toBe(0);
+	});
+
 	it("warns for unknown registration modes", () => {
 		const unknown = createMockApi({ registrationMode: "mystery-mode" as OpenClawPluginApi["registrationMode"] });
 		signetPlugin.register(unknown.api);

@@ -2081,7 +2081,8 @@ const signetPlugin = {
 			});
 		} catch (err) {
 			if (claimed) {
-				api.logger.error("signet-memory: registration failed after guard was claimed; restart host before retry", {
+				writeRegistered(false);
+				api.logger.error("signet-memory: registration failed after guard was claimed; guard reset before rethrow", {
 					error: String(err),
 				});
 			}
