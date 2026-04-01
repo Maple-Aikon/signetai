@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.6] - 2026-04-01
+
+### Bug Fixes
+
+- **ci**: prevent lockfile drift and restore openclaw build
+- **runtime**: hotfix issues #432 #433 #435 #437 (#438)
+
+
 ## [0.91.5] - 2026-04-01
 
 ### Bug Fixes
