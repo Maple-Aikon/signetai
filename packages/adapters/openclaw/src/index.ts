@@ -77,9 +77,10 @@ const METADATA_LINE_PREFIXES = [
 
 const SIGNET_MEMORY_OPEN = "<signet-memory";
 const SIGNET_MEMORY_CLOSE = "</signet-memory>";
+const SIGNET_MEMORY_CLOSE_ORPHAN = /<\/signet-memory>/gi;
 
 function stripSignetMemory(content: string): string {
-	const clean = (text: string): string => text.replaceAll(SIGNET_MEMORY_CLOSE, "").trim();
+	const clean = (text: string): string => text.replace(SIGNET_MEMORY_CLOSE_ORPHAN, "").trim();
 	let text = content;
 	while (true) {
 		const lower = text.toLowerCase();

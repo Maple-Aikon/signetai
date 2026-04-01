@@ -1046,6 +1046,28 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real question");
 	});
 
+	it("skips prompt-submit when user messages are only signet-memory injection blocks", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const result = await beforePromptBuild?.(
+			{
+				prompt: "<signet-memory>synthetic</signet-memory>",
+				messages: [{ role: "user", content: "<signet-memory>synthetic</signet-memory>" }],
+			},
+			{
+				sessionKey: "strip-memory-tag-only",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(result).toBeUndefined();
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(0);
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================
