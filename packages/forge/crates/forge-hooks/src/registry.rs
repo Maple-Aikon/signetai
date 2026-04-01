@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use forge_core::hook::{
-    AggregatedResult, HookConfig, HookEntry, HookEvent, HookInput, HookOutput, HookType, Matcher,
+    HookConfig, HookEntry, HookEvent, HookInput, HookOutput, HookType, Matcher,
 };
 use tracing::{debug, info, warn};
 
@@ -10,7 +10,6 @@ use crate::executor::command::CommandExecutor;
 use crate::executor::daemon::DaemonExecutor;
 use crate::executor::http::HttpExecutor;
 use crate::executor::HookExecutor;
-use crate::matcher::matches;
 
 /// Source of a registered hook (built-in vs user-configured).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,64 +155,6 @@ impl HookRegistry {
         debug!("Hot-reloaded hook registry");
     }
 
-    /// Dispatch hooks for an event: find matching hooks, run in parallel, aggregate.
-    pub async fn dispatch(&self, event: HookEvent, input: HookInput) -> AggregatedResult {
-        let hooks = match self.hooks.get(&event) {
-            Some(h) if !h.is_empty() => h,
-            _ => return AggregatedResult::default(),
-        };
-
-        let target = input.match_target().map(|s| s.to_string());
-
-        // Filter to matching hooks
-        let matching: Vec<_> = hooks
-            .iter()
-            .filter(|h| matches(&h.entry.matcher, target.as_deref()))
-            .collect();
-
-        if matching.is_empty() {
-            return AggregatedResult::default();
-        }
-
-        debug!(
-            "Dispatching {:?}: {} matching hooks (of {} registered)",
-            event,
-            matching.len(),
-            hooks.len()
-        );
-
-        // Build executors and run in parallel
-        let futures: Vec<_> = matching
-            .iter()
-            .map(|hook| {
-                let input = input.clone();
-                let entry = hook.entry.clone();
-                let headers = hook.headers.clone();
-                let daemon = self.daemon_url.clone();
-                async move { execute_hook(&entry, &headers, &input, daemon.as_deref()).await }
-            })
-            .collect();
-
-        let outputs = futures::future::join_all(futures).await;
-        let result = AggregatedResult::aggregate(outputs);
-
-        // Warn if blocking on an event that doesn't support it
-        if result.decision == forge_core::hook::HookDecision::Block
-            && !event.supports_blocking()
-        {
-            warn!(
-                "Hook returned Block for {:?} which doesn't support blocking — treating as Allow",
-                event
-            );
-            return AggregatedResult {
-                decision: forge_core::hook::HookDecision::Allow,
-                ..result
-            };
-        }
-
-        result
-    }
-
     /// Get all registered hooks for a given event.
     pub fn get(&self, event: HookEvent) -> &[RegisteredHook] {
         self.hooks.get(&event).map(|v| v.as_slice()).unwrap_or(&[])
@@ -274,8 +215,8 @@ pub(crate) async fn execute_hook(
                 }
             };
             let agent = entry.hook_type == HookType::Agent;
-            let executor =
-                DaemonExecutor::new(base, entry.prompt.clone(), entry.timeout, agent);
+            let executor = DaemonExecutor::new(base, entry.prompt.clone(), entry.timeout, agent)
+                .with_headers(headers.clone());
             executor.execute(input).await
         }
     }

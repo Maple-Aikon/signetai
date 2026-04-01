@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use forge_core::hook::{HookInput, HookOutput};
 use reqwest::Client;
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -17,6 +18,7 @@ pub struct DaemonExecutor {
     client: Client,
     timeout: Duration,
     prompt_template: Option<String>,
+    headers: HashMap<String, String>,
 }
 
 impl DaemonExecutor {
@@ -36,7 +38,13 @@ impl DaemonExecutor {
             client: Client::new(),
             timeout: Duration::from_secs(timeout.unwrap_or(30)),
             prompt_template,
+            headers: HashMap::new(),
         }
+    }
+
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = headers;
+        self
     }
 
     /// Interpolate template placeholders with values from the hook input.
@@ -97,15 +105,17 @@ impl HookExecutor for DaemonExecutor {
             "input": input,
         });
 
-        let result = self
+        let mut req = self
             .client
             .post(&self.endpoint)
             .json(&body)
-            .timeout(self.timeout)
-            .send()
-            .await;
+            .timeout(self.timeout);
 
-        let resp = match result {
+        for (key, value) in &self.headers {
+            req = req.header(key, value);
+        }
+
+        let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
                 if e.is_timeout() {
@@ -120,6 +130,7 @@ impl HookExecutor for DaemonExecutor {
             }
         };
 
+        let status = resp.status();
         let text = match resp.text().await {
             Ok(t) => t,
             Err(e) => {
@@ -127,6 +138,18 @@ impl HookExecutor for DaemonExecutor {
                 return HookOutput::error(format!("Response read failed: {e}"));
             }
         };
+
+        if !status.is_success() {
+            // Non-2xx (e.g. 401 Unauthorized) — log and return Error (non-blocking, fail-open).
+            // Without this check, a missing 'ok' field in the error body would silently allow.
+            warn!(
+                "Daemon hook returned {} for {}: body={:?}",
+                status,
+                self.endpoint,
+                &text[..text.len().min(200)]
+            );
+            return HookOutput::error(format!("Daemon hook returned {status}"));
+        }
 
         if text.is_empty() {
             return HookOutput::allow();

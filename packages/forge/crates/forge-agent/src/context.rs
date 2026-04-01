@@ -58,11 +58,10 @@ impl ContextManager {
             let s = session.lock().await;
             s.id.clone()
         };
-        // TODO(forge-hooks): apply hook_instructions as a bias prompt to the
-        // compaction summarizer (e.g. prepend to the summarization system prompt).
-        // Currently collected but unused — PreCompact hooks that return inject text
-        // have their output silently ignored until this is wired up.
-        let _hook_instructions = if let Some(registry) = hooks {
+        // Pre-compaction hook: collect any bias instructions for the summarizer.
+        // Inject text is prepended to the compaction system prompt so that hooks
+        // can guide what the summarizer preserves (e.g. "always keep TODO items").
+        let hook_instructions = if let Some(registry) = hooks {
             let input = HookInput::pre_compact(&session_id);
             let output = forge_hooks::dispatch(registry, HookEvent::PreCompact, input).await;
             match output.inject {
@@ -111,13 +110,17 @@ impl ContextManager {
 
         let summary_messages = vec![Message::user(&summary_prompt)];
 
-        let opts = CompletionOpts {
-            system_prompt: Some(
-                "You are a conversation summarizer. Produce a concise summary \
+        let base_system = "You are a conversation summarizer. Produce a concise summary \
                  that preserves all technical details, decisions, file paths, \
-                 and code changes."
-                    .to_string(),
-            ),
+                 and code changes.";
+        let system_prompt = if hook_instructions.is_empty() {
+            base_system.to_string()
+        } else {
+            format!("{base_system}\n\n{hook_instructions}")
+        };
+
+        let opts = CompletionOpts {
+            system_prompt: Some(system_prompt),
             max_tokens: Some(2048),
             ..Default::default()
         };
