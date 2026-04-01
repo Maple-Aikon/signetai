@@ -22,7 +22,7 @@ import type { LlmProvider } from "./provider";
 const MAX_FACTS = 20;
 const MAX_ENTITIES = 15;
 const MAX_FACT_LENGTH = 2000;
-const MIN_FACT_LENGTH = 20;
+const MIN_FACT_LENGTH = 80;
 const MAX_INPUT_CHARS = 12000;
 
 const VALID_TYPES = new Set<string>(MEMORY_TYPES);
