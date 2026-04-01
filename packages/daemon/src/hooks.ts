@@ -156,16 +156,12 @@ export function buildSignetSystemPrompt(): string {
 	return `[signet active]
 You have persistent memory managed by Signet.
 
-Primary retrieval tool:
-- mcp__signet__memory_search: hybrid vector + keyword recall across stored memories.
-
-Deeper memory exploration:
-- mcp__signet__lcm_expand: expand a session summary node into lineage + linked memory context.
-- mcp__signet__knowledge_expand: expand an entity into aspects, attributes, constraints, and dependencies.
-- mcp__signet__knowledge_expand_session: find session summaries linked to an entity.
-
-Explicit memory writes:
-- mcp__signet__memory_store: persist a memory with content, type, and optional tags.
+Memory tools:
+- mcp__signet__memory_search: search stored memories by keyword or meaning
+- mcp__signet__lcm_expand: expand a session summary into its full lineage and linked memories
+- mcp__signet__knowledge_expand: expand a known entity into its aspects, attributes, and dependencies
+- mcp__signet__knowledge_expand_session: find sessions linked to a known entity
+- mcp__signet__memory_store: save something to memory explicitly
 
 Identity files in your Signet workspace:
 - AGENTS.md: how you operate (maintain this)
