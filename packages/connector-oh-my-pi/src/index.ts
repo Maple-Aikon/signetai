@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult, expandHome } from "@signet/connector-base";
 import {
 	clearConfiguredOhMyPiAgentDir,
 	getOhMyPiConfigPath,
@@ -56,10 +56,6 @@ function resolveDaemonUrl(): string {
 
 function resolveAgentId(): string {
 	return readTrimmedEnv("SIGNET_AGENT_ID") ?? AGENT_ID_DEFAULT;
-}
-
-function expandHome(path: string): string {
-	return path.replace(/^~(?=$|[/\\])/, homedir());
 }
 
 function isSignetManagedExtensionFile(filePath: string): boolean {

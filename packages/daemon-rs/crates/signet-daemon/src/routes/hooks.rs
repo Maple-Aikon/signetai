@@ -514,7 +514,7 @@ pub async fn session_start(
             Json(serde_json::json!({
                 "identity": { "name": state.config.manifest.agent.name },
                 "memories": [],
-                "inject": format!("[memory active | /remember | /recall]\nCurrent date: {}", now.format("%Y-%m-%d %H:%M")),
+                "inject": format!("{}\n[memory active | /remember | /recall]\nCurrent date: {}", build_signet_system_prompt(), now.format("%Y-%m-%d %H:%M")),
                 "deduped": true,
             })),
         )
