@@ -435,11 +435,11 @@ export async function extractFactsAndEntities(
 	opts?: { timeoutMs?: number; maxTokens?: number },
 ): Promise<ExtractionResult> {
 	const trimmed = input.trim().replace(/\s+/g, " ");
-	if (trimmed.length < 20) {
+	if (trimmed.length < MIN_FACT_LENGTH) {
 		return {
 			facts: [],
 			entities: [],
-			warnings: ["Input too short (< 20 chars)"],
+			warnings: [`Input too short (< ${MIN_FACT_LENGTH} chars)`],
 		};
 	}
 

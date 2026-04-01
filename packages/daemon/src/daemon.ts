@@ -11154,7 +11154,7 @@ function chunkMarkdownHierarchically(
 // Artifact files written by the summary-worker / lineage system.
 // These are already distilled and inserted directly into the DB —
 // re-ingesting them through the chunker creates noisy duplicates.
-const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
+export const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
 
 async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 	// Skip MEMORY.md (index file, not content)
@@ -11199,8 +11199,12 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 	for (let i = 0; i < chunks.length; i++) {
 		const chunk = chunks[i];
 
-		// Skip chunks with insufficient non-header content
-		const body = chunk.header ? chunk.text.slice(chunk.header.length).trim() : chunk.text.trim();
+		// Skip chunks with insufficient non-header content.
+		// chunk.text is always constructed as `${header}\n\n${body}` when a
+		// header exists (see chunkMarkdownHierarchically), so startsWith holds.
+		const body = chunk.header && chunk.text.startsWith(chunk.header)
+			? chunk.text.slice(chunk.header.length).trim()
+			: chunk.text.trim();
 		if (body.length < 80) continue;
 
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;

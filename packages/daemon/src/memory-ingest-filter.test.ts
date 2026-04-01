@@ -7,10 +7,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-
-// The regex used in daemon.ts to skip artifact files.
-// Duplicated here for testing — the canonical copy lives in daemon.ts.
-const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
+import { ARTIFACT_FILENAME_RE } from "./daemon";
 
 describe("artifact filename exclusion", () => {
 	it("matches summary artifact filenames", () => {
