@@ -3,9 +3,9 @@ import { join } from "path";
 
 export const DEFAULT_BASE_PATH = join(homedir(), ".agents");
 
-export function expandHome(p: string): string {
-	if (p === "~") return homedir();
-	if (p.startsWith("~/") || p.startsWith("~\\")) return join(homedir(), p.slice(2));
+export function expandHome(p: string, home = homedir()): string {
+	if (p === "~") return home;
+	if (p.startsWith("~/") || p.startsWith("~\\")) return join(home, p.slice(2));
 	return p;
 }
 
