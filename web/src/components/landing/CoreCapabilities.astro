@@ -1,30 +1,4 @@
 ---
-const features = [
-  {
-    title: "Ambient Memory",
-    desc: "Every session is automatically distilled into structured memory. No tool calls, no manual saves. Your agent wakes up knowing what happened yesterday.",
-  },
-  {
-    title: "Knowledge Graph",
-    desc: "People, projects, tools, and decisions extracted as entities with relationships. Retrieved via graph traversal, not just embedding similarity.",
-  },
-  {
-    title: "Inspect Everything",
-    desc: "Memory is not a black box. Browse, search, edit, and delete through the dashboard. See provenance for every memory. Repair when the model gets it wrong.",
-  },
-];
-
-const more = [
-  "Cross-platform — Claude Code, OpenCode, OpenClaw, Codex, Forge, Oh My Pi",
-  "Multi-agent — isolated, shared, or group visibility across agents",
-  "Encrypted secrets — libsodium at rest, agents use without seeing plaintext",
-  "Predictive scorer — learned reranking that improves over time",
-  "SDK & React hooks — typed client with Vercel AI SDK middleware",
-  "Docker self-hosting — first-party compose stack with persistent volumes",
-  "Skills marketplace — install from skills.sh and ClawHub",
-  "Dashboard — web UI for memory inspection, search, and management",
-  "Git sync — version identity and memory in your own remote",
-];
 ---
 
 <section id="capabilities" class="container" style="border-top: 1px solid var(--color-border)">
@@ -34,22 +8,133 @@ const more = [
     <span class="section-index">02 / 04</span>
   </div>
 
-  <div class="features-list reveal">
-    {features.map((f, i) => (
-      <div class="feature-row">
-        <div class="feature-num">{String(i + 1).padStart(2, '0')}</div>
-        <h3 class="feature-title">{f.title}</h3>
-        <p class="feature-desc">{f.desc}</p>
+  <div class="cap-grid reveal">
+    <!-- Row 1: Ambient Memory (2 cols) + Knowledge Graph (1 col, spans 2 rows) -->
+    <div class="cap-cell cap-ambient">
+      <span class="cap-fig">FIG_01</span>
+      <div class="cap-illustration">
+        <svg viewBox="0 0 300 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <line x1="16" y1="36" x2="284" y2="36" stroke="currentColor" stroke-opacity="0.06" stroke-dasharray="3 3"/>
+          <rect x="24" y="14" width="48" height="44" rx="2" stroke="var(--color-accent)" stroke-opacity="0.4" fill="var(--color-accent)" fill-opacity="0.05"/>
+          <rect x="84" y="14" width="48" height="44" rx="2" stroke="var(--color-accent)" stroke-opacity="0.25" fill="var(--color-accent)" fill-opacity="0.03"/>
+          <rect x="144" y="14" width="48" height="44" rx="2" stroke="var(--color-accent)" stroke-opacity="0.14" fill="var(--color-accent)" fill-opacity="0.015"/>
+          <rect x="204" y="14" width="48" height="44" rx="2" stroke="var(--color-accent)" stroke-opacity="0.08" fill="var(--color-accent)" fill-opacity="0.008"/>
+          <path d="M48 58 L48 70 L60 70" stroke="var(--color-accent)" stroke-opacity="0.2" fill="none" stroke-width="1"/>
+          <circle cx="64" cy="70" r="2" fill="var(--color-accent)" fill-opacity="0.3"/>
+          <path d="M108 58 L108 74 L120 74" stroke="var(--color-accent)" stroke-opacity="0.12" fill="none" stroke-width="1"/>
+          <circle cx="124" cy="74" r="2" fill="var(--color-accent)" fill-opacity="0.18"/>
+        </svg>
       </div>
-    ))}
-  </div>
+      <h3 class="cap-title">Ambient Memory</h3>
+      <p class="cap-desc">Every session is automatically distilled into structured memory. No tool calls, no manual saves — your agent wakes up knowing what happened yesterday.</p>
+    </div>
 
-  <div class="more-list reveal">
-    <h4 class="more-heading">And also</h4>
-    <ul class="more-grid">
-      {more.map((item) => (
-        <li class="more-item">{item}</li>
-      ))}
-    </ul>
+    <div class="cap-cell cap-graph">
+      <span class="cap-fig">FIG_02</span>
+      <div class="cap-illustration">
+        <svg viewBox="0 0 160 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <line x1="80" y1="16" x2="30" y2="58" stroke="var(--color-accent)" stroke-opacity="0.18" stroke-width="1"/>
+          <line x1="80" y1="16" x2="130" y2="52" stroke="var(--color-accent)" stroke-opacity="0.18" stroke-width="1"/>
+          <line x1="30" y1="58" x2="54" y2="100" stroke="var(--color-accent)" stroke-opacity="0.12" stroke-width="1"/>
+          <line x1="130" y1="52" x2="106" y2="96" stroke="var(--color-accent)" stroke-opacity="0.12" stroke-width="1"/>
+          <line x1="30" y1="58" x2="106" y2="96" stroke="var(--color-electric)" stroke-opacity="0.08" stroke-width="1" stroke-dasharray="3 3"/>
+          <circle cx="80" cy="16" r="4.5" fill="var(--color-accent)" fill-opacity="0.25" stroke="var(--color-accent)" stroke-opacity="0.4"/>
+          <circle cx="30" cy="58" r="3.5" fill="var(--color-accent)" fill-opacity="0.15" stroke="var(--color-accent)" stroke-opacity="0.3"/>
+          <circle cx="130" cy="52" r="3.5" fill="var(--color-accent)" fill-opacity="0.15" stroke="var(--color-accent)" stroke-opacity="0.3"/>
+          <circle cx="54" cy="100" r="3" fill="var(--color-electric)" fill-opacity="0.12" stroke="var(--color-electric)" stroke-opacity="0.25"/>
+          <circle cx="106" cy="96" r="3" fill="var(--color-electric)" fill-opacity="0.12" stroke="var(--color-electric)" stroke-opacity="0.25"/>
+        </svg>
+      </div>
+      <h3 class="cap-title">Knowledge Graph</h3>
+      <p class="cap-desc">People, projects, and decisions extracted as entities with relationships. Graph traversal, not just embedding similarity.</p>
+    </div>
+
+    <!-- Row 2: Inspect (1 col) + Cross-platform (1 col) -->
+    <div class="cap-cell cap-inspect">
+      <span class="cap-fig">FIG_03</span>
+      <div class="cap-illustration">
+        <svg viewBox="0 0 220 90" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="10" y="4" width="200" height="82" rx="3" stroke="currentColor" stroke-opacity="0.12" fill="none"/>
+          <line x1="10" y1="16" x2="210" y2="16" stroke="currentColor" stroke-opacity="0.08"/>
+          <circle cx="18" cy="10" r="1.5" fill="currentColor" opacity="0.12"/>
+          <circle cx="24" cy="10" r="1.5" fill="currentColor" opacity="0.12"/>
+          <circle cx="30" cy="10" r="1.5" fill="currentColor" opacity="0.12"/>
+          <line x1="56" y1="16" x2="56" y2="86" stroke="currentColor" stroke-opacity="0.06"/>
+          <rect x="16" y="22" width="32" height="4" rx="1" fill="var(--color-accent)" fill-opacity="0.18"/>
+          <rect x="16" y="30" width="26" height="3" rx="1" fill="currentColor" fill-opacity="0.06"/>
+          <rect x="16" y="37" width="28" height="3" rx="1" fill="currentColor" fill-opacity="0.05"/>
+          <rect x="62" y="22" width="140" height="14" rx="1" stroke="var(--color-accent)" stroke-opacity="0.12" fill="var(--color-accent)" fill-opacity="0.02"/>
+          <rect x="68" y="27" width="40" height="3" rx="1" fill="currentColor" fill-opacity="0.15"/>
+          <rect x="114" y="27" width="24" height="3" rx="1" fill="currentColor" fill-opacity="0.08"/>
+          <rect x="62" y="42" width="140" height="14" rx="1" stroke="currentColor" stroke-opacity="0.06" fill="none"/>
+          <rect x="62" y="62" width="140" height="14" rx="1" stroke="currentColor" stroke-opacity="0.04" fill="none"/>
+        </svg>
+      </div>
+      <h3 class="cap-title">Inspect Everything</h3>
+      <p class="cap-desc">Memory is not a black box. Browse, search, edit, and delete through the dashboard. See provenance for every memory.</p>
+    </div>
+
+    <div class="cap-cell cap-cross">
+      <span class="cap-fig">FIG_04</span>
+      <h3 class="cap-title">Cross-Platform</h3>
+      <p class="cap-desc">One memory layer across every harness.</p>
+      <div class="cap-platforms">
+        <span>Claude Code</span>
+        <span>OpenCode</span>
+        <span>OpenClaw</span>
+        <span>Codex</span>
+        <span>Forge</span>
+      </div>
+    </div>
+
+    <!-- Row 3: Secrets + Multi-Agent + Scorer -->
+    <div class="cap-cell cap-secrets">
+      <span class="cap-fig">FIG_05</span>
+      <svg class="cap-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="6" y="10" width="12" height="10" rx="1.5" stroke="var(--color-accent)" stroke-opacity="0.4"/>
+        <path d="M9 10V7a3 3 0 0 1 6 0v3" stroke="var(--color-accent)" stroke-opacity="0.3" stroke-width="1" fill="none"/>
+        <circle cx="12" cy="15" r="1.5" fill="var(--color-accent)" fill-opacity="0.35"/>
+      </svg>
+      <h3 class="cap-title">Encrypted Secrets</h3>
+      <p class="cap-desc">Libsodium at rest. Agents use secrets without seeing plaintext.</p>
+    </div>
+
+    <div class="cap-cell cap-multi">
+      <span class="cap-fig">FIG_06</span>
+      <svg class="cap-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="8" cy="9" r="3" stroke="var(--color-accent)" stroke-opacity="0.35"/>
+        <circle cx="16" cy="9" r="3" stroke="var(--color-accent)" stroke-opacity="0.25"/>
+        <circle cx="12" cy="17" r="3" stroke="var(--color-electric)" stroke-opacity="0.25"/>
+        <line x1="8" y1="12" x2="12" y2="14" stroke="var(--color-accent)" stroke-opacity="0.15"/>
+        <line x1="16" y1="12" x2="12" y2="14" stroke="var(--color-accent)" stroke-opacity="0.15"/>
+      </svg>
+      <h3 class="cap-title">Multi-Agent</h3>
+      <p class="cap-desc">Isolated, shared, or group visibility. Scoped memory with configurable access.</p>
+    </div>
+
+    <div class="cap-cell cap-scorer">
+      <span class="cap-fig">FIG_07</span>
+      <svg class="cap-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <polyline points="4,18 8,14 12,16 16,8 20,6" stroke="var(--color-accent)" stroke-opacity="0.35" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="20" cy="6" r="2" fill="var(--color-accent)" fill-opacity="0.3"/>
+      </svg>
+      <h3 class="cap-title">Predictive Scorer</h3>
+      <p class="cap-desc">Learned reranking that improves retrieval relevance over time.</p>
+    </div>
+
+    <!-- Row 4: And more — single spanning row -->
+    <div class="cap-cell cap-more">
+      <div class="cap-more-label">
+        <span class="cap-fig">FIG_08</span>
+        <h3 class="cap-title">And More</h3>
+      </div>
+      <div class="cap-more-list">
+        <span>SDK & React Hooks</span>
+        <span>Dashboard</span>
+        <span>Git Sync</span>
+        <span>Skills Marketplace</span>
+        <span>Docker Self-Hosting</span>
+      </div>
+    </div>
   </div>
 </section>

@@ -17,7 +17,7 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
   <Nav />
 
   <div class="blog-shell">
-    <main class="blog-main">
+    <main class="blog-main blog-main--index">
       <div class="section-header">
         <div class="crosshair"></div>
         <span class="section-label">Blog</span>
@@ -70,4 +70,6 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
   </div>
 
   <Footer />
+
+  <script src="../../scripts/masonry-layout.ts"></script>
 </Base>

@@ -19,6 +19,10 @@
 	margin: 0 auto;
 }
 
+.blog-main--index {
+	max-width: 1100px;
+}
+
 .has-toc .blog-main {
 	margin: 0;
 }
@@ -353,35 +357,54 @@
 }
 
 .blog-index {
-	display: grid;
-	grid-template-columns: 1fr;
+	display: flex;
+	flex-direction: column;
 	gap: 0;
+}
+
+/* Masonry: CSS columns activated by JS after pretext measurement */
+.blog-index.masonry-active {
+	display: block;
+	columns: 2;
+	column-gap: 24px;
 }
 
 .blog-card {
 	display: block;
-	border: none;
-	border-bottom: 1px solid var(--color-border);
-	background: none;
-	padding: var(--space-lg) 0;
+	border: 1px solid var(--color-border);
+	background: var(--color-surface);
+	padding: var(--space-lg);
 	text-decoration: none;
-	transition: background-color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease),
+		transform var(--dur) var(--ease);
+	position: relative;
+	margin-bottom: var(--space-lg);
+	break-inside: avoid;
 }
 
-.blog-card:first-child {
-	padding-top: 0;
+/* Crosshair motif at top-left */
+.blog-card::before {
+	content: "";
+	position: absolute;
+	left: 8px;
+	top: 8px;
+	width: 10px;
+	height: 10px;
+	background:
+		linear-gradient(to right, transparent 4px, var(--color-text-muted) 4px, var(--color-text-muted) 6px, transparent 6px),
+		linear-gradient(to bottom, transparent 4px, var(--color-text-muted) 4px, var(--color-text-muted) 6px, transparent 6px);
+	opacity: 0;
+	transition: opacity var(--dur) var(--ease);
 }
 
-.blog-card:last-child {
-	border-bottom: none;
+.blog-card:hover::before {
+	opacity: 1;
 }
 
 .blog-card:hover {
-	background: var(--color-glow);
-	padding-left: var(--space-md);
-	padding-right: var(--space-md);
-	margin-left: calc(-1 * var(--space-md));
-	margin-right: calc(-1 * var(--space-md));
+	border-color: var(--color-border-strong);
+	transform: translateY(-1px);
 }
 
 .blog-card-image {
@@ -477,6 +500,11 @@
 
 	.blog-pager {
 		grid-template-columns: 1fr;
+	}
+
+	/* Collapse masonry to single column on narrow screens */
+	.blog-index.masonry-active {
+		columns: 1;
 	}
 }
 

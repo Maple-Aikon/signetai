@@ -1,12 +1,49 @@
 // initLatentTopology: ASCII dither background + latent topology graph + hex stream.
 
+type Node = {
+	id: string;
+	x: number;
+	y: number;
+	vx: number;
+	vy: number;
+	baseX: number;
+	baseY: number;
+	isHub: boolean;
+};
+
+export type AnimState = {
+	ctx: CanvasRenderingContext2D;
+	asciiCtx: CanvasRenderingContext2D;
+	width: number;
+	height: number;
+	time: number;
+	mouse: { x: number; y: number };
+	nodes: Node[];
+	isDark: boolean;
+	lowPowerMode: boolean;
+	highlightColor: string;
+	nodeColor: string;
+	edgeColor: string;
+	surfaceColor: string;
+};
+
+export type CanvasRenderer = (state: AnimState) => void;
+
+const renderers: CanvasRenderer[] = [];
+
+export function registerRenderer(fn: CanvasRenderer): () => void {
+	renderers.push(fn);
+	return () => {
+		const idx = renderers.indexOf(fn);
+		if (idx >= 0) renderers.splice(idx, 1);
+	};
+}
+
 declare global {
 	interface Window {
 		initLatentTopology?: () => void;
 	}
 }
-
-export {};
 
 let topologyCleanup: (() => void) | null = null;
 let lifecycleBound = false;
@@ -60,16 +97,7 @@ function initLatentTopology() {
 		{ x: width * 0.3, y: height * 0.8, r: 150 },
 	];
 
-	type Node = {
-		id: string;
-		x: number;
-		y: number;
-		vx: number;
-		vy: number;
-		baseX: number;
-		baseY: number;
-		isHub: boolean;
-	};
+	// Node type is declared at module scope for export
 
 	const nodes: Node[] = [];
 	for (let i = 0; i < numNodes; i++) {
@@ -322,6 +350,16 @@ function initLatentTopology() {
 				ctx.fillText(`MEM: ${n.id}`, n.x, n.y - 34);
 				ctx.fillText("STS: ACTIVE", n.x, n.y - 24);
 			}
+		}
+
+		// Run registered renderer plugins
+		if (renderers.length > 0) {
+			const state: AnimState = {
+				ctx, asciiCtx, width, height, time, mouse, nodes,
+				isDark, lowPowerMode,
+				highlightColor, nodeColor, edgeColor, surfaceColor,
+			};
+			for (const render of renderers) render(state);
 		}
 
 		rafId = requestAnimationFrame(drawNodes);
