@@ -115,7 +115,14 @@ export abstract class BaseConnector {
 		const raw = readFileSync(agentsPath, "utf-8");
 		const cleaned = stripSignetBlock(raw);
 		if (cleaned === raw) return null;
-		writeFileSync(agentsPath, cleaned, "utf-8");
+		const tmp = join(basePath, `.${randomBytes(6).toString("hex")}.tmp`);
+		try {
+			writeFileSync(tmp, cleaned, "utf-8");
+			renameSync(tmp, agentsPath);
+		} catch (err) {
+			try { unlinkSync(tmp); } catch {}
+			throw err;
+		}
 		return agentsPath;
 	}
 
