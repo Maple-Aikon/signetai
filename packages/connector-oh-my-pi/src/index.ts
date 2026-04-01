@@ -184,7 +184,7 @@ export class OhMyPiConnector extends BaseConnector {
 
 		mkdirSync(dirname(targetPath), { recursive: true });
 		const managedContent = buildManagedExtensionContent({
-			signetPath: expandedBasePath || resolveWorkspacePath(),
+			signetPath: expandedBasePath,
 			daemonUrl: resolveDaemonUrl() || DAEMON_URL_DEFAULT,
 			agentId: resolveAgentId(),
 		});
