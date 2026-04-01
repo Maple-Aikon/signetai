@@ -556,11 +556,12 @@ describe("resolveSummaryProvider", () => {
 
 		expect(captured).not.toBeNull();
 		if (typeof captured !== "object" || captured === null) throw new Error("Expected object body");
-		const body = captured as Record<string, unknown>;
-		const options = body.options;
+		if (!("options" in captured)) throw new Error("Expected options field");
+		const { options } = captured;
 		if (typeof options !== "object" || options === null) throw new Error("Expected options object");
-		const opts = options as Record<string, unknown>;
-		expect(typeof opts.num_ctx).toBe("number");
-		expect(opts.num_ctx).toBeGreaterThanOrEqual(8192);
+		if (!("num_ctx" in options)) throw new Error("Expected num_ctx field");
+		const { num_ctx: numCtx } = options;
+		expect(typeof numCtx).toBe("number");
+		expect(numCtx).toBeGreaterThanOrEqual(8192);
 	});
 });
