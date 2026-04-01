@@ -528,4 +528,35 @@ describe("resolveSummaryProvider", () => {
 		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
 		expect(provider.name).toBe("ollama:qwen3.5:4b");
 	});
+
+	it("direct ollama provider sends num_ctx so chunks are not truncated (#426)", async () => {
+		const dir = makeAgentsDir(`memory:
+  pipelineV2:
+    extractionProvider: ollama
+    extractionModel: qwen3:4b
+`);
+
+		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
+		expect(provider.name).toBe("ollama:qwen3:4b");
+
+		// Intercept fetch to verify num_ctx is included in the request
+		const original = globalThis.fetch;
+		let captured: Record<string, unknown> | null = null;
+		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+			captured = JSON.parse(init?.body as string) as Record<string, unknown>;
+			return new Response(JSON.stringify({ response: "{}", done: true }), { status: 200 });
+		}) as typeof fetch;
+
+		try {
+			await provider.generate("test prompt");
+		} finally {
+			globalThis.fetch = original;
+		}
+
+		expect(captured).not.toBeNull();
+		const options = captured?.options as Record<string, unknown> | undefined;
+		expect(options).toBeDefined();
+		expect(typeof options?.num_ctx).toBe("number");
+		expect((options?.num_ctx as number) > 0).toBe(true);
+	});
 });

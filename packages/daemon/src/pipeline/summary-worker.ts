@@ -774,6 +774,7 @@ async function processChunked(
 			logger.warn("summary-worker", "Chunk summarization failed, skipping", {
 				chunk: i + 1,
 				total: chunks.length,
+				responsePreview: raw.length > 0 ? raw.slice(0, 120) : "(empty)",
 			});
 		}
 	}
@@ -1410,12 +1411,11 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 				defaultTimeoutMs: timeout,
 			});
 		default:
-			// Intentionally omit maxContextTokens here. When Ollama is explicitly
-			// configured (not fallback), users control context via model config.
 			return createOllamaProvider({
 				...(typeof model === "string" && model.trim().length > 0 ? { model } : {}),
 				...(endpoint ? { baseUrl: endpoint } : {}),
 				defaultTimeoutMs: timeout,
+				maxContextTokens: ollamaFallbackMaxContextTokens,
 			});
 	}
 }
