@@ -6854,44 +6854,17 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 // Forge hook evaluation endpoints
 // ---------------------------------------------------------------------------
 
-const EVAL_SYSTEM = [
-	"You are evaluating a hook condition.",
-	'Respond with a JSON object: {"ok": true} if the condition passes,',
-	'or {"ok": false, "reason": "explanation"} if it fails.',
-	"Only return the JSON, nothing else.",
-].join(" ");
-
-/**
- * Parse a JSON eval result from raw LLM text, tolerating markdown
- * fences and leading/trailing whitespace.
- */
-function parseEvalResult(raw: string): { ok: boolean; reason?: string } {
-	const trimmed = raw
-		.replace(/^```(?:json)?\s*/i, "")
-		.replace(/\s*```\s*$/, "")
-		.trim();
-	const parsed: unknown = JSON.parse(trimmed);
-	if (typeof parsed !== "object" || parsed === null) {
-		throw new Error("LLM returned non-object JSON");
-	}
-	const obj: Record<string, unknown> = Object.assign({}, parsed);
-	return {
-		ok: Boolean(obj.ok),
-		reason: typeof obj.reason === "string" ? obj.reason : undefined,
-	};
-}
-
-// Maximum prompt length accepted by the eval endpoints.
-// Prevents unbounded LLM cost per request; callers must truncate before sending.
-const MAX_HOOK_EVAL_PROMPT_CHARS = 16_000;
+import { EVAL_SYSTEM, MAX_HOOK_EVAL_PROMPT_CHARS, parseEvalResult, truncatePrompt } from "./hook-eval";
 
 /** Shared handler for prompt-eval and agent-eval endpoints. */
 async function handleHookEval(
 	tag: string,
 	prompt: string,
 ): Promise<{ ok: boolean; reason: string | null; inject: string | null }> {
-	// Truncate oversized prompts rather than rejecting — eval hooks must be fail-open.
-	const p = prompt.length > MAX_HOOK_EVAL_PROMPT_CHARS ? prompt.slice(0, MAX_HOOK_EVAL_PROMPT_CHARS) : prompt;
+	const { prompt: p, truncated } = truncatePrompt(prompt);
+	if (truncated) {
+		logger.warn("hooks", `${tag}: prompt truncated from ${prompt.length} to ${MAX_HOOK_EVAL_PROMPT_CHARS} chars`);
+	}
 
 	let provider: ReturnType<typeof getSynthesisProvider> | null = null;
 	try {

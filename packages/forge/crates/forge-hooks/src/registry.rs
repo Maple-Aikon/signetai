@@ -77,28 +77,31 @@ impl HookRegistry {
         debug!("Registered built-in HTTP hook for {:?}: {}", event, url);
     }
 
-    /// Register the 4 built-in Signet daemon HTTP hooks.
-    pub fn register_builtin(&mut self, base_url: &str) {
-        let empty = HashMap::new();
+    /// Register the 4 built-in Signet daemon HTTP hooks with auth headers.
+    ///
+    /// Pass the daemon auth headers (e.g. from `build_daemon_headers`) so that
+    /// the built-in hooks authenticate identically to direct daemon calls.
+    /// Pass `HashMap::new()` only in tests where auth is not needed.
+    pub fn register_builtin(&mut self, base_url: &str, headers: HashMap<String, String>) {
         self.register_builtin_http(
             HookEvent::SessionStart,
             &format!("{base_url}/api/hooks/session-start"),
-            empty.clone(),
+            headers.clone(),
         );
         self.register_builtin_http(
             HookEvent::UserPromptSubmit,
             &format!("{base_url}/api/hooks/user-prompt-submit"),
-            empty.clone(),
+            headers.clone(),
         );
         self.register_builtin_http(
             HookEvent::PreCompact,
             &format!("{base_url}/api/hooks/pre-compaction"),
-            empty.clone(),
+            headers.clone(),
         );
         self.register_builtin_http(
             HookEvent::SessionEnd,
             &format!("{base_url}/api/hooks/session-end"),
-            empty,
+            headers,
         );
         info!("Registered 4 built-in daemon hooks");
     }
@@ -285,7 +288,7 @@ mod tests {
     #[test]
     fn builtin_hooks_registered() {
         let mut reg = HookRegistry::new();
-        reg.register_builtin("http://localhost:3850");
+        reg.register_builtin("http://localhost:3850", HashMap::new());
         assert_eq!(reg.count(), 4);
 
         let start = reg.get(HookEvent::SessionStart);
@@ -296,7 +299,7 @@ mod tests {
     #[test]
     fn user_hooks_alongside_builtins() {
         let mut reg = HookRegistry::new();
-        reg.register_builtin("http://localhost:3850");
+        reg.register_builtin("http://localhost:3850", HashMap::new());
 
         let mut config = HookConfig::default();
         config.events.insert(
@@ -318,7 +321,7 @@ mod tests {
     #[test]
     fn user_http_suppresses_builtin() {
         let mut reg = HookRegistry::new();
-        reg.register_builtin("http://localhost:3850");
+        reg.register_builtin("http://localhost:3850", HashMap::new());
 
         let mut config = HookConfig::default();
         config.events.insert(
@@ -343,7 +346,7 @@ mod tests {
     #[test]
     fn reload_preserves_builtins() {
         let mut reg = HookRegistry::new();
-        reg.register_builtin("http://localhost:3850");
+        reg.register_builtin("http://localhost:3850", HashMap::new());
 
         let mut config = HookConfig::default();
         config.events.insert(
