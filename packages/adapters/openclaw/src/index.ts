@@ -1180,16 +1180,18 @@ const signetPlugin = {
 			api.logger.warn("signet-memory: register() called twice with non-cli mode, skipping duplicate");
 			return;
 		}
-		writeRegistered(true);
-
-		const cfg = signetConfigSchema.parse(api.pluginConfig);
-		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
-		const opts = {
-			daemonUrl,
-			harness: "openclaw",
-			workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
-			channel: process.env.SIGNET_CHANNEL,
-		};
+		let claimed = false;
+		try {
+			const cfg = signetConfigSchema.parse(api.pluginConfig);
+			const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
+			const opts = {
+				daemonUrl,
+				harness: "openclaw",
+				workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
+				channel: process.env.SIGNET_CHANNEL,
+			};
+			writeRegistered(true);
+			claimed = true;
 
 		// Instance-scoped health state (safe for multi-register)
 		let daemonReachable = true;
@@ -2033,8 +2035,8 @@ const signetPlugin = {
 		// Service
 		// ==================================================================
 
-		api.registerService({
-			id: "signet-memory-openclaw",
+			api.registerService({
+				id: "signet-memory-openclaw",
 			start() {
 				api.logger.info(`signet-memory: service started (daemon: ${daemonUrl})`);
 				healthTimer = setInterval(async () => {
@@ -2075,7 +2077,11 @@ const signetPlugin = {
 						writeRegistered(false);
 					}
 				},
-		});
+			});
+		} catch (err) {
+			if (claimed) writeRegistered(false);
+			throw err;
+		}
 	},
 };
 
