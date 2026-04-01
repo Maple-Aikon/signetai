@@ -3,6 +3,9 @@ import { join } from "path";
 
 export const DEFAULT_BASE_PATH = join(homedir(), ".agents");
 
+// Note: on Windows, homedir() uses backslashes but the replacement preserves
+// the forward slash from the original path (e.g. ~/foo → C:\Users\x/foo).
+// This is intentional — Signet targets Unix-primary environments.
 export function expandHome(path: string): string {
 	return path.replace(/^~(?=$|[/\\])/, homedir());
 }
