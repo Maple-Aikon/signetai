@@ -155,6 +155,16 @@ impl AgentLoop {
 
             let (recall_result, _) = tokio::join!(recall_future, preconnect_future);
 
+            // UserPromptSubmit supports blocking — a Block decision aborts the turn.
+            if recall_result.decision == HookDecision::Block {
+                let reason = recall_result
+                    .reason
+                    .unwrap_or_else(|| "Blocked by UserPromptSubmit hook".to_string());
+                let _ = self.event_tx.send(AgentEvent::Error(reason)).await;
+                let _ = self.event_tx.send(AgentEvent::TurnComplete).await;
+                return;
+            }
+
             if let Some(injection) = &recall_result.inject {
                 if !injection.is_empty() {
                     // Daemon endpoint returns HookOutput-shaped JSON with data.memoryCount.

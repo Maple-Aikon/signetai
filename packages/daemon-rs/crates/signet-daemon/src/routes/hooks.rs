@@ -5,17 +5,22 @@
 //! remember, recall, pre-compaction, and compaction-complete.
 
 use std::fs;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use tracing::warn;
+
+use crate::auth::middleware::{authenticate_headers, require_permission_guard, require_rate_limit_guard};
+use crate::auth::types::Permission;
+use crate::routes::pipeline::is_loopback;
 
 use signet_core::db::Priority;
 use signet_pipeline::memory_lineage::{
@@ -2347,30 +2352,51 @@ pub struct HookEvalBody {
     pub prompt: String,
 }
 
-/// Stub handler for `/api/hooks/prompt-eval`.
-/// Parity with daemon.ts:6898. Full LLM delegation is tracked in the
-/// forge-hook-system-expansion spec (Phase 4).
-pub async fn prompt_eval(Json(body): Json<HookEvalBody>) -> axum::response::Response {
+/// Guard: recall permission + rate limit for LLM eval endpoints.
+/// Mirrors the TS daemon's `requirePermission("recall") + requireRateLimit` pattern.
+fn guard_hook_eval(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+) -> Result<(), Box<axum::response::Response>> {
+    let is_local = is_loopback(peer);
+    let auth = authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), headers, is_local)?;
+    require_permission_guard(&auth, Permission::Recall, state.auth_mode, is_local)?;
+    require_rate_limit_guard(&auth, "hook-eval", &state.recall_llm_limiter, state.auth_mode, None)?;
+    Ok(())
+}
+
+/// POST `/api/hooks/prompt-eval` — delegate prompt hook evaluation to synthesis provider.
+/// Parity with daemon.ts:6898. Full LLM delegation tracked in forge-hook-system-expansion Phase 4.
+pub async fn prompt_eval(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<HookEvalBody>,
+) -> axum::response::Response {
+    if let Err(e) = guard_hook_eval(&state, &headers, &peer) {
+        return *e;
+    }
     if body.prompt.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "prompt is required"})),
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "prompt is required"}))).into_response();
     }
     // Fail-open: no synthesis provider wired in daemon-rs yet.
     (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()
 }
 
-/// Stub handler for `/api/hooks/agent-eval`.
-/// Parity with daemon.ts:6920. Currently delegates to prompt_eval semantics.
-pub async fn agent_eval(Json(body): Json<HookEvalBody>) -> axum::response::Response {
+/// POST `/api/hooks/agent-eval` — delegate agent hook evaluation to synthesis provider.
+/// Parity with daemon.ts:6920. Currently delegates to prompt-eval semantics.
+pub async fn agent_eval(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<HookEvalBody>,
+) -> axum::response::Response {
+    if let Err(e) = guard_hook_eval(&state, &headers, &peer) {
+        return *e;
+    }
     if body.prompt.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "prompt is required"})),
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "prompt is required"}))).into_response();
     }
     // Fail-open: no synthesis provider wired in daemon-rs yet.
     (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()

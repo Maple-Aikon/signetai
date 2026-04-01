@@ -6881,11 +6881,19 @@ function parseEvalResult(raw: string): { ok: boolean; reason?: string } {
 	};
 }
 
+// Maximum prompt length accepted by the eval endpoints.
+// Prevents unbounded LLM cost per request; callers must truncate before sending.
+const MAX_HOOK_EVAL_PROMPT_CHARS = 16_000;
+
 /** Shared handler for prompt-eval and agent-eval endpoints. */
 async function handleHookEval(
 	tag: string,
 	prompt: string,
 ): Promise<{ ok: boolean; reason: string | null; inject: string | null }> {
+	if (prompt.length > MAX_HOOK_EVAL_PROMPT_CHARS) {
+		return { ok: false, reason: `prompt exceeds ${MAX_HOOK_EVAL_PROMPT_CHARS} character limit`, inject: null };
+	}
+
 	let provider: ReturnType<typeof getSynthesisProvider> | null = null;
 	try {
 		provider = getSynthesisProvider();
