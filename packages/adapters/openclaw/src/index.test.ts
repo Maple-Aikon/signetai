@@ -965,6 +965,191 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		);
 	});
 
+	it("strips prior <signet-memory> injection blocks from user message extraction", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: '<signet-memory source="auto-recall">\nold injected memory\n</signet-memory>\nreal user question',
+				messages: [
+					{
+						role: "user",
+						content: '<signet-memory source="auto-recall">\nold injected memory\n</signet-memory>\nreal user question',
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
+	});
+
+	it("strips signet-memory blocks when source contains >", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: '<signet-memory source="a > b">\nold injected memory\n</signet-memory>\nreal user question',
+				messages: [
+					{
+						role: "user",
+						content: '<signet-memory source="a > b">\nold injected memory\n</signet-memory>\nreal user question',
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-gt",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
+	});
+
+	it("strips orphaned </signet-memory> tags from extracted user message", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "<signet-memory>old</signet-memory>real question</signet-memory>",
+				messages: [
+					{
+						role: "user",
+						content: "<signet-memory>old</signet-memory>real question</signet-memory>",
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-orphan-close",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real question");
+	});
+
+	it("skips prompt-submit when user messages are only signet-memory injection blocks", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const result = await beforePromptBuild?.(
+			{
+				prompt: "<signet-memory>synthetic</signet-memory>",
+				messages: [{ role: "user", content: "<signet-memory>synthetic</signet-memory>" }],
+			},
+			{
+				sessionKey: "strip-memory-tag-only",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(result).toBeUndefined();
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(0);
+	});
+
+	it("falls back to most recent real user message when trailing user messages are injection-only", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "fallback message should come from structured messages",
+				messages: [
+					{ role: "user", content: "real question" },
+					{ role: "assistant", content: "answer" },
+					{ role: "user", content: "<signet-memory>injection</signet-memory>" },
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-fallback-older-real",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real question");
+	});
+
+	it("drops trailing text from an unclosed <signet-memory block", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+				messages: [
+					{
+						role: "user",
+						content: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-unclosed-open",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
+	});
+
+	it("does not match hyphenated non-signet tags", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "real user question <signet-memory-anything> keep this",
+				messages: [
+					{
+						role: "user",
+						content: "real user question <signet-memory-anything> keep this",
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-hyphenated-non-signet",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe(
+			"real user question <signet-memory-anything> keep this",
+		);
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================
@@ -1560,6 +1745,50 @@ describe("registration guard (#422)", () => {
 
 		signetPlugin.register(second.api);
 		expect(registeredServices.length).toBe(count);
+	});
+
+	it("skips setup-runtime registration pass and still registers on full mode", () => {
+		const setupRuntime = createMockApi({ registrationMode: "setup-runtime" });
+		signetPlugin.register(setupRuntime.api);
+
+		expect(setupRuntime.tools.length).toBe(0);
+		expect(setupRuntime.hooks.size).toBe(0);
+
+		const full = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(full.api);
+		expect(full.tools.length).toBeGreaterThan(0);
+		expect(full.hooks.size).toBeGreaterThan(0);
+	});
+
+	it("skips setup-only registration pass", () => {
+		const setupOnly = createMockApi({ registrationMode: "setup-only" });
+		signetPlugin.register(setupOnly.api);
+		expect(setupOnly.tools.length).toBe(0);
+		expect(setupOnly.hooks.size).toBe(0);
+		expect(registeredServices.length).toBe(0);
+	});
+
+	it("warns for unknown registration modes", () => {
+		const unknown = createMockApi({ registrationMode: "mystery-mode" as OpenClawPluginApi["registrationMode"] });
+		signetPlugin.register(unknown.api);
+		expect(warnMessages).toContain("signet-memory: skipping runtime registration for unknown mode=mystery-mode");
+	});
+
+	it("allows re-registration after service stop", async () => {
+		const first = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(first.api);
+		expect(registeredServices.length).toBeGreaterThan(0);
+		expect(first.tools.length).toBeGreaterThan(0);
+
+		for (const service of registeredServices) {
+			await service.stop();
+		}
+		registeredServices = [];
+
+		const second = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(second.api);
+		expect(second.tools.length).toBeGreaterThan(0);
+		expect(second.hooks.size).toBeGreaterThan(0);
 	});
 
 	it("does not register session:compact:before or session:compact:after hooks", () => {

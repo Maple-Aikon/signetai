@@ -13,9 +13,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 } from "@signet/core";
 import { Type } from "@sinclair/typebox";
 import type {
@@ -75,6 +75,23 @@ const METADATA_LINE_PREFIXES = [
 	"END_EXTERNAL_UNTRUSTED_CONTENT",
 ] as const;
 
+const SIGNET_MEMORY_CLOSE = "</signet-memory>";
+
+function stripSignetMemory(content: string): string {
+	const clean = (text: string): string => text.replace(/<\/signet-memory>/gi, "").trim();
+	let text = content;
+	while (true) {
+		const start = text.search(/<signet-memory(?=[\s/>])/i);
+		if (start === -1) return clean(text);
+		const closeOffset = text.slice(start).search(/<\/signet-memory>/i);
+		if (closeOffset === -1) return clean(text.slice(0, start));
+		const end = start + closeOffset;
+		// Closing tag length is case-invariant for ASCII `</signet-memory>`.
+		const stop = end + SIGNET_MEMORY_CLOSE.length;
+		text = text.slice(0, start) + text.slice(stop);
+	}
+}
+
 /**
  * Check if content looks like metadata JSON (sender info, usernames, tags)
  */
@@ -91,7 +108,8 @@ function looksLikeMetadataJson(content: string): boolean {
 }
 
 function extractUserMessage(rawPrompt: string): string {
-	const lines = rawPrompt.split("\n");
+	const sanitized = stripSignetMemory(rawPrompt);
+	const lines = sanitized.split("\n");
 	let lastContentStart = 0;
 
 	// Track when we're inside a code fence
@@ -124,7 +142,7 @@ function extractUserMessage(rawPrompt: string): string {
 	}
 
 	const extracted = lines.slice(lastContentStart).join("\n").trim();
-	return extracted.length > 0 ? extracted : rawPrompt;
+	return extracted.length > 0 ? extracted : sanitized;
 }
 
 // ============================================================================
@@ -247,7 +265,9 @@ function extractLastUserMessage(messages: unknown): string | undefined {
 		if (!isUserMessage(raw)) continue;
 
 		const text = getMessageText(raw);
-		if (text) return text;
+		if (!text) continue;
+		const sanitized = stripSignetMemory(text);
+		if (sanitized.length > 0) return sanitized;
 	}
 
 	return undefined;
@@ -1126,8 +1146,18 @@ async function registerMarketplaceProxyTools(
 // Defensive backstop: even if registrationMode is absent or "full", never
 // run the full registration body more than once per process. OpenClaw's
 // documented double-call is mode-gated below, but older hosts or future
-// loader changes could call with "full" twice.
-let registered = false;
+// loader changes could call with "full" twice. Keep this state on globalThis
+// so hot-reload module re-imports still honor the guard.
+const REG_KEY = "__signet_openclaw_registered__signet-memory-openclaw";
+
+function readRegistered(): boolean {
+	const value = Reflect.get(globalThis, REG_KEY);
+	return value === true;
+}
+
+function writeRegistered(value: boolean): void {
+	Reflect.set(globalThis, REG_KEY, value);
+}
 
 const signetPlugin = {
 	id: "signet-memory-openclaw",
@@ -1137,26 +1167,32 @@ const signetPlugin = {
 	configSchema: signetConfigSchema,
 
 	register(api: OpenClawPluginApi): void {
-		// OpenClaw calls register() twice: once for the full runtime pass and
-		// once for CLI metadata (registrationMode "cli-metadata"). The CLI pass
-		// only needs registerCli(); skip tools, hooks, and services to avoid
-		// duplicate registrations that stall the gateway and block providers.
-		if (api.registrationMode === "cli-metadata") return;
+		const mode = api.registrationMode ?? "full";
+		// Only "full" should register runtime behavior. setup-only,
+		// setup-runtime, and cli-metadata are metadata/setup passes.
+		if (mode !== "full") {
+			if (!["cli-metadata", "setup-only", "setup-runtime"].includes(mode)) {
+				api.logger.warn(`signet-memory: skipping runtime registration for unknown mode=${mode}`);
+			}
+			return;
+		}
 
-		if (registered) {
+		if (readRegistered()) {
 			api.logger.warn("signet-memory: register() called twice with non-cli mode, skipping duplicate");
 			return;
 		}
-		registered = true;
-
-		const cfg = signetConfigSchema.parse(api.pluginConfig);
-		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
-		const opts = {
-			daemonUrl,
-			harness: "openclaw",
-			workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
-			channel: process.env.SIGNET_CHANNEL,
-		};
+		let claimed = false;
+		try {
+			const cfg = signetConfigSchema.parse(api.pluginConfig);
+			const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
+			const opts = {
+				daemonUrl,
+				harness: "openclaw",
+				workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
+				channel: process.env.SIGNET_CHANNEL,
+			};
+			writeRegistered(true);
+			claimed = true;
 
 		// Instance-scoped health state (safe for multi-register)
 		let daemonReachable = true;
@@ -2000,8 +2036,8 @@ const signetPlugin = {
 		// Service
 		// ==================================================================
 
-		api.registerService({
-			id: "signet-memory-openclaw",
+			api.registerService({
+				id: "signet-memory-openclaw",
 			start() {
 				api.logger.info(`signet-memory: service started (daemon: ${daemonUrl})`);
 				healthTimer = setInterval(async () => {
@@ -2027,23 +2063,38 @@ const signetPlugin = {
 			},
 			stop() {
 				api.logger.info("signet-memory: service stopped");
-				if (healthTimer) {
-					clearInterval(healthTimer);
-					healthTimer = null;
-				}
-				if (marketplaceProxyTimer) {
-					clearInterval(marketplaceProxyTimer);
-					marketplaceProxyTimer = null;
+				try {
+					if (healthTimer) {
+						clearInterval(healthTimer);
+						healthTimer = null;
+					}
+					if (marketplaceProxyTimer) {
+						clearInterval(marketplaceProxyTimer);
+						marketplaceProxyTimer = null;
+					}
+				} finally {
+					// Always release the process-level registration guard so a
+					// later full registration pass can reinitialize cleanly.
+					writeRegistered(false);
 				}
 			},
-		});
+			});
+		} catch (err) {
+			if (claimed) {
+				writeRegistered(false);
+				api.logger.error("signet-memory: registration failed after guard was claimed; guard reset before rethrow", {
+					error: String(err),
+				});
+			}
+			throw err;
+		}
 	},
 };
 
 /** @internal Test-only: reset the module-level registration guard. No-op in production. */
 export function _resetRegistration(): void {
 	if (process.env.NODE_ENV === "test") {
-		registered = false;
+		writeRegistered(false);
 	}
 }
 

@@ -504,6 +504,14 @@ export function resolveSessionStartTimeoutMs(raw?: string): number {
 	return ms;
 }
 
+export function resolvePromptSubmitTimeoutMs(raw?: string): number {
+	if (!raw) return 5_000;
+	const ms = Number.parseInt(raw, 10);
+	if (!Number.isFinite(ms) || ms < 1_000) return 5_000;
+	if (ms > 120_000) return 120_000;
+	return ms;
+}
+
 /**
  * Read identity files directly from disk and compose a degraded inject string.
  * Used as fallback when the daemon is unreachable during session-start.

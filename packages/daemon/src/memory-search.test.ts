@@ -180,4 +180,83 @@ describe("hybridRecall", () => {
 		expect(card?.content).not.toContain("[[memory/");
 		expect(card?.content_length ?? 0).toBeLessThanOrEqual(900);
 	});
+
+	it("skips null embedding vectors in traversal cosine scoring without crashing", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`
+				DROP TABLE IF EXISTS embeddings;
+				CREATE TABLE embeddings (
+					id TEXT PRIMARY KEY,
+					content_hash TEXT NOT NULL UNIQUE,
+					vector BLOB,
+					dimensions INTEGER NOT NULL,
+					source_type TEXT NOT NULL,
+					source_id TEXT NOT NULL,
+					chunk_text TEXT NOT NULL,
+					created_at TEXT NOT NULL
+				);
+			`);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-null-vec", "Signet traversal memory", now, now);
+
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'project', 'default', 5, ?, ?)`,
+			).run("ent-null-vec", "Signet", "signet", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'context', 'context', 0.9, ?, ?)`,
+			).run("asp-null-vec", "ent-null-vec", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at
+				) VALUES (?, ?, 'default', ?, 'attribute', ?, ?, 1, 0.9, 'active', ?, ?)`,
+			).run(
+				"attr-null-vec",
+				"asp-null-vec",
+				"mem-null-vec",
+				"Signet traversal memory",
+				"signet traversal memory",
+				now,
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO embeddings (
+					id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at
+				) VALUES (?, ?, NULL, 3, 'memory', ?, ?, ?)`,
+			).run("emb-null-vec", "hash-null-vec", "mem-null-vec", "Signet traversal memory", now);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = true;
+		cfg.pipelineV2.traversal.enabled = true;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "Signet",
+				keywordQuery: "Signet",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => [0.1, 0.2, 0.3],
+		);
+
+		expect(result.results.length).toBeGreaterThan(0);
+		expect(result.results.map((row) => row.id)).toContain("mem-null-vec");
+	});
 });

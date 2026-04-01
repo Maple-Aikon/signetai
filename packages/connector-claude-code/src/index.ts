@@ -12,11 +12,11 @@
  * ```
  */
 
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { resolveSessionStartTimeoutMs } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import { resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
 // ============================================================================
 // Types
@@ -66,6 +66,14 @@ export interface SessionEndResult {
 function sessionStartHookTimeout(): number {
 	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
 	return resolveSessionStartTimeoutMs(raw) + 2_000;
+}
+
+function userPromptSubmitHookTimeout(): number {
+	// Claude Code hooks are written once to settings.json at install time.
+	// This env is resolved during connector install/update, not per prompt.
+	// Keep the same grace buffer as session-start so Claude Code does not kill
+	// the hook at the exact daemon timeout boundary.
+	return resolvePromptSubmitTimeoutMs(process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT) + 2_000;
 }
 
 // ============================================================================
@@ -335,7 +343,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook user-prompt-submit -H claude-code --project "${pwdExpr}"`,
-							timeout: 2000,
+							timeout: userPromptSubmitHookTimeout(),
 						},
 					],
 				},

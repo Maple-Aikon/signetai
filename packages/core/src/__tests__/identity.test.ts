@@ -1,11 +1,12 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-	readStaticIdentity,
-	resolveSessionStartTimeoutMs,
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	readStaticIdentity,
+	resolvePromptSubmitTimeoutMs,
+	resolveSessionStartTimeoutMs,
 } from "../identity";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
@@ -105,5 +106,22 @@ describe("resolveSessionStartTimeoutMs", () => {
 	test("clamps high values and preserves valid ones", () => {
 		expect(resolveSessionStartTimeoutMs("18000")).toBe(18000);
 		expect(resolveSessionStartTimeoutMs("999999")).toBe(120000);
+	});
+});
+
+describe("resolvePromptSubmitTimeoutMs", () => {
+	test("returns the default when unset or invalid", () => {
+		expect(resolvePromptSubmitTimeoutMs()).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("oops")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("NaN")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("0")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("-100")).toBe(5000);
+		expect(resolvePromptSubmitTimeoutMs("250")).toBe(5000);
+	});
+
+	test("clamps high values and preserves valid ones", () => {
+		expect(resolvePromptSubmitTimeoutMs("6000")).toBe(6000);
+		expect(resolvePromptSubmitTimeoutMs("999999")).toBe(120000);
+		expect(resolvePromptSubmitTimeoutMs(String(Number.MAX_SAFE_INTEGER))).toBe(120000);
 	});
 });

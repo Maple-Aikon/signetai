@@ -15,9 +15,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import {
-	readStaticIdentity,
-	resolveSessionStartTimeoutMs,
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	readStaticIdentity,
+	resolvePromptSubmitTimeoutMs,
+	resolveSessionStartTimeoutMs,
 } from "@signet/core";
 import { createDaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
@@ -25,6 +26,7 @@ import {
 	DAEMON_URL_DEFAULT,
 	FETCH_TIMEOUT_ENV,
 	HARNESS,
+	PROMPT_SUBMIT_TIMEOUT_ENV,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
 	SESSION_START_TIMEOUT_ENV,
@@ -49,10 +51,6 @@ interface UserPromptSubmitResult {
 	readonly inject?: string;
 	readonly memoryCount?: number;
 }
-
-// Tighter timeout for the prompt-submit path — this blocks every user message,
-// so we can't afford the full 5s READ_TIMEOUT if the daemon is slow.
-const PROMPT_SUBMIT_TIMEOUT = 2000;
 
 // Per-prompt inject cache: consumed once by system.transform after chat.message populates it.
 // Capped to prevent unbounded growth if sessions die between the two hooks.
@@ -104,6 +102,10 @@ function sessionStartFallback(reason: "offline" | "timeout"): string {
 
 function sessionStartTimeout(): number {
 	return resolveSessionStartTimeoutMs(readRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readRuntimeEnv(FETCH_TIMEOUT_ENV));
+}
+
+function promptSubmitTimeout(): number {
+	return resolvePromptSubmitTimeoutMs(readRuntimeEnv(PROMPT_SUBMIT_TIMEOUT_ENV));
 }
 
 // ============================================================================
@@ -213,7 +215,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 						userMessage: userText,
 						runtimePath: RUNTIME_PATH,
 					},
-					PROMPT_SUBMIT_TIMEOUT,
+					promptSubmitTimeout(),
 				);
 				if (result?.inject) {
 					pendingInjectSet(input.sessionID, result.inject);
