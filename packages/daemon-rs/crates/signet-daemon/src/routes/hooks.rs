@@ -2366,40 +2366,42 @@ fn guard_hook_eval(
     Ok(())
 }
 
-/// POST `/api/hooks/prompt-eval` — delegate prompt hook evaluation to synthesis provider.
-/// Parity with daemon.ts:6898. Full LLM delegation tracked in forge-hook-system-expansion Phase 4.
+/// Shared eval handler body for prompt-eval and agent-eval.
+/// Both endpoints fail-open: no synthesis provider is wired in daemon-rs yet.
+/// Parity tracked in forge-hook-system-expansion Phase 4.
+fn handle_eval(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    body: HookEvalBody,
+) -> axum::response::Response {
+    if let Err(e) = guard_hook_eval(state, headers, peer) {
+        return *e;
+    }
+    if body.prompt.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "prompt is required"}))).into_response();
+    }
+    (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()
+}
+
+/// POST `/api/hooks/prompt-eval` — parity with daemon.ts:6898.
 pub async fn prompt_eval(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<HookEvalBody>,
 ) -> axum::response::Response {
-    if let Err(e) = guard_hook_eval(&state, &headers, &peer) {
-        return *e;
-    }
-    if body.prompt.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "prompt is required"}))).into_response();
-    }
-    // Fail-open: no synthesis provider wired in daemon-rs yet.
-    (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()
+    handle_eval(&state, &headers, &peer, body)
 }
 
-/// POST `/api/hooks/agent-eval` — delegate agent hook evaluation to synthesis provider.
-/// Parity with daemon.ts:6920. Currently delegates to prompt-eval semantics.
+/// POST `/api/hooks/agent-eval` — parity with daemon.ts:6920.
 pub async fn agent_eval(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<HookEvalBody>,
 ) -> axum::response::Response {
-    if let Err(e) = guard_hook_eval(&state, &headers, &peer) {
-        return *e;
-    }
-    if body.prompt.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "prompt is required"}))).into_response();
-    }
-    // Fail-open: no synthesis provider wired in daemon-rs yet.
-    (StatusCode::OK, Json(serde_json::json!({"ok": true, "reason": null, "inject": null}))).into_response()
+    handle_eval(&state, &headers, &peer, body)
 }
 
 #[cfg(test)]

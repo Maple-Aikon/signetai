@@ -5975,13 +5975,13 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 			// HookOutput-compatible: decision + data.memoryCount so Rust HttpExecutor can
 			// parse this as a typed HookOutput. Legacy fields (inject, memoryCount) kept
 			// at top level for backward compat with TypeScript connectors.
-			return c.json({ decision: "Allow", inject: "", memoryCount: 0, data: { memoryCount: 0 }, bypassed: true });
+			return c.json({ decision: "allow", inject: "", memoryCount: 0, data: { memoryCount: 0 }, bypassed: true });
 		}
 
 		const result = await handleUserPromptSubmit(body);
 		// HookOutput-compatible shape: Rust HttpExecutor parses decision+inject+data directly.
 		// Legacy top-level memoryCount preserved for TypeScript connector backward compat.
-		return c.json({ decision: "Allow", ...result, sessionKnown: known, data: { memoryCount: result.memoryCount } });
+		return c.json({ decision: "allow", ...result, sessionKnown: known, data: { memoryCount: result.memoryCount } });
 	} catch (e) {
 		logger.error("hooks", "User prompt submit hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
@@ -6890,9 +6890,8 @@ async function handleHookEval(
 	tag: string,
 	prompt: string,
 ): Promise<{ ok: boolean; reason: string | null; inject: string | null }> {
-	if (prompt.length > MAX_HOOK_EVAL_PROMPT_CHARS) {
-		return { ok: false, reason: `prompt exceeds ${MAX_HOOK_EVAL_PROMPT_CHARS} character limit`, inject: null };
-	}
+	// Truncate oversized prompts rather than rejecting — eval hooks must be fail-open.
+	const p = prompt.length > MAX_HOOK_EVAL_PROMPT_CHARS ? prompt.slice(0, MAX_HOOK_EVAL_PROMPT_CHARS) : prompt;
 
 	let provider: ReturnType<typeof getSynthesisProvider> | null = null;
 	try {
@@ -6902,7 +6901,7 @@ async function handleHookEval(
 		return { ok: true, reason: null, inject: null };
 	}
 
-	const full = `${EVAL_SYSTEM}\n\n${prompt}`;
+	const full = `${EVAL_SYSTEM}\n\n${p}`;
 	const raw = await provider.generate(full, {
 		timeoutMs: 30_000,
 		maxTokens: 512,

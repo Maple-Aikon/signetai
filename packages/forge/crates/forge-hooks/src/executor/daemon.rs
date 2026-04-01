@@ -40,24 +40,44 @@ impl DaemonExecutor {
     }
 
     /// Interpolate template placeholders with values from the hook input.
+    ///
+    /// Uses a single left-to-right scan of the template so that substituted
+    /// values are never re-scanned. This prevents double-expansion when a
+    /// value (e.g. tool_input) itself contains a placeholder like `{{payload}}`.
     fn interpolate(template: &str, input: &HookInput) -> String {
-        let mut result = template.to_string();
-
-        result = result.replace("{{event}}", &format!("{:?}", input.event));
-
+        let event = format!("{:?}", input.event);
         let name = input.tool_name.as_deref().unwrap_or("");
-        result = result.replace("{{tool_name}}", name);
-
         let tool_input = input
             .payload
             .get("toolInput")
             .map(|v| v.to_string())
             .unwrap_or_default();
-        result = result.replace("{{tool_input}}", &tool_input);
+        let payload = input.payload.to_string();
 
-        result = result.replace("{{payload}}", &input.payload.to_string());
+        let replacements: &[(&str, &str)] = &[
+            ("{{event}}", &event),
+            ("{{tool_name}}", name),
+            ("{{tool_input}}", &tool_input),
+            ("{{payload}}", &payload),
+        ];
 
-        result
+        // Single-pass: scan template once, emit output without rescanning substitutions.
+        let mut out = String::with_capacity(template.len());
+        let mut rest = template;
+        'outer: while !rest.is_empty() {
+            for (placeholder, value) in replacements {
+                if rest.starts_with(placeholder) {
+                    out.push_str(value);
+                    rest = &rest[placeholder.len()..];
+                    continue 'outer;
+                }
+            }
+            // Advance one char at a time when no placeholder matches.
+            let ch = rest.chars().next().unwrap();
+            out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+        }
+        out
     }
 }
 
