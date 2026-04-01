@@ -58,6 +58,10 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         run: bun run build
 
+      - name: CLI runtime smoke check
+        if: steps.changes.outputs.skip != 'true'
+        run: node packages/signetai/bin/signet.js --help > /dev/null
+
       - name: Configure Git
         if: steps.changes.outputs.skip != 'true'
         run: |
