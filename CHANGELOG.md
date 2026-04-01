@@ -2,6 +2,18 @@
 
 All notable changes to Signet are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **pipeline**: fix chunked session summarization failures when using direct Ollama synthesis (#426)
+  - Direct Ollama provider now sends `num_ctx` (default 8192) on every request, matching the fallback path
+  - Rust parity: `packages/daemon-rs` summary worker also passes `max_context_tokens` to the Ollama provider
+
+### Notes
+
+- `SIGNET_OLLAMA_FALLBACK_MAX_CTX` now controls the context window for **all** Ollama summary paths (direct and fallback), not just the fallback. If you previously set this variable to intentionally limit the fallback path, be aware it also applies when `synthesis.provider` is explicitly `ollama`.
+
 ## [0.91.3] - 2026-04-01
 
 ### Bug Fixes
