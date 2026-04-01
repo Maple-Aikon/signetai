@@ -1068,6 +1068,33 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(0);
 	});
 
+	it("drops trailing text from an unclosed <signet-memory block", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		await beforePromptBuild?.(
+			{
+				prompt: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+				messages: [
+					{
+						role: "user",
+						content: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+					},
+				],
+			},
+			{
+				sessionKey: "strip-memory-tag-unclosed-open",
+				agentId: "agent-1",
+			},
+		);
+
+		expect(lastPromptSubmitBody).toBeDefined();
+		expect(isRecord(lastPromptSubmitBody) && lastPromptSubmitBody.userMessage).toBe("real user question");
+	});
+
 	// ======================================================================
 	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
 	// ======================================================================

@@ -87,7 +87,7 @@ function stripSignetMemory(content: string): string {
 		const start = lower.indexOf(SIGNET_MEMORY_OPEN);
 		if (start === -1) return clean(text);
 		const end = lower.indexOf(SIGNET_MEMORY_CLOSE, start);
-		if (end === -1) return clean(text);
+		if (end === -1) return clean(text.slice(0, start));
 		const stop = end + SIGNET_MEMORY_CLOSE.length;
 		text = text.slice(0, start) + text.slice(stop);
 	}

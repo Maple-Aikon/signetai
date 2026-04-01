@@ -369,6 +369,11 @@ Prompt-submit timeout note: `SIGNET_PROMPT_SUBMIT_TIMEOUT` defaults to
 grace buffer when written to `settings.json`, so the installed
 `UserPromptSubmit` timeout default is `7000`.
 
+Upgrade note: Claude Code hook timeouts are persisted in
+`~/.claude/settings.json` during connector install/update. Existing
+installs keep old timeout values until you rerun `signet connect
+claude-code` (or `signet setup`) to refresh hook config.
+
 The CLI calls the daemon's hook endpoints and outputs context that Claude Code injects into the session.
 
 ---
