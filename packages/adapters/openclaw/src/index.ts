@@ -75,7 +75,6 @@ const METADATA_LINE_PREFIXES = [
 	"END_EXTERNAL_UNTRUSTED_CONTENT",
 ] as const;
 
-const SIGNET_MEMORY_OPEN = "<signet-memory";
 const SIGNET_MEMORY_CLOSE = "</signet-memory>";
 
 function stripSignetMemory(content: string): string {
