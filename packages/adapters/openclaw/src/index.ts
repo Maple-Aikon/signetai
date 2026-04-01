@@ -2058,18 +2058,23 @@ const signetPlugin = {
 					knownPid = pid;
 				}, 60_000);
 			},
-			stop() {
-				api.logger.info("signet-memory: service stopped");
-				writeRegistered(false);
-				if (healthTimer) {
-					clearInterval(healthTimer);
-					healthTimer = null;
-				}
-				if (marketplaceProxyTimer) {
-					clearInterval(marketplaceProxyTimer);
-					marketplaceProxyTimer = null;
-				}
-			},
+				stop() {
+					api.logger.info("signet-memory: service stopped");
+					try {
+						if (healthTimer) {
+							clearInterval(healthTimer);
+							healthTimer = null;
+						}
+						if (marketplaceProxyTimer) {
+							clearInterval(marketplaceProxyTimer);
+							marketplaceProxyTimer = null;
+						}
+					} finally {
+						// Always release the process-level registration guard so a
+						// later full registration pass can reinitialize cleanly.
+						writeRegistered(false);
+					}
+				},
 		});
 	},
 };

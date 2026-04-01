@@ -122,5 +122,6 @@ describe("resolvePromptSubmitTimeoutMs", () => {
 	test("clamps high values and preserves valid ones", () => {
 		expect(resolvePromptSubmitTimeoutMs("6000")).toBe(6000);
 		expect(resolvePromptSubmitTimeoutMs("999999")).toBe(120000);
+		expect(resolvePromptSubmitTimeoutMs(String(Number.MAX_SAFE_INTEGER))).toBe(120000);
 	});
 });
