@@ -221,7 +221,7 @@ impl HookInput {
             event: HookEvent::Stop,
             tool_name: None,
             payload: serde_json::json!({
-                "sessionId": session_id,
+                "sessionKey": session_id,
             }),
         }
     }

@@ -5980,8 +5980,10 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 
 		const result = await handleUserPromptSubmit(body);
 		// HookOutput-compatible shape: Rust HttpExecutor parses decision+inject+data directly.
+		// Enumerate fields explicitly to avoid a future `data` field from result silently
+		// overwriting the structured `data: { memoryCount }` we want to expose.
 		// Legacy top-level memoryCount preserved for TypeScript connector backward compat.
-		return c.json({ decision: "allow", ...result, sessionKnown: known, data: { memoryCount: result.memoryCount } });
+		return c.json({ decision: "allow", inject: result.inject, memoryCount: result.memoryCount, sessionKnown: known, data: { memoryCount: result.memoryCount } });
 	} catch (e) {
 		logger.error("hooks", "User prompt submit hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
@@ -6874,6 +6876,12 @@ async function handleHookEval(
 		return { ok: true, reason: null, inject: null };
 	}
 
+	// SECURITY NOTE: EVAL_SYSTEM and the (potentially adversarial) prompt are
+	// joined into a single string. If the synthesis provider exposes a system-role
+	// lane via its generate() API, callers should use it instead to prevent
+	// prompt injection via tool outputs embedded in the hook payload.
+	// Current accepted risk: forced-block via injection is possible; forced-allow
+	// is mitigated by parseEvalResult throwing on non-JSON output (fail-open).
 	const full = `${EVAL_SYSTEM}\n\n${p}`;
 	let raw: string;
 	try {

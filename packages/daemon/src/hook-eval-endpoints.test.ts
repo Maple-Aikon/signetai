@@ -5,10 +5,14 @@
  * and the fail-open behavior when no synthesis provider is configured.
  * The LLM parsing logic itself is tested in hook-eval.test.ts.
  */
+import { Hono } from "hono";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseAuthConfig } from "./auth/config";
+import { createAuthMiddleware, requirePermission } from "./auth/middleware";
+import { generateSecret, createToken } from "./auth/tokens";
 
 let app: {
 	request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -136,5 +140,64 @@ describe("hook eval endpoints", () => {
 			const aBody = (await agentRes.json()) as Record<string, unknown>;
 			expect(Object.keys(pBody).sort()).toEqual(Object.keys(aBody).sort());
 		});
+	});
+});
+
+// Auth enforcement — build a minimal app with the same middleware applied to
+// both hook-eval routes and verify team-mode auth is enforced.
+describe("hook eval auth enforcement", () => {
+	const secret = generateSecret();
+	// team mode: every request needs a valid Bearer token
+	const cfg = parseAuthConfig({ mode: "team" }, "/tmp/test-agents");
+
+	function makeProtectedApp(): typeof app {
+		const a = new Hono();
+		// Apply the same middleware stack the daemon uses for these routes
+		const auth = createAuthMiddleware(cfg, secret);
+		a.use("/api/hooks/prompt-eval", auth, (c, next) => requirePermission("recall", cfg)(c, next));
+		a.use("/api/hooks/agent-eval", auth, (c, next) => requirePermission("recall", cfg)(c, next));
+		a.post("/api/hooks/prompt-eval", (c) => c.json({ ok: true, reason: null, inject: null }));
+		a.post("/api/hooks/agent-eval", (c) => c.json({ ok: true, reason: null, inject: null }));
+		return a;
+	}
+
+	const protected_ = makeProtectedApp();
+
+	it("rejects unauthenticated requests to prompt-eval with 401", async () => {
+		const res = await protected_.request("http://localhost/api/hooks/prompt-eval", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ prompt: "test" }),
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it("rejects unauthenticated requests to agent-eval with 401", async () => {
+		const res = await protected_.request("http://localhost/api/hooks/agent-eval", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ prompt: "test" }),
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it("accepts a valid Bearer token on prompt-eval", async () => {
+		const token = createToken(secret, { sub: "agent:test", scope: {}, role: "agent" }, 300);
+		const res = await protected_.request("http://localhost/api/hooks/prompt-eval", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+			body: JSON.stringify({ prompt: "test" }),
+		});
+		expect(res.status).toBe(200);
+	});
+
+	it("accepts a valid Bearer token on agent-eval", async () => {
+		const token = createToken(secret, { sub: "agent:test", scope: {}, role: "agent" }, 300);
+		const res = await protected_.request("http://localhost/api/hooks/agent-eval", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+			body: JSON.stringify({ prompt: "test" }),
+		});
+		expect(res.status).toBe(200);
 	});
 });

@@ -855,7 +855,18 @@ async fn run_non_interactive(
     };
 
     let mut response_text = String::new();
-    let stream = provider.complete(&messages, &tools, &opts).await?;
+    let stream = match provider.complete(&messages, &tools, &opts).await {
+        Ok(s) => s,
+        Err(e) => {
+            // Fire SessionEnd before propagating — keeps the daemon's session
+            // tracker mutex in sync even when the provider fails at startup.
+            if let Some(ref reg) = hooks {
+                let input = HookInput::session_end(&session_id, &format!("User: {prompt}"));
+                forge_hooks::dispatch(reg, HookEvent::SessionEnd, input).await;
+            }
+            return Err(e.into());
+        }
+    };
     let mut stream = std::pin::pin!(stream);
 
     while let Some(event) = stream.next().await {
