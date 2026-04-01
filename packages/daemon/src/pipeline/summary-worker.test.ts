@@ -542,11 +542,12 @@ describe("resolveSummaryProvider", () => {
 		// Intercept fetch to verify num_ctx is included in the request
 		const original = globalThis.fetch;
 		let captured: unknown = null;
-		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+		const mockFetch: typeof fetch = async (_url, init) => {
 			if (typeof init?.body !== "string") throw new Error(`Expected string body, got: ${typeof init?.body}`);
 			captured = JSON.parse(init.body);
 			return new Response(JSON.stringify({ response: "{}", done: true }), { status: 200 });
-		}) as typeof fetch;
+		};
+		globalThis.fetch = mockFetch;
 
 		try {
 			await provider.generate("test prompt");
