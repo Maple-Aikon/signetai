@@ -454,13 +454,27 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		}
 	});
 
+	// Track process exit so the poll loop can short-circuit on fast failures
+	// (port conflict, missing binary, bad config) rather than waiting the
+	// full deadline.
+	let procExited = false;
+	proc.on("exit", () => {
+		procExited = true;
+	});
+
 	proc.unref();
 	if (stderrFd !== null) {
 		closeSync(stderrFd);
 	}
 
-	for (let i = 0; i < 20; i += 1) {
+	// Use wall-clock deadline instead of iteration count so the budget
+	// is always ~15 real seconds regardless of how long each health
+	// probe takes (connection-refused can stall up to 1.2s per probe).
+	// If the spawned process exits early (fast failure), break immediately.
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
 		await sleep(250);
+		if (procExited) break;
 		if (await isDaemonRunning()) {
 			return true;
 		}

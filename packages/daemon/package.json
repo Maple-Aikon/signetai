@@ -1,6 +1,6 @@
 {
   "name": "@signet/daemon",
-  "version": "0.91.10",
+  "version": "0.92.0",
   "license": "Apache-2.0",
   "description": "Background daemon for Signet - serves dashboard, API, and memory system",
   "type": "module",
@@ -46,6 +46,7 @@
     "graphology-types": "^0.24.8",
     "cron-parser": "^5.5.0",
     "hono": "^4.8.0",
+    "js-tiktoken": "^1.0.21",
     "libsodium-wrappers": "^0.8.2",
     "onnxruntime-node": "1.21.0",
     "sharp": "^0.34.1",

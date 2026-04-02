@@ -2,6 +2,27 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.12] - 2026-04-02
+
+### Features
+
+- dreaming memory consolidation — periodic LLM-driven knowledge graph refinement (#442)
+
+
+## [0.91.11] - 2026-04-02
+
+### Bug Fixes
+
+- **cli**: use wall-clock deadline for daemon startup poll and exit non-zero on failure (#445)
+
+
+## [0.91.10] - 2026-04-02
+
+### Bug Fixes
+
+- enforce 5000-token MEMORY.md budget (#443)
+
+
 ## [0.91.9] - 2026-04-02
 
 ### Bug Fixes
