@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 import { expandHome, hasValidIdentity } from "@signet/core";
 
@@ -257,9 +257,14 @@ export class ForgeConnector extends BaseConnector {
 				if (!lstatSync(target).isSymbolicLink()) continue;
 				// Only remove symlinks that point into the Signet skills source,
 				// so user-created symlinks elsewhere are never touched.
+				// Use isAbsolute + resolve for cross-platform correctness (Windows
+				// absolute paths start with a drive letter, not "/").
 				const linkTarget = readlinkSync(target);
-				const resolved = linkTarget.startsWith("/") ? linkTarget : join(skillsDir, linkTarget);
-				if (!resolved.startsWith(`${signetSkillsSource}/`) && resolved !== signetSkillsSource) continue;
+				const resolved = isAbsolute(linkTarget) ? linkTarget : resolve(skillsDir, linkTarget);
+				const rel = relative(signetSkillsSource, resolved);
+				// rel starts with ".." (or is absolute for a different Windows drive)
+				// when resolved is outside signetSkillsSource — skip it.
+				if (rel.startsWith("..") || isAbsolute(rel)) continue;
 				unlinkSync(target);
 				filesRemoved.push(target);
 			}
