@@ -41,6 +41,7 @@ import {
 	writeTranscriptArtifact,
 } from "./memory-lineage";
 import { buildAgentScopeClause, hybridRecall } from "./memory-search";
+import { isNoiseSession } from "./session-noise";
 import {
 	applyFtsOverlapFeedback,
 	decayAspectWeights,
@@ -2630,17 +2631,26 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 
 	if (transcript.trim().length > 0) {
 		try {
-			writeTranscriptArtifact({
-				agentId,
-				sessionId,
-				sessionKey: sessionKey ?? null,
-				project: req.cwd ?? null,
-				harness: req.harness,
-				capturedAt: endedAt,
-				startedAt: null,
-				endedAt,
-				transcript,
-			});
+			if (
+				!isNoiseSession({
+					project: req.cwd ?? null,
+					sessionKey: sessionKey ?? null,
+					sessionId,
+					harness: req.harness,
+				})
+			) {
+				writeTranscriptArtifact({
+					agentId,
+					sessionId,
+					sessionKey: sessionKey ?? null,
+					project: req.cwd ?? null,
+					harness: req.harness,
+					capturedAt: endedAt,
+					startedAt: null,
+					endedAt,
+					transcript,
+				});
+			}
 		} catch (e) {
 			logger.warn("hooks", "Transcript artifact write failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),

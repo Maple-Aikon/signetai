@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { Tiktoken } from "js-tiktoken/lite";
+import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import type { LlmProvider } from "@signet/core";
 import { getAgentScope } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
+import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
+import { isNoiseSession } from "./session-noise";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -20,8 +24,11 @@ const SENTENCE_VERSION = "memory_sentence_v1";
 export const IMMUTABLE_ARTIFACT_ERROR_PREFIX = "Refusing to mutate immutable artifact";
 const LEDGER_HEADING = "Session Ledger (Last 30 Days)";
 const LOW_SIGNAL_SENTENCES = new Set(["Investigated issue.", "Worked on task.", "Reviewed code."]);
+const PROJECTION_HEADROOM_TOKENS = 256;
+export const MEMORY_PROJECTION_MAX_TOKENS = Math.max(512, MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM_TOKENS);
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+const projTok = new Tiktoken(cl100k_base);
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
 type SentenceQuality = "ok" | "fallback";
@@ -87,6 +94,11 @@ interface LedgerSession {
 	readonly transcriptPath: string | null;
 	readonly compactionPath: string | null;
 	readonly manifestPath: string | null;
+}
+
+interface ProjectionSection {
+	readonly heading: string;
+	readonly lines: ReadonlyArray<string>;
 }
 
 function readString(frontmatter: Record<string, unknown>, key: string): string | null {
@@ -260,6 +272,22 @@ function pickAnchor(body: string, project: string | null, harness: string | null
 
 	if (harness && harness.trim().length > 0) return harness.trim();
 	return "session";
+}
+
+function tokenCount(text: string): number {
+	return projTok.encode(text).length;
+}
+
+function joinParts(parts: ReadonlyArray<string>): string {
+	return parts.filter((part) => part.trim().length > 0).join("\n\n").trimEnd();
+}
+
+function renderSection(section: ProjectionSection): string {
+	return [section.heading, "", ...section.lines].join("\n").trimEnd();
+}
+
+function fitsBudget(parts: ReadonlyArray<string>): boolean {
+	return tokenCount(joinParts(parts)) <= MEMORY_PROJECTION_MAX_TOKENS;
 }
 
 function fallbackSentence(body: string, project: string | null, harness: string | null, sourceKind: string): string {
@@ -852,7 +880,11 @@ function buildTemporalIndex(
 		const preview = normalizeMarkdownBody(node.content).replace(/\n+/g, " ").trim().slice(0, 120);
 		return `- id=${node.id} kind=${node.kind} source=${node.source_type} depth=${node.depth} session=${node.session_key ?? "none"} project=${node.project ?? "none"} ref=${node.source_ref ?? "none"} latest=${node.latest_at}\n  summary: ${preview}`;
 	});
-	return `## Temporal Index\n\n${lines.join("\n")}`.trimEnd();
+	if (lines.length === 0) return "";
+	return renderSection({
+		heading: "## Temporal Index",
+		lines,
+	});
 }
 
 function readThreadHeads(agentId: string): ReadonlyArray<{
@@ -861,13 +893,16 @@ function readThreadHeads(agentId: string): ReadonlyArray<{
 	readonly latest_at: string;
 	readonly sample: string;
 	readonly node_id: string;
+	readonly project: string | null;
+	readonly session_key: string | null;
+	readonly harness: string | null;
 }> {
 	try {
-		return getDbAccessor().withReadDb(
+		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
 					.prepare(
-						`SELECT label, source_type, latest_at, sample, node_id
+						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
 					 FROM memory_thread_heads
 					 WHERE agent_id = ?
 					 ORDER BY latest_at DESC
@@ -879,7 +914,19 @@ function readThreadHeads(agentId: string): ReadonlyArray<{
 					latest_at: string;
 					sample: string;
 					node_id: string;
+					project: string | null;
+					session_key: string | null;
+					harness: string | null;
 				}>,
+		);
+		return rows.filter(
+			(row) =>
+				!isNoiseSession({
+					project: row.project,
+					sessionKey: row.session_key,
+					sessionId: row.node_id,
+					harness: row.harness,
+				}),
 		);
 	} catch {
 		return [];
@@ -895,7 +942,7 @@ function readTopMemories(agentId: string): ReadonlyArray<{
 	try {
 		const scope = getAgentScope(agentId);
 		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
-		return getDbAccessor().withReadDb(
+		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
 					.prepare(
@@ -912,6 +959,7 @@ function readTopMemories(agentId: string): ReadonlyArray<{
 					project: string | null;
 				}>,
 		);
+		return rows.filter((row) => !isNoiseSession({ project: row.project }));
 	} catch {
 		return [];
 	}
@@ -929,7 +977,7 @@ function readTemporalNodes(agentId: string): ReadonlyArray<{
 	readonly content: string;
 }> {
 	try {
-		return getDbAccessor().withReadDb(
+		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
 					.prepare(
@@ -951,6 +999,14 @@ function readTemporalNodes(agentId: string): ReadonlyArray<{
 					source_ref: string | null;
 					content: string;
 				}>,
+		);
+		return rows.filter(
+			(row) =>
+				!isNoiseSession({
+					project: row.project,
+					sessionKey: row.session_key,
+					sessionId: row.id,
+				}),
 		);
 	} catch {
 		return [];
@@ -994,7 +1050,7 @@ function membershipTs(rows: ReadonlyArray<ArtifactRow>): string {
 	return picked.ended_at ?? picked.captured_at;
 }
 
-function buildLedger(agentId: string): { markdown: string; refs: ReadonlyArray<string>; count: number } {
+function buildLedger(agentId: string): ReadonlyArray<LedgerSession> {
 	const now = Date.now();
 	const floor = now - 30 * 24 * 60 * 60 * 1000;
 	let rows: ArtifactRow[] = [];
@@ -1033,6 +1089,16 @@ function buildLedger(agentId: string): { markdown: string; refs: ReadonlyArray<s
 		if (!Number.isFinite(stamp) || stamp < floor || stamp > now) continue;
 		const picked = chooseSentence(group);
 		if (!picked || !picked.memory_sentence) continue;
+		if (
+			isNoiseSession({
+				project: sessionProject(group),
+				sessionKey: picked.session_key,
+				sessionId: sessionId(group),
+				harness: picked.harness,
+			})
+		) {
+			continue;
+		}
 		sessions.push({
 			sessionToken: token,
 			sessionId: sessionId(group),
@@ -1054,16 +1120,23 @@ function buildLedger(agentId: string): { markdown: string; refs: ReadonlyArray<s
 	}
 
 	sessions.sort((a, b) => b.membershipTs.localeCompare(a.membershipTs));
+	return sessions;
+}
 
-	const refs = sessions
-		.map((session) => session.manifestPath)
-		.filter((path): path is string => typeof path === "string");
-	const lines: string[] = ["## Session Ledger (Last 30 Days)", ""];
+function renderLedgerRows(sessions: ReadonlyArray<LedgerSession>): string[] {
+	if (sessions.length === 0) {
+		return ["- no in-window sessions yet."];
+	}
+
+	const lines: string[] = [];
 	let day = "";
 	for (const session of sessions) {
 		const utcDay = session.membershipTs.slice(0, 10);
 		if (utcDay !== day) {
 			day = utcDay;
+			if (lines.length > 0) {
+				lines.push("");
+			}
 			lines.push(`### ${utcDay}`, "");
 		}
 		const links = [
@@ -1076,14 +1149,90 @@ function buildLedger(agentId: string): { markdown: string; refs: ReadonlyArray<s
 			`- ${session.membershipTs} | session=${session.sessionKey ?? session.sessionId} | project=${session.project ?? "none"} | ${session.sentence} ${links.join(" ")}`.trim(),
 		);
 	}
-	if (sessions.length === 0) {
-		lines.push("- no in-window sessions yet.");
+	return lines;
+}
+
+function renderLedgerSection(
+	sessions: ReadonlyArray<LedgerSession>,
+	base: ReadonlyArray<string>,
+): { readonly block: string; readonly refs: ReadonlyArray<string>; readonly count: number } {
+	function renderCount(count: number): string {
+		const kept = sessions.slice(0, count);
+		const clipped = sessions.length - kept.length;
+		const lines =
+			clipped > 0
+				? [
+						`- older ledger rows clipped: kept ${kept.length} of ${sessions.length} in-window sessions within projection budget.`,
+						"",
+						...renderLedgerRows(kept),
+					]
+				: renderLedgerRows(kept);
+		return renderSection({
+			heading: `## ${LEDGER_HEADING}`,
+			lines,
+		});
 	}
+
+	let low = 1;
+	let high = sessions.length;
+	let best = 0;
+	while (low <= high) {
+		const mid = Math.floor((low + high) / 2);
+		const block = renderCount(mid);
+		if (fitsBudget([...base, block])) {
+			best = mid;
+			low = mid + 1;
+			continue;
+		}
+		high = mid - 1;
+	}
+
+	if (best > 0) {
+		const kept = sessions.slice(0, best);
+		const block = renderCount(best);
+		const refs = kept
+			.map((session) => session.manifestPath)
+			.filter((path): path is string => typeof path === "string");
+		return {
+			block,
+			refs,
+			count: kept.length,
+		};
+	}
+
+	if (sessions.length === 0) {
+		const block = renderCount(0);
+		return {
+			block,
+			refs: [],
+			count: 0,
+		};
+	}
+
 	return {
-		markdown: lines.join("\n").trimEnd(),
-		refs,
-		count: sessions.length,
+		block: renderSection({
+			heading: `## ${LEDGER_HEADING}`,
+			lines: [`- older ledger rows clipped: kept 0 of ${sessions.length} in-window sessions within projection budget.`],
+		}),
+		refs: [],
+		count: 0,
 	};
+}
+
+function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): string {
+	if (indexBlock.trim().length === 0) return "";
+	if (fitsBudget([...base, indexBlock])) return indexBlock;
+
+	const lines = indexBlock.split("\n");
+	while (lines.length > 2) {
+		lines.pop();
+		const next = lines.join("\n").trimEnd();
+		if (fitsBudget([...base, next])) {
+			return next;
+		}
+	}
+
+	return "";
 }
 
 function syncManifestRefs(refs: ReadonlyArray<string>): void {
@@ -1123,7 +1272,6 @@ export function renderMemoryProjection(agentId = "default"): {
 	const threadHeads = readThreadHeads(agentId);
 	const nodes = readTemporalNodes(agentId);
 	const ledger = buildLedger(agentId);
-	syncManifestRefs(ledger.refs);
 	const indexBlock = buildTemporalIndex(nodes);
 
 	const globalLines =
@@ -1146,31 +1294,35 @@ export function renderMemoryProjection(agentId = "default"): {
 
 	const parts = [
 		"# Working Memory Summary",
-		"",
-		"## Global Head (Tier 1)",
-		"",
-		...globalLines,
-		"",
-		"## Thread Heads (Tier 2)",
-		"",
-		...threadLines,
-		ledger.markdown,
-		"",
-		"## Open Threads",
-		"",
-		...openLines,
-		"",
-		"## Durable Notes & Constraints",
-		"",
-		...durableLines,
-		"",
-		indexBlock,
+		renderSection({
+			heading: "## Global Head (Tier 1)",
+			lines: globalLines,
+		}),
+		renderSection({
+			heading: "## Thread Heads (Tier 2)",
+			lines: threadLines,
+		}),
+		renderSection({
+			heading: "## Open Threads",
+			lines: openLines,
+		}),
+		renderSection({
+			heading: "## Durable Notes & Constraints",
+			lines: durableLines,
+		}),
 	];
+	const ledgerBlock = renderLedgerSection(ledger, parts);
+	syncManifestRefs(ledgerBlock.refs);
+	parts.push(ledgerBlock.block);
+	const trimmedIndex = renderIndexSection(indexBlock, parts);
+	if (trimmedIndex.length > 0) {
+		parts.push(trimmedIndex);
+	}
 
 	return {
-		content: parts.join("\n").trimEnd(),
-		fileCount: memories.length + threadHeads.length + ledger.count + nodes.length,
-		indexBlock,
+		content: joinParts(parts),
+		fileCount: memories.length + threadHeads.length + ledgerBlock.count + nodes.length,
+		indexBlock: trimmedIndex,
 	};
 }
 
@@ -1208,4 +1360,43 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 		).run(agentId, sessionToken, new Date().toISOString(), reason, JSON.stringify(paths));
 		db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ? AND session_token = ?").run(agentId, sessionToken);
 	});
+}
+
+export function purgeCanonicalNoiseSessions(agentId: string, reason: string): number {
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT session_token, session_id, session_key, project, harness
+				 FROM memory_artifacts
+				 WHERE agent_id = ?
+				   AND source_kind IN ('summary', 'transcript', 'compaction')`,
+				)
+				.all(agentId) as Array<{
+				session_token: string;
+				session_id: string;
+				session_key: string | null;
+				project: string | null;
+				harness: string | null;
+			}>,
+	);
+	const seen = new Set<string>();
+	let count = 0;
+	for (const row of rows) {
+		if (seen.has(row.session_token)) continue;
+		if (
+			!isNoiseSession({
+				project: row.project,
+				sessionKey: row.session_key,
+				sessionId: row.session_id,
+				harness: row.harness,
+			})
+		) {
+			continue;
+		}
+		removeCanonicalSession(agentId, row.session_token, reason);
+		seen.add(row.session_token);
+		count++;
+	}
+	return count;
 }

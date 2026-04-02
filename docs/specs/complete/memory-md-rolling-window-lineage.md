@@ -201,7 +201,10 @@ At render time `t_now` in UTC:
 - `membership_ts = ended_at` when present, else `captured_at`
 - day buckets use `membership_ts` UTC date
 
-No in-window session may be dropped due to rank, token budget, or top-N caps.
+Projection excludes temp/test sessions from visible lineage surfaces. For
+projectable sessions, the renderer must prefer a fixed output budget over
+unbounded growth: high-signal head sections stay intact, then the oldest ledger
+rows may be clipped with an explicit notice in `MEMORY.md`.
 
 ## Per-session sentence quality floor
 

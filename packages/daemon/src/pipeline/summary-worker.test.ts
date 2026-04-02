@@ -86,7 +86,7 @@ describe("insertSummaryFacts", () => {
 			accessor,
 			{
 				harness: "codex",
-				project: "/tmp/project",
+				project: "/mnt/work/dev/project",
 				session_key: "session-1",
 				agent_id: "",
 			},
@@ -117,7 +117,7 @@ describe("insertSummaryFacts", () => {
 		expect(row?.who).toBe("codex");
 		expect(row?.source_id).toBe("session-1");
 		expect(row?.source_type).toBe("session_end");
-		expect(row?.project).toBe("/tmp/project");
+		expect(row?.project).toBe("/mnt/work/dev/project");
 		expect(row?.agent_id).toBe("default");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
 	});
@@ -195,6 +195,30 @@ describe("insertSummaryFacts", () => {
 		expect(row).toBeDefined();
 		expect(typeof row?.content_hash).toBe("string");
 		expect((row?.content_hash ?? "").length).toBeGreaterThan(0);
+	});
+
+	it("skips summary facts for temp sessions", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: "/tmp/signetai",
+				session_key: "sess-temp",
+				agent_id: "default",
+			},
+			[
+				{
+					content: "This temp-session fact should never hit durable memory.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(0);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number };
+		expect(row.n).toBe(0);
 	});
 });
 
