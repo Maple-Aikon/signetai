@@ -121,7 +121,12 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			const mode = opts.compact ? "compact" : "incremental";
 			// Poll ceiling: default 720s (12 min) > default LLM timeout 300s.
 			// Increase with --wait-secs if your dreaming.timeout config exceeds 5 min.
-			const maxWait = Math.max(30, Number.parseInt(opts.waitSecs ?? "720", 10));
+			const parsedWait = Number.parseInt(opts.waitSecs ?? "720", 10);
+			if (Number.isNaN(parsedWait) || parsedWait <= 0) {
+				console.error(chalk.red(`  Invalid --wait-secs value: "${opts.waitSecs}" (must be a positive integer)`));
+				process.exit(1);
+			}
+			const maxWait = Math.max(30, parsedWait);
 			const pollInterval = 5_000;
 			const maxPolls = Math.ceil((maxWait * 1000) / pollInterval);
 			console.log(chalk.dim(`\n  Triggering ${mode} dreaming pass...\n`));

@@ -778,6 +778,15 @@ function applyMergeEntities(
 	for (const src of mut.source) {
 		const srcId = resolveEntity(db, agentId, src);
 		if (!srcId || srcId === targetId) continue;
+
+		// Don't consume a pinned entity as a merge source — same invariant as delete
+		const srcRow = db.prepare("SELECT pinned FROM entities WHERE id = ? AND agent_id = ?").get(srcId, agentId) as
+			| { pinned: number }
+			| undefined;
+		if (srcRow?.pinned === 1) {
+			logger.warn("dreaming", `Merge source "${src}" is pinned, skipping`);
+			continue;
+		}
 		merged++;
 
 		// Move non-colliding aspects to target

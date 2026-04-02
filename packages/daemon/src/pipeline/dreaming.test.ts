@@ -274,6 +274,33 @@ describe("dreaming", () => {
 			expect(aspects[0]?.count).toBeGreaterThanOrEqual(1);
 		});
 
+		it("skips merge_entities when source entity is pinned (invariant parity with delete)", async () => {
+			seedEntity(db, "ent-1", "TypeScript", "tool");
+			seedEntity(db, "ent-2", "PinnedAlias", "tool");
+			db.prepare("UPDATE entities SET pinned = 1 WHERE id = ?").run("ent-2");
+
+			const generate = async () =>
+				JSON.stringify({
+					mutations: [
+						{
+							op: "merge_entities",
+							source: ["PinnedAlias"],
+							target: "TypeScript",
+							reason: "Same thing",
+						},
+					],
+					summary: "Tried to merge pinned source",
+				});
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "compact");
+			// Source was pinned so no merge should have occurred
+			expect(result.applied).toBe(0);
+
+			// Pinned entity must still exist
+			const pinned = db.prepare("SELECT id FROM entities WHERE id = 'ent-2' AND agent_id = ?").get(AGENT);
+			expect(pinned).toBeDefined();
+		});
+
 		it("applies delete_entity mutations but skips pinned", async () => {
 			seedEntity(db, "ent-1", "JunkEntity", "unknown");
 			seedEntity(db, "ent-2", "PinnedEntity", "concept");

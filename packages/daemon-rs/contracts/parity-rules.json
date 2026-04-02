@@ -262,8 +262,8 @@
 				"note": "Dreaming consolidation — not yet implemented in daemon-rs. Stub returns enabled:false until Rust parity wave."
 			},
 			"POST /api/dream/trigger": {
-				"deterministic": ["success"],
-				"ignoreFields": ["passId", "summary"],
+				"deterministic": ["accepted", "status", "mode"],
+				"ignoreFields": ["passId"],
 				"note": "Dreaming consolidation — not yet implemented in daemon-rs. Stub returns 501 until Rust parity wave."
 			}
 		}
