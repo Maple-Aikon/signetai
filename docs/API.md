@@ -2611,8 +2611,12 @@ Requires `admin` permission.
 ### POST /api/dream/trigger
 
 Manually trigger a dreaming pass. Requires `admin` permission.
+Returns `202 Accepted` immediately and runs the pass in the background
+(passes can take up to several minutes on large graphs).
 Returns 409 if a pass is already running. Returns 503 if the
 dreaming worker is not started.
+
+Poll `GET /api/dream/status` and check `passes[0].status` for completion.
 
 **Request body**
 
@@ -2624,16 +2628,14 @@ dreaming worker is not started.
 
 `mode` is `"incremental"` (default) or `"compact"`.
 
-**Response**
+**Response** — `202 Accepted`
 
 ```json
 {
-  "success": true,
+  "accepted": true,
   "passId": "pass-uuid",
-  "applied": 12,
-  "skipped": 3,
-  "failed": 1,
-  "summary": "Merged 3 duplicate entities, pruned 5 junk attributes"
+  "status": "running",
+  "mode": "incremental"
 }
 ```
 

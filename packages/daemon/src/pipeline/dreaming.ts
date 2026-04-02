@@ -244,7 +244,7 @@ export function recordDreamingFailure(accessor: DbAccessor, agentId: string): vo
 // Dreaming pass records
 // ---------------------------------------------------------------------------
 
-function createDreamingPass(accessor: DbAccessor, agentId: string, mode: DreamingMode): string {
+export function createDreamingPass(accessor: DbAccessor, agentId: string, mode: DreamingMode): string {
 	const id = randomUUID();
 	accessor.withWriteTx((db) => {
 		db.prepare(
@@ -840,16 +840,21 @@ function applyMergeEntities(
 		}
 
 		// Move dependencies (source side)
+		// OR IGNORE handles collision when T→X already exists (S→X can't become T→X)
 		db.prepare(
-			`UPDATE entity_dependencies SET source_entity_id = ?, updated_at = datetime('now')
+			`UPDATE OR IGNORE entity_dependencies SET source_entity_id = ?, updated_at = datetime('now')
 			 WHERE source_entity_id = ? AND agent_id = ?`,
 		).run(targetId, srcId, agentId);
+		// Clean up colliding duplicates that OR IGNORE couldn't move
+		db.prepare("DELETE FROM entity_dependencies WHERE source_entity_id = ? AND agent_id = ?").run(srcId, agentId);
 
 		// Move dependencies (target side)
 		db.prepare(
-			`UPDATE entity_dependencies SET target_entity_id = ?, updated_at = datetime('now')
+			`UPDATE OR IGNORE entity_dependencies SET target_entity_id = ?, updated_at = datetime('now')
 			 WHERE target_entity_id = ? AND agent_id = ?`,
 		).run(targetId, srcId, agentId);
+		// Clean up colliding duplicates that OR IGNORE couldn't move
+		db.prepare("DELETE FROM entity_dependencies WHERE target_entity_id = ? AND agent_id = ?").run(srcId, agentId);
 
 		// Clean up self-loop dependencies created by the rewrite
 		db.prepare(
@@ -969,7 +974,12 @@ function applyDeleteAspect(
 		.get(aspectId, agentId);
 	if (constraints) return "skipped";
 
-	db.prepare("DELETE FROM entity_attributes WHERE aspect_id = ? AND agent_id = ?").run(aspectId, agentId);
+	// Soft-delete attributes before removing the aspect (consistent with
+	// applyDeleteAttribute which also preserves rows for audit/recovery).
+	db.prepare(
+		`UPDATE entity_attributes SET status = 'deleted', updated_at = datetime('now')
+		 WHERE aspect_id = ? AND agent_id = ?`,
+	).run(aspectId, agentId);
 	db.prepare("DELETE FROM entity_aspects WHERE id = ? AND agent_id = ?").run(aspectId, agentId);
 	return "applied";
 }
@@ -1086,8 +1096,9 @@ export async function runDreamingPass(
 	agentsDir: string,
 	agentId: string,
 	mode: DreamingMode,
+	existingPassId?: string,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
-	const passId = createDreamingPass(accessor, agentId, mode);
+	const passId = existingPassId ?? createDreamingPass(accessor, agentId, mode);
 
 	try {
 		// Fetch data

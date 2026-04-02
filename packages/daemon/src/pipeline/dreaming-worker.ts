@@ -10,6 +10,7 @@ import { logger } from "../logger";
 import {
 	type DreamingMode,
 	type LlmGenerateFn,
+	createDreamingPass,
 	getDreamingState,
 	recordDreamingFailure,
 	runDreamingPass,
@@ -17,12 +18,27 @@ import {
 } from "./dreaming";
 import type { LlmProvider } from "./provider";
 
+/** Thrown when a trigger is attempted while a pass is already in-flight. */
+export class AlreadyRunningError extends Error {
+	constructor() {
+		super("A dreaming pass is already running");
+		this.name = "AlreadyRunningError";
+	}
+}
+
 export interface DreamingWorkerHandle {
 	stop(): void;
-	/** Force-trigger a pass (API / CLI). */
+	/** Force-trigger a pass synchronously (CLI / testing). */
 	trigger(
 		mode: DreamingMode,
 	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }>;
+	/**
+	 * Fire-and-forget trigger: creates the pass record synchronously
+	 * (so the passId is returned immediately), then runs the pass in the
+	 * background. Callers should poll GET /api/dream/status for completion.
+	 * Throws AlreadyRunningError if a pass is already active.
+	 */
+	triggerAsync(mode: DreamingMode): string;
 	readonly running: boolean;
 }
 
@@ -116,7 +132,7 @@ export function startDreamingWorker(
 
 		async trigger(mode: DreamingMode) {
 			if (active) {
-				throw new Error("A dreaming pass is already running");
+				throw new AlreadyRunningError();
 			}
 			active = true;
 			try {
@@ -127,6 +143,24 @@ export function startDreamingWorker(
 			} finally {
 				active = false;
 			}
+		},
+
+		triggerAsync(mode: DreamingMode): string {
+			if (active) throw new AlreadyRunningError();
+			const passId = createDreamingPass(accessor, agentId, mode);
+			active = true;
+			runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode, passId)
+				.catch((e) => {
+					recordDreamingFailure(accessor, agentId);
+					logger.error("dreaming-worker", "Async trigger failed", {
+						passId,
+						error: e instanceof Error ? e.message : String(e),
+					});
+				})
+				.finally(() => {
+					active = false;
+				});
+			return passId;
 		},
 
 		get running() {

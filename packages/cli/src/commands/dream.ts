@@ -39,13 +39,11 @@ interface DreamStatus {
 	readonly passes: readonly DreamPass[];
 }
 
-interface TriggerResult {
-	readonly success: boolean;
+interface TriggerAccepted {
+	readonly accepted: boolean;
 	readonly passId: string;
-	readonly applied: number;
-	readonly skipped: number;
-	readonly failed: number;
-	readonly summary: string;
+	readonly status: string;
+	readonly mode: string;
 	readonly error?: string;
 }
 
@@ -122,29 +120,52 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			const mode = opts.compact ? "compact" : "incremental";
 			console.log(chalk.dim(`\n  Triggering ${mode} dreaming pass...\n`));
 
-			const result = await deps.fetchFromDaemon<TriggerResult>("/api/dream/trigger", {
+			const accepted = await deps.fetchFromDaemon<TriggerAccepted>("/api/dream/trigger", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ mode }),
-				timeout: 360_000, // 6 min — dreaming can be slow
 			});
 
-			if (!result) {
+			if (!accepted) {
 				console.error(chalk.red("Failed to trigger dreaming pass (is the daemon running?)"));
 				process.exit(1);
 			}
 
-			if (result.error) {
-				console.error(chalk.red(`  Error: ${result.error}`));
+			if (accepted.error) {
+				console.error(chalk.red(`  Error: ${accepted.error}`));
+				process.exit(1);
+			}
+
+			console.log(chalk.dim(`  Pass ${accepted.passId} accepted, polling for result...\n`));
+
+			// Poll status until the pass completes or fails
+			let pass: DreamPass | undefined;
+			for (let i = 0; i < 120; i++) {
+				await new Promise((r) => setTimeout(r, 5_000));
+				const status = await deps.fetchFromDaemon<DreamStatus>("/api/dream/status");
+				if (!status) break;
+				pass = status.passes.find((p) => p.id === accepted.passId);
+				if (pass && pass.status !== "running") break;
+			}
+
+			if (!pass) {
+				console.log(chalk.yellow("  Could not retrieve pass result. Check `signet dream status`."));
+				console.log();
+				return;
+			}
+
+			if (pass.status === "failed") {
+				console.error(chalk.red("  Dreaming pass failed"));
+				if (pass.error) console.error(chalk.red(`  Error: ${pass.error}`));
 				process.exit(1);
 			}
 
 			console.log(chalk.green("  Dreaming pass complete"));
-			console.log(`  ${chalk.dim("Pass ID:")}    ${result.passId}`);
-			console.log(`  ${chalk.dim("Applied:")}    ${result.applied} mutations`);
-			console.log(`  ${chalk.dim("Skipped:")}    ${result.skipped} mutations`);
-			console.log(`  ${chalk.dim("Failed:")}     ${result.failed} mutations`);
-			console.log(`  ${chalk.dim("Summary:")}    ${result.summary}`);
+			console.log(`  ${chalk.dim("Pass ID:")}    ${pass.id}`);
+			console.log(`  ${chalk.dim("Applied:")}    ${pass.mutationsApplied ?? 0} mutations`);
+			console.log(`  ${chalk.dim("Skipped:")}    ${pass.mutationsSkipped ?? 0} mutations`);
+			console.log(`  ${chalk.dim("Failed:")}     ${pass.mutationsFailed ?? 0} mutations`);
+			if (pass.summary) console.log(`  ${chalk.dim("Summary:")}    ${pass.summary}`);
 			console.log();
 		});
 }

@@ -152,7 +152,7 @@ import {
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
-import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
+import { AlreadyRunningError, type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { clusterEntities } from "./pipeline/community-detection";
 import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
@@ -8218,15 +8218,19 @@ app.post("/api/dream/trigger", async (c) => {
 		if (parsed.mode === "compact") mode = "compact";
 	}
 
+	// Async fire-and-forget: return 202 immediately so the caller is not
+	// blocked for the full pass duration (up to several minutes on large
+	// graphs). The pass runs in the background; poll GET /api/dream/status
+	// for completion. If a pass is already running, return 409.
+	let passId: string;
 	try {
-		const result = await worker.trigger(mode);
-		return c.json({ success: true, ...result });
+		passId = worker.triggerAsync(mode);
 	} catch (e) {
+		if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 		const msg = e instanceof Error ? e.message : String(e);
-		// Discriminate "already running" (conflict) from other errors (server)
-		const status = msg.includes("already running") ? 409 : 500;
-		return c.json({ error: msg }, status);
+		return c.json({ error: msg }, 500);
 	}
+	return c.json({ accepted: true, passId, status: "running", mode }, 202);
 });
 
 app.get("/api/predictor/status", async (c) => {
