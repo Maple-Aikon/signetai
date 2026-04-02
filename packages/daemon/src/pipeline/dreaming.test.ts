@@ -28,9 +28,6 @@ const AGENT = "default";
 function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
 	return {
 		enabled: true,
-		provider: "ollama",
-		model: "test",
-		endpoint: undefined,
 		tokenThreshold: 100_000,
 		maxInputTokens: 32_000,
 		maxOutputTokens: 16_000,

@@ -8158,10 +8158,11 @@ app.get("/api/dream/status", (c) => {
 		worker: { running: worker !== null, active: worker?.running ?? false },
 		state,
 		config: {
-			provider: cfg.dreaming.provider,
-			model: cfg.dreaming.model,
 			tokenThreshold: cfg.dreaming.tokenThreshold,
 			backfillOnFirstRun: cfg.dreaming.backfillOnFirstRun,
+			maxInputTokens: cfg.dreaming.maxInputTokens,
+			maxOutputTokens: cfg.dreaming.maxOutputTokens,
+			timeout: cfg.dreaming.timeout,
 		},
 		passes,
 	});

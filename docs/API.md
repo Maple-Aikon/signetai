@@ -2586,7 +2586,10 @@ Requires `admin` permission.
   },
   "config": {
     "tokenThreshold": 100000,
-    "backfillOnFirstRun": true
+    "backfillOnFirstRun": true,
+    "maxInputTokens": 128000,
+    "maxOutputTokens": 16000,
+    "timeout": 300000
   },
   "passes": [
     {
