@@ -8,6 +8,18 @@ import { createEvent, eventBus } from "../event-bus";
 import { logger } from "../logger";
 import { deleteCachedWidget, generateWidgetHtml, loadCachedWidget, widgetDir } from "../widget-gen";
 
+function formatWidgetGenerationError(message: string): string {
+	const missingExecMatch = message.match(/Executable not found in \$PATH:\s*"([^"]+)"/);
+	if (!missingExecMatch) return message;
+
+	const executable = missingExecMatch[1];
+	if (executable === "docker") {
+		return "Docker CLI is required for this MCP app but was not found in PATH. Install Docker Desktop (with CLI), then restart Signet daemon and retry.";
+	}
+
+	return `Required executable \"${executable}\" was not found in PATH. Install it, restart Signet daemon, and retry.`;
+}
+
 /**
  * Mount widget routes on the Hono app.
  */
@@ -43,13 +55,14 @@ export function mountWidgetRoutes(app: Hono): void {
 		// Spawn async generation — don't block the response
 		generateWidgetHtml(serverId).catch((err) => {
 			const msg = err instanceof Error ? err.message : String(err);
+			const userMessage = formatWidgetGenerationError(msg);
 			logger.warn("widget", `Async widget generation failed for ${serverId}`, {
-				error: msg,
+				error: userMessage,
 			});
 			eventBus.emit(
 				createEvent("system", "widget.error", {
 					serverId,
-					error: msg,
+					error: userMessage,
 				}),
 			);
 		});

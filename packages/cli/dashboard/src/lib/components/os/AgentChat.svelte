@@ -15,7 +15,14 @@ import ExternalLink from "@lucide/svelte/icons/external-link";
 import Send from "@lucide/svelte/icons/send";
 import User from "@lucide/svelte/icons/user";
 import Wrench from "@lucide/svelte/icons/wrench";
-import { tick } from "svelte";
+import { onMount, tick } from "svelte";
+
+interface ChatModelOption {
+	id: string;
+	label: string;
+	description: string;
+	provider: string;
+}
 
 interface ToolCall {
 	tool: string;
@@ -32,12 +39,68 @@ interface ChatMessage {
 	openedWidget?: string; // server ID of widget that was opened
 }
 
+type HeaderChatAction = "remember" | "transcribe" | "recall";
+
+interface HeaderActionOptions {
+	targetLanguage?: string;
+}
+
+interface HeaderActionResult {
+	ok: boolean;
+	message?: string;
+	error?: string;
+}
+
+interface SendInvocation {
+	messageText: string;
+	displayText?: string;
+	clearInput?: boolean;
+}
+
 let messages = $state<ChatMessage[]>([]);
 let input = $state("");
 let loading = $state(false);
 let loadingStatus = $state("");
 let chatEl: HTMLDivElement | null = $state(null);
+let modelOptions = $state<ChatModelOption[]>([]);
+let selectedModelId = $state("");
+let modelOptionsLoading = $state(true);
+let modelOptionsError = $state<string | null>(null);
 const AGENT_EXEC_TIMEOUT_MS = 30_000;
+
+onMount(() => {
+	void loadChatModels();
+});
+
+async function loadChatModels(): Promise<void> {
+	modelOptionsLoading = true;
+	modelOptionsError = null;
+	try {
+		const res = await fetch(`${API_BASE}/api/os/chat/models`);
+		if (!res.ok) throw new Error(`Chat model request failed (${res.status})`);
+		const data = (await res.json()) as {
+			options?: ChatModelOption[];
+			defaultModelId?: string;
+		};
+		const options = Array.isArray(data.options) ? data.options : [];
+		modelOptions = options;
+
+		if (typeof data.defaultModelId === "string" && options.some((opt) => opt.id === data.defaultModelId)) {
+			selectedModelId = data.defaultModelId;
+		} else if (options.length > 0) {
+			selectedModelId = options[0]!.id;
+		} else {
+			selectedModelId = "";
+			modelOptionsError = "No available chat providers were discovered. Install/configure Codex, Claude Code, OpenCode, or Ollama.";
+		}
+	} catch (err) {
+		modelOptions = [];
+		selectedModelId = "";
+		modelOptionsError = err instanceof Error ? err.message : "Unable to load chat models";
+	} finally {
+		modelOptionsLoading = false;
+	}
+}
 
 async function scrollToBottom() {
 	await tick();
@@ -273,12 +336,30 @@ async function executeAgentTask(serverId: string, task: string): Promise<string>
 	}
 }
 
-async function send() {
-	const text = input.trim();
-	if (!text || loading) return;
+function buildSessionTranscript(limit = 16): string {
+	const recent = messages.slice(-limit);
+	return recent
+		.map((msg, index) => `${index + 1}. ${msg.role.toUpperCase()}: ${msg.content}`)
+		.join("\n");
+}
 
-	messages.push({ role: "user", content: text, timestamp: Date.now() });
-	input = "";
+async function sendInvocation(invocation: SendInvocation): Promise<boolean> {
+	const text = invocation.messageText.trim();
+	if (!text || loading) return false;
+	if (!selectedModelId) {
+		messages.push({
+			role: "agent",
+			content:
+				modelOptionsError ||
+				"No chat provider is selected. Start the branch daemon and make sure /api/os/chat/models is reachable.",
+			timestamp: Date.now(),
+		});
+		await scrollToBottom();
+		return false;
+	}
+
+	messages.push({ role: "user", content: invocation.displayText?.trim() || text, timestamp: Date.now() });
+	if (invocation.clearInput) input = "";
 	loading = true;
 	loadingStatus = "thinking...";
 	scrollToBottom();
@@ -288,9 +369,19 @@ async function send() {
 		const res = await fetch(`${API_BASE}/api/os/chat`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ message: text }),
+			body: JSON.stringify({ message: text, modelId: selectedModelId }),
 		});
-		const data = await res.json();
+		const data = (await res.json().catch(() => ({}))) as {
+			response?: string;
+			error?: string;
+			useAgent?: boolean;
+			agentServerId?: string;
+			agentTask?: string;
+			toolCalls?: ToolCall[];
+		};
+		if (!res.ok) {
+			throw new Error(data.error || `Chat request failed (${res.status})`);
+		}
 
 		// ═══════════════════════════════════════════════════════════════
 		// VISUAL AGENT MODE — LLM decided this needs the AI cursor
@@ -322,10 +413,7 @@ async function send() {
 				});
 			}
 
-			loading = false;
-			loadingStatus = "";
-			scrollToBottom();
-			return;
+			return true;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -392,17 +480,99 @@ async function send() {
 			toolCalls,
 			openedWidget,
 		});
+		return true;
 	} catch (err) {
 		messages.push({
 			role: "agent",
 			content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
 			timestamp: Date.now(),
 		});
+		return false;
 	} finally {
 		loading = false;
 		loadingStatus = "";
 		scrollToBottom();
 	}
+}
+
+export async function triggerHeaderAction(
+	action: HeaderChatAction,
+	options: HeaderActionOptions = {},
+): Promise<HeaderActionResult> {
+	if (loading) {
+		return { ok: false, error: "Chat is busy right now. Wait for the current response to finish." };
+	}
+
+	if (action === "transcribe") {
+		const sourceText = input.trim();
+		if (!sourceText) {
+			return { ok: false, error: "Paste text into the chat input first, then click Transcribe." };
+		}
+		const targetLanguage = options.targetLanguage?.trim() || "English";
+		const sent = await sendInvocation({
+			messageText: [
+				"You are Signet OS Transcribe mode.",
+				`Transcribe and translate the provided text into ${targetLanguage}.`,
+				"Preserve intent, tone, and key details.",
+				"Return only the final transcription in the target language.",
+				"Text:",
+				sourceText,
+			].join("\n\n"),
+			displayText: `Transcribe to ${targetLanguage}:\n${sourceText}`,
+			clearInput: true,
+		});
+		return sent
+			? { ok: true, message: `Transcribe request sent through chat (${targetLanguage}).` }
+			: { ok: false, error: "Transcribe request failed. Check the latest chat output." };
+	}
+
+	const transcript = buildSessionTranscript();
+	if (!transcript) {
+		return { ok: false, error: "No active chat session yet. Start chatting first." };
+	}
+
+	if (action === "remember") {
+		const sent = await sendInvocation({
+			messageText: [
+				"You are Signet OS Remember mode.",
+				"Use this current chat session transcript as context.",
+				"Persist the important long-term facts from this session if memory tools are available.",
+				"Then reply with: (1) what you remembered, (2) confidence, (3) any items not stored.",
+				"Session transcript:",
+				transcript,
+			].join("\n\n"),
+			displayText: "Remember everything important from this current session.",
+		});
+		return sent
+			? { ok: true, message: "Remember request sent through chat." }
+			: { ok: false, error: "Remember request failed. Check the latest chat output." };
+	}
+
+	const focus = input.trim();
+	const sent = await sendInvocation({
+		messageText: [
+			"You are Signet OS Recall mode.",
+			"Compare relevant saved memories with the active session context.",
+			"Highlight similarities, differences, missing facts, and potential conflicts.",
+			"If memory tools are available, use them before answering.",
+			focus ? `Focus query: ${focus}` : "Focus query: current session",
+			"Session transcript:",
+			transcript,
+		].join("\n\n"),
+		displayText: focus
+			? `Recall and compare memories against this context:\n${focus}`
+			: "Recall and compare memories against this session.",
+		clearInput: Boolean(focus),
+	});
+	return sent
+		? { ok: true, message: "Recall request sent through chat." }
+		: { ok: false, error: "Recall request failed. Check the latest chat output." };
+}
+
+async function send() {
+	const text = input.trim();
+	if (!text) return;
+	await sendInvocation({ messageText: text, displayText: text, clearInput: true });
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -508,6 +678,23 @@ function scrollToWidget(serverId: string): void {
 
 	<!-- Input bar -->
 	<div class="chat-input-bar">
+		{#if modelOptionsError}
+			<div class="chat-model-error">{modelOptionsError}</div>
+		{/if}
+		<select
+			class="chat-model-select"
+			bind:value={selectedModelId}
+			disabled={loading || modelOptionsLoading}
+			title="Choose chat model"
+		>
+			{#if modelOptions.length > 0}
+				{#each modelOptions as option (option.id)}
+					<option value={option.id}>{option.label}</option>
+				{/each}
+			{:else}
+				<option value="" disabled>No providers found</option>
+			{/if}
+		</select>
 		<input
 			type="text"
 			class="chat-input"
@@ -520,7 +707,7 @@ function scrollToWidget(serverId: string): void {
 			class="chat-send-btn"
 			title="Send message"
 			onclick={send}
-			disabled={loading || !input.trim()}
+			disabled={loading || !selectedModelId || !input.trim()}
 		>
 			<Send class="size-3.5" />
 		</button>
@@ -533,8 +720,8 @@ function scrollToWidget(serverId: string): void {
 		flex-direction: column;
 		border-top: 1px solid var(--sig-border);
 		background: var(--sig-bg);
-		max-height: 280px;
-		min-height: 120px;
+		max-height: 360px;
+		min-height: 140px;
 	}
 
 	.chat-messages {
@@ -575,7 +762,7 @@ function scrollToWidget(serverId: string): void {
 
 	.chat-msg-icon {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		justify-content: center;
 		width: 22px;
 		height: 22px;
@@ -584,13 +771,35 @@ function scrollToWidget(serverId: string): void {
 		border: 1px solid var(--sig-border);
 		color: var(--sig-text-muted);
 		flex-shrink: 0;
-		padding-top: 4px;
+		padding: 0;
+	}
+
+	.chat-msg-icon :global(svg) {
+		width: 12px;
+		height: 12px;
+		color: currentColor;
+	}
+
+	.chat-msg--agent .chat-msg-icon {
+		border-color: color-mix(in srgb, var(--sig-highlight) 62%, var(--sig-warning));
+		background: color-mix(in srgb, var(--sig-highlight) 11%, var(--sig-surface));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 30%, transparent), var(--sig-glow-highlight);
+		color: var(--sig-text-muted);
 	}
 
 	.chat-msg--user .chat-msg-icon {
-		background: color-mix(in srgb, var(--sig-accent) 15%, var(--sig-surface));
-		border-color: color-mix(in srgb, var(--sig-accent) 30%, var(--sig-border));
-		color: var(--sig-accent);
+		background: color-mix(in srgb, var(--sig-surface) 90%, var(--sig-bg));
+		border-color: color-mix(in srgb, var(--sig-warning) 55%, var(--sig-border));
+		color: var(--sig-text-muted);
+	}
+
+	.chat-msg--user .chat-msg-icon :global(svg) {
+		color: color-mix(in srgb, var(--sig-highlight) 84%, var(--sig-warning));
+		background: color-mix(in srgb, var(--sig-highlight) 22%, transparent);
+		border: 1px solid color-mix(in srgb, var(--sig-highlight) 58%, var(--sig-warning));
+		border-radius: 999px;
+		padding: 1px;
+		box-shadow: var(--sig-glow-highlight);
 	}
 
 	.chat-msg-body {
@@ -609,6 +818,7 @@ function scrollToWidget(serverId: string): void {
 		border-radius: 8px;
 		padding: 6px 10px;
 		word-break: break-word;
+		white-space: pre-wrap;
 	}
 
 	.chat-msg--user .chat-msg-content {
@@ -774,11 +984,42 @@ function scrollToWidget(serverId: string): void {
 	.chat-input-bar {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 6px;
 		padding: 8px var(--space-md);
 		border-top: 1px solid var(--sig-border);
 		background: var(--sig-surface);
 		flex-shrink: 0;
+	}
+
+	.chat-model-error {
+		width: 100%;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		line-height: 1.4;
+		color: var(--sig-danger, #8a4545);
+	}
+
+	.chat-model-select {
+		width: 220px;
+		max-width: 42%;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--sig-text);
+		background: var(--sig-bg);
+		border: 1px solid var(--sig-border);
+		border-radius: 6px;
+		padding: 6px 8px;
+		outline: none;
+		transition: border-color var(--dur) var(--ease);
+	}
+
+	.chat-model-select:focus {
+		border-color: var(--sig-accent);
+	}
+
+	.chat-model-select:disabled {
+		opacity: 0.5;
 	}
 
 	.chat-input {

@@ -1256,7 +1256,9 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 				"--sandbox",
 				"read-only",
 				"-c",
-				"mcp_servers.signet.enabled=false",
+				// Keep MCP disabled for daemon-side Codex runs without creating
+				// partial per-server config that newer Codex rejects.
+				"mcp_servers={}",
 				"-C",
 				cfg.workingDirectory,
 				"--model",

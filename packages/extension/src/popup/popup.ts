@@ -504,16 +504,13 @@ async function init(): Promise<void> {
 			videos: context.videos,
 			audio: context.audio,
 			files: context.files,
-			dispatchToHarness: true,
+			dispatchToHarness: false,
 		});
 
-		if (browserResult.success && browserResult.dispatched) {
-			setToolStatus(toolStatus, "Page sent to Signet.", "success");
-			return;
-		}
-
-		if (browserResult.memoryStored && !browserResult.dispatched) {
-			setToolStatus(toolStatus, "Saved to memory. Opening harness fallback...", "neutral");
+		if (browserResult.memoryStored) {
+			setToolStatus(toolStatus, "Saved to memory. Opening Signet OS...", "neutral");
+		} else {
+			setToolStatus(toolStatus, "Opening Signet OS...", "neutral");
 		}
 
 		await sendToHarness(payload, toolStatus, true);
@@ -576,12 +573,13 @@ async function init(): Promise<void> {
 			videos: context.videos,
 			audio: context.audio,
 			files: context.files,
-			dispatchToHarness: true,
+			dispatchToHarness: false,
 		});
 
-		if (browserResult.success && browserResult.dispatched) {
-			setToolStatus(toolStatus, "Selection sent to Signet.", "success");
-			return;
+		if (browserResult.memoryStored) {
+			setToolStatus(toolStatus, "Saved selection. Opening Signet OS...", "neutral");
+		} else {
+			setToolStatus(toolStatus, "Opening Signet OS...", "neutral");
 		}
 
 		await sendToHarness(payload, toolStatus, true);

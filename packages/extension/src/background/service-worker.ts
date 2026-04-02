@@ -385,7 +385,7 @@ async function handleSendSelection(tab: chrome.tabs.Tab, selectedText: string): 
 	const context = await getPageContext(tab, selectedText);
 	const payload = formatSelectionBundle(context);
 
-	const browserResult = await dispatchBrowserTool({
+	await dispatchBrowserTool({
 		action: "send-selection",
 		payload,
 		pageTitle: context.pageTitle,
@@ -396,12 +396,8 @@ async function handleSendSelection(tab: chrome.tabs.Tab, selectedText: string): 
 		videos: context.videos,
 		audio: context.audio,
 		files: context.files,
-		dispatchToHarness: true,
+		dispatchToHarness: false,
 	});
-
-	if (browserResult.success && browserResult.dispatched) {
-		return;
-	}
 
 	const config = await getConfig();
 	const dashboardUrl = buildDashboardUrl(config.daemonUrl, "os");
