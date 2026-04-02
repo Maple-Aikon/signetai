@@ -1061,6 +1061,8 @@ function scrollToWidget(serverId: string): void {
 		background: var(--sig-bg);
 		max-height: 360px;
 		min-height: 140px;
+		--chat-accent: #c8ff00;
+		--chat-accent-glow: 0 0 20px rgba(200, 255, 0, 0.15);
 	}
 
 	.chat-messages {
@@ -1120,9 +1122,9 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-msg--agent .chat-msg-icon {
-		border-color: color-mix(in srgb, var(--sig-highlight) 62%, var(--sig-warning));
-		background: color-mix(in srgb, var(--sig-highlight) 11%, var(--sig-surface));
-		box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 30%, transparent), var(--sig-glow-highlight);
+		border-color: color-mix(in srgb, var(--chat-accent) 62%, var(--sig-warning));
+		background: color-mix(in srgb, var(--chat-accent) 11%, var(--sig-surface));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--chat-accent) 30%, transparent), var(--chat-accent-glow);
 		color: var(--sig-text-muted);
 	}
 
@@ -1133,12 +1135,12 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-msg--user .chat-msg-icon :global(svg) {
-		color: color-mix(in srgb, var(--sig-highlight) 84%, var(--sig-warning));
-		background: color-mix(in srgb, var(--sig-highlight) 22%, transparent);
-		border: 1px solid color-mix(in srgb, var(--sig-highlight) 58%, var(--sig-warning));
+		color: color-mix(in srgb, var(--chat-accent) 84%, var(--sig-warning));
+		background: color-mix(in srgb, var(--chat-accent) 22%, transparent);
+		border: 1px solid color-mix(in srgb, var(--chat-accent) 58%, var(--sig-warning));
 		border-radius: 999px;
 		padding: 1px;
-		box-shadow: var(--sig-glow-highlight);
+		box-shadow: var(--chat-accent-glow);
 	}
 
 	.chat-msg-body {
@@ -1169,9 +1171,9 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-copy-btn:hover {
-		border-color: var(--sig-highlight);
-		color: var(--sig-highlight);
-		background: color-mix(in srgb, var(--sig-highlight) 10%, var(--sig-bg));
+		border-color: var(--chat-accent);
+		color: var(--chat-accent);
+		background: color-mix(in srgb, var(--chat-accent) 10%, var(--sig-bg));
 	}
 
 	.chat-msg-content {
@@ -1408,11 +1410,11 @@ function scrollToWidget(serverId: string): void {
 		font-size: 12px;
 		color: var(--sig-text);
 		background: var(--sig-bg);
-		border: 1px solid color-mix(in srgb, var(--sig-highlight) 65%, var(--sig-border));
+		border: 1px solid color-mix(in srgb, var(--chat-accent) 65%, var(--sig-border));
 		border-radius: 6px;
 		padding: 8px 78px 8px 10px;
 		outline: none;
-		box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 22%, transparent);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--chat-accent) 22%, transparent);
 		transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 	}
 
@@ -1422,8 +1424,8 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-input:focus {
-		border-color: var(--sig-highlight);
-		box-shadow: var(--sig-glow-highlight);
+		border-color: var(--chat-accent);
+		box-shadow: var(--chat-accent-glow);
 	}
 
 	.chat-input:disabled {
@@ -1471,15 +1473,15 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-voice-btn:hover:not(:disabled) {
-		border-color: var(--sig-highlight);
-		color: var(--sig-highlight);
-		background: color-mix(in srgb, var(--sig-highlight) 10%, var(--sig-surface));
+		border-color: var(--chat-accent);
+		color: var(--chat-accent);
+		background: color-mix(in srgb, var(--chat-accent) 10%, var(--sig-surface));
 	}
 
 	.chat-voice-btn.active {
-		border-color: color-mix(in srgb, var(--sig-highlight) 70%, var(--sig-warning));
-		color: var(--sig-highlight);
-		box-shadow: var(--sig-glow-highlight);
+		border-color: color-mix(in srgb, var(--chat-accent) 70%, var(--sig-warning));
+		color: var(--chat-accent);
+		box-shadow: var(--chat-accent-glow);
 	}
 
 	.chat-voice-btn:disabled {
@@ -1524,9 +1526,9 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-send-btn:hover:not(:disabled) {
-		border-color: var(--sig-accent);
-		color: var(--sig-accent);
-		background: color-mix(in srgb, var(--sig-accent) 8%, var(--sig-surface));
+		border-color: var(--chat-accent);
+		color: var(--chat-accent);
+		background: color-mix(in srgb, var(--chat-accent) 8%, var(--sig-surface));
 	}
 
 	.chat-send-btn:disabled {

@@ -1,20 +1,22 @@
 /**
  * Signet popup entry point
- * New flow: Header → Memory Search → Navigator → Tools → Overview
+ * Flow: Header → Memory Search → Navigator → Tools
  */
 
-import { checkHealth, dispatchBrowserTool, getIdentity, getMemories, rememberMemory } from "../shared/api.js";
+import { checkHealth, dispatchBrowserTool, rememberMemory } from "../shared/api.js";
 import { getConfig } from "../shared/config.js";
 import { applyTheme, watchSystemTheme } from "../shared/theme.js";
-import type { Memory } from "../shared/types.js";
 import { initHealthBadge } from "./components/health-badge.js";
-import { renderLoading, renderMemories, renderOffline, renderSearchEmpty } from "./components/memory-list.js";
-import { updateStats } from "./components/memory-stats.js";
+import {
+	renderLoading,
+	renderMemories,
+	renderOffline,
+	renderSearchEmpty,
+	renderSearchPrompt,
+} from "./components/memory-list.js";
 import { initSearch } from "./components/search-bar.js";
 
 type ToolTone = "neutral" | "success" | "error";
-
-type TranscribeFormat = "summary" | "bullet" | "checklist" | "json";
 
 interface PageContext {
 	readonly pageTitle: string;
@@ -131,45 +133,6 @@ async function getPageContext(): Promise<PageContext> {
 	};
 }
 
-function transcribeSelection(text: string, format: TranscribeFormat, identityName: string): string {
-	const cleaned = text.trim();
-	if (!cleaned) return "";
-
-	if (format === "json") {
-		return JSON.stringify(
-			{
-				agent: identityName,
-				type: "transcription",
-				summary: cleaned.slice(0, 220),
-				length: cleaned.length,
-				timestamp: new Date().toISOString(),
-				content: cleaned,
-			},
-			null,
-			2,
-		);
-	}
-
-	const sentences = cleaned
-		.split(/(?<=[.!?])\s+/)
-		.map((part) => part.trim())
-		.filter(Boolean)
-		.slice(0, 8);
-
-	if (format === "bullet") {
-		const items = sentences.length > 0 ? sentences : [cleaned];
-		return items.map((item) => `• ${item}`).join("\n");
-	}
-
-	if (format === "checklist") {
-		const items = sentences.length > 0 ? sentences : [cleaned];
-		return items.map((item) => `- [ ] ${item}`).join("\n");
-	}
-
-	const lead = sentences.length > 0 ? sentences.slice(0, 2).join(" ") : cleaned;
-	return `${lead}\n\nTranscribed by ${identityName}.`;
-}
-
 function formatPageCapture(context: PageContext): string {
 	return [
 		"[Signet Page Capture]",
@@ -218,36 +181,6 @@ function formatHarnessPayload(context: PageContext, note: string): string {
 		"",
 		"Please process this payload in Signet harness context.",
 	].join("\n");
-}
-
-function formatSelectionBundle(context: PageContext): string {
-	const lines: string[] = [
-		"--- signet-selection-bundle.txt ---",
-		`source_title: ${context.pageTitle || "Untitled"}`,
-		`source_url: ${context.pageUrl || "unknown"}`,
-		`created_at: ${new Date().toISOString()}`,
-		"",
-		"## Text",
-		context.selectedText || "(none)",
-		"",
-		"## Links",
-		...(context.links.length > 0 ? context.links : ["(none)"]),
-		"",
-		"## Images",
-		...(context.images.length > 0 ? context.images : ["(none)"]),
-		"",
-		"## Videos",
-		...(context.videos.length > 0 ? context.videos : ["(none)"]),
-		"",
-		"## Audio",
-		...(context.audio.length > 0 ? context.audio : ["(none)"]),
-		"",
-		"## Files",
-		...(context.files.length > 0
-			? context.files.map((file) => `${file.name} (${file.type || "unknown"}, ${file.size} bytes)`)
-			: ["(none)"]),
-	];
-	return lines.join("\n");
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -301,9 +234,6 @@ async function init(): Promise<void> {
 
 	const healthDot = document.getElementById("health-dot");
 	const versionEl = document.getElementById("version");
-	const memoriesStatEl = document.getElementById("stat-memories");
-	const embeddedStatEl = document.getElementById("stat-embedded");
-	const pipelineStatEl = document.getElementById("stat-pipeline");
 	const searchInput = document.getElementById("search-input") as HTMLInputElement | null;
 	const memoryList = document.getElementById("memory-list");
 	const openDashboard = document.getElementById("open-dashboard");
@@ -313,22 +243,16 @@ async function init(): Promise<void> {
 	const navOpenTargetBtn = document.getElementById("nav-open-target") as HTMLButtonElement | null;
 	const noteSection = document.getElementById("tool-note-section") as HTMLDivElement | null;
 	const noteInput = document.getElementById("tool-note-input") as HTMLTextAreaElement | null;
-	const transcribeFormat = document.getElementById("transcribe-format") as HTMLSelectElement | null;
 
 	const capturePageBtn = document.getElementById("tool-capture-page") as HTMLButtonElement | null;
 	const saveBookmarkBtn = document.getElementById("tool-save-bookmark") as HTMLButtonElement | null;
 	const writeNoteBtn = document.getElementById("tool-write-note") as HTMLButtonElement | null;
 	const openOsChatBtn = document.getElementById("tool-open-os-chat") as HTMLButtonElement | null;
 	const sendPageBtn = document.getElementById("tool-send-page") as HTMLButtonElement | null;
-	const transcribeBtn = document.getElementById("tool-transcribe-highlight") as HTMLButtonElement | null;
-	const sendSelectionBtn = document.getElementById("tool-send-selection") as HTMLButtonElement | null;
 
 	if (
 		!healthDot ||
 		!versionEl ||
-		!memoriesStatEl ||
-		!embeddedStatEl ||
-		!pipelineStatEl ||
 		!searchInput ||
 		!memoryList ||
 		!openDashboard ||
@@ -338,22 +262,16 @@ async function init(): Promise<void> {
 		!navOpenTargetBtn ||
 		!noteSection ||
 		!noteInput ||
-		!transcribeFormat ||
 		!capturePageBtn ||
 		!saveBookmarkBtn ||
 		!writeNoteBtn ||
 		!openOsChatBtn ||
-		!sendPageBtn ||
-		!transcribeBtn ||
-		!sendSelectionBtn
+		!sendPageBtn
 	) {
 		return;
 	}
 
 	const memoryListEl = memoryList as HTMLElement;
-	const memoriesStat = memoriesStatEl as HTMLElement;
-	const embeddedStat = embeddedStatEl as HTMLElement;
-	const pipelineStat = pipelineStatEl as HTMLElement;
 	const searchInputEl = searchInput as HTMLInputElement;
 	const noteSectionEl = noteSection as HTMLDivElement;
 
@@ -383,29 +301,19 @@ async function init(): Promise<void> {
 	const setNoteSectionVisible = (visible: boolean): void => {
 		noteSectionVisible = visible;
 		noteSectionEl.hidden = !visible;
+		noteSectionEl.classList.toggle("is-visible", visible);
 		writeNoteBtn.textContent = visible ? "Save Note" : "Write Note";
 	};
 	setNoteSectionVisible(false);
 
-	let recentMemories: readonly Memory[] = [];
 	let online = false;
 
 	async function refreshOverview(): Promise<void> {
 		if (!online) {
 			renderOffline(memoryListEl);
-			memoriesStat.textContent = "--";
-			embeddedStat.textContent = "--";
-			pipelineStat.textContent = "--";
 			return;
 		}
-
-		const memoryResult = await getMemories(10, 0);
-		recentMemories = memoryResult.memories;
-		await updateStats(memoryResult.stats, memoriesStat, embeddedStat, pipelineStat);
-
-		if (searchInputEl.value.trim().length === 0) {
-			renderMemories(memoryListEl, recentMemories);
-		}
+		renderSearchPrompt(memoryListEl);
 	}
 
 	renderLoading(memoryListEl);
@@ -419,9 +327,6 @@ async function init(): Promise<void> {
 		await refreshOverview();
 	} else {
 		renderOffline(memoryListEl);
-		memoriesStat.textContent = "--";
-		embeddedStat.textContent = "--";
-		pipelineStat.textContent = "--";
 	}
 
 	initSearch(
@@ -434,7 +339,11 @@ async function init(): Promise<void> {
 			}
 		},
 		() => {
-			renderMemories(memoryListEl, recentMemories);
+			if (!online) {
+				renderOffline(memoryListEl);
+				return;
+			}
+			renderSearchPrompt(memoryListEl);
 		},
 	);
 
@@ -535,75 +444,6 @@ async function init(): Promise<void> {
 
 		if (browserResult.memoryStored) {
 			setToolStatus(toolStatus, "Saved to memory. Opening Signet OS...", "neutral");
-		} else {
-			setToolStatus(toolStatus, "Opening Signet OS...", "neutral");
-		}
-
-		await sendToHarness(payload, toolStatus, true);
-	});
-
-	transcribeBtn.addEventListener("click", async () => {
-		setToolStatus(toolStatus, "Transcribing highlight...");
-		const context = await getPageContext();
-		if (!context.selectedText.trim()) {
-			setToolStatus(toolStatus, "Highlight text on the page first.", "error");
-			return;
-		}
-
-		const identity = await getIdentity();
-		const identityName = identity?.name ?? "Signet Agent";
-		const format = (transcribeFormat.value as TranscribeFormat) || "summary";
-		const transcription = transcribeSelection(context.selectedText, format, identityName);
-
-		if (!transcription) {
-			setToolStatus(toolStatus, "Could not transcribe selection.", "error");
-			return;
-		}
-
-		noteInput.value = transcription;
-		const result = await rememberMemory({
-			content: [
-				"[Signet Transcribe]",
-				`Format: ${format}`,
-				`Source: ${context.pageTitle} (${context.pageUrl})`,
-				"",
-				transcription,
-			].join("\n"),
-			tags: "transcribe,browser-extension",
-			importance: 0.7,
-			type: "note",
-			source_type: "browser-extension",
-		});
-
-		if (result.success) {
-			setToolStatus(toolStatus, "Transcribed and saved to Signet.", "success");
-			if (online) await refreshOverview();
-		} else {
-			setToolStatus(toolStatus, "Transcription save failed.", "error");
-		}
-	});
-
-	sendSelectionBtn.addEventListener("click", async () => {
-		setToolStatus(toolStatus, "Packaging selection for Signet...");
-		const context = await getPageContext();
-		const payload = formatSelectionBundle(context);
-
-		const browserResult = await dispatchBrowserTool({
-			action: "send-selection",
-			payload,
-			pageTitle: context.pageTitle,
-			pageUrl: context.pageUrl,
-			selectedText: context.selectedText,
-			links: context.links,
-			images: context.images,
-			videos: context.videos,
-			audio: context.audio,
-			files: context.files,
-			dispatchToHarness: false,
-		});
-
-		if (browserResult.memoryStored) {
-			setToolStatus(toolStatus, "Saved selection. Opening Signet OS...", "neutral");
 		} else {
 			setToolStatus(toolStatus, "Opening Signet OS...", "neutral");
 		}

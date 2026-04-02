@@ -85,11 +85,23 @@ export async function getMemories(
 }
 
 export async function recallMemories(query: string, limit = 10): Promise<RecallResult> {
-	const result = await fetchApi<RecallResult>("/api/memory/recall", {
-		method: "POST",
-		body: JSON.stringify({ query, limit }),
-	});
-	return result ?? { memories: [], query, count: 0 };
+	const result = await fetchApi<{ memories?: Memory[]; results?: Memory[]; query?: string; count?: number }>(
+		"/api/memory/recall",
+		{
+			method: "POST",
+			body: JSON.stringify({ query, limit }),
+		},
+	);
+	const memories = Array.isArray(result?.memories)
+		? result.memories
+		: Array.isArray(result?.results)
+			? result.results
+			: [];
+	return {
+		memories,
+		query: result?.query ?? query,
+		count: typeof result?.count === "number" ? result.count : memories.length,
+	};
 }
 
 export async function rememberMemory(request: RememberRequest): Promise<{ success: boolean; id?: string }> {

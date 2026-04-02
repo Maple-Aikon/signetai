@@ -29,6 +29,12 @@
         autocomplete="off"
         spellcheck="false"
       >
+      <div class="memory-list memory-list--search" id="memory-list">
+        <div class="state-message loading-pulse" id="loading-state">
+          <span class="state-message-title">Loading</span>
+          <span class="state-message-body">Connecting to daemon...</span>
+        </div>
+      </div>
     </section>
 
     <section class="section nav-section">
@@ -56,6 +62,7 @@
         <button class="tool-btn" id="tool-write-note">Write Note</button>
         <button class="tool-btn" id="tool-open-os-chat">OS Chat</button>
         <button class="tool-btn" id="tool-send-page">Send Page to Signet</button>
+        <button class="tool-btn" id="open-options">Settings</button>
       </div>
 
       <div class="tool-note-section" id="tool-note-section" hidden>
@@ -67,52 +74,12 @@
         ></textarea>
       </div>
 
-      <div class="tool-row">
-        <select id="transcribe-format" class="tool-select">
-          <option value="summary">Transcribe: Summary</option>
-          <option value="bullet">Transcribe: Bullet Points</option>
-          <option value="checklist">Transcribe: Checklist</option>
-          <option value="json">Transcribe: JSON</option>
-        </select>
-      </div>
-
-      <div class="tool-grid tool-grid-secondary">
-        <button class="tool-btn" id="tool-transcribe-highlight">Signet Transcribe</button>
-        <button class="tool-btn" id="tool-send-selection">Send Selection to Signet</button>
+      <div class="tool-grid tool-grid-secondary tool-grid-single">
+        <button class="tool-btn" id="open-dashboard">Open Dashboard</button>
       </div>
 
       <div class="tool-status" id="tool-status">Ready.</div>
     </section>
-
-    <section class="section overview-section">
-      <div class="section-title">Overview</div>
-      <div class="stats-bar" id="stats-bar">
-        <div class="stat">
-          <span class="stat-value" id="stat-memories">--</span>
-          <span class="stat-label">Memories</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="stat-embedded">--</span>
-          <span class="stat-label">Embedded</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="stat-pipeline">--</span>
-          <span class="stat-label">Pipeline</span>
-        </div>
-      </div>
-
-      <div class="memory-list" id="memory-list">
-        <div class="state-message loading-pulse" id="loading-state">
-          <span class="state-message-title">Loading</span>
-          <span class="state-message-body">Connecting to daemon...</span>
-        </div>
-      </div>
-    </section>
-
-    <footer class="footer">
-      <button class="footer-link" id="open-dashboard">Open Dashboard</button>
-      <button class="footer-link" id="open-options">Settings</button>
-    </footer>
   </div>
 
   <script type="module" src="popup.js"></script>

@@ -63,6 +63,8 @@ const PANEL_STYLES = `
     --sig-highlight: #a3e635;
     --sig-warning: #facc15;
     --sig-glow-highlight: 0 0 10px rgba(163, 230, 53, 0.24);
+    --ask-chat-accent: #c8ff00;
+    --ask-chat-glow: 0 0 12px rgba(200, 255, 0, 0.24);
 
     --ease: cubic-bezier(0.16, 1, 0.3, 1);
     --dur: 0.2s;
@@ -322,8 +324,8 @@ const PANEL_STYLES = `
   }
 
   .ask-icon-btn:hover {
-    border-color: var(--sig-accent);
-    color: var(--sig-accent-hover);
+    border-color: var(--ask-chat-accent);
+    color: var(--ask-chat-accent);
   }
 
   .ask-body {
@@ -408,8 +410,8 @@ const PANEL_STYLES = `
   }
 
   .ask-msg--assistant .ask-msg-icon {
-    border-color: color-mix(in srgb, var(--sig-highlight) 62%, var(--sig-warning));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 30%, transparent), var(--sig-glow-highlight);
+    border-color: color-mix(in srgb, var(--ask-chat-accent) 62%, var(--sig-warning));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ask-chat-accent) 30%, transparent), var(--ask-chat-glow);
   }
 
   .ask-msg--user .ask-msg-icon {
@@ -443,9 +445,9 @@ const PANEL_STYLES = `
   }
 
   .ask-copy-btn:hover {
-    border-color: var(--sig-highlight);
-    color: var(--sig-highlight);
-    background: color-mix(in srgb, var(--sig-highlight) 10%, var(--sig-bg));
+    border-color: var(--ask-chat-accent);
+    color: var(--ask-chat-accent);
+    background: color-mix(in srgb, var(--ask-chat-accent) 10%, var(--sig-bg));
   }
 
   .ask-msg-content {
@@ -523,8 +525,8 @@ const PANEL_STYLES = `
     min-height: 36px;
     max-height: 36px;
     border-radius: 6px;
-    border-color: color-mix(in srgb, var(--sig-highlight) 65%, var(--sig-border-strong));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 22%, transparent);
+    border-color: color-mix(in srgb, var(--ask-chat-accent) 65%, var(--sig-border-strong));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ask-chat-accent) 22%, transparent);
     padding: 8px 78px 8px 10px;
     font-size: 12px;
     line-height: 1.2;
@@ -532,8 +534,8 @@ const PANEL_STYLES = `
   }
 
   .ask-input:focus {
-    border-color: var(--sig-highlight);
-    box-shadow: var(--sig-glow-highlight);
+    border-color: var(--ask-chat-accent);
+    box-shadow: var(--ask-chat-glow);
   }
 
   .ask-voice-btn {
@@ -551,15 +553,15 @@ const PANEL_STYLES = `
   }
 
   .ask-voice-btn[data-state="active"] {
-    border-color: color-mix(in srgb, var(--sig-highlight) 70%, var(--sig-warning));
-    color: var(--sig-highlight);
-    box-shadow: var(--sig-glow-highlight);
+    border-color: color-mix(in srgb, var(--ask-chat-accent) 70%, var(--sig-warning));
+    color: var(--ask-chat-accent);
+    box-shadow: var(--ask-chat-glow);
   }
 
   .ask-voice-btn:hover:not(:disabled) {
-    border-color: var(--sig-highlight);
-    color: var(--sig-highlight);
-    background: color-mix(in srgb, var(--sig-highlight) 10%, var(--sig-surface));
+    border-color: var(--ask-chat-accent);
+    color: var(--ask-chat-accent);
+    background: color-mix(in srgb, var(--ask-chat-accent) 10%, var(--sig-surface));
   }
 
   .ask-voice-bars {
@@ -613,9 +615,9 @@ const PANEL_STYLES = `
   }
 
   .ask-send-btn:hover:not(:disabled) {
-    border-color: var(--sig-accent);
-    color: var(--sig-accent);
-    background: color-mix(in srgb, var(--sig-accent) 8%, var(--sig-surface));
+    border-color: var(--ask-chat-accent);
+    color: var(--ask-chat-accent);
+    background: color-mix(in srgb, var(--ask-chat-accent) 8%, var(--sig-surface));
   }
 
   .ask-send-btn:disabled,
