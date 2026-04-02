@@ -590,8 +590,10 @@ async function processJob(
 			const tokens = Math.ceil(result.summary.length / 4);
 			const { addDreamingTokens } = await import("./dreaming.js");
 			addDreamingTokens(accessor, job.agent_id, tokens);
-		} catch {
-			// non-fatal: dreaming table may not exist yet
+		} catch (e) {
+			logger.warn("summary-worker", "Failed to accumulate dreaming tokens (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
 		}
 
 		// --- Session continuity scoring ---

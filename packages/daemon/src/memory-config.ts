@@ -44,7 +44,10 @@ export const DEFAULT_DREAMING: DreamingConfig = {
 	tokenThreshold: 100_000,
 	provider: "anthropic",
 	model: "claude-sonnet-4-6",
+	endpoint: undefined,
+	timeout: 300_000,
 	maxInputTokens: 128_000,
+	maxOutputTokens: 16_000,
 	backfillOnFirstRun: true,
 };
 
@@ -942,7 +945,10 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 		tokenThreshold: clampPositive(raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
 		provider: isDreamingProvider(raw.provider) ? raw.provider : dd.provider,
 		model: typeof raw.model === "string" && raw.model.trim().length > 0 ? raw.model : dd.model,
+		endpoint: parseOptionalUrl(raw.endpoint),
+		timeout: clampPositive(raw.timeout, 30_000, 600_000, dd.timeout),
 		maxInputTokens: clampPositive(raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
+		maxOutputTokens: clampPositive(raw.maxOutputTokens, 1_000, 128_000, dd.maxOutputTokens),
 		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,
 	};
 }

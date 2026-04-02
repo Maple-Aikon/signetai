@@ -940,7 +940,7 @@ function resolveDreamingProvider(
 	cfg: DreamingConfig,
 	anthropicKey?: string,
 	openRouterKey?: string,
-): import("@signet/core").LlmProvider | null {
+): import("@signet/core").LlmProvider {
 	const base = normalizeRuntimeBaseUrl(cfg.endpoint, "http://127.0.0.1:11434");
 	const timeout = cfg.timeout;
 
@@ -962,15 +962,13 @@ function resolveDreamingProvider(
 				baseUrl: normalizeRuntimeBaseUrl(cfg.endpoint, "https://openrouter.ai/api/v1"),
 				defaultTimeoutMs: timeout,
 			});
-		case "claude-code":
-			return createClaudeCodeProvider({ model: cfg.model, defaultTimeoutMs: timeout });
 		case "ollama":
 			return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
-		case "none":
-			return null;
-		default:
-			// Fall back to ollama for unknown providers
+		default: {
+			const _exhaustive: never = cfg.provider;
+			logger.warn("dreaming", `Unknown dreaming provider "${_exhaustive}", falling back to ollama`);
 			return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+		}
 	}
 }
 
@@ -8179,7 +8177,9 @@ app.use("/api/dream/*", async (c, next) => {
 app.get("/api/dream/status", (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const accessor = getDbAccessor();
-	const agentId = parseOptionalString(c.req.query("agentId")) ?? "default";
+	const agentId = resolveAgentId({
+		agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
+	});
 
 	const state = getDreamingState(accessor, agentId);
 	const passes = getDreamingPasses(accessor, agentId, 10);
@@ -12330,18 +12330,14 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		try {
 			const dreamCfg = memoryCfg.dreaming;
 			const dreamProvider = resolveDreamingProvider(dreamCfg, anthropicApiKey, openRouterApiKey);
-			if (dreamProvider) {
-				dreamingWorkerHandle = startDreamingWorker(
-					getDbAccessor(),
-					dreamProvider.generate.bind(dreamProvider),
-					dreamCfg,
-					AGENTS_DIR,
-					"default",
-				);
-				setDreamingWorker(dreamingWorkerHandle);
-			} else {
-				logger.warn("dreaming", "No valid provider for dreaming, worker not started");
-			}
+			dreamingWorkerHandle = startDreamingWorker(
+				getDbAccessor(),
+				dreamProvider.generate.bind(dreamProvider),
+				dreamCfg,
+				AGENTS_DIR,
+				resolveAgentId({}),
+			);
+			setDreamingWorker(dreamingWorkerHandle);
 		} catch (err) {
 			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
 				error: err instanceof Error ? err.message : String(err),

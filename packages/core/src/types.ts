@@ -438,7 +438,10 @@ export interface DreamingConfig {
 	readonly tokenThreshold: number;
 	readonly provider: DreamingProvider;
 	readonly model: string;
+	readonly endpoint?: string;
+	readonly timeout: number;
 	readonly maxInputTokens: number;
+	readonly maxOutputTokens: number;
 	readonly backfillOnFirstRun: boolean;
 }
 

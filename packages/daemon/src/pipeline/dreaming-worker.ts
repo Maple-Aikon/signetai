@@ -19,7 +19,9 @@ import type { LlmProvider } from "./provider";
 export interface DreamingWorkerHandle {
 	stop(): void;
 	/** Force-trigger a pass (API / CLI). */
-	trigger(mode: DreamingMode): Promise<{ passId: string; applied: number; failed: number; summary: string }>;
+	trigger(
+		mode: DreamingMode,
+	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }>;
 	readonly running: boolean;
 }
 

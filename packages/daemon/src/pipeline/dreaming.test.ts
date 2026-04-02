@@ -265,8 +265,8 @@ describe("dreaming", () => {
 				});
 
 			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "compact");
-			// delete_entity on junk succeeds, pinned one is silently skipped (still counts as applied since no error)
-			expect(result.applied).toBe(2);
+			expect(result.applied).toBe(1);
+			expect(result.skipped).toBe(1);
 
 			const remaining = db.prepare("SELECT name FROM entities WHERE agent_id = ?").all(AGENT) as Array<{
 				name: string;
@@ -328,7 +328,8 @@ describe("dreaming", () => {
 				});
 
 			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental");
-			expect(result.applied).toBe(1); // op ran (no error), but constraint was protected
+			expect(result.applied).toBe(0);
+			expect(result.skipped).toBe(1); // constraint was protected
 
 			// Constraint should still be active
 			const attr = db.prepare("SELECT status, kind FROM entity_attributes WHERE id = ?").get("attr-1") as {
