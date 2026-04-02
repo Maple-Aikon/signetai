@@ -14,6 +14,7 @@ import {
 	addDreamingTokens,
 	getDreamingPasses,
 	getDreamingState,
+	recordDreamingFailure,
 	runDreamingPass,
 	shouldTriggerDreaming,
 } from "./dreaming";
@@ -156,6 +157,29 @@ describe("dreaming", () => {
 
 		it("does not trigger on first run without backfill", () => {
 			expect(shouldTriggerDreaming(accessor, defaultCfg({ backfillOnFirstRun: false }), AGENT)).toBe(false);
+		});
+
+		it("backs off on consecutive failures", () => {
+			// First failure: requires 2x threshold
+			addDreamingTokens(accessor, AGENT, 100_000);
+			recordDreamingFailure(accessor, AGENT);
+			const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
+			// At 1 failure, need 2x threshold (200k) — current 100k is below
+			expect(shouldTriggerDreaming(accessor, cfg, AGENT)).toBe(false);
+			// Add more tokens to exceed 2x
+			addDreamingTokens(accessor, AGENT, 100_001);
+			expect(shouldTriggerDreaming(accessor, cfg, AGENT)).toBe(true);
+		});
+
+		it("backs off first-run failures requiring threshold tokens", () => {
+			// First-run with backfill but has failures — requires tokenThreshold
+			recordDreamingFailure(accessor, AGENT);
+			const cfg = defaultCfg({ backfillOnFirstRun: true, tokenThreshold: 100_000 });
+			// No tokens: would normally trigger on first run, but failure backoff blocks
+			expect(shouldTriggerDreaming(accessor, cfg, AGENT)).toBe(false);
+			// Add tokens to reach threshold
+			addDreamingTokens(accessor, AGENT, 100_000);
+			expect(shouldTriggerDreaming(accessor, cfg, AGENT)).toBe(true);
 		});
 	});
 

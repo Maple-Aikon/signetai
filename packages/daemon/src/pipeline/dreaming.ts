@@ -34,6 +34,7 @@ export interface DreamingResult {
 
 export interface DreamingState {
 	readonly tokensSinceLastPass: number;
+	readonly consecutiveFailures: number;
 	readonly lastPassAt: string | null;
 	readonly lastPassId: string | null;
 	readonly lastPassMode: string | null;
@@ -105,23 +106,25 @@ export function getDreamingState(accessor: DbAccessor, agentId: string): Dreamin
 	return accessor.withReadDb((db) => {
 		const row = db
 			.prepare(
-				`SELECT tokens_since_last_pass, last_pass_at,
-				        last_pass_id, last_pass_mode
+				`SELECT tokens_since_last_pass, consecutive_failures,
+				        last_pass_at, last_pass_id, last_pass_mode
 				 FROM dreaming_state WHERE agent_id = ?`,
 			)
 			.get(agentId) as
 			| {
 					tokens_since_last_pass: number;
+					consecutive_failures: number;
 					last_pass_at: string | null;
 					last_pass_id: string | null;
 					last_pass_mode: string | null;
 			  }
 			| undefined;
 		if (!row) {
-			return { tokensSinceLastPass: 0, lastPassAt: null, lastPassId: null, lastPassMode: null };
+			return { tokensSinceLastPass: 0, consecutiveFailures: 0, lastPassAt: null, lastPassId: null, lastPassMode: null };
 		}
 		return {
 			tokensSinceLastPass: row.tokens_since_last_pass,
+			consecutiveFailures: row.consecutive_failures,
 			lastPassAt: row.last_pass_at,
 			lastPassId: row.last_pass_id,
 			lastPassMode: row.last_pass_mode,
@@ -154,6 +157,7 @@ function resetDreamingTokens(db: WriteDb, agentId: string, passId: string, mode:
 		db.prepare(
 			`UPDATE dreaming_state
 			 SET tokens_since_last_pass = 0,
+			     consecutive_failures = 0,
 			     last_pass_at = datetime('now'),
 			     last_pass_id = ?,
 			     last_pass_mode = ?,
@@ -162,10 +166,29 @@ function resetDreamingTokens(db: WriteDb, agentId: string, passId: string, mode:
 		).run(passId, mode, agentId);
 	} else {
 		db.prepare(
-			`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass, last_pass_at, last_pass_id, last_pass_mode)
-			 VALUES (?, 0, datetime('now'), ?, ?)`,
+			`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass, consecutive_failures, last_pass_at, last_pass_id, last_pass_mode)
+			 VALUES (?, 0, 0, datetime('now'), ?, ?)`,
 		).run(agentId, passId, mode);
 	}
+}
+
+export function recordDreamingFailure(accessor: DbAccessor, agentId: string): void {
+	accessor.withWriteTx((db) => {
+		const exists = db.prepare("SELECT 1 FROM dreaming_state WHERE agent_id = ?").get(agentId);
+		if (exists) {
+			db.prepare(
+				`UPDATE dreaming_state
+				 SET consecutive_failures = consecutive_failures + 1,
+				     updated_at = datetime('now')
+				 WHERE agent_id = ?`,
+			).run(agentId);
+		} else {
+			db.prepare(
+				`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass, consecutive_failures)
+				 VALUES (?, 0, 1)`,
+			).run(agentId);
+		}
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,22 +1037,33 @@ export async function runDreamingPass(
 			summary: result.summary.slice(0, 200),
 		});
 
-		// Apply mutations in a single transaction
-		const { applied, skipped, failed, errors } = accessor.withWriteTx((db) =>
-			applyMutations(db, agentId, result.mutations),
-		);
+		// Apply mutations and complete pass in a single atomic transaction.
+		// This prevents a crash between mutation apply and pass completion
+		// from leaving the graph mutated with the pass still in 'running'
+		// state and the token counter unreset (which would re-trigger).
+		const { applied, skipped, failed, errors } = accessor.withWriteTx((db) => {
+			const result2 = applyMutations(db, agentId, result.mutations);
+
+			// Complete pass record + reset token counter in same tx
+			db.prepare(
+				`UPDATE dreaming_passes
+				 SET status = 'completed',
+				     completed_at = datetime('now'),
+				     tokens_consumed = ?,
+				     mutations_applied = ?,
+				     mutations_skipped = ?,
+				     mutations_failed = ?,
+				     summary = ?
+				 WHERE id = ?`,
+			).run(totalTokens, result2.applied, result2.skipped, result2.failed, result.summary, passId);
+			resetDreamingTokens(db, agentId, passId, mode);
+
+			return result2;
+		});
 
 		if (errors.length > 0) {
 			logger.warn("dreaming", "Some mutations failed", { errors: errors.slice(0, 10) });
 		}
-
-		completeDreamingPass(accessor, passId, agentId, mode, {
-			tokensConsumed: totalTokens,
-			applied,
-			skipped,
-			failed,
-			summary: result.summary,
-		});
 
 		logger.info("dreaming", "Dreaming pass complete", {
 			applied,
@@ -1051,10 +1085,33 @@ export async function runDreamingPass(
 // Threshold check
 // ---------------------------------------------------------------------------
 
+// Max backoff: 5min * 2^6 = ~5.3 hours
+const MAX_FAILURE_BACKOFF_MULTIPLIER = 6;
+
 export function shouldTriggerDreaming(accessor: DbAccessor, cfg: DreamingConfig, agentId: string): boolean {
 	if (!cfg.enabled) return false;
 	const state = getDreamingState(accessor, agentId);
-	// First run with backfill always triggers
+
+	// Exponential backoff on consecutive failures: require tokens to
+	// exceed threshold * 2^failures before retrying. The worker runs
+	// every 5 min; this naturally delays retries (5min, 10min, 20min,
+	// 40min, 80min, 160min, capped at ~5h).
+	if (state.consecutiveFailures > 0) {
+		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
+		const backoffChecks = 2 ** exp;
+
+		// For first-run failures with backfill, require at least
+		// tokenThreshold accumulated before retrying (instead of
+		// triggering unconditionally with 0 tokens)
+		if (state.lastPassAt === null && cfg.backfillOnFirstRun) {
+			return state.tokensSinceLastPass >= cfg.tokenThreshold;
+		}
+
+		// For all other cases, multiply the threshold by the backoff factor
+		return state.tokensSinceLastPass >= cfg.tokenThreshold * backoffChecks;
+	}
+
+	// First run with backfill always triggers (no failures)
 	if (cfg.backfillOnFirstRun && state.lastPassAt === null) return true;
 	return state.tokensSinceLastPass >= cfg.tokenThreshold;
 }

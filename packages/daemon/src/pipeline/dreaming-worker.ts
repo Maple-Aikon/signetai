@@ -11,6 +11,7 @@ import {
 	type DreamingMode,
 	type LlmGenerateFn,
 	getDreamingState,
+	recordDreamingFailure,
 	runDreamingPass,
 	shouldTriggerDreaming,
 } from "./dreaming";
@@ -57,6 +58,7 @@ export function startDreamingWorker(
 			active = true;
 			await runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
 		} catch (e) {
+			recordDreamingFailure(accessor, agentId);
 			logger.error("dreaming-worker", "Dreaming check failed", {
 				error: e instanceof Error ? e.message : String(e),
 			});

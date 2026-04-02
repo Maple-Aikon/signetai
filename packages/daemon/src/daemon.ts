@@ -8223,7 +8223,9 @@ app.post("/api/dream/trigger", async (c) => {
 		return c.json({ success: true, ...result });
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
-		return c.json({ error: msg }, 409);
+		// Discriminate "already running" (conflict) from other errors (server)
+		const status = msg.includes("already running") ? 409 : 500;
+		return c.json({ error: msg }, status);
 	}
 });
 
