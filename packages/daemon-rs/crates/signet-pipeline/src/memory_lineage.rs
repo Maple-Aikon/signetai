@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_yml::Value as YamlValue;
 use sha2::{Digest, Sha256};
+use tiktoken_rs::{CoreBPE, cl100k_base};
 
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 
@@ -16,6 +18,7 @@ const HASH_SCOPE: &str = "body-normalized-v1";
 const SANITIZER_VERSION: &str = "sanitize_transcript_v1";
 const SENTENCE_VERSION: &str = "memory_sentence_v1";
 const LEDGER_HEADING: &str = "Session Ledger (Last 30 Days)";
+const MEMORY_MD_MAX_TOKENS: usize = 5000;
 const LOW_SIGNAL_SENTENCES: &[&str] = &["Investigated issue.", "Worked on task.", "Reviewed code."];
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
@@ -1480,14 +1483,47 @@ pub fn render_memory_projection(
     })
 }
 
+fn memory_md_tokenizer() -> Result<&'static CoreBPE, String> {
+    static TOK: OnceLock<Result<CoreBPE, String>> = OnceLock::new();
+    match TOK.get_or_init(|| cl100k_base().map_err(|err| err.to_string())) {
+        Ok(tok) => Ok(tok),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+fn truncate_tokens(text: &str, limit: usize) -> Result<String, String> {
+    if limit < 1 {
+        return Ok(String::new());
+    }
+    let tok = memory_md_tokenizer()?;
+    let mut tokens = tok.encode_ordinary(text);
+    if tokens.len() <= limit {
+        return Ok(text.to_string());
+    }
+    tokens.truncate(limit);
+    tok.decode(tokens)
+        .map(|value| value.trim_end().to_string())
+        .map_err(|err| err.to_string())
+}
+
+fn truncate_memory_projection(content: &str) -> Result<String, String> {
+    let tok = memory_md_tokenizer()?;
+    let budget = MEMORY_MD_MAX_TOKENS.saturating_sub(tok.encode_ordinary("\n").len());
+    truncate_tokens(content, budget)
+}
+
 pub fn write_memory_projection(
     conn: &Connection,
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
     let rendered = render_memory_projection(conn, root, agent_id)?;
-    write_atomic(&root.join("MEMORY.md"), &format!("{}\n", rendered.content))?;
-    Ok(rendered)
+    let content = truncate_memory_projection(&rendered.content)?;
+    write_atomic(&root.join("MEMORY.md"), &format!("{}\n", content))?;
+    Ok(RenderResult {
+        content,
+        ..rendered
+    })
 }
 
 pub fn upsert_thread_head(
@@ -1771,6 +1807,7 @@ pub fn write_summary_to_dag(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tiktoken_rs::cl100k_base;
 
     fn temp_root(name: &str) -> PathBuf {
         let now = SystemTime::now()
@@ -1972,6 +2009,56 @@ mod tests {
                 .content
                 .contains("packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs")
         );
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn projection_truncates_oversized_memory_md_to_token_budget() {
+        // render_memory_projection renders memory rows verbatim (up to 8, each
+        // appearing in both the "Global Head" and "Durable Notes" sections).
+        // Populate the memories table with 8 rows of ~500 tokens each so the
+        // pre-truncation render exceeds 5000 tokens.  The artifact body stored
+        // via write_summary_artifact is NOT rendered verbatim (only its
+        // memory_sentence ≈ 20 tokens ends up in the ledger), so this test
+        // seeds memories directly.
+        let conn = setup_conn();
+        let root = temp_root("projection-budget");
+        let tok = cl100k_base().unwrap();
+        let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega ";
+        // Build a single memory content string that is ~500 tokens.
+        let mut long = String::new();
+        while tok.encode_ordinary(&long).len() < 500 {
+            long.push_str(chunk);
+        }
+        // Insert 8 memories.  Each appears twice in the render (global + durable),
+        // so total memory token contribution is 8 × 2 × ~500 = ~8000 > 5000.
+        for i in 0u32..8 {
+            conn.execute(
+                "INSERT INTO memories (id, content, type, importance, project,
+                           source_id, is_deleted, pinned, created_at, agent_id)
+                 VALUES (?1, ?2, 'fact', 0.5, NULL, NULL, 0, 0, ?3, 'default')",
+                rusqlite::params![
+                    format!("mem-budget-{i}"),
+                    long.clone(),
+                    format!("2026-01-01T{i:02}:00:00Z"),
+                ],
+            )
+            .unwrap();
+        }
+        // Confirm pre-truncation render actually exceeds the budget.
+        let pre = render_memory_projection(&conn, &root, "default").unwrap();
+        assert!(
+            tok.encode_ordinary(&pre.content).len() > MEMORY_MD_MAX_TOKENS,
+            "pre-truncation render must exceed {} tokens to validate the test",
+            MEMORY_MD_MAX_TOKENS,
+        );
+        // write_memory_projection must truncate the output to the budget.
+        let rendered = write_memory_projection(&conn, &root, "default").unwrap();
+        let file = fs::read_to_string(root.join("MEMORY.md")).unwrap();
+        assert!(rendered.content.starts_with("# Working Memory Summary"));
+        assert!(file.contains("## Global Head (Tier 1)"));
+        assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
+        assert!(tok.encode_ordinary(&file).len() <= MEMORY_MD_MAX_TOKENS);
         fs::remove_dir_all(root).ok();
     }
 
