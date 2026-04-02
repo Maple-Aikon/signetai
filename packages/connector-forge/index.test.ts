@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,6 +160,29 @@ describe("ForgeConnector", () => {
 		expect(existing.command).toBe("existing-mcp");
 		expect(Reflect.has(servers, "signet")).toBe(false);
 		expect(connector.isInstalled()).toBe(false);
+	});
+
+	it("does not remove user-owned symlinks pointing outside the Signet workspace", async () => {
+		const basePath = join(tmpRoot, "agents");
+		writeIdentity(basePath);
+
+		const connector = new ForgeConnector();
+		await connector.install(basePath);
+
+		// Simulate a user-created symlink in ~/forge/skills/ pointing to
+		// an unrelated directory, not the Signet workspace.
+		const forgeHome = join(tmpRoot, "forge");
+		const userSkillTarget = join(tmpRoot, "my-own-skill");
+		mkdirSync(userSkillTarget, { recursive: true });
+		const userSkillLink = join(forgeHome, "skills", "user-skill");
+		symlinkSync(userSkillTarget, userSkillLink);
+
+		const uninstall = await connector.uninstall();
+
+		// Signet-managed skill is gone; user-owned symlink is preserved.
+		expect(uninstall.filesRemoved).not.toContain(userSkillLink);
+		expect(existsSync(userSkillLink)).toBe(true);
+		expect(lstatSync(userSkillLink).isSymbolicLink()).toBe(true);
 	});
 
 	it("fails safely when Forge MCP config is invalid JSON", async () => {

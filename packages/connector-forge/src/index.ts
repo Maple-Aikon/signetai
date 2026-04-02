@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	readlinkSync,
 	rmSync,
 	unlinkSync,
 	writeFileSync,
@@ -169,12 +170,22 @@ export class ForgeConnector extends BaseConnector {
 			}
 		}
 
-		this.removeSkillSymlinks(filesRemoved);
-
+		// Read MCP config first so we can derive SIGNET_PATH before patching it.
 		const mcpPath = this.getMcpConfigPath();
+		let config: JsonObject = {};
 		if (existsSync(mcpPath)) {
 			try {
-				const config = readJsonObject(mcpPath);
+				config = readJsonObject(mcpPath);
+			} catch {
+				// Leave unreadable user config untouched.
+			}
+		}
+
+		const signetPath = this.extractSignetPath(config);
+		this.removeSkillSymlinks(filesRemoved, signetPath);
+
+		if (Object.keys(config).length > 0) {
+			try {
 				const patched = this.removeMcpServer(config);
 				if (patched) {
 					if (Object.keys(config).length === 0) {
@@ -186,7 +197,7 @@ export class ForgeConnector extends BaseConnector {
 					}
 				}
 			} catch {
-				// Leave unreadable user config untouched.
+				// Leave unpatchable config untouched.
 			}
 		}
 
@@ -214,19 +225,38 @@ export class ForgeConnector extends BaseConnector {
 		}
 	}
 
-	private removeSkillSymlinks(filesRemoved: string[]): void {
+	private extractSignetPath(config: JsonObject): string | null {
+		const servers = config.mcpServers;
+		if (!isJsonObject(servers)) return null;
+		const signet = servers.signet;
+		if (!isJsonObject(signet)) return null;
+		const env = signet.env;
+		if (!isJsonObject(env)) return null;
+		const path = env.SIGNET_PATH;
+		return typeof path === "string" && path.length > 0 ? path : null;
+	}
+
+	private removeSkillSymlinks(filesRemoved: string[], signetPath: string | null): void {
 		const skillsDir = this.getSkillsPath();
 		if (!existsSync(skillsDir)) return;
+
+		// Without a known source we cannot safely scope removal — skip.
+		if (signetPath === null) return;
+		const signetSkillsSource = join(signetPath, "skills");
 
 		try {
 			for (const entry of readdirSync(skillsDir)) {
 				const target = join(skillsDir, entry);
-				if (lstatSync(target).isSymbolicLink()) {
-					unlinkSync(target);
-					filesRemoved.push(target);
-				}
+				if (!lstatSync(target).isSymbolicLink()) continue;
+				// Only remove symlinks that point into the Signet skills source,
+				// so user-created symlinks elsewhere are never touched.
+				const linkTarget = readlinkSync(target);
+				const resolved = linkTarget.startsWith("/") ? linkTarget : join(skillsDir, linkTarget);
+				if (!resolved.startsWith(signetSkillsSource)) continue;
+				unlinkSync(target);
+				filesRemoved.push(target);
 			}
-			// Remove the skills directory itself if now empty
+			// Remove the skills directory itself if now empty.
 			if (readdirSync(skillsDir).length === 0) {
 				rmSync(skillsDir, { force: true });
 			}

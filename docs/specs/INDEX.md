@@ -713,6 +713,7 @@ Legend:
 | `connector-py-agent` | planning | `docs/specs/planning/connector-py-agent.md` | `signet-runtime` | - | Stub: Py Agent connector |
 | `connector-hermes-agent` | planning | `docs/specs/planning/connector-hermes-agent.md` | `signet-runtime` | - | Stub: Hermes Agent connector |
 | `connector-oh-my-pi` | planning | `docs/specs/planning/connector-oh-my-pi.md` | `signet-runtime` | - | Stub: Oh My Pi managed runtime extension and connector |
+| `connector-forgecode` | complete | `docs/specs/complete/connector-forgecode.md` | `signet-runtime` | - | ForgeCode connector: AGENTS.md, MCP server registration, skills symlink. MCP-only (no external hook API). |
 | `plugin-api-ecosystem` | planning | `docs/specs/planning/plugin-api-ecosystem.md` | `signet-runtime` | - | Stub: plugin/app API for dashboard and CLI integrations |
 | `constellation-unified-viewer` | planning | `docs/specs/planning/constellation-unified-viewer.md` | `knowledge-architecture-schema` | - | Stub: realtime unified constellation/embedding/entity viewer |
 | `dashboard-information-architecture-refactor` | planning | `docs/specs/planning/dashboard-information-architecture-refactor.md` | `signet-runtime` | - | Stub: dashboard IA cleanup, settings split, breadcrumb navigation |

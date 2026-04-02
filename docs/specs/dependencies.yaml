@@ -332,8 +332,8 @@ specs:
     decision: null
 
   - id: connector-forgecode
-    status: planning
-    path: docs/specs/planning/connector-forgecode.md
+    status: complete
+    path: docs/specs/complete/connector-forgecode.md
     hard_depends_on:
       - signet-runtime
     soft_depends_on: []
