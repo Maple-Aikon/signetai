@@ -430,5 +430,125 @@ describe("dreaming", () => {
 			expect(state.lastPassAt).not.toBeNull();
 			expect(state.lastPassMode).toBe("incremental");
 		});
+
+		it("applies update_aspect mutations (additive — does not replace existing attributes)", async () => {
+			seedEntity(db, "ent-1", "Node.js", "tool");
+			seedAspect(db, "asp-1", "ent-1", "usage");
+			seedAttribute(db, "attr-1", "asp-1", "Used for API servers");
+			seedSummary(db, "s-1", "Node.js is also used for CLI tooling", 200);
+
+			const generate = async () =>
+				JSON.stringify({
+					mutations: [
+						{
+							op: "update_aspect",
+							entity: "Node.js",
+							aspect: "usage",
+							attributes: ["Used for CLI tooling"],
+						},
+					],
+					summary: "Added CLI usage to Node.js",
+				});
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental");
+			expect(result.applied).toBe(1);
+
+			// Original attribute must still exist (additive operation)
+			const original = db.prepare("SELECT status FROM entity_attributes WHERE id = 'attr-1'").get() as
+				| { status: string }
+				| undefined;
+			expect(original?.status).toBe("active");
+
+			// New attribute should have been added
+			const count = db
+				.prepare(
+					"SELECT COUNT(*) as c FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND status = 'active'",
+				)
+				.get("asp-1", AGENT) as { c: number };
+			expect(count.c).toBe(2);
+		});
+
+		it("applies delete_aspect mutations (hard-deletes aspect and attributes)", async () => {
+			seedEntity(db, "ent-1", "Webpack", "tool");
+			seedAspect(db, "asp-1", "ent-1", "legacy config");
+			seedAttribute(db, "attr-1", "asp-1", "Used webpack.config.js with CommonJS");
+			seedAttribute(db, "attr-2", "asp-1", "Migrated to Vite");
+
+			const generate = async () =>
+				JSON.stringify({
+					mutations: [{ op: "delete_aspect", entity: "Webpack", aspect: "legacy config", reason: "Outdated info" }],
+					summary: "Removed stale Webpack config aspect",
+				});
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "compact");
+			expect(result.applied).toBe(1);
+
+			// Aspect row must be gone (hard delete)
+			const aspect = db.prepare("SELECT id FROM entity_aspects WHERE id = 'asp-1' AND agent_id = ?").get(AGENT);
+			expect(aspect).toBeNull();
+
+			// All attribute rows must be gone (hard delete)
+			const attrCount = db
+				.prepare("SELECT COUNT(*) as c FROM entity_attributes WHERE aspect_id = 'asp-1' AND agent_id = ?")
+				.get(AGENT) as { c: number };
+			expect(attrCount.c).toBe(0);
+		});
+
+		it("applies create_attribute mutations", async () => {
+			seedEntity(db, "ent-1", "Bun", "tool");
+			seedAspect(db, "asp-1", "ent-1", "features");
+
+			const generate = async () =>
+				JSON.stringify({
+					mutations: [
+						{
+							op: "create_attribute",
+							entity: "Bun",
+							aspect: "features",
+							content: "Built-in SQLite driver with bun:sqlite",
+						},
+					],
+					summary: "Added Bun SQLite feature",
+				});
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental");
+			expect(result.applied).toBe(1);
+
+			const attr = db
+				.prepare(
+					"SELECT content, status FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND status = 'active'",
+				)
+				.get("asp-1", AGENT) as { content: string; status: string } | undefined;
+			expect(attr?.content).toBe("Built-in SQLite driver with bun:sqlite");
+		});
+
+		it("applies delete_attribute mutations (soft-delete)", async () => {
+			seedEntity(db, "ent-1", "React", "tool");
+			seedAspect(db, "asp-1", "ent-1", "usage");
+			seedAttribute(db, "attr-1", "asp-1", "React class components are used throughout");
+
+			const generate = async () =>
+				JSON.stringify({
+					mutations: [
+						{
+							op: "delete_attribute",
+							entity: "React",
+							aspect: "usage",
+							content: "React class components are used throughout",
+							reason: "Migrated to hooks",
+						},
+					],
+					summary: "Removed stale React class component reference",
+				});
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "compact");
+			expect(result.applied).toBe(1);
+
+			// Attribute row should still exist with status=deleted (soft delete)
+			const attr = db.prepare("SELECT status FROM entity_attributes WHERE id = 'attr-1'").get() as
+				| { status: string }
+				| undefined;
+			expect(attr?.status).toBe("deleted");
+		});
 	});
 });

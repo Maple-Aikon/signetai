@@ -39,7 +39,7 @@ export { startSummaryWorker, enqueueSummaryJob } from "./summary-worker";
 export type { SummaryWorkerHandle } from "./summary-worker";
 export { startSynthesisWorker, readLastSynthesisTime } from "./synthesis-worker";
 export type { SynthesisWorkerHandle } from "./synthesis-worker";
-export { getDreamingState, getDreamingPasses } from "./dreaming";
+export { addDreamingTokens, getDreamingState, getDreamingPasses, recordDreamingFailure } from "./dreaming";
 export type { DreamingWorkerHandle } from "./dreaming-worker";
 
 /** Get the active synthesis worker handle (for API routes). */

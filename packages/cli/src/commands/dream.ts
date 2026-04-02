@@ -116,8 +116,14 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 		.command("trigger")
 		.description("Manually trigger a dreaming pass")
 		.option("--compact", "Run in compaction mode (full graph cleanup)")
-		.action(async (opts: { compact?: boolean }) => {
+		.option("--wait-secs <seconds>", "Max seconds to wait for pass completion (default: 720)", "720")
+		.action(async (opts: { compact?: boolean; waitSecs?: string }) => {
 			const mode = opts.compact ? "compact" : "incremental";
+			// Poll ceiling: default 720s (12 min) > default LLM timeout 300s.
+			// Increase with --wait-secs if your dreaming.timeout config exceeds 5 min.
+			const maxWait = Math.max(30, Number.parseInt(opts.waitSecs ?? "720", 10));
+			const pollInterval = 5_000;
+			const maxPolls = Math.ceil((maxWait * 1000) / pollInterval);
 			console.log(chalk.dim(`\n  Triggering ${mode} dreaming pass...\n`));
 
 			const accepted = await deps.fetchFromDaemon<TriggerAccepted>("/api/dream/trigger", {
@@ -140,8 +146,8 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 
 			// Poll status until the pass completes or fails
 			let pass: DreamPass | undefined;
-			for (let i = 0; i < 120; i++) {
-				await new Promise((r) => setTimeout(r, 5_000));
+			for (let i = 0; i < maxPolls; i++) {
+				await new Promise((r) => setTimeout(r, pollInterval));
 				const status = await deps.fetchFromDaemon<DreamStatus>("/api/dream/status");
 				if (!status) break;
 				pass = status.passes.find((p) => p.id === accepted.passId);

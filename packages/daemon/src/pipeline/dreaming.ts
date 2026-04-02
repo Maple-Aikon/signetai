@@ -523,6 +523,7 @@ Guidelines:
 - Provide clear reasons for all deletions and merges
 - Be conservative — only change what you're confident about
 - "update_aspect" is ADDITIVE — it adds new attributes to an aspect without removing existing ones. To replace a stale attribute, use "supersede_attribute" instead
+- "delete_attribute" soft-deletes a single attribute (auditable, recoverable). "delete_aspect" hard-deletes the entire aspect and all its attributes permanently — use only when the whole aspect is no longer meaningful
 </task>
 
 ${summaryText ? `<recent_sessions>\n${summaryText}\n</recent_sessions>` : ""}
@@ -773,9 +774,11 @@ function applyMergeEntities(
 		return "skipped";
 	}
 
+	let merged = 0;
 	for (const src of mut.source) {
 		const srcId = resolveEntity(db, agentId, src);
 		if (!srcId || srcId === targetId) continue;
+		merged++;
 
 		// Move non-colliding aspects to target
 		db.prepare(
@@ -842,6 +845,20 @@ function applyMergeEntities(
 
 		// Move dependencies (source side)
 		// OR IGNORE handles collision when T→X already exists (S→X can't become T→X)
+		// Check ahead of time whether S→T exists so we know if a self-loop will be
+		// created below (S→T becomes T→T after the rewrite).
+		const hadSrcToTarget = !!db
+			.prepare(
+				`SELECT 1 FROM entity_dependencies
+				 WHERE source_entity_id = ? AND target_entity_id = ? AND agent_id = ?`,
+			)
+			.get(srcId, targetId, agentId);
+		const hadTargetSelfLoop = !!db
+			.prepare(
+				`SELECT 1 FROM entity_dependencies
+				 WHERE source_entity_id = ? AND target_entity_id = ? AND agent_id = ?`,
+			)
+			.get(targetId, targetId, agentId);
 		db.prepare(
 			`UPDATE OR IGNORE entity_dependencies SET source_entity_id = ?, updated_at = datetime('now')
 			 WHERE source_entity_id = ? AND agent_id = ?`,
@@ -857,13 +874,14 @@ function applyMergeEntities(
 		// Clean up colliding duplicates that OR IGNORE couldn't move
 		db.prepare("DELETE FROM entity_dependencies WHERE target_entity_id = ? AND agent_id = ?").run(srcId, agentId);
 
-		// Clean up self-loop dependency on targetId created by the rewrite
-		// (src→target became target→target). Scoped to targetId only to avoid
-		// accidentally removing unrelated self-loops elsewhere in the graph.
-		db.prepare(
-			`DELETE FROM entity_dependencies
-			 WHERE source_entity_id = ? AND target_entity_id = ? AND agent_id = ?`,
-		).run(targetId, targetId, agentId);
+		// If S→T was rewritten to T→T and no self-loop existed beforehand, remove it.
+		// Preserves any intentional pre-existing T→T edge.
+		if (hadSrcToTarget && !hadTargetSelfLoop) {
+			db.prepare(
+				`DELETE FROM entity_dependencies
+				 WHERE source_entity_id = ? AND target_entity_id = ? AND agent_id = ?`,
+			).run(targetId, targetId, agentId);
+		}
 
 		// Move memory mentions (OR IGNORE skips duplicates).
 		// memory_entity_mentions has no agent_id column — scope implicitly
@@ -898,7 +916,7 @@ function applyMergeEntities(
 		db.prepare("DELETE FROM entity_aspects WHERE entity_id = ? AND agent_id = ?").run(srcId, agentId);
 		db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(srcId, agentId);
 	}
-	return "applied";
+	return merged > 0 ? "applied" : "skipped";
 }
 
 function applyDeleteEntity(

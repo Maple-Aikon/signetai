@@ -435,7 +435,7 @@ The mechanical consolidation engine is complete:
 - **Graph safety.** LIMIT caps on entity graph queries (2000 entities,
   10k aspects, 50k attributes, 10k dependencies). Character budget
   for graph text in prompts (~30% of token budget).
-- **Tests.** 21 tests covering state management, threshold logic,
+- **Tests.** 25 tests covering state management, threshold logic,
   all mutation types, constraint protection, and pass lifecycle.
 
 ### Deferred (Phase 2 — required for spec completion)

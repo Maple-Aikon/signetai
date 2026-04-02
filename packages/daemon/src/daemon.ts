@@ -172,6 +172,7 @@ import {
 	stopModelRegistry,
 } from "./pipeline/model-registry";
 import {
+	DEFAULT_OLLAMA_FALLBACK_MODEL,
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -946,18 +947,22 @@ function resolveDreamingProvider(
 		"http://127.0.0.1:11434",
 	);
 	const timeout = cfg.timeout;
+	// When falling back to Ollama due to missing API key, cfg.model is the
+	// non-Ollama model name (e.g. "claude-sonnet-4-6"). Use the Ollama default.
+	const ollamaFallback = () =>
+		createOllamaProvider({ model: DEFAULT_OLLAMA_FALLBACK_MODEL, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
 
 	switch (cfg.provider) {
 		case "anthropic":
 			if (!anthropicKey) {
 				logger.warn("dreaming", "ANTHROPIC_API_KEY not found for dreaming, falling back to ollama");
-				return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
+				return ollamaFallback();
 			}
 			return createAnthropicProvider({ model: cfg.model, apiKey: anthropicKey, defaultTimeoutMs: timeout });
 		case "openrouter":
 			if (!openRouterKey) {
 				logger.warn("dreaming", "OPENROUTER_API_KEY not found for dreaming, falling back to ollama");
-				return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
+				return ollamaFallback();
 			}
 			return createOpenRouterProvider({
 				model: cfg.model,
@@ -970,7 +975,7 @@ function resolveDreamingProvider(
 		default: {
 			const _exhaustive: never = cfg.provider;
 			logger.warn("dreaming", `Unknown dreaming provider "${_exhaustive}", falling back to ollama`);
-			return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
+			return ollamaFallback();
 		}
 	}
 }
