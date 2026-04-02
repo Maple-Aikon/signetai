@@ -2014,49 +2014,50 @@ mod tests {
 
     #[test]
     fn projection_truncates_oversized_memory_md_to_token_budget() {
+        // render_memory_projection renders memory rows verbatim (up to 8, each
+        // appearing in both the "Global Head" and "Durable Notes" sections).
+        // Populate the memories table with 8 rows of ~500 tokens each so the
+        // pre-truncation render exceeds 5000 tokens.  The artifact body stored
+        // via write_summary_artifact is NOT rendered verbatim (only its
+        // memory_sentence ≈ 20 tokens ends up in the ledger), so this test
+        // seeds memories directly.
         let conn = setup_conn();
         let root = temp_root("projection-budget");
-        let now = Utc::now().to_rfc3339();
-        let keep = "Preserve this context in MEMORY.md.";
-        let tail = "TRUNCATE-ME-TAIL";
-        let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega\n";
-        let mut body = format!("# Session Notes\n\n## Keep\n\n{keep}\n\n");
         let tok = cl100k_base().unwrap();
-
-        while tok.encode_ordinary(&body).len() < 6000 {
-            body.push_str(chunk);
+        let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega ";
+        // Build a single memory content string that is ~500 tokens.
+        let mut long = String::new();
+        while tok.encode_ordinary(&long).len() < 500 {
+            long.push_str(chunk);
         }
-        body.push_str("\n## Tail\n\n");
-        body.push_str(tail);
-
-        write_summary_artifact(
-            &conn,
-            &root,
-            SummaryArtifactInput {
-                agent_id: "default".to_string(),
-                session_id: "sess-budget".to_string(),
-                session_key: Some("sess-budget".to_string()),
-                project: Some("/tmp/proj".to_string()),
-                harness: Some("codex".to_string()),
-                captured_at: now.clone(),
-                started_at: None,
-                ended_at: Some(now.clone()),
-                summary: body,
-            },
-            MemorySentence {
-                text: "Preserved the daemon-rs projection token budget behavior for oversized MEMORY.md output.".to_string(),
-                quality: "ok".to_string(),
-                generated_at: now.clone(),
-            },
-        )
-        .unwrap();
-
+        // Insert 8 memories.  Each appears twice in the render (global + durable),
+        // so total memory token contribution is 8 × 2 × ~500 = ~8000 > 5000.
+        for i in 0u32..8 {
+            conn.execute(
+                "INSERT INTO memories (id, content, type, importance, project,
+                           source_id, is_deleted, pinned, created_at, agent_id)
+                 VALUES (?1, ?2, 'fact', 0.5, NULL, NULL, 0, 0, ?3, 'default')",
+                rusqlite::params![
+                    format!("mem-budget-{i}"),
+                    long.clone(),
+                    format!("2026-01-01T{i:02}:00:00Z"),
+                ],
+            )
+            .unwrap();
+        }
+        // Confirm pre-truncation render actually exceeds the budget.
+        let pre = render_memory_projection(&conn, &root, "default").unwrap();
+        assert!(
+            tok.encode_ordinary(&pre.content).len() > MEMORY_MD_MAX_TOKENS,
+            "pre-truncation render must exceed {} tokens to validate the test",
+            MEMORY_MD_MAX_TOKENS,
+        );
+        // write_memory_projection must truncate the output to the budget.
         let rendered = write_memory_projection(&conn, &root, "default").unwrap();
         let file = fs::read_to_string(root.join("MEMORY.md")).unwrap();
         assert!(rendered.content.starts_with("# Working Memory Summary"));
         assert!(file.contains("## Global Head (Tier 1)"));
-        assert!(!rendered.content.contains(tail));
-        assert!(!file.contains(tail));
+        assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
         assert!(tok.encode_ordinary(&file).len() <= MEMORY_MD_MAX_TOKENS);
         fs::remove_dir_all(root).ok();
     }
