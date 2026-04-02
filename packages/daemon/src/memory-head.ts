@@ -8,7 +8,7 @@ import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
 
-const MEMORY_HEAD_MAX_TOKENS = 5000;
+export const MEMORY_HEAD_MAX_TOKENS = 5000;
 const headTok = new Tiktoken(cl100k_base);
 
 function getAgentsDir(): string {

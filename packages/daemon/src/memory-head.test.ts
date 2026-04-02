@@ -4,9 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
-import { writeMemoryHead } from "./memory-head";
+import { MEMORY_HEAD_MAX_TOKENS, writeMemoryHead } from "./memory-head";
 
-const MEMORY_HEAD_MAX_TOKENS = 5000;
 const tok = new Tiktoken(cl100k_base);
 
 let agentsDir = "";
@@ -31,7 +30,7 @@ describe("writeMemoryHead", () => {
 	afterAll(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (prevSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 			return;
 		}
 		process.env.SIGNET_PATH = prevSignetPath;
