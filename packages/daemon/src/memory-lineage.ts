@@ -26,6 +26,7 @@ const LEDGER_HEADING = "Session Ledger (Last 30 Days)";
 const LOW_SIGNAL_SENTENCES = new Set(["Investigated issue.", "Worked on task.", "Reviewed code."]);
 const PROJECTION_HEADROOM_TOKENS = 256;
 export const MEMORY_PROJECTION_MAX_TOKENS = Math.max(512, MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM_TOKENS);
+const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test sessions";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const projTok = new Tiktoken(cl100k_base);
@@ -1173,6 +1174,20 @@ function renderLedgerSection(
 		});
 	}
 
+	// renderCount is not monotone at the full-length boundary because dropping
+	// one row adds the clipping notice. Check the unclipped case up front before
+	// binary-searching clipped prefixes.
+	if (fitsBudget([...base, renderCount(sessions.length)])) {
+		const refs = sessions
+			.map((session) => session.manifestPath)
+			.filter((path): path is string => typeof path === "string");
+		return {
+			block: renderCount(sessions.length),
+			refs,
+			count: sessions.length,
+		};
+	}
+
 	let low = 1;
 	let high = sessions.length;
 	let best = 0;
@@ -1267,6 +1282,7 @@ export function renderMemoryProjection(agentId = "default"): {
 	fileCount: number;
 	indexBlock: string;
 } {
+	purgeCanonicalNoiseSessions(agentId, NOISE_PURGE_REASON);
 	reindexMemoryArtifacts(agentId);
 	const memories = readTopMemories(agentId);
 	const threadHeads = readThreadHeads(agentId);

@@ -21,6 +21,7 @@ const LEDGER_HEADING: &str = "Session Ledger (Last 30 Days)";
 const MEMORY_MD_MAX_TOKENS: usize = 5000;
 const LOW_SIGNAL_SENTENCES: &[&str] = &["Investigated issue.", "Worked on task.", "Reviewed code."];
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+const NOISE_PURGE_REASON: &str = "automatic projection cleanup for temp/test sessions";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
@@ -95,6 +96,40 @@ pub struct SummaryArtifactInput {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub summary: String,
+}
+
+pub fn is_temp_project(project: Option<&str>) -> bool {
+    project.is_some_and(|value| {
+        let trimmed = value.trim();
+        trimmed.starts_with("/tmp/") || trimmed.starts_with("/private/tmp/")
+    })
+}
+
+fn has_synthetic_prefix(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| {
+        let lower = raw.trim().to_ascii_lowercase();
+        ["test-", "spec-", "fixture-", "synthetic-", "tmp-"]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+    })
+}
+
+pub fn is_noise_session(
+    project: Option<&str>,
+    session_id: Option<&str>,
+    session_key: Option<&str>,
+    harness: Option<&str>,
+) -> bool {
+    if is_temp_project(project) {
+        return true;
+    }
+    if project.is_some_and(|value| !value.trim().is_empty()) {
+        return false;
+    }
+    if has_synthetic_prefix(session_key) || has_synthetic_prefix(session_id) {
+        return true;
+    }
+    harness.is_some_and(|value| value.trim().eq_ignore_ascii_case("test"))
 }
 
 #[derive(Debug, Clone)]
@@ -941,6 +976,85 @@ pub fn reindex_memory_artifacts(
     Ok(())
 }
 
+pub fn purge_canonical_noise_sessions(
+    conn: &Connection,
+    root: &Path,
+    agent_id: &str,
+    reason: &str,
+) -> Result<usize, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT session_token, session_id, session_key, project, harness
+             FROM memory_artifacts
+             WHERE agent_id = ?1
+               AND source_kind IN ('summary', 'transcript', 'compaction')",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![agent_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|err| err.to_string())?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+
+    let mut removed = 0usize;
+    for (session_token, session_id, session_key, project, harness) in rows {
+        if !is_noise_session(
+            project.as_deref(),
+            Some(session_id.as_str()),
+            session_key.as_deref(),
+            harness.as_deref(),
+        ) {
+            continue;
+        }
+        let mut path_stmt = conn
+            .prepare(
+                "SELECT source_path FROM memory_artifacts
+                 WHERE agent_id = ?1 AND session_token = ?2",
+            )
+            .map_err(|err| err.to_string())?;
+        let paths = path_stmt
+            .query_map(params![agent_id, session_token], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        for path in &paths {
+            let _ = fs::remove_file(root.join(path));
+        }
+        conn.execute(
+            "INSERT INTO memory_artifact_tombstones (
+                agent_id, session_token, removed_at, reason, removed_paths
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(agent_id, session_token) DO UPDATE SET
+                removed_at = excluded.removed_at,
+                reason = excluded.reason,
+                removed_paths = excluded.removed_paths",
+            params![
+                agent_id,
+                session_token,
+                Utc::now().to_rfc3339(),
+                reason,
+                serde_json::to_string(&paths).map_err(|err| err.to_string())?,
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND session_token = ?2",
+            params![agent_id, session_token],
+        )
+        .map_err(|err| err.to_string())?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 pub fn write_transcript_artifact(
     conn: &Connection,
     root: &Path,
@@ -1142,6 +1256,7 @@ fn build_temporal_index(conn: &Connection, agent_id: &str) -> String {
     };
     let lines = rows
         .filter_map(Result::ok)
+        .filter(|row| !is_noise_session(row.5.as_deref(), Some(row.0.as_str()), row.6.as_deref(), None))
         .map(|row| {
             let preview = normalize_markdown_body(&row.8)
                 .replace('\n', " ")
@@ -1253,11 +1368,20 @@ fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String
                 return None;
             }
             let picked = choose_sentence(&group)?;
+            let project = group.iter().find_map(|row| row.project.clone());
+            if is_noise_session(
+                project.as_deref(),
+                Some(group[0].session_id.as_str()),
+                picked.session_key.as_deref(),
+                picked.harness.as_deref(),
+            ) {
+                return None;
+            }
             let kind = ArtifactKind::from_str(&picked.source_kind).unwrap_or(ArtifactKind::Summary);
             Some(LedgerSession {
                 session_id: group[0].session_id.clone(),
                 session_key: picked.session_key.clone(),
-                project: group.iter().find_map(|row| row.project.clone()),
+                project,
                 membership_ts: ts,
                 sentence: coerce_sentence(
                     picked.memory_sentence.as_deref(),
@@ -1367,6 +1491,7 @@ pub fn render_memory_projection(
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
+    purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
     reindex_memory_artifacts(conn, root, Some(agent_id))?;
     let memories = conn
         .prepare(
@@ -1387,9 +1512,10 @@ pub fn render_memory_projection(
         })
         .map_err(|err| err.to_string())?
         .filter_map(Result::ok)
+        .filter(|row| !is_noise_session(row.3.as_deref(), None, None, None))
         .collect::<Vec<_>>();
     let thread_heads = match conn.prepare(
-        "SELECT label, source_type, latest_at, sample, node_id
+        "SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
          FROM memory_thread_heads
          WHERE agent_id = ?1
          ORDER BY latest_at DESC
@@ -1403,10 +1529,24 @@ pub fn render_memory_projection(
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })
             .ok()
-            .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
+            .map(|rows| {
+                rows.filter_map(Result::ok)
+                    .filter(|row| {
+                        !is_noise_session(
+                            row.5.as_deref(),
+                            Some(row.4.as_str()),
+                            row.6.as_deref(),
+                            row.7.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };

@@ -19,9 +19,9 @@ use tracing::warn;
 
 use signet_core::db::Priority;
 use signet_pipeline::memory_lineage::{
-    ArtifactKind, SummaryArtifactInput, TranscriptArtifactInput, resolve_memory_sentence,
-    upsert_thread_head, write_compaction_artifact, write_memory_projection,
-    write_transcript_artifact,
+    ArtifactKind, SummaryArtifactInput, TranscriptArtifactInput, is_noise_session,
+    resolve_memory_sentence, upsert_thread_head, write_compaction_artifact,
+    write_memory_projection, write_transcript_artifact,
 };
 use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
@@ -1351,11 +1351,18 @@ pub async fn session_end(
             .into_response();
     }
 
+    let noise = is_noise_session(
+        project.as_deref(),
+        Some(session_id.as_str()),
+        Some(session_key.as_str()),
+        Some(harness),
+    );
+
     // Canonical artifact always written before pipeline gates — it is the
     // lineage source of truth regardless of pipeline_enabled or shadow_mode.
     // This matches compaction_complete, which also writes artifacts unconditionally
     // so manifests and backlinks never reference transcripts that don't exist.
-    {
+    if !noise {
         let transcript_value = transcript.clone();
         let root = state.config.base_path.clone();
         let session_key_value = if session_key.trim().is_empty() {
@@ -2109,6 +2116,12 @@ pub async fn compaction_complete(
 
     let session_id = meta["sessionId"].as_str().unwrap_or("").to_string();
     let project: Option<String> = meta["project"].as_str().map(str::to_string);
+    let noise = is_noise_session(
+        project.as_deref(),
+        Some(session_id.as_str()),
+        session_key.as_deref(),
+        Some(harness),
+    );
 
     // Step 2: DB ingest. Artifact is committed above so this is recoverable
     // on failure. idempotency_key=session_id ensures retries don't create
@@ -2123,27 +2136,76 @@ pub async fn compaction_complete(
             let session_id = session_id.clone();
             let root = state.config.base_path.clone();
             move |conn| {
-                let r = transactions::ingest(
-                    conn,
-                    &transactions::IngestInput {
-                        content: &summary_value,
-                        memory_type: "session_summary",
-                        tags: vec!["session".into(), "summary".into(), harness_value.clone()],
-                        who: None,
-                        why: Some("compaction"),
-                        project: project.as_deref(),
-                        importance: 0.3,
-                        pinned: false,
-                        source_type: Some("compaction"),
-                        source_id: session_key.as_deref(),
-                        idempotency_key: Some(&session_id),
-                        runtime_path: None,
-                        actor: "compaction",
-                        agent_id: &agent_id,
-                        visibility: "global",
-                        scope: None,
-                    },
-                )?;
+                let memory_id = if noise {
+                    serde_json::Value::Null
+                } else {
+                    let r = transactions::ingest(
+                        conn,
+                        &transactions::IngestInput {
+                            content: &summary_value,
+                            memory_type: "session_summary",
+                            tags: vec!["session".into(), "summary".into(), harness_value.clone()],
+                            who: None,
+                            why: Some("compaction"),
+                            project: project.as_deref(),
+                            importance: 0.3,
+                            pinned: false,
+                            source_type: Some("compaction"),
+                            source_id: session_key.as_deref(),
+                            idempotency_key: Some(&session_id),
+                            runtime_path: None,
+                            actor: "compaction",
+                            agent_id: &agent_id,
+                            visibility: "global",
+                            scope: None,
+                        },
+                    )?;
+
+                    // Write temporal DAG node — mirrors the TS daemon's
+                    // compaction-complete path (daemon.ts ~L6140-6173).
+                    let node_id = session_key
+                        .as_deref()
+                        .map(|k| format!("{k}:compaction:{}", chrono::Utc::now().timestamp_millis()))
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    let token_count = (summary_value.len() / 4) as i64;
+                    let _ = conn.execute(
+                        "INSERT OR REPLACE INTO session_summaries (
+                             id, project, depth, kind, content, token_count,
+                             earliest_at, latest_at, session_key, harness,
+                             agent_id, source_type, source_ref, meta_json, created_at
+                         ) VALUES (?1, ?2, 0, 'session', ?3, ?4, ?5, ?5, ?6, ?7, ?8,
+                                   'compaction', ?6, ?9, ?5)",
+                        rusqlite::params![
+                            node_id,
+                            project,
+                            summary_value,
+                            token_count,
+                            captured_at,
+                            session_key,
+                            harness_value,
+                            agent_id,
+                            serde_json::json!({"source": "compaction-complete"}).to_string(),
+                        ],
+                    );
+                    let thread_key = session_key.as_deref().unwrap_or(&node_id);
+                    let sample: String = summary_value.chars().take(200).collect();
+                    let _ = upsert_thread_head(
+                        conn,
+                        &agent_id,
+                        thread_key,
+                        "compaction",
+                        project.as_deref(),
+                        session_key.as_deref(),
+                        "compaction",
+                        session_key.as_deref(),
+                        Some(&harness_value),
+                        &node_id,
+                        &captured_at,
+                        &sample,
+                    );
+                    serde_json::Value::String(r.id)
+                };
+
                 if let Some(key) = session_key.as_deref() {
                     let _ = conn.execute(
                         "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
@@ -2155,53 +2217,10 @@ pub async fn compaction_complete(
                     );
                 }
 
-                // Write temporal DAG node — mirrors the TS daemon's
-                // compaction-complete path (daemon.ts ~L6140-6173).
-                let node_id = session_key
-                    .as_deref()
-                    .map(|k| format!("{k}:compaction:{}", chrono::Utc::now().timestamp_millis()))
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                let token_count = (summary_value.len() / 4) as i64;
-                let _ = conn.execute(
-                    "INSERT OR REPLACE INTO session_summaries (
-                         id, project, depth, kind, content, token_count,
-                         earliest_at, latest_at, session_key, harness,
-                         agent_id, source_type, source_ref, meta_json, created_at
-                     ) VALUES (?1, ?2, 0, 'session', ?3, ?4, ?5, ?5, ?6, ?7, ?8,
-                               'compaction', ?6, ?9, ?5)",
-                    rusqlite::params![
-                        node_id,
-                        project,
-                        summary_value,
-                        token_count,
-                        captured_at,
-                        session_key,
-                        harness_value,
-                        agent_id,
-                        serde_json::json!({"source": "compaction-complete"}).to_string(),
-                    ],
-                );
-                let thread_key = session_key.as_deref().unwrap_or(&node_id);
-                let sample: String = summary_value.chars().take(200).collect();
-                let _ = upsert_thread_head(
-                    conn,
-                    &agent_id,
-                    thread_key,
-                    "compaction",
-                    project.as_deref(),
-                    session_key.as_deref(),
-                    "compaction",
-                    session_key.as_deref(),
-                    Some(&harness_value),
-                    &node_id,
-                    &captured_at,
-                    &sample,
-                );
-
                 // Project MEMORY.md after ingest so it includes the new row.
                 write_memory_projection(conn, &root, &agent_id)
                     .map_err(signet_core::error::CoreError::Migration)?;
-                Ok(serde_json::Value::String(r.id))
+                Ok(memory_id)
             }
         })
         .await;
@@ -2444,8 +2463,10 @@ mod tests {
             pool,
             None,
             None,
+            None,
             AuthMode::Local,
             None,
+            AuthRateLimiter::from_rules(&default_limits()),
             AuthRateLimiter::from_rules(&default_limits()),
         ));
         (state, writer, tmp)
@@ -2617,6 +2638,129 @@ mod tests {
             .unwrap();
         let manifest_text = std::fs::read_to_string(manifest).unwrap();
         assert!(manifest_text.contains("compaction_path: memory/"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn session_end_skips_transcript_artifact_for_noise_session() {
+        let (state, writer, _tmp) = test_state("hooks-session-end-noise");
+        let transcript = [
+            "User: this is a temp-session smoke test.",
+            "Assistant: skip canonical transcript artifacts for /tmp projects.",
+        ]
+        .join("\n")
+        .repeat(24);
+
+        let resp = session_end(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionEndBody {
+                harness: Some("codex".to_string()),
+                transcript: Some(transcript),
+                transcript_path: None,
+                session_id: None,
+                session_key: Some("agent:agent-a:sess-noise".to_string()),
+                cwd: Some("/tmp/signetai".to_string()),
+                reason: None,
+                runtime_path: None,
+                agent_id: Some("agent-a".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+
+        let counts = state
+            .pool
+            .read(|conn| {
+                let jobs: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM summary_jobs", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let artifacts: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'transcript'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let manifests: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'manifest'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok((jobs, artifacts, manifests))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(counts.0, 1);
+        assert_eq!(counts.1, 0);
+        assert_eq!(counts.2, 0);
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn compaction_complete_skips_noise_session_writes() {
+        let (state, writer, _tmp) = test_state("hooks-compaction-noise");
+
+        let resp = compaction_complete(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CompactionCompleteBody {
+                harness: Some("codex".to_string()),
+                summary: Some(
+                    "# Compaction Summary\n\n## temp\n\nSkip compaction writes for temp sessions."
+                        .to_string(),
+                ),
+                session_key: Some("agent:agent-a:sess-noise".to_string()),
+                project: Some("/tmp/signetai".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["success"], serde_json::Value::Bool(true));
+        assert!(body["memoryId"].is_null());
+
+        let counts = state
+            .pool
+            .read(|conn| {
+                let artifacts: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'compaction'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let memories: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let summaries: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let heads: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM memory_thread_heads", [], |row| row.get(0))
+                    .unwrap_or(0);
+                Ok((artifacts, memories, summaries, heads))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(counts.0, 0);
+        assert_eq!(counts.1, 0);
+        assert_eq!(counts.2, 0);
+        assert_eq!(counts.3, 0);
 
         drop(state);
         let _ = writer.await;

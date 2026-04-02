@@ -6315,7 +6315,7 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			}
 		}
 
-		logger.info("hooks", "Compaction summary saved", {
+		logger.info("hooks", noise ? "Compaction summary skipped (noise session)" : "Compaction summary saved", {
 			harness: body.harness,
 			memoryId: summaryId ?? "skipped-temp-session",
 		});
