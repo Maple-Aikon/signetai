@@ -1474,6 +1474,20 @@ pub async fn session_end(
     let agent_value = agent_id.clone();
     let transcript_value = summary_transcript;
     let ended_value = ended_at.clone();
+    if noise {
+        state.sessions.release(&session_key);
+        if !snapshot_retained {
+            state.continuity.clear(&session_key);
+        }
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "queued": false})),
+        )
+            .into_response();
+    }
+
     let result = state
         .pool
         .write(Priority::High, move |conn| {
@@ -2501,7 +2515,7 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body = test_json(resp).await;
-        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+        assert_eq!(body["queued"], serde_json::Value::Bool(false));
         assert!(body["jobId"].is_string());
 
         let counts = state
@@ -2672,7 +2686,7 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body = test_json(resp).await;
-        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+        assert_eq!(body["queued"], serde_json::Value::Bool(false));
 
         let counts = state
             .pool
@@ -2699,7 +2713,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(counts.0, 1);
+        assert_eq!(counts.0, 0);
         assert_eq!(counts.1, 0);
         assert_eq!(counts.2, 0);
 

@@ -18,7 +18,9 @@ const HASH_SCOPE: &str = "body-normalized-v1";
 const SANITIZER_VERSION: &str = "sanitize_transcript_v1";
 const SENTENCE_VERSION: &str = "memory_sentence_v1";
 const LEDGER_HEADING: &str = "Session Ledger (Last 30 Days)";
-const MEMORY_MD_MAX_TOKENS: usize = 5000;
+const MEMORY_HEAD_MAX_TOKENS: usize = 5000;
+const PROJECTION_HEADROOM_TOKENS: usize = 256;
+const MEMORY_MD_MAX_TOKENS: usize = MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM_TOKENS;
 const LOW_SIGNAL_SENTENCES: &[&str] = &["Investigated issue.", "Worked on task.", "Reviewed code."];
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 const NOISE_PURGE_REASON: &str = "automatic projection cleanup for temp/test sessions";
@@ -1317,7 +1319,7 @@ fn membership_ts(rows: &[ArtifactRow]) -> String {
         .unwrap_or_else(|| Utc::now().to_rfc3339())
 }
 
-fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String>, usize), String> {
+fn build_ledger(conn: &Connection, agent_id: &str) -> Result<Vec<LedgerSession>, String> {
     let now = Utc::now();
     let floor = now - chrono::TimeDelta::days(30);
     let mut stmt = conn
@@ -1398,16 +1400,41 @@ fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String
         })
         .collect::<Vec<_>>();
     sessions.sort_by(|a, b| b.membership_ts.cmp(&a.membership_ts));
-    let refs = sessions
-        .iter()
-        .filter_map(|session| session.manifest_path.clone())
-        .collect::<Vec<_>>();
-    let mut lines = vec![
-        "## Session Ledger (Last 30 Days)".to_string(),
-        String::new(),
-    ];
+    Ok(sessions)
+}
+
+fn render_section(heading: &str, lines: &[String]) -> String {
+    std::iter::once(heading.to_string())
+        .chain(std::iter::once(String::new()))
+        .chain(lines.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+fn join_parts(parts: &[String]) -> String {
+    parts.iter()
+        .filter(|part| !part.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim_end()
+        .to_string()
+}
+
+fn token_count(text: &str) -> Result<usize, String> {
+    Ok(memory_md_tokenizer()?.encode_ordinary(text).len())
+}
+
+fn fits_budget(parts: &[String]) -> Result<bool, String> {
+    Ok(token_count(&join_parts(parts))? <= MEMORY_MD_MAX_TOKENS)
+}
+
+fn render_ledger_rows(sessions: &[LedgerSession]) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut day = String::new();
-    for session in &sessions {
+    for session in sessions {
         let utc_day = session.membership_ts.chars().take(10).collect::<String>();
         if utc_day != day {
             day = utc_day;
@@ -1457,7 +1484,100 @@ fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String
     if sessions.is_empty() {
         lines.push("- no in-window sessions yet.".to_string());
     }
-    Ok((lines.join("\n"), refs, sessions.len()))
+    lines
+}
+
+fn render_ledger_section(
+    sessions: &[LedgerSession],
+    base: &[String],
+) -> Result<(String, Vec<String>, usize), String> {
+    fn render_count(sessions: &[LedgerSession], count: usize) -> String {
+        let kept = &sessions[..count];
+        let clipped = sessions.len().saturating_sub(kept.len());
+        let lines = if clipped > 0 {
+            let mut lines = vec![format!(
+                "- older ledger rows clipped: kept {} of {} in-window sessions within projection budget.",
+                kept.len(),
+                sessions.len()
+            )];
+            lines.push(String::new());
+            lines.extend(render_ledger_rows(kept));
+            lines
+        } else {
+            render_ledger_rows(kept)
+        };
+        render_section(&format!("## {LEDGER_HEADING}"), &lines)
+    }
+
+    if fits_budget(&[base, &[render_count(sessions, sessions.len())].as_slice()].concat())? {
+        let refs = sessions
+            .iter()
+            .filter_map(|session| session.manifest_path.clone())
+            .collect::<Vec<_>>();
+        return Ok((render_count(sessions, sessions.len()), refs, sessions.len()));
+    }
+
+    let mut low = 1usize;
+    let mut high = sessions.len();
+    let mut best = 0usize;
+    while low <= high {
+        let mid = (low + high) / 2;
+        let block = render_count(sessions, mid);
+        if fits_budget(&[base, &[block].as_slice()].concat())? {
+            best = mid;
+            low = mid + 1;
+        } else {
+            if mid == 0 {
+                break;
+            }
+            high = mid - 1;
+        }
+    }
+
+    if best > 0 {
+        let kept = &sessions[..best];
+        let refs = kept
+            .iter()
+            .filter_map(|session| session.manifest_path.clone())
+            .collect::<Vec<_>>();
+        return Ok((render_count(sessions, best), refs, kept.len()));
+    }
+
+    if sessions.is_empty() {
+        return Ok((render_count(sessions, 0), Vec::new(), 0));
+    }
+
+    Ok((
+        render_section(
+            &format!("## {LEDGER_HEADING}"),
+            &[format!(
+                "- older ledger rows clipped: kept 0 of {} in-window sessions within projection budget.",
+                sessions.len()
+            )],
+        ),
+        Vec::new(),
+        0,
+    ))
+}
+
+fn render_index_section(index_block: &str, base: &[String]) -> Result<String, String> {
+    if index_block.trim().is_empty() {
+        return Ok(String::new());
+    }
+    if fits_budget(&[base, &[index_block.to_string()].as_slice()].concat())? {
+        return Ok(index_block.to_string());
+    }
+
+    let mut lines = index_block.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    while lines.len() > 2 {
+        lines.pop();
+        let next = lines.join("\n").trim_end().to_string();
+        if fits_budget(&[base, &[next.clone()].as_slice()].concat())? {
+            return Ok(next);
+        }
+    }
+
+    Ok(String::new())
 }
 
 fn sync_manifest_refs(conn: &Connection, root: &Path, refs: &[String]) -> Result<(), String> {
@@ -1491,7 +1611,6 @@ pub fn render_memory_projection(
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
-    purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
     reindex_memory_artifacts(conn, root, Some(agent_id))?;
     let memories = conn
         .prepare(
@@ -1550,8 +1669,7 @@ pub fn render_memory_projection(
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    let (ledger, refs, count) = build_ledger(conn, agent_id)?;
-    sync_manifest_refs(conn, root, &refs)?;
+    let ledger = build_ledger(conn, agent_id)?;
     let index_block = build_temporal_index(conn, agent_id);
     let global_lines = if memories.is_empty() {
         vec!["- no durable global head items yet.".to_string()]
@@ -1590,36 +1708,28 @@ pub fn render_memory_projection(
     } else {
         memories
             .iter()
+            .take(8)
             .map(|row| format!("- {}", row.0))
             .collect::<Vec<_>>()
     };
     let mut parts = vec![
         "# Working Memory Summary".to_string(),
-        String::new(),
-        "## Global Head (Tier 1)".to_string(),
-        String::new(),
+        render_section("## Global Head (Tier 1)", &global_lines),
+        render_section("## Thread Heads (Tier 2)", &thread_lines),
+        render_section("## Open Threads", &open_lines),
+        render_section("## Durable Notes & Constraints", &durable_lines),
     ];
-    parts.extend(global_lines);
-    parts.extend([
-        String::new(),
-        "## Thread Heads (Tier 2)".to_string(),
-        String::new(),
-    ]);
-    parts.extend(thread_lines);
-    parts.push(ledger);
-    parts.extend([String::new(), "## Open Threads".to_string(), String::new()]);
-    parts.extend(open_lines);
-    parts.extend([
-        String::new(),
-        "## Durable Notes & Constraints".to_string(),
-        String::new(),
-    ]);
-    parts.extend(durable_lines);
-    parts.extend([String::new(), index_block.clone()]);
+    let (ledger_block, refs, count) = render_ledger_section(&ledger, &parts)?;
+    sync_manifest_refs(conn, root, &refs)?;
+    parts.push(ledger_block);
+    let trimmed_index = render_index_section(&index_block, &parts)?;
+    if !trimmed_index.is_empty() {
+        parts.push(trimmed_index.clone());
+    }
     Ok(RenderResult {
-        content: parts.join("\n").trim_end().to_string(),
+        content: join_parts(&parts),
         file_count: memories.len() + thread_heads.len() + count,
-        index_block,
+        index_block: trimmed_index,
     })
 }
 
@@ -1657,6 +1767,7 @@ pub fn write_memory_projection(
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
+    purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
     let rendered = render_memory_projection(conn, root, agent_id)?;
     let content = truncate_memory_projection(&rendered.content)?;
     write_atomic(&root.join("MEMORY.md"), &format!("{}\n", content))?;
@@ -2109,7 +2220,7 @@ mod tests {
                 agent_id: "default".to_string(),
                 session_id: "sess-1".to_string(),
                 session_key: Some("sess-1".to_string()),
-                project: Some("/tmp/proj".to_string()),
+                project: Some("/home/nicholai/signet/signetai".to_string()),
                 harness: Some("codex".to_string()),
                 captured_at: now.clone(),
                 started_at: None,
@@ -2125,7 +2236,7 @@ mod tests {
                 agent_id: "default".to_string(),
                 session_id: "sess-1".to_string(),
                 session_key: Some("sess-1".to_string()),
-                project: Some("/tmp/proj".to_string()),
+                project: Some("/home/nicholai/signet/signetai".to_string()),
                 harness: Some("codex".to_string()),
                 captured_at: now.clone(),
                 started_at: None,
@@ -2149,6 +2260,76 @@ mod tests {
                 .content
                 .contains("packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs")
         );
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn projection_clips_older_ledger_rows_within_budget() {
+        let conn = setup_conn();
+        let root = temp_root("projection-ledger-budget");
+        let tok = cl100k_base().unwrap();
+
+        for i in 0..220 {
+            let ts = (Utc::now() - chrono::TimeDelta::minutes(i)).to_rfc3339();
+            write_summary_artifact(
+                &conn,
+                &root,
+                SummaryArtifactInput {
+                    agent_id: "default".to_string(),
+                    session_id: format!("real-{i}"),
+                    session_key: Some(format!("real-{i}")),
+                    project: Some("/home/nicholai/signet/signetai".to_string()),
+                    harness: Some("codex".to_string()),
+                    captured_at: ts.clone(),
+                    started_at: Some(ts.clone()),
+                    ended_at: Some(ts.clone()),
+                    summary: format!(
+                        "Resolved projection pressure for real-{i} in packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs and kept deterministic ledger rendering readable under load."
+                    ),
+                },
+                MemorySentence {
+                    text: format!(
+                        "Resolved projection pressure for real-{i} in packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs and kept deterministic ledger rendering readable under load."
+                    ),
+                    quality: "ok".to_string(),
+                    generated_at: ts,
+                },
+            )
+            .unwrap();
+        }
+
+        for i in 0..40 {
+            let ts = (Utc::now() - chrono::TimeDelta::minutes(i + 500)).to_rfc3339();
+            write_summary_artifact(
+                &conn,
+                &root,
+                SummaryArtifactInput {
+                    agent_id: "default".to_string(),
+                    session_id: format!("tmp-{i}"),
+                    session_key: Some(format!("tmp-{i}")),
+                    project: Some("/tmp/signetai".to_string()),
+                    harness: Some("codex".to_string()),
+                    captured_at: ts.clone(),
+                    started_at: Some(ts.clone()),
+                    ended_at: Some(ts.clone()),
+                    summary: "This temp-session artifact should be purged before projection."
+                        .to_string(),
+                },
+                MemorySentence {
+                    text: "This temp-session artifact should be purged before projection."
+                        .to_string(),
+                    quality: "ok".to_string(),
+                    generated_at: ts,
+                },
+            )
+            .unwrap();
+        }
+
+        let rendered = write_memory_projection(&conn, &root, "default").unwrap();
+        assert!(rendered.content.contains("## Session Ledger (Last 30 Days)"));
+        assert!(rendered.content.contains("older ledger rows clipped:"));
+        assert!(!rendered.content.contains("/tmp/signetai"));
+        assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
         fs::remove_dir_all(root).ok();
     }
 

@@ -37,6 +37,8 @@ import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
 import {
 	appendSynthesisIndexBlock as appendRenderedIndexBlock,
+	NOISE_PURGE_REASON,
+	purgeCanonicalNoiseSessions,
 	renderMemoryProjection,
 	writeTranscriptArtifact,
 } from "./memory-lineage";
@@ -2721,6 +2723,23 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	// Queue for async processing by the summary worker instead of
 	// blocking on LLM inference. The worker produces both a dated
 	// markdown summary and atomic fact rows.
+	if (
+		isNoiseSession({
+			project: req.cwd ?? null,
+			sessionKey: sessionKey ?? null,
+			sessionId,
+			harness: req.harness,
+		})
+	) {
+		logger.debug("hooks", "Session end summary skipped for noise session", {
+			harness: req.harness,
+			project: req.cwd,
+			sessionKey,
+			sessionId,
+		});
+		return { memoriesSaved: 0, queued: false };
+	}
+
 	const jobId = enqueueSummaryJob(getDbAccessor(), {
 		harness: req.harness,
 		transcript,
@@ -3379,7 +3398,9 @@ export function handleSynthesisRequest(
 	void _sinceTimestamp;
 	void _maxTokens;
 
-	const rendered = renderMemoryProjection(opts?.agentId ?? "default");
+	const agentId = opts?.agentId ?? "default";
+	purgeCanonicalNoiseSessions(agentId, NOISE_PURGE_REASON);
+	const rendered = renderMemoryProjection(agentId);
 	return {
 		harness: "daemon",
 		model: "projection",
