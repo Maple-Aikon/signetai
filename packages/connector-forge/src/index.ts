@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 import { expandHome, hasValidIdentity } from "@signet/core";
 
@@ -262,9 +262,11 @@ export class ForgeConnector extends BaseConnector {
 				const linkTarget = readlinkSync(target);
 				const resolved = isAbsolute(linkTarget) ? linkTarget : resolve(skillsDir, linkTarget);
 				const rel = relative(signetSkillsSource, resolved);
-				// rel starts with ".." (or is absolute for a different Windows drive)
-				// when resolved is outside signetSkillsSource — skip it.
-				if (rel.startsWith("..") || isAbsolute(rel)) continue;
+				// Skip when resolved is outside signetSkillsSource. Use the canonical
+				// parent-escape prefix (rel === ".." or starts with "../") rather than
+				// bare startsWith("..") which would incorrectly exclude skill names
+				// that happen to begin with the characters "..".
+				if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
 				unlinkSync(target);
 				filesRemoved.push(target);
 			}
