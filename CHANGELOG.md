@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.9] - 2026-04-02
+
+### Bug Fixes
+
+- **daemon**: stop re-ingesting pipeline artifacts as memories (#439)
+
+
 ## [0.91.8] - 2026-04-01
 
 ### Bug Fixes
