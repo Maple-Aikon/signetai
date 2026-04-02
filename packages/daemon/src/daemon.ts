@@ -941,20 +941,23 @@ function resolveDreamingProvider(
 	anthropicKey?: string,
 	openRouterKey?: string,
 ): import("@signet/core").LlmProvider {
-	const base = normalizeRuntimeBaseUrl(cfg.endpoint, "http://127.0.0.1:11434");
+	const ollamaBase = normalizeRuntimeBaseUrl(
+		cfg.provider === "ollama" ? cfg.endpoint : undefined,
+		"http://127.0.0.1:11434",
+	);
 	const timeout = cfg.timeout;
 
 	switch (cfg.provider) {
 		case "anthropic":
 			if (!anthropicKey) {
 				logger.warn("dreaming", "ANTHROPIC_API_KEY not found for dreaming, falling back to ollama");
-				return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+				return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
 			}
 			return createAnthropicProvider({ model: cfg.model, apiKey: anthropicKey, defaultTimeoutMs: timeout });
 		case "openrouter":
 			if (!openRouterKey) {
 				logger.warn("dreaming", "OPENROUTER_API_KEY not found for dreaming, falling back to ollama");
-				return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+				return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
 			}
 			return createOpenRouterProvider({
 				model: cfg.model,
@@ -963,11 +966,11 @@ function resolveDreamingProvider(
 				defaultTimeoutMs: timeout,
 			});
 		case "ollama":
-			return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+			return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
 		default: {
 			const _exhaustive: never = cfg.provider;
 			logger.warn("dreaming", `Unknown dreaming provider "${_exhaustive}", falling back to ollama`);
-			return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+			return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
 		}
 	}
 }

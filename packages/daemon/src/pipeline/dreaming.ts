@@ -643,8 +643,12 @@ function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation)
 	const target = mut.target as string;
 	if (!sources || !target || sources.length === 0) return "skipped";
 
-	// Resolve or create the target entity
-	const targetId = resolveOrCreateEntity(db, agentId, target);
+	// Resolve target — do NOT create; if the target doesn't exist, skip
+	const targetId = resolveEntity(db, agentId, target);
+	if (!targetId) {
+		logger.warn("dreaming", `Merge target "${target}" not found, skipping`);
+		return "skipped";
+	}
 
 	for (const src of sources) {
 		const srcId = resolveEntity(db, agentId, src);
@@ -956,9 +960,19 @@ export async function runDreamingPass(
 	try {
 		// Fetch data
 		const state = getDreamingState(accessor, agentId);
+		// Derive row limits from token budget — ~40% for graph, ~20 tokens per entity,
+		// ~10 per aspect, ~25 per attribute, ~20 per dependency
+		const graphTokenBudget = Math.floor(cfg.maxInputTokens * 0.4);
+		const graphLimits = {
+			entities: Math.max(100, Math.floor(graphTokenBudget / 20)),
+			aspects: Math.max(200, Math.floor(graphTokenBudget / 10)),
+			attributes: Math.max(500, Math.floor(graphTokenBudget / 25)),
+			dependencies: Math.max(200, Math.floor(graphTokenBudget / 20)),
+		};
+
 		const { summaries, graph } = accessor.withReadDb((db) => {
 			const summaries = fetchUnprocessedSummaries(db, agentId, mode === "compact" ? null : state.lastPassAt, 200);
-			const graph = fetchEntityGraph(db, agentId);
+			const graph = fetchEntityGraph(db, agentId, graphLimits);
 			return { summaries, graph };
 		});
 
@@ -988,11 +1002,15 @@ export async function runDreamingPass(
 			maxTokens: cfg.maxOutputTokens,
 		});
 
-		// Parse response
+		// Parse response — include prompt tokens in consumption estimate
 		const result = parseDreamingResult(raw);
+		const promptTokens = Math.ceil(prompt.length / 4);
+		const totalTokens = promptTokens + result.tokensConsumed;
 
 		logger.info("dreaming", "Dreaming pass produced mutations", {
 			count: result.mutations.length,
+			promptTokens,
+			outputTokens: result.tokensConsumed,
 			summary: result.summary.slice(0, 200),
 		});
 
@@ -1006,7 +1024,7 @@ export async function runDreamingPass(
 		}
 
 		completeDreamingPass(accessor, passId, agentId, mode, {
-			tokensConsumed: result.tokensConsumed,
+			tokensConsumed: totalTokens,
 			applied,
 			skipped,
 			failed,

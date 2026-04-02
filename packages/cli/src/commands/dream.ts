@@ -20,6 +20,7 @@ interface DreamPass {
 	readonly completedAt: string | null;
 	readonly tokensConsumed: number | null;
 	readonly mutationsApplied: number | null;
+	readonly mutationsSkipped: number | null;
 	readonly mutationsFailed: number | null;
 	readonly summary: string | null;
 	readonly error: string | null;
@@ -42,6 +43,7 @@ interface TriggerResult {
 	readonly success: boolean;
 	readonly passId: string;
 	readonly applied: number;
+	readonly skipped: number;
 	readonly failed: number;
 	readonly summary: string;
 	readonly error?: string;
@@ -85,7 +87,7 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			if (data.passes.length > 0) {
 				console.log(chalk.bold("\n  Recent Passes\n"));
 				console.log(
-					`  ${chalk.dim("STATUS".padEnd(12))}${chalk.dim("MODE".padEnd(14))}${chalk.dim("MUTATIONS".padEnd(12))}${chalk.dim("STARTED")}`,
+					`  ${chalk.dim("STATUS".padEnd(12))}${chalk.dim("MODE".padEnd(14))}${chalk.dim("MUTATIONS".padEnd(24))}${chalk.dim("STARTED")}`,
 				);
 				for (const pass of data.passes) {
 					const status =
@@ -96,10 +98,10 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 								: chalk.yellow(pass.status);
 					const mutations =
 						pass.mutationsApplied !== null
-							? `${pass.mutationsApplied}/${(pass.mutationsApplied ?? 0) + (pass.mutationsFailed ?? 0)}`
+							? `${pass.mutationsApplied}ok/${pass.mutationsSkipped ?? 0}skip/${pass.mutationsFailed ?? 0}err`
 							: "-";
 					console.log(
-						`  ${status.padEnd(12 + (status.length - pass.status.length))}${pass.mode.padEnd(14)}${mutations.padEnd(12)}${pass.startedAt}`,
+						`  ${status.padEnd(12 + (status.length - pass.status.length))}${pass.mode.padEnd(14)}${mutations.padEnd(24)}${pass.startedAt}`,
 					);
 					if (pass.summary) {
 						console.log(`  ${chalk.dim(pass.summary.slice(0, 100))}`);
@@ -140,6 +142,7 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			console.log(chalk.green("  Dreaming pass complete"));
 			console.log(`  ${chalk.dim("Pass ID:")}    ${result.passId}`);
 			console.log(`  ${chalk.dim("Applied:")}    ${result.applied} mutations`);
+			console.log(`  ${chalk.dim("Skipped:")}    ${result.skipped} mutations`);
 			console.log(`  ${chalk.dim("Failed:")}     ${result.failed} mutations`);
 			console.log(`  ${chalk.dim("Summary:")}    ${result.summary}`);
 			console.log();
