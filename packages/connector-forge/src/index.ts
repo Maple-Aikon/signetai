@@ -126,6 +126,7 @@ export class ForgeConnector extends BaseConnector {
 				success: false,
 				message: `No valid Signet identity found at ${expandedBasePath}`,
 				filesWritten,
+				configsPatched,
 			};
 		}
 
@@ -139,27 +140,41 @@ export class ForgeConnector extends BaseConnector {
 				success: false,
 				message: `Failed to read Forge MCP config: ${message}`,
 				filesWritten,
+				configsPatched,
 			};
 		}
 
-		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
-		if (strippedAgentsPath !== null) {
-			filesWritten.push(strippedAgentsPath);
-		}
+		// Wrap the write phase so infrastructure errors (permission denied,
+		// disk full, ENOENT race, etc.) are surfaced as result-type failures
+		// rather than thrown exceptions, keeping the contract consistent.
+		try {
+			const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+			if (strippedAgentsPath !== null) {
+				filesWritten.push(strippedAgentsPath);
+			}
 
-		const forgeHome = this.getForgeHome();
-		mkdirSync(forgeHome, { recursive: true });
+			const forgeHome = this.getForgeHome();
+			mkdirSync(forgeHome, { recursive: true });
 
-		const agentsPath = this.generateAgentsMd(expandedBasePath);
-		filesWritten.push(agentsPath);
+			const agentsPath = this.generateAgentsMd(expandedBasePath);
+			filesWritten.push(agentsPath);
 
-		this.registerMcpServer(config, expandedBasePath);
-		atomicWriteJson(mcpPath, config);
-		configsPatched.push(mcpPath);
+			this.registerMcpServer(config, expandedBasePath);
+			atomicWriteJson(mcpPath, config);
+			configsPatched.push(mcpPath);
 
-		const skillsSource = join(expandedBasePath, "skills");
-		if (existsSync(skillsSource)) {
-			this.symlinkSkills(skillsSource, this.getSkillsPath());
+			const skillsSource = join(expandedBasePath, "skills");
+			if (existsSync(skillsSource)) {
+				this.symlinkSkills(skillsSource, this.getSkillsPath());
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : "unknown error";
+			return {
+				success: false,
+				message: `ForgeCode integration install failed: ${message}`,
+				filesWritten,
+				configsPatched,
+			};
 		}
 
 		return {
@@ -253,9 +268,12 @@ export class ForgeConnector extends BaseConnector {
 		const skillsDir = this.getSkillsPath();
 		if (!existsSync(skillsDir)) return;
 
-		// Without a known source we cannot safely scope removal — skip.
-		if (signetPath === null) return;
-		const signetSkillsSource = join(signetPath, "skills");
+		// If SIGNET_PATH couldn't be read from the MCP config (e.g. the user
+		// manually edited .mcp.json, or a partial uninstall already stripped
+		// the entry), fall back to the default workspace so Signet-managed
+		// symlinks are still cleaned up rather than silently left behind.
+		const source = signetPath ?? join(getHomeDir(), ".agents");
+		const signetSkillsSource = join(source, "skills");
 
 		try {
 			for (const entry of readdirSync(skillsDir)) {
