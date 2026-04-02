@@ -12,8 +12,20 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
+import { Tiktoken } from "js-tiktoken/lite";
+import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
+
+// Module-level tokenizer — same vocab used by memory-head.ts.
+// cl100k_base (GPT-4/3.5 BPE) is a reasonable approximation for all
+// hosted LLM APIs; actual model tokenizers differ slightly but this
+// is far more accurate than the length/4 heuristic.
+const tok = new Tiktoken(cl100k_base);
+
+export function countTokens(text: string): number {
+	return tok.encode(text).length;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,6 +91,8 @@ export interface DreamingResult {
 	readonly mutations: readonly DreamingMutation[];
 	readonly summary: string;
 	readonly tokensConsumed: number;
+	/** Mutations discarded at parse time because they failed shape validation. */
+	readonly invalidMutations: number;
 }
 
 export interface DreamingState {
@@ -617,11 +631,23 @@ function parseDreamingResult(raw: string): DreamingResult {
 		mutations?: unknown[];
 		summary?: string;
 	};
-	const mutations = Array.isArray(parsed.mutations) ? parsed.mutations.filter(isValidMutation) : [];
+	const all = Array.isArray(parsed.mutations) ? parsed.mutations : [];
+	const mutations = all.filter(isValidMutation);
+	const invalidMutations = all.length - mutations.length;
+	if (invalidMutations > 0) {
+		logger.warn("dreaming", "LLM response contained invalid mutations — discarded", {
+			count: invalidMutations,
+			sample: all
+				.filter((m) => !isValidMutation(m))
+				.slice(0, 3)
+				.map((m) => JSON.stringify(m).slice(0, 120)),
+		});
+	}
 	return {
 		mutations,
 		summary: typeof parsed.summary === "string" ? parsed.summary : "No summary provided",
-		tokensConsumed: Math.ceil(raw.length / 4), // rough estimate
+		tokensConsumed: countTokens(raw),
+		invalidMutations,
 	};
 }
 
@@ -1228,9 +1254,9 @@ export async function runDreamingPass(
 			maxTokens: cfg.maxOutputTokens,
 		});
 
-		// Parse response — include prompt tokens in consumption estimate
+		// Parse response — count actual tokens for both prompt and output
 		const result = parseDreamingResult(raw);
-		const promptTokens = Math.ceil(prompt.length / 4);
+		const promptTokens = countTokens(prompt);
 		const totalTokens = promptTokens + result.tokensConsumed;
 
 		logger.info("dreaming", "Dreaming pass produced mutations", {
@@ -1263,7 +1289,9 @@ export async function runDreamingPass(
 				});
 			}
 
-			// Complete pass record + reset token counter in same tx
+			// Complete pass record + reset token counter in same tx.
+			// invalidMutations are counted as failed — they were not applied
+			// because the LLM returned a structurally invalid object.
 			db.prepare(
 				`UPDATE dreaming_passes
 				 SET status = 'completed',
@@ -1274,7 +1302,14 @@ export async function runDreamingPass(
 				     mutations_failed = ?,
 				     summary = ?
 				 WHERE id = ?`,
-			).run(totalTokens, result2.applied, result2.skipped, result2.failed, result.summary, passId);
+			).run(
+				totalTokens,
+				result2.applied,
+				result2.skipped,
+				result2.failed + result.invalidMutations,
+				result.summary,
+				passId,
+			);
 			resetDreamingTokens(db, agentId, passId, mode);
 
 			return result2;

@@ -26,7 +26,7 @@ import { writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
-import { addDreamingTokens } from "./dreaming";
+import { addDreamingTokens, countTokens } from "./dreaming";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -593,7 +593,7 @@ async function processJob(
 		// agent. Tokens for non-default agents accumulate but no pass fires
 		// for them until Phase 2 adds multi-agent dreaming worker support.
 		try {
-			const tokens = Math.ceil(job.transcript.length / 4);
+			const tokens = countTokens(job.transcript);
 			addDreamingTokens(accessor, job.agent_id, tokens);
 		} catch (e) {
 			logger.warn("summary-worker", "Failed to accumulate dreaming tokens (non-fatal)", {
