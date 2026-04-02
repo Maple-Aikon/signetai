@@ -3,7 +3,7 @@
 	"name": "Signet",
 	"version": "0.29.0",
 	"description": "Portable AI agent identity — memory, search, and quick actions from your browser",
-	"permissions": ["storage", "contextMenus", "activeTab"],
+	"permissions": ["storage", "contextMenus", "activeTab", "alarms"],
 	"host_permissions": ["http://localhost:3850/*"],
 	"action": {
 		"default_popup": "popup/index.html",

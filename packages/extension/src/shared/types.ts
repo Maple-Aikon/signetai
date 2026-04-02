@@ -66,6 +66,37 @@ export interface RememberRequest {
 	readonly source_type?: string;
 }
 
+export interface BrowserToolRequest {
+	readonly action:
+		| "send-page"
+		| "send-selection"
+		| "capture-page"
+		| "bookmark-page"
+		| "write-note"
+		| "transcribe-selection";
+	readonly payload: string;
+	readonly pageTitle?: string;
+	readonly pageUrl?: string;
+	readonly note?: string;
+	readonly selectedText?: string;
+	readonly links?: readonly string[];
+	readonly images?: readonly string[];
+	readonly videos?: readonly string[];
+	readonly audio?: readonly string[];
+	readonly files?: readonly { name: string; type: string; size: number }[];
+	readonly dispatchToHarness?: boolean;
+}
+
+export interface BrowserToolResult {
+	readonly success: boolean;
+	readonly memoryStored: boolean;
+	readonly dispatched: boolean;
+	readonly memoryId?: string;
+	readonly response?: string;
+	readonly error?: string;
+	readonly toolCalls?: readonly unknown[];
+}
+
 export type ThemeMode = "auto" | "dark" | "light";
 
 export interface ExtensionConfig {

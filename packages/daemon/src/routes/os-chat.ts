@@ -71,6 +71,59 @@ interface ToolSpec {
 	inputSchema?: unknown;
 }
 
+interface BrowserToolRequest {
+	action?: string;
+	payload?: string;
+	pageTitle?: string;
+	pageUrl?: string;
+	note?: string;
+	selectedText?: string;
+	links?: string[];
+	images?: string[];
+	videos?: string[];
+	audio?: string[];
+	files?: Array<{ name?: string; type?: string; size?: number }>;
+	dispatchToHarness?: boolean;
+}
+
+interface BrowserToolRouteResult {
+	success: boolean;
+	memoryStored: boolean;
+	dispatched: boolean;
+	memoryId?: string;
+	response?: string;
+	error?: string;
+	toolCalls?: ToolCallResult[];
+}
+
+function getLocalDaemonBaseUrl(): string {
+	return `http://127.0.0.1:${process.env.SIGNET_PORT || 3850}`;
+}
+
+function formatBrowserToolMessage(request: BrowserToolRequest): string {
+	const title = request.pageTitle?.trim() || "Untitled page";
+	const url = request.pageUrl?.trim() || "unknown";
+	const action = request.action?.trim() || "browser-submission";
+	const note = request.note?.trim() || "(none)";
+	const selected = request.selectedText?.trim() || "(none)";
+
+	return [
+		"Browser extension submission from Signet.",
+		`Action: ${action}`,
+		`Page: ${title}`,
+		`URL: ${url}`,
+		`Note: ${note}`,
+		"",
+		"Selection:",
+		selected,
+		"",
+		"Payload:",
+		request.payload?.slice(0, 20_000) || "",
+		"",
+		"Please process this like a live browser handoff: extract key facts, continue workflow context, and run tools only when clearly needed.",
+	].join("\n");
+}
+
 /**
  * Gather all available tools from all installed MCP servers using probe results.
  */
@@ -273,9 +326,7 @@ export function mountOsChatRoutes(app: Hono): void {
 						});
 
 						// Call the tool via the marketplace /mcp/call endpoint internally
-						const callRes = await fetch(
-							`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
-							{
+						const callRes = await fetch(`${getLocalDaemonBaseUrl()}/api/marketplace/mcp/call`, {
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: JSON.stringify({
@@ -361,5 +412,111 @@ Now give a concise, natural language summary of the results for the user. Be spe
 				toolCalls: [],
 			});
 		}
+	});
+
+	app.post("/api/os/browser-tool", async (c) => {
+		let body: BrowserToolRequest;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON" }, 400);
+		}
+
+		const payload = body.payload?.trim();
+		if (!payload) {
+			return c.json({ error: "Payload is required" }, 400);
+		}
+
+		const action = body.action?.trim() || "browser-submission";
+		const baseUrl = getLocalDaemonBaseUrl();
+		let memoryStored = false;
+		let memoryId: string | undefined;
+		let dispatched = false;
+		let responseText: string | undefined;
+		let dispatchError: string | undefined;
+		let memoryError: string | undefined;
+		let toolCalls: ToolCallResult[] | undefined;
+
+		const links = Array.isArray(body.links) ? body.links.slice(0, 20) : [];
+		const images = Array.isArray(body.images) ? body.images.slice(0, 20) : [];
+		const videos = Array.isArray(body.videos) ? body.videos.slice(0, 20) : [];
+		const audio = Array.isArray(body.audio) ? body.audio.slice(0, 20) : [];
+		const files = Array.isArray(body.files) ? body.files.slice(0, 20) : [];
+
+		try {
+			const memoryRes = await fetch(`${baseUrl}/api/memory/remember`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: [
+						"[Signet Browser Tool]",
+						`Action: ${action}`,
+						`Title: ${body.pageTitle || "Untitled"}`,
+						`URL: ${body.pageUrl || "unknown"}`,
+						`Captured At: ${new Date().toISOString()}`,
+						"",
+						`Selection: ${body.selectedText?.trim() || "(none)"}`,
+						`Note: ${body.note?.trim() || "(none)"}`,
+						`Links: ${links.length}`,
+						`Images: ${images.length}`,
+						`Videos: ${videos.length}`,
+						`Audio: ${audio.length}`,
+						`Files: ${files.length}`,
+						"",
+						payload.slice(0, 20_000),
+					].join("\n"),
+					tags: `browser-tool,${action},browser-extension`,
+					importance: 0.72,
+					type: "note",
+					source_type: "browser-extension",
+				}),
+			});
+
+			if (memoryRes.ok) {
+				const memoryData = (await memoryRes.json()) as { success?: boolean; id?: string };
+				memoryStored = memoryData.success === true;
+				memoryId = memoryData.id;
+			} else {
+				memoryError = `Memory save failed (${memoryRes.status})`;
+			}
+		} catch (error) {
+			memoryError = error instanceof Error ? error.message : String(error);
+		}
+
+		if (body.dispatchToHarness !== false) {
+			try {
+				const chatRes = await fetch(`${baseUrl}/api/os/chat`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ message: formatBrowserToolMessage({ ...body, payload, action }) }),
+				});
+
+				if (chatRes.ok) {
+					const chatData = (await chatRes.json()) as {
+						response?: string;
+						toolCalls?: ToolCallResult[];
+					};
+					dispatched = true;
+					responseText = chatData.response;
+					toolCalls = chatData.toolCalls;
+				} else {
+					dispatchError = `Dispatch failed (${chatRes.status})`;
+				}
+			} catch (error) {
+				dispatchError = error instanceof Error ? error.message : String(error);
+			}
+		}
+
+		const result: BrowserToolRouteResult = {
+			success: memoryStored || dispatched,
+			memoryStored,
+			dispatched,
+			memoryId,
+			response: responseText,
+			error: memoryStored || dispatched ? undefined : dispatchError || memoryError || "Browser tool failed",
+			toolCalls,
+		};
+
+		return c.json(result, result.success ? 200 : 500);
 	});
 }

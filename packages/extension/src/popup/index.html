@@ -11,33 +11,16 @@
 </head>
 <body>
   <div class="popup" id="popup">
-    <!-- Header -->
-    <div class="header">
+    <header class="header">
       <div class="header-left">
         <span class="logo">Signet</span>
         <span class="health-dot" id="health-dot" data-state="offline" title="Daemon offline"></span>
       </div>
       <span class="version" id="version">--</span>
-    </div>
+    </header>
 
-    <!-- Stats -->
-    <div class="stats-bar" id="stats-bar">
-      <div class="stat">
-        <span class="stat-value" id="stat-memories">--</span>
-        <span class="stat-label">Memories</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value" id="stat-embedded">--</span>
-        <span class="stat-label">Embedded</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value" id="stat-pipeline">--</span>
-        <span class="stat-label">Pipeline</span>
-      </div>
-    </div>
-
-    <!-- Search -->
-    <div class="search-section">
+    <section class="section search-section">
+      <div class="section-title">Memory Search</div>
       <input
         type="text"
         class="search-input"
@@ -46,21 +29,83 @@
         autocomplete="off"
         spellcheck="false"
       >
-    </div>
+    </section>
 
-    <!-- Memory list -->
-    <div class="memory-list" id="memory-list">
-      <div class="state-message loading-pulse" id="loading-state">
-        <span class="state-message-title">Loading</span>
-        <span class="state-message-body">Connecting to daemon...</span>
+    <section class="section nav-section">
+      <div class="section-title">Signet Page Navigator</div>
+      <div class="nav-grid">
+        <button class="nav-btn" data-nav-target="home">Overview</button>
+        <button class="nav-btn" data-nav-target="cortex-memory/constellation">Ontology</button>
+        <button class="nav-btn" data-nav-target="tasks">Tasks</button>
+        <button class="nav-btn" data-nav-target="audit">Audit</button>
+        <button class="nav-btn" data-nav-target="secrets">Secrets</button>
+        <button class="nav-btn" data-nav-target="skills">Skills</button>
+        <button class="nav-btn nav-btn-wide" data-nav-target="cortex-memory/memories">View Memories</button>
       </div>
-    </div>
+    </section>
 
-    <!-- Footer -->
-    <div class="footer">
+    <section class="section tools-section">
+      <div class="section-title">Tools</div>
+      <div class="tool-grid">
+        <button class="tool-btn" id="tool-capture-page">Capture Page</button>
+        <button class="tool-btn" id="tool-save-bookmark">Save Bookmark</button>
+        <button class="tool-btn" id="tool-write-note">Write Note</button>
+        <button class="tool-btn" id="tool-send-page">Send Page to Signet</button>
+      </div>
+
+      <textarea
+        id="tool-note-input"
+        class="tool-note-input"
+        rows="3"
+        placeholder="Add page notes for Signet..."
+      ></textarea>
+
+      <div class="tool-row">
+        <select id="transcribe-format" class="tool-select">
+          <option value="summary">Transcribe: Summary</option>
+          <option value="bullet">Transcribe: Bullet Points</option>
+          <option value="checklist">Transcribe: Checklist</option>
+          <option value="json">Transcribe: JSON</option>
+        </select>
+      </div>
+
+      <div class="tool-grid tool-grid-secondary">
+        <button class="tool-btn" id="tool-transcribe-highlight">Signet Transcribe</button>
+        <button class="tool-btn" id="tool-send-selection">Send Selection to Signet</button>
+      </div>
+
+      <div class="tool-status" id="tool-status">Ready.</div>
+    </section>
+
+    <section class="section overview-section">
+      <div class="section-title">Overview</div>
+      <div class="stats-bar" id="stats-bar">
+        <div class="stat">
+          <span class="stat-value" id="stat-memories">--</span>
+          <span class="stat-label">Memories</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-embedded">--</span>
+          <span class="stat-label">Embedded</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-pipeline">--</span>
+          <span class="stat-label">Pipeline</span>
+        </div>
+      </div>
+
+      <div class="memory-list" id="memory-list">
+        <div class="state-message loading-pulse" id="loading-state">
+          <span class="state-message-title">Loading</span>
+          <span class="state-message-body">Connecting to daemon...</span>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
       <button class="footer-link" id="open-dashboard">Open Dashboard</button>
       <button class="footer-link" id="open-options">Settings</button>
-    </div>
+    </footer>
   </div>
 
   <script type="module" src="popup.js"></script>

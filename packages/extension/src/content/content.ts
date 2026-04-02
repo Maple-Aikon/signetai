@@ -476,12 +476,177 @@ function showToast(theme: "dark" | "light", message: string): void {
 	}, 2000);
 }
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function uniqueLimited(values: readonly string[], limit = 24): string[] {
+	const unique = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+	return unique.slice(0, limit);
+}
+
+function normalizeUrl(value: string): string | null {
+	if (!value) return null;
+	try {
+		return new URL(value, window.location.href).href;
+	} catch {
+		return null;
+	}
+}
+
+function collectPageContext() {
+	const selectedText = window.getSelection()?.toString()?.trim() ?? "";
+
+	const links = uniqueLimited(
+		Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
+			.map((anchor) => normalizeUrl(anchor.href) ?? "")
+			.filter(Boolean),
+	);
+
+	const images = uniqueLimited(
+		Array.from(document.querySelectorAll<HTMLImageElement>("img[src]"))
+			.map((img) => normalizeUrl(img.currentSrc || img.src) ?? "")
+			.filter(Boolean),
+	);
+
+	const videos = uniqueLimited(
+		Array.from(document.querySelectorAll<HTMLVideoElement>("video"))
+			.flatMap((video) => {
+				const sourceEls = Array.from(video.querySelectorAll<HTMLSourceElement>("source[src]"));
+				return [video.currentSrc, video.src, ...sourceEls.map((source) => source.src)]
+					.map((src) => normalizeUrl(src || "") ?? "")
+					.filter(Boolean);
+			})
+			.slice(0, 32),
+	);
+
+	const audio = uniqueLimited(
+		Array.from(document.querySelectorAll<HTMLAudioElement>("audio"))
+			.flatMap((track) => {
+				const sourceEls = Array.from(track.querySelectorAll<HTMLSourceElement>("source[src]"));
+				return [track.currentSrc, track.src, ...sourceEls.map((source) => source.src)]
+					.map((src) => normalizeUrl(src || "") ?? "")
+					.filter(Boolean);
+			})
+			.slice(0, 32),
+	);
+
+	const files = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="file"]'))
+		.flatMap((input) => Array.from(input.files ?? []))
+		.slice(0, 24)
+		.map((file) => ({
+			name: file.name,
+			type: file.type,
+			size: file.size,
+		}));
+
+	return {
+		pageTitle: document.title,
+		pageUrl: window.location.href,
+		selectedText,
+		links,
+		images,
+		videos,
+		audio,
+		files,
+	};
+}
+
+type HarnessInput = HTMLInputElement | HTMLTextAreaElement;
+
+function setInputValue(input: HarnessInput, value: string): void {
+	if (input instanceof HTMLTextAreaElement) {
+		const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+		if (descriptor?.set) {
+			descriptor.set.call(input, value);
+		} else {
+			input.value = value;
+		}
+	} else {
+		const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+		if (descriptor?.set) {
+			descriptor.set.call(input, value);
+		} else {
+			input.value = value;
+		}
+	}
+
+	input.dispatchEvent(new Event("input", { bubbles: true }));
+	input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function waitForElement<T extends Element>(selector: string, timeoutMs = 4000): Promise<T | null> {
+	const start = Date.now();
+	while (Date.now() - start <= timeoutMs) {
+		const found = document.querySelector<T>(selector);
+		if (found) return found;
+		await delay(100);
+	}
+	return null;
+}
+
+async function injectHarnessPayload(payload: string, autoSend: boolean): Promise<{ ok: boolean; error?: string }> {
+	if (!payload.trim()) {
+		return { ok: false, error: "Empty payload" };
+	}
+
+	if (window.location.hash.slice(1) !== "os") {
+		window.location.hash = "os";
+		await delay(350);
+	}
+
+	const chatToggle = await waitForElement<HTMLButtonElement>(".os-chat-toggle", 2500);
+	if (chatToggle && !chatToggle.classList.contains("active")) {
+		chatToggle.click();
+		await delay(250);
+	}
+
+	const chatInput = await waitForElement<HarnessInput>(".chat-input", 4500);
+	if (!chatInput) {
+		return { ok: false, error: "Harness input unavailable" };
+	}
+
+	chatInput.focus();
+	setInputValue(chatInput, payload);
+	await delay(80);
+
+	if (!chatInput.value.trim()) {
+		return { ok: false, error: "Harness input did not accept payload" };
+	}
+
+	if (autoSend) {
+		const sendButton = await waitForElement<HTMLButtonElement>(".chat-send-btn", 2000);
+		if (!sendButton) {
+			return { ok: false, error: "Harness send button unavailable" };
+		}
+
+		if (sendButton.disabled) {
+			chatInput.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "Enter",
+					code: "Enter",
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+			await delay(120);
+			if (sendButton.disabled) {
+				return { ok: false, error: "Harness send action unavailable" };
+			}
+		}
+
+		sendButton.click();
+	}
+
+	return { ok: true };
+}
+
 // --- Message handling ---
 
-chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 	if (message.action === "show-save-panel" || message.action === "trigger-save-shortcut") {
 		const selectedText = message.text ?? window.getSelection()?.toString()?.trim() ?? "";
-		if (!selectedText) return;
+		if (!selectedText) return false;
 
 		currentSelection = selectedText;
 		currentPageUrl = message.pageUrl ?? window.location.href;
@@ -492,5 +657,25 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 			destroyPanel();
 			createPanel(theme);
 		});
+		return false;
 	}
+
+	if (message.action === "collect-page-context") {
+		sendResponse(collectPageContext());
+		return false;
+	}
+
+	if (message.action === "inject-harness-payload") {
+		injectHarnessPayload(String(message.payload ?? ""), message.autoSend !== false)
+			.then((result) => sendResponse(result))
+			.catch((error: unknown) => {
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : "Injection failed",
+				});
+			});
+		return true;
+	}
+
+	return false;
 });
