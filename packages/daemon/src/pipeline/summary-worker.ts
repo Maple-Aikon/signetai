@@ -588,7 +588,10 @@ async function processJob(
 
 		// Track session tokens for dreaming trigger (use transcript length
 		// as a proxy for the session's actual token consumption, not the
-		// compressed summary output)
+		// compressed summary output).
+		// NOTE: The dreaming worker currently only starts for the default
+		// agent. Tokens for non-default agents accumulate but no pass fires
+		// for them until Phase 2 adds multi-agent dreaming worker support.
 		try {
 			const tokens = Math.ceil(job.transcript.length / 4);
 			addDreamingTokens(accessor, job.agent_id, tokens);

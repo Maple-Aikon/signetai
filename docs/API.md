@@ -2586,7 +2586,7 @@ Requires `admin` permission.
   },
   "config": {
     "provider": "anthropic",
-    "model": "sonnet",
+    "model": "claude-sonnet-4-6",
     "tokenThreshold": 100000,
     "backfillOnFirstRun": true
   },

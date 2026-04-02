@@ -299,6 +299,31 @@ describe("dreaming", () => {
 			expect(remaining[0]?.name).toBe("PinnedEntity");
 		});
 
+		it("skips delete_entity when entity owns active constraint attributes (invariant 5)", async () => {
+			// Unpinned entity, but it has a constraint attribute — must not be deleted
+			seedEntity(db, "ent-1", "ConstrainedEntity", "concept");
+			const aspId = "asp-c1";
+			seedAspect(db, aspId, "ent-1", "system constraints");
+			db.prepare(
+				`INSERT INTO entity_attributes (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-c1', ?, ?, 'constraint', 'Must not be deleted', 'must not be deleted', 1.0, 1.0, 'active', datetime('now'), datetime('now'))`,
+			).run(aspId, AGENT);
+
+			const generate = async () =>
+				JSON.stringify({
+					mutations: [{ op: "delete_entity", name: "ConstrainedEntity", reason: "Seems unused" }],
+					summary: "Attempt to delete constrained entity",
+				});
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "compact");
+			expect(result.applied).toBe(0);
+			expect(result.skipped).toBe(1);
+
+			// Entity must still exist
+			const still = db.prepare("SELECT id FROM entities WHERE id = 'ent-1' AND agent_id = ?").get(AGENT);
+			expect(still).toBeDefined();
+		});
+
 		it("applies supersede_attribute mutations", async () => {
 			seedEntity(db, "ent-1", "Redis", "tool");
 			seedAspect(db, "asp-1", "ent-1", "usage");

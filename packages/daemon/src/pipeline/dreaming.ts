@@ -862,13 +862,20 @@ function applyMergeEntities(
 			 WHERE source_entity_id = target_entity_id AND agent_id = ?`,
 		).run(agentId);
 
-		// Move memory mentions (OR IGNORE skips duplicates)
+		// Move memory mentions (OR IGNORE skips duplicates).
+		// memory_entity_mentions has no agent_id column — scope implicitly
+		// through the entities table since entity UUIDs are agent-unique.
 		db.prepare(
 			`UPDATE OR IGNORE memory_entity_mentions SET entity_id = ?
-			 WHERE entity_id = ?`,
-		).run(targetId, srcId);
+			 WHERE entity_id = ?
+			   AND entity_id IN (SELECT id FROM entities WHERE agent_id = ?)`,
+		).run(targetId, srcId, agentId);
 		// Clean up any remaining source mentions (duplicates skipped above)
-		db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(srcId);
+		db.prepare(
+			`DELETE FROM memory_entity_mentions
+			 WHERE entity_id = ?
+			   AND entity_id IN (SELECT id FROM entities WHERE agent_id = ?)`,
+		).run(srcId, agentId);
 
 		// Transfer mention count
 		db.prepare(
@@ -906,6 +913,17 @@ function applyDeleteEntity(
 		| undefined;
 	if (pinned?.pinned === 1) return "skipped";
 
+	// Don't delete entities that own active constraint attributes (invariant 5)
+	const hasConstraints = db
+		.prepare(
+			`SELECT 1 FROM entity_attributes ea
+			 JOIN entity_aspects asp ON ea.aspect_id = asp.id
+			 WHERE asp.entity_id = ? AND asp.agent_id = ?
+			   AND ea.kind = 'constraint' AND ea.status = 'active'`,
+		)
+		.get(entityId, agentId);
+	if (hasConstraints) return "skipped";
+
 	db.prepare(
 		`DELETE FROM entity_attributes WHERE agent_id = ? AND aspect_id IN (
 		   SELECT id FROM entity_aspects WHERE entity_id = ? AND agent_id = ?
@@ -915,7 +933,11 @@ function applyDeleteEntity(
 	db.prepare(
 		"DELETE FROM entity_dependencies WHERE (source_entity_id = ? OR target_entity_id = ?) AND agent_id = ?",
 	).run(entityId, entityId, agentId);
-	db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(entityId);
+	db.prepare(
+		`DELETE FROM memory_entity_mentions
+		 WHERE entity_id = ?
+		   AND entity_id IN (SELECT id FROM entities WHERE agent_id = ?)`,
+	).run(entityId, agentId);
 	db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(entityId, agentId);
 	return "applied";
 }
@@ -974,12 +996,11 @@ function applyDeleteAspect(
 		.get(aspectId, agentId);
 	if (constraints) return "skipped";
 
-	// Soft-delete attributes before removing the aspect (consistent with
-	// applyDeleteAttribute which also preserves rows for audit/recovery).
-	db.prepare(
-		`UPDATE entity_attributes SET status = 'deleted', updated_at = datetime('now')
-		 WHERE aspect_id = ? AND agent_id = ?`,
-	).run(aspectId, agentId);
+	// Hard-delete attributes then the aspect itself. Using hard-delete
+	// throughout (not soft-delete) to stay consistent: keeping soft-deleted
+	// attributes whose parent aspect row no longer exists would break any
+	// recovery path that tries to re-attach them.
+	db.prepare("DELETE FROM entity_attributes WHERE aspect_id = ? AND agent_id = ?").run(aspectId, agentId);
 	db.prepare("DELETE FROM entity_aspects WHERE id = ? AND agent_id = ?").run(aspectId, agentId);
 	return "applied";
 }

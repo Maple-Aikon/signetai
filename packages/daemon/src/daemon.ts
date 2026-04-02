@@ -11652,6 +11652,13 @@ async function stopPipelineRuntime(): Promise<void> {
 
 	if (dreamingWorkerHandle) {
 		dreamingWorkerHandle.stop();
+		// Await any in-flight pass (up to 30s) before the DB closes.
+		// Without this, a pass completing after stopPipeline() would throw
+		// on the closed DB connection.
+		if (dreamingWorkerHandle.activePass) {
+			const timeout = new Promise<void>((resolve) => setTimeout(resolve, 30_000));
+			await Promise.race([dreamingWorkerHandle.activePass.catch(() => undefined), timeout]);
+		}
 		dreamingWorkerHandle = null;
 		setDreamingWorker(null);
 	}

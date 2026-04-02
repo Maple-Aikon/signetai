@@ -40,6 +40,11 @@ export interface DreamingWorkerHandle {
 	 */
 	triggerAsync(mode: DreamingMode): string;
 	readonly running: boolean;
+	/**
+	 * Resolves when the in-flight pass completes (or is null when idle).
+	 * Await this (with a timeout) during shutdown before closing the DB.
+	 */
+	readonly activePass: Promise<unknown> | null;
 }
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 min
@@ -54,6 +59,7 @@ export function startDreamingWorker(
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let active = false;
 	let stopped = false;
+	let activePassPromise: Promise<unknown> | null = null;
 
 	// Sweep orphaned passes from unclean shutdown: any 'running' record
 	// for this agent was left by a crash or forced stop — mark it failed
@@ -90,7 +96,9 @@ export function startDreamingWorker(
 			});
 
 			active = true;
-			await runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+			const p = runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+			activePassPromise = p;
+			await p;
 		} catch (e) {
 			recordDreamingFailure(accessor, agentId);
 			logger.error("dreaming-worker", "Dreaming check failed", {
@@ -98,6 +106,7 @@ export function startDreamingWorker(
 			});
 		} finally {
 			active = false;
+			activePassPromise = null;
 		}
 	}
 
@@ -131,17 +140,18 @@ export function startDreamingWorker(
 		},
 
 		async trigger(mode: DreamingMode) {
-			if (active) {
-				throw new AlreadyRunningError();
-			}
+			if (active) throw new AlreadyRunningError();
 			active = true;
+			const p = runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+			activePassPromise = p;
 			try {
-				return await runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+				return await p;
 			} catch (e) {
 				recordDreamingFailure(accessor, agentId);
 				throw e;
 			} finally {
 				active = false;
+				activePassPromise = null;
 			}
 		},
 
@@ -149,22 +159,27 @@ export function startDreamingWorker(
 			if (active) throw new AlreadyRunningError();
 			const passId = createDreamingPass(accessor, agentId, mode);
 			active = true;
-			runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode, passId)
-				.catch((e) => {
-					recordDreamingFailure(accessor, agentId);
-					logger.error("dreaming-worker", "Async trigger failed", {
-						passId,
-						error: e instanceof Error ? e.message : String(e),
-					});
-				})
-				.finally(() => {
-					active = false;
+			const p = runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode, passId);
+			activePassPromise = p;
+			p.catch((e) => {
+				recordDreamingFailure(accessor, agentId);
+				logger.error("dreaming-worker", "Async trigger failed", {
+					passId,
+					error: e instanceof Error ? e.message : String(e),
 				});
+			}).finally(() => {
+				active = false;
+				activePassPromise = null;
+			});
 			return passId;
 		},
 
 		get running() {
 			return active;
+		},
+
+		get activePass() {
+			return activePassPromise;
 		},
 	};
 }
