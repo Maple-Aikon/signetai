@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
+	DREAMING_PROVIDERS,
+	type DreamingConfig,
+	type DreamingProvider,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
@@ -29,7 +32,21 @@ export interface MemorySearchConfig {
 }
 
 export { PIPELINE_FLAGS };
-export type { PipelineFlag, PipelineV2Config };
+export type { PipelineFlag, PipelineV2Config, DreamingConfig };
+
+const DREAMING_SET = new Set<string>(DREAMING_PROVIDERS);
+function isDreamingProvider(v: unknown): v is DreamingProvider {
+	return typeof v === "string" && DREAMING_SET.has(v);
+}
+
+export const DEFAULT_DREAMING: DreamingConfig = {
+	enabled: false,
+	tokenThreshold: 100_000,
+	provider: "anthropic",
+	model: "claude-sonnet-4-6",
+	maxInputTokens: 128_000,
+	backfillOnFirstRun: true,
+};
 
 class PipelineConfigValidationError extends Error {
 	constructor(message: string) {
@@ -235,6 +252,7 @@ export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
 	search: MemorySearchConfig;
 	pipelineV2: PipelineV2Config;
+	dreaming: DreamingConfig;
 	auth: AuthConfig;
 }
 
@@ -914,6 +932,21 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	};
 }
 
+export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfig {
+	const mem = yaml.memory as Record<string, unknown> | undefined;
+	const raw = mem?.dreaming as Record<string, unknown> | undefined;
+	if (!raw) return { ...DEFAULT_DREAMING };
+	const dd = DEFAULT_DREAMING;
+	return {
+		enabled: typeof raw.enabled === "boolean" ? raw.enabled : dd.enabled,
+		tokenThreshold: clampPositive(raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
+		provider: isDreamingProvider(raw.provider) ? raw.provider : dd.provider,
+		model: typeof raw.model === "string" && raw.model.trim().length > 0 ? raw.model : dd.model,
+		maxInputTokens: clampPositive(raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
+		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,
+	};
+}
+
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 	const defaults: ResolvedMemoryConfig = {
 		embedding: {
@@ -931,6 +964,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			rehearsal_half_life_days: 30,
 		},
 		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
+		dreaming: { ...DEFAULT_DREAMING },
 		auth: parseAuthConfig(undefined, agentsDir),
 	};
 
@@ -988,6 +1022,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			}
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
+			defaults.dreaming = loadDreamingConfig(yaml);
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 
 			break;

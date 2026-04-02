@@ -2555,6 +2555,87 @@ Requires `admin` permission and uses the admin rate limit bucket.
 requested state.
 
 
+Dreaming
+--------
+
+Dreaming is a periodic knowledge-graph consolidation process that uses a
+smart model to merge, prune, and enrich the entity graph.
+
+### GET /api/dream/status
+
+Return the current dreaming worker state, configuration, and recent passes.
+Requires `admin` permission.
+
+**Query parameters**
+
+| Parameter | Type   | Required | Description         |
+|-----------|--------|----------|---------------------|
+| `agentId` | string | no       | Agent ID (default: `"default"`) |
+
+**Response**
+
+```json
+{
+  "enabled": true,
+  "worker": { "running": true, "active": false },
+  "state": {
+    "tokensSinceLastPass": 42000,
+    "lastPassAt": "2026-04-01T12:00:00.000Z",
+    "lastPassSummaryId": "abc-123",
+    "lastPassMode": "incremental"
+  },
+  "config": {
+    "provider": "anthropic",
+    "model": "sonnet",
+    "tokenThreshold": 100000,
+    "backfillOnFirstRun": true
+  },
+  "passes": [
+    {
+      "id": "pass-uuid",
+      "mode": "incremental",
+      "status": "completed",
+      "startedAt": "2026-04-01T12:00:00.000Z",
+      "completedAt": "2026-04-01T12:05:00.000Z",
+      "tokensConsumed": 8000,
+      "mutationsApplied": 12,
+      "mutationsFailed": 1,
+      "summary": "Merged 3 duplicate entities, pruned 5 junk attributes",
+      "error": null
+    }
+  ]
+}
+```
+
+### POST /api/dream/trigger
+
+Manually trigger a dreaming pass. Requires `admin` permission.
+Returns 409 if a pass is already running. Returns 503 if the
+dreaming worker is not started.
+
+**Request body**
+
+```json
+{
+  "mode": "incremental"
+}
+```
+
+`mode` is `"incremental"` (default) or `"compact"`.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "passId": "pass-uuid",
+  "applied": 12,
+  "failed": 1,
+  "summary": "Merged 3 duplicate entities, pruned 5 junk attributes"
+}
+```
+
+
 Checkpoints
 -----------
 

@@ -1123,8 +1123,8 @@ specs:
     decision: null
 
   - id: dreaming-memory-consolidation
-    status: planning
-    path: docs/specs/planning/dreaming-memory-consolidation.md
+    status: approved
+    path: docs/specs/approved/dreaming-memory-consolidation.md
     hard_depends_on:
       - memory-pipeline-v2
       - knowledge-architecture-schema

@@ -38,6 +38,7 @@ flowchart TD
   DRR[Daemon Rust Rewrite]
   PAF[Predictor Agent Feedback]
   SACC[Sub-Agent Context Continuity]
+  DMC[Dreaming Memory Consolidation]
 
   subgraph W9[Wave 9 Strategic Stubs]
     DHO[Distributed Harness Orchestration]
@@ -92,6 +93,10 @@ flowchart TD
   MA --> SACC
   KA -.-> SACC
 
+  MP --> DMC
+  KA --> DMC
+  SCP -.-> DMC
+
   MA --> DHO
   SR --> DHO
   DHO --> SNH
@@ -141,6 +146,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `dogfood-hardening-2026-03-29` | RESEARCH-DOGFOOD-HARDENING-2026-03-29 | Which runtime, MCP, and knowledge-surface regressions from the March 29, 2026 dogfood run need durable hardening? |
 | `marketplace-official-skills` | RESEARCH-MARKETPLACE-OFFICIAL-SKILLS | How should the dashboard marketplace spotlight Signet official skills without hiding the broader community catalog? |
 | `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
+| `dreaming-memory-consolidation` | LCM-PATTERNS, memory-pipeline-plan, knowledge-architecture-schema | How should Signet consolidate accumulated session knowledge into a cleaner entity graph during idle periods? |
 
 ### Research Adoption Ledger (high-impact)
 

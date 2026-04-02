@@ -585,6 +585,15 @@ async function processJob(
 			});
 		}
 
+		// Track summary tokens for dreaming trigger
+		try {
+			const tokens = Math.ceil(result.summary.length / 4);
+			const { addDreamingTokens } = await import("./dreaming.js");
+			addDreamingTokens(accessor, job.agent_id, tokens);
+		} catch {
+			// non-fatal: dreaming table may not exist yet
+		}
+
 		// --- Session continuity scoring ---
 		try {
 			await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);

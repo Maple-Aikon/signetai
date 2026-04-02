@@ -131,6 +131,7 @@ import {
 import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
 import { type LogCategory, type LogEntry, logger } from "./logger";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import type { DreamingConfig } from "@signet/core";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
@@ -140,13 +141,18 @@ import {
 	enqueueDocumentIngestJob,
 	enqueueExtractionJob,
 	ensureRetentionWorker,
+	getDreamingPasses,
+	getDreamingState,
+	getDreamingWorker,
 	getPipelineWorkerStatus,
 	getSynthesisWorker,
 	nudgeExtractionWorker,
 	readLastSynthesisTime,
+	setDreamingWorker,
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
+import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { clusterEntities } from "./pipeline/community-detection";
 import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
@@ -499,6 +505,7 @@ let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let predictorClientRef: PredictorClient | null = null;
 let shadowProcess: ChildProcess | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
+let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 let pipelineTransition = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -923,6 +930,48 @@ function parseIsoDateQuery(raw: string | undefined): string | undefined {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return undefined;
 	return date.toISOString();
+}
+
+/**
+ * Create an LlmProvider for the dreaming worker from its config.
+ * Falls back to ollama when the requested provider isn't available.
+ */
+function resolveDreamingProvider(
+	cfg: DreamingConfig,
+	anthropicKey?: string,
+	openRouterKey?: string,
+): import("@signet/core").LlmProvider | null {
+	const base = normalizeRuntimeBaseUrl(cfg.endpoint, "http://127.0.0.1:11434");
+	const timeout = cfg.timeout;
+
+	switch (cfg.provider) {
+		case "anthropic":
+			if (!anthropicKey) {
+				logger.warn("dreaming", "ANTHROPIC_API_KEY not found for dreaming, falling back to ollama");
+				return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+			}
+			return createAnthropicProvider({ model: cfg.model, apiKey: anthropicKey, defaultTimeoutMs: timeout });
+		case "openrouter":
+			if (!openRouterKey) {
+				logger.warn("dreaming", "OPENROUTER_API_KEY not found for dreaming, falling back to ollama");
+				return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+			}
+			return createOpenRouterProvider({
+				model: cfg.model,
+				apiKey: openRouterKey,
+				baseUrl: normalizeRuntimeBaseUrl(cfg.endpoint, "https://openrouter.ai/api/v1"),
+				defaultTimeoutMs: timeout,
+			});
+		case "claude-code":
+			return createClaudeCodeProvider({ model: cfg.model, defaultTimeoutMs: timeout });
+		case "ollama":
+			return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+		case "none":
+			return null;
+		default:
+			// Fall back to ollama for unknown providers
+			return createOllamaProvider({ model: cfg.model, baseUrl: base, defaultTimeoutMs: timeout });
+	}
 }
 
 function getConfiguredProviderHints(agentsDir: string): {
@@ -8119,6 +8168,55 @@ app.post("/api/pipeline/models/refresh", async (c) => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// Dreaming API
+// ---------------------------------------------------------------------------
+
+app.use("/api/dream/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
+app.get("/api/dream/status", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const accessor = getDbAccessor();
+	const agentId = parseOptionalString(c.req.query("agentId")) ?? "default";
+
+	const state = getDreamingState(accessor, agentId);
+	const passes = getDreamingPasses(accessor, agentId, 10);
+	const worker = getDreamingWorker();
+
+	return c.json({
+		enabled: cfg.dreaming.enabled,
+		worker: { running: worker !== null, active: worker?.running ?? false },
+		state,
+		config: {
+			provider: cfg.dreaming.provider,
+			model: cfg.dreaming.model,
+			tokenThreshold: cfg.dreaming.tokenThreshold,
+			backfillOnFirstRun: cfg.dreaming.backfillOnFirstRun,
+		},
+		passes,
+	});
+});
+
+app.post("/api/dream/trigger", async (c) => {
+	const worker = getDreamingWorker();
+	if (!worker) {
+		return c.json({ error: "Dreaming worker not running" }, 503);
+	}
+
+	const body = await c.req.json().catch(() => ({}));
+	const mode = body.mode === "compact" ? "compact" : "incremental";
+
+	try {
+		const result = await worker.trigger(mode);
+		return c.json({ success: true, ...result });
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		return c.json({ error: msg }, 409);
+	}
+});
+
 app.get("/api/predictor/status", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const predictorCfg = cfg.pipelineV2.predictor;
@@ -11536,6 +11634,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		embeddingTrackerHandle = null;
 	}
 
+	if (dreamingWorkerHandle) {
+		dreamingWorkerHandle.stop();
+		dreamingWorkerHandle = null;
+		setDreamingWorker(null);
+	}
+
 	try {
 		await stopPipeline();
 	} catch {
@@ -12218,6 +12322,31 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			fetchEmbedding,
 			checkEmbeddingProvider,
 		);
+	}
+
+	// Dreaming worker — periodic knowledge-graph consolidation via a smart model.
+	// Runs independently from extraction; uses its own configured provider.
+	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
+		try {
+			const dreamCfg = memoryCfg.dreaming;
+			const dreamProvider = resolveDreamingProvider(dreamCfg, anthropicApiKey, openRouterApiKey);
+			if (dreamProvider) {
+				dreamingWorkerHandle = startDreamingWorker(
+					getDbAccessor(),
+					dreamProvider.generate.bind(dreamProvider),
+					dreamCfg,
+					AGENTS_DIR,
+					"default",
+				);
+				setDreamingWorker(dreamingWorkerHandle);
+			} else {
+				logger.warn("dreaming", "No valid provider for dreaming, worker not started");
+			}
+		} catch (err) {
+			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	// One-time structural backfill: populate entity_aspects/attributes for
