@@ -404,7 +404,8 @@ function warnIfTruncated(
 function readIdentityFile(dir: string, name: string): string {
 	try {
 		return readFileSync(join(dir, name), "utf-8").trim();
-	} catch {
+	} catch (err) {
+		logger.warn("dreaming", "Could not read identity file", { name, error: String(err) });
 		return "";
 	}
 }
@@ -856,11 +857,13 @@ function applyMergeEntities(
 		// Clean up colliding duplicates that OR IGNORE couldn't move
 		db.prepare("DELETE FROM entity_dependencies WHERE target_entity_id = ? AND agent_id = ?").run(srcId, agentId);
 
-		// Clean up self-loop dependencies created by the rewrite
+		// Clean up self-loop dependency on targetId created by the rewrite
+		// (src→target became target→target). Scoped to targetId only to avoid
+		// accidentally removing unrelated self-loops elsewhere in the graph.
 		db.prepare(
 			`DELETE FROM entity_dependencies
-			 WHERE source_entity_id = target_entity_id AND agent_id = ?`,
-		).run(agentId);
+			 WHERE source_entity_id = ? AND target_entity_id = ? AND agent_id = ?`,
+		).run(targetId, targetId, agentId);
 
 		// Move memory mentions (OR IGNORE skips duplicates).
 		// memory_entity_mentions has no agent_id column — scope implicitly

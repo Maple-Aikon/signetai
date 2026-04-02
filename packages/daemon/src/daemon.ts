@@ -8186,7 +8186,11 @@ app.get("/api/dream/status", (c) => {
 
 	const state = getDreamingState(accessor, agentId);
 	const passes = getDreamingPasses(accessor, agentId, 10);
-	const worker = getDreamingWorker();
+	// The dreaming worker currently runs only for the default agent.
+	// For non-default agent queries, report no worker (not a lie —
+	// no worker is processing their graph yet).
+	const defaultAgent = resolveAgentId({});
+	const worker = agentId === defaultAgent ? getDreamingWorker() : null;
 
 	return c.json({
 		enabled: cfg.dreaming.enabled,
@@ -8211,11 +8215,13 @@ app.post("/api/dream/trigger", async (c) => {
 	const contentType = c.req.header("content-type") ?? "";
 	let mode: "compact" | "incremental" = "incremental";
 	if (contentType.includes("application/json")) {
-		const parsed = await c.req.json().catch(() => null);
-		if (parsed === null) {
+		const raw: unknown = await c.req.json().catch(() => null);
+		if (raw === null) {
 			return c.json({ error: "Malformed JSON body" }, 400);
 		}
-		if (parsed.mode === "compact") mode = "compact";
+		if (typeof raw === "object" && raw !== null && "mode" in raw && raw.mode === "compact") {
+			mode = "compact";
+		}
 	}
 
 	// Async fire-and-forget: return 202 immediately so the caller is not
