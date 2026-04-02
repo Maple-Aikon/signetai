@@ -12338,6 +12338,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	// Dreaming worker — periodic knowledge-graph consolidation via a smart model.
 	// Runs independently from extraction; uses its own configured provider.
+	// NOTE: Currently starts a single worker for the default agent. Multi-agent
+	// support would require iterating the agent roster and starting one worker
+	// per agent (Phase 2 / dreaming-as-session work).
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
 			const dreamCfg = memoryCfg.dreaming;

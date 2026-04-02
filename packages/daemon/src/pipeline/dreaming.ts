@@ -21,10 +21,59 @@ import { logger } from "../logger";
 
 export type DreamingMode = "incremental" | "compact";
 
-interface DreamingMutation {
-	readonly op: string;
-	readonly [key: string]: unknown;
-}
+type DreamingMutation =
+	| {
+			readonly op: "create_entity";
+			readonly name: string;
+			readonly type?: string;
+			readonly aspects?: ReadonlyArray<{
+				readonly name: string;
+				readonly attributes?: readonly string[];
+			}>;
+	  }
+	| {
+			readonly op: "merge_entities";
+			readonly source: readonly string[];
+			readonly target: string;
+			readonly reason?: string;
+	  }
+	| {
+			readonly op: "delete_entity";
+			readonly name: string;
+			readonly reason?: string;
+	  }
+	| {
+			readonly op: "update_aspect";
+			readonly entity: string;
+			readonly aspect: string;
+			readonly attributes: readonly string[];
+	  }
+	| {
+			readonly op: "delete_aspect";
+			readonly entity: string;
+			readonly aspect: string;
+			readonly reason?: string;
+	  }
+	| {
+			readonly op: "supersede_attribute";
+			readonly entity: string;
+			readonly aspect: string;
+			readonly old: string;
+			readonly new: string;
+	  }
+	| {
+			readonly op: "create_attribute";
+			readonly entity: string;
+			readonly aspect: string;
+			readonly content: string;
+	  }
+	| {
+			readonly op: "delete_attribute";
+			readonly entity: string;
+			readonly aspect: string;
+			readonly content: string;
+			readonly reason?: string;
+	  };
 
 export interface DreamingResult {
 	readonly mutations: readonly DreamingMutation[];
@@ -204,29 +253,6 @@ function createDreamingPass(accessor: DbAccessor, agentId: string, mode: Dreamin
 		).run(id, agentId, mode);
 	});
 	return id;
-}
-
-function completeDreamingPass(
-	accessor: DbAccessor,
-	passId: string,
-	agentId: string,
-	mode: string,
-	result: { tokensConsumed: number; applied: number; skipped: number; failed: number; summary: string },
-): void {
-	accessor.withWriteTx((db) => {
-		db.prepare(
-			`UPDATE dreaming_passes
-			 SET status = 'completed',
-			     completed_at = datetime('now'),
-			     tokens_consumed = ?,
-			     mutations_applied = ?,
-			     mutations_skipped = ?,
-			     mutations_failed = ?,
-			     summary = ?
-			 WHERE id = ?`,
-		).run(result.tokensConsumed, result.applied, result.skipped, result.failed, result.summary, passId);
-		resetDreamingTokens(db, agentId, passId, mode);
-	});
 }
 
 function failDreamingPass(accessor: DbAccessor, passId: string, error: string): void {
@@ -505,6 +531,52 @@ Respond with ONLY a JSON object in this exact format (no markdown code fences, n
 }
 
 // ---------------------------------------------------------------------------
+// Mutation validation — narrows unknown LLM output to typed DreamingMutation
+// ---------------------------------------------------------------------------
+
+const MUTATION_OPS = new Set([
+	"create_entity",
+	"merge_entities",
+	"delete_entity",
+	"update_aspect",
+	"delete_aspect",
+	"supersede_attribute",
+	"create_attribute",
+	"delete_attribute",
+] as const);
+
+function isValidMutation(v: unknown): v is DreamingMutation {
+	if (typeof v !== "object" || v === null) return false;
+	const obj = v as Record<string, unknown>;
+	if (typeof obj.op !== "string" || !MUTATION_OPS.has(obj.op as DreamingMutation["op"])) return false;
+	switch (obj.op) {
+		case "create_entity":
+			return typeof obj.name === "string";
+		case "merge_entities":
+			return Array.isArray(obj.source) && typeof obj.target === "string";
+		case "delete_entity":
+			return typeof obj.name === "string";
+		case "update_aspect":
+			return typeof obj.entity === "string" && typeof obj.aspect === "string" && Array.isArray(obj.attributes);
+		case "delete_aspect":
+			return typeof obj.entity === "string" && typeof obj.aspect === "string";
+		case "supersede_attribute":
+			return (
+				typeof obj.entity === "string" &&
+				typeof obj.aspect === "string" &&
+				typeof obj.old === "string" &&
+				typeof obj.new === "string"
+			);
+		case "create_attribute":
+			return typeof obj.entity === "string" && typeof obj.aspect === "string" && typeof obj.content === "string";
+		case "delete_attribute":
+			return typeof obj.entity === "string" && typeof obj.aspect === "string" && typeof obj.content === "string";
+		default:
+			return false;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Mutation execution
 // ---------------------------------------------------------------------------
 
@@ -523,8 +595,9 @@ function parseDreamingResult(raw: string): DreamingResult {
 		mutations?: unknown[];
 		summary?: string;
 	};
+	const mutations = Array.isArray(parsed.mutations) ? parsed.mutations.filter(isValidMutation) : [];
 	return {
-		mutations: Array.isArray(parsed.mutations) ? (parsed.mutations as DreamingMutation[]) : [],
+		mutations,
 		summary: typeof parsed.summary === "string" ? parsed.summary : "No summary provided",
 		tokensConsumed: Math.ceil(raw.length / 4), // rough estimate
 	};
@@ -560,10 +633,13 @@ function applyMutations(
 						return applyCreateAttribute(db, agentId, mut);
 					case "delete_attribute":
 						return applyDeleteAttribute(db, agentId, mut);
-					default:
-						errors.push(`Unknown op: ${mut.op}`);
+					default: {
+						const _exhaustive: never = mut;
+						void _exhaustive;
+						errors.push("Unknown mutation op");
 						failed++;
 						return undefined;
+					}
 				}
 			})();
 			if (result === undefined) continue;
@@ -631,14 +707,15 @@ function resolveOrCreateAspect(db: WriteDb, entityId: string, agentId: string, n
 	return id;
 }
 
-function applyCreateEntity(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const name = mut.name as string;
-	const type = (mut.type as string) ?? "unknown";
-	if (!name) return "skipped";
-	const entityId = resolveOrCreateEntity(db, agentId, name, type);
-	const aspects = mut.aspects as Array<{ name: string; attributes?: string[] }> | undefined;
-	if (!aspects) return "applied";
-	for (const aspect of aspects) {
+function applyCreateEntity(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "create_entity" },
+): "applied" | "skipped" {
+	if (!mut.name) return "skipped";
+	const entityId = resolveOrCreateEntity(db, agentId, mut.name, mut.type ?? "unknown");
+	if (!mut.aspects) return "applied";
+	for (const aspect of mut.aspects) {
 		const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect.name);
 		for (const content of aspect.attributes ?? []) {
 			if (!content || content.trim().length < 5) continue;
@@ -661,19 +738,21 @@ function applyCreateEntity(db: WriteDb, agentId: string, mut: DreamingMutation):
 	return "applied";
 }
 
-function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const sources = mut.source as string[] | undefined;
-	const target = mut.target as string;
-	if (!sources || !target || sources.length === 0) return "skipped";
+function applyMergeEntities(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "merge_entities" },
+): "applied" | "skipped" {
+	if (!mut.source || !mut.target || mut.source.length === 0) return "skipped";
 
 	// Resolve target — do NOT create; if the target doesn't exist, skip
-	const targetId = resolveEntity(db, agentId, target);
+	const targetId = resolveEntity(db, agentId, mut.target);
 	if (!targetId) {
-		logger.warn("dreaming", `Merge target "${target}" not found, skipping`);
+		logger.warn("dreaming", `Merge target "${mut.target}" not found, skipping`);
 		return "skipped";
 	}
 
-	for (const src of sources) {
+	for (const src of mut.source) {
 		const srcId = resolveEntity(db, agentId, src);
 		if (!srcId || srcId === targetId) continue;
 
@@ -787,10 +866,13 @@ function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation)
 	return "applied";
 }
 
-function applyDeleteEntity(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const name = mut.name as string;
-	if (!name) return "skipped";
-	const entityId = resolveEntity(db, agentId, name);
+function applyDeleteEntity(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "delete_entity" },
+): "applied" | "skipped" {
+	if (!mut.name) return "skipped";
+	const entityId = resolveEntity(db, agentId, mut.name);
 	if (!entityId) return "skipped";
 
 	// Don't delete pinned entities
@@ -813,17 +895,18 @@ function applyDeleteEntity(db: WriteDb, agentId: string, mut: DreamingMutation):
 	return "applied";
 }
 
-function applyUpdateAspect(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const entityName = mut.entity as string;
-	const aspectName = mut.aspect as string;
-	const attributes = mut.attributes as string[] | undefined;
-	if (!entityName || !aspectName || !attributes) return "skipped";
+function applyUpdateAspect(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "update_aspect" },
+): "applied" | "skipped" {
+	if (!mut.entity || !mut.aspect || !mut.attributes) return "skipped";
 
-	const entityId = resolveEntity(db, agentId, entityName);
+	const entityId = resolveEntity(db, agentId, mut.entity);
 	if (!entityId) return "skipped";
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspectName);
+	const aspectId = resolveOrCreateAspect(db, entityId, agentId, mut.aspect);
 
-	for (const content of attributes) {
+	for (const content of mut.attributes) {
 		if (!content || content.trim().length < 5) continue;
 		const normalized = content.trim().toLowerCase();
 		const exists = db
@@ -843,14 +926,16 @@ function applyUpdateAspect(db: WriteDb, agentId: string, mut: DreamingMutation):
 	return "applied";
 }
 
-function applyDeleteAspect(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const entityName = mut.entity as string;
-	const aspectName = mut.aspect as string;
-	if (!entityName || !aspectName) return "skipped";
+function applyDeleteAspect(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "delete_aspect" },
+): "applied" | "skipped" {
+	if (!mut.entity || !mut.aspect) return "skipped";
 
-	const entityId = resolveEntity(db, agentId, entityName);
+	const entityId = resolveEntity(db, agentId, mut.entity);
 	if (!entityId) return "skipped";
-	const aspectId = resolveAspect(db, entityId, agentId, aspectName);
+	const aspectId = resolveAspect(db, entityId, agentId, mut.aspect);
 	if (!aspectId) return "skipped";
 
 	// Don't delete aspects containing constraints
@@ -867,20 +952,20 @@ function applyDeleteAspect(db: WriteDb, agentId: string, mut: DreamingMutation):
 	return "applied";
 }
 
-function applySupersede(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const entityName = mut.entity as string;
-	const aspectName = mut.aspect as string;
-	const oldContent = mut.old as string;
-	const newContent = mut.new as string;
-	if (!entityName || !aspectName || !oldContent || !newContent) return "skipped";
+function applySupersede(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "supersede_attribute" },
+): "applied" | "skipped" {
+	if (!mut.entity || !mut.aspect || !mut.old || !mut.new) return "skipped";
 
-	const entityId = resolveEntity(db, agentId, entityName);
+	const entityId = resolveEntity(db, agentId, mut.entity);
 	if (!entityId) return "skipped";
-	const aspectId = resolveAspect(db, entityId, agentId, aspectName);
+	const aspectId = resolveAspect(db, entityId, agentId, mut.aspect);
 	if (!aspectId) return "skipped";
 
 	// Find old attribute
-	const normalizedOld = oldContent.trim().toLowerCase();
+	const normalizedOld = mut.old.trim().toLowerCase();
 	const oldAttr = db
 		.prepare(
 			`SELECT id, kind FROM entity_attributes
@@ -895,12 +980,12 @@ function applySupersede(db: WriteDb, agentId: string, mut: DreamingMutation): "a
 
 	// Create new attribute
 	const newId = randomUUID();
-	const normalizedNew = newContent.trim().toLowerCase();
+	const normalizedNew = mut.new.trim().toLowerCase();
 	db.prepare(
 		`INSERT INTO entity_attributes
 		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
 		 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-	).run(newId, aspectId, agentId, newContent.trim(), normalizedNew);
+	).run(newId, aspectId, agentId, mut.new.trim(), normalizedNew);
 
 	// Mark old as superseded
 	db.prepare(
@@ -911,17 +996,18 @@ function applySupersede(db: WriteDb, agentId: string, mut: DreamingMutation): "a
 	return "applied";
 }
 
-function applyCreateAttribute(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const entityName = mut.entity as string;
-	const aspectName = mut.aspect as string;
-	const content = mut.content as string;
-	if (!entityName || !aspectName || !content || content.trim().length < 5) return "skipped";
+function applyCreateAttribute(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "create_attribute" },
+): "applied" | "skipped" {
+	if (!mut.entity || !mut.aspect || !mut.content || mut.content.trim().length < 5) return "skipped";
 
-	const entityId = resolveEntity(db, agentId, entityName);
+	const entityId = resolveEntity(db, agentId, mut.entity);
 	if (!entityId) return "skipped";
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspectName);
+	const aspectId = resolveOrCreateAspect(db, entityId, agentId, mut.aspect);
 
-	const normalized = content.trim().toLowerCase();
+	const normalized = mut.content.trim().toLowerCase();
 	const exists = db
 		.prepare(
 			`SELECT 1 FROM entity_attributes
@@ -934,22 +1020,23 @@ function applyCreateAttribute(db: WriteDb, agentId: string, mut: DreamingMutatio
 		`INSERT INTO entity_attributes
 		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
 		 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-	).run(randomUUID(), aspectId, agentId, content.trim(), normalized);
+	).run(randomUUID(), aspectId, agentId, mut.content.trim(), normalized);
 	return "applied";
 }
 
-function applyDeleteAttribute(db: WriteDb, agentId: string, mut: DreamingMutation): "applied" | "skipped" {
-	const entityName = mut.entity as string;
-	const aspectName = mut.aspect as string;
-	const content = mut.content as string;
-	if (!entityName || !aspectName || !content) return "skipped";
+function applyDeleteAttribute(
+	db: WriteDb,
+	agentId: string,
+	mut: DreamingMutation & { op: "delete_attribute" },
+): "applied" | "skipped" {
+	if (!mut.entity || !mut.aspect || !mut.content) return "skipped";
 
-	const entityId = resolveEntity(db, agentId, entityName);
+	const entityId = resolveEntity(db, agentId, mut.entity);
 	if (!entityId) return "skipped";
-	const aspectId = resolveAspect(db, entityId, agentId, aspectName);
+	const aspectId = resolveAspect(db, entityId, agentId, mut.aspect);
 	if (!aspectId) return "skipped";
 
-	const normalized = content.trim().toLowerCase();
+	const normalized = mut.content.trim().toLowerCase();
 	// Don't delete constraints
 	const attr = db
 		.prepare(
@@ -1000,12 +1087,19 @@ export async function runDreamingPass(
 		});
 
 		if (mode === "incremental" && summaries.length === 0 && graph.entities.length === 0) {
-			completeDreamingPass(accessor, passId, agentId, mode, {
-				tokensConsumed: 0,
-				applied: 0,
-				skipped: 0,
-				failed: 0,
-				summary: "No new summaries or entities to process",
+			accessor.withWriteTx((db) => {
+				db.prepare(
+					`UPDATE dreaming_passes
+					 SET status = 'completed',
+					     completed_at = datetime('now'),
+					     tokens_consumed = 0,
+					     mutations_applied = 0,
+					     mutations_skipped = 0,
+					     mutations_failed = 0,
+					     summary = ?
+					 WHERE id = ?`,
+				).run("No new summaries or entities to process", passId);
+				resetDreamingTokens(db, agentId, passId, mode);
 			});
 			return { passId, applied: 0, skipped: 0, failed: 0, summary: "No new summaries or entities to process" };
 		}

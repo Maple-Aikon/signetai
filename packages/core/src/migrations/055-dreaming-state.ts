@@ -25,7 +25,7 @@ export function up(db: MigrationDb): void {
 			id TEXT PRIMARY KEY,
 			agent_id TEXT NOT NULL DEFAULT 'default',
 			mode TEXT NOT NULL DEFAULT 'incremental',
-			status TEXT NOT NULL DEFAULT 'pending',
+			status TEXT NOT NULL DEFAULT 'running',
 			started_at TEXT NOT NULL DEFAULT (datetime('now')),
 			completed_at TEXT,
 			tokens_consumed INTEGER,

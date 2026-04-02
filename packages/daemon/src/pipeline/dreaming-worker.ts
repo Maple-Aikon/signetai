@@ -85,6 +85,9 @@ export function startDreamingWorker(
 	});
 
 	return {
+		// Cancels the timer but does NOT await an in-flight pass.
+		// An active pass will complete (or fail) asynchronously; the
+		// `stopped` flag prevents new passes from being scheduled.
 		stop() {
 			stopped = true;
 			if (timer) {
@@ -100,6 +103,9 @@ export function startDreamingWorker(
 			active = true;
 			try {
 				return await runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+			} catch (e) {
+				recordDreamingFailure(accessor, agentId);
+				throw e;
 			} finally {
 				active = false;
 			}

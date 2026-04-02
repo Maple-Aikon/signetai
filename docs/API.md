@@ -2599,6 +2599,7 @@ Requires `admin` permission.
       "completedAt": "2026-04-01T12:05:00.000Z",
       "tokensConsumed": 8000,
       "mutationsApplied": 12,
+      "mutationsSkipped": 3,
       "mutationsFailed": 1,
       "summary": "Merged 3 duplicate entities, pruned 5 junk attributes",
       "error": null
@@ -2630,6 +2631,7 @@ dreaming worker is not started.
   "success": true,
   "passId": "pass-uuid",
   "applied": 12,
+  "skipped": 3,
   "failed": 1,
   "summary": "Merged 3 duplicate entities, pruned 5 junk attributes"
 }
