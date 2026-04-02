@@ -361,6 +361,42 @@ describe("OpenClawConnector config patching", () => {
 		expect(connector.getConfiguredRuntimePath()).toBe("legacy");
 	});
 
+	it("detects dual runtime state from config", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					hooks: {
+						internal: {
+							entries: {
+								"signet-memory": {
+									enabled: true,
+								},
+							},
+						},
+					},
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {
+							"signet-memory-openclaw": {
+								enabled: true,
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("dual");
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
+	});
+
 	it("adds signet memory plugin to plugins.allow during plugin install", async () => {
 		const configPath = join(tmpRoot, "openclaw.json");
 		const basePath = join(tmpRoot, "agents");

@@ -18,7 +18,11 @@ interface SyncState {
 
 interface Deps {
 	readonly agentsDir: string;
-	readonly configureHarnessHooks: (harness: string, basePath: string) => Promise<void>;
+	readonly configureHarnessHooks: (
+		harness: string,
+		basePath: string,
+		options?: { openclawRuntimePath?: "plugin" | "legacy" },
+	) => Promise<void>;
 	readonly getSkillsSourceDir: () => string;
 	readonly getTemplatesDir: () => string;
 	readonly signetLogo: () => string;
@@ -119,7 +123,20 @@ async function syncHarnessHooks(basePath: string, deps: Deps): Promise<number> {
 	let synced = 0;
 	for (const harness of detectHarnesses()) {
 		try {
-			await deps.configureHarnessHooks(harness, basePath);
+			let runtimePath: "plugin" | "legacy" | undefined;
+			if (harness === "openclaw") {
+				const state = new OpenClawConnector().getRuntimeState();
+				if (state === "legacy") {
+					runtimePath = "plugin";
+					console.log(
+						chalk.yellow(
+							"  ↺ OpenClaw legacy-only config detected, migrating to the plugin runtime path for full lifecycle capture",
+						),
+					);
+				}
+			}
+
+			await deps.configureHarnessHooks(harness, basePath, runtimePath ? { openclawRuntimePath: runtimePath } : undefined);
 			console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
 			synced += 1;
 		} catch {

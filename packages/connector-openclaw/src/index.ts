@@ -71,6 +71,8 @@ export interface OpenClawInstallOptions {
 	runtimePath?: "plugin" | "legacy";
 }
 
+export type OpenClawRuntimeState = "plugin" | "legacy" | "dual" | null;
+
 /**
  * Recursively merge `source` into `target`. Arrays are replaced (not
  * concatenated); objects are merged. Mutates and returns `target`.
@@ -678,7 +680,7 @@ export class OpenClawConnector extends BaseConnector {
 		return false;
 	}
 
-	getConfiguredRuntimePath(): "plugin" | "legacy" | null {
+	getRuntimeState(): OpenClawRuntimeState {
 		let sawLegacy = false;
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
@@ -691,12 +693,18 @@ export class OpenClawConnector extends BaseConnector {
 				const pluginSlot =
 					config.plugins?.slots?.memory === "signet-memory-openclaw" ||
 					config.plugins?.slots?.memory === "signet-memory";
+				const plugin = pluginEntry || pluginSlot;
+				const legacy = config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true;
 
-				if (pluginEntry || pluginSlot) {
+				if (plugin && legacy) {
+					return "dual";
+				}
+
+				if (plugin) {
 					return "plugin";
 				}
 
-				if (config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true) {
+				if (legacy) {
 					sawLegacy = true;
 				}
 			} catch {
@@ -705,6 +713,17 @@ export class OpenClawConnector extends BaseConnector {
 		}
 
 		return sawLegacy ? "legacy" : null;
+	}
+
+	getConfiguredRuntimePath(): "plugin" | "legacy" | null {
+		const state = this.getRuntimeState();
+		if (state === "plugin" || state === "dual") {
+			return "plugin";
+		}
+		if (state === "legacy") {
+			return "legacy";
+		}
+		return null;
 	}
 
 	/**
