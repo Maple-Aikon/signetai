@@ -198,6 +198,19 @@ describe("ForgeConnector", () => {
 		expect(result.message).toContain("Failed to read Forge MCP config");
 		expect(existsSync(join(forgeHome, "AGENTS.md"))).toBe(false);
 	});
+
+	it("fails safely when Signet identity is missing", async () => {
+		// basePath exists but has no identity files — hasValidIdentity returns false.
+		const basePath = join(tmpRoot, "empty-agents");
+		mkdirSync(basePath, { recursive: true });
+
+		const result = await new ForgeConnector().install(basePath);
+		expect(result.success).toBe(false);
+		expect(result.message).toContain("No valid Signet identity found at");
+		expect(result.message).toContain(basePath);
+		// Nothing should be written to ~/forge.
+		expect(existsSync(join(tmpRoot, "forge", "AGENTS.md"))).toBe(false);
+	});
 });
 
 describe("Forge connector wiring", () => {

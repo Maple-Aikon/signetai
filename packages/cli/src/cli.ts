@@ -40,6 +40,7 @@ import {
 	type SetupDetection,
 	type SkillsResult,
 	detectExistingSetup as detectExistingSetupCore,
+	expandHome,
 	formatYaml,
 	getGlobalInstallCommand,
 	getMissingIdentityFiles,
@@ -50,7 +51,6 @@ import {
 	parseSimpleYaml,
 	readStaticIdentity,
 	resolveGlobalPackagePath,
-	expandHome,
 	resolvePrimaryPackageManager,
 	symlinkSkills,
 	unifySkills,
@@ -299,7 +299,10 @@ async function configureHarnessHooks(
 		}
 		case "forge": {
 			const connector = new ForgeConnector();
-			await connector.install(basePath);
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: ForgeCode integration setup failed: ${result.message}`));
+			}
 			break;
 		}
 	}

@@ -63,6 +63,12 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 	// use node + the mcp-stdio.js entry point directly instead.
 	// argv[1] is e.g. .../signetai/bin/signet.js; mcp-stdio.js lives at
 	// .../signetai/dist/mcp-stdio.js (matches Claude Code / OpenCode pattern).
+	//
+	// Known limitation: the resolved absolute path is baked into
+	// ~/forge/.mcp.json at install time. If signet is updated or relocated
+	// after the initial setup, this path goes stale and ForgeCode will
+	// silently fail to spawn the MCP server. Re-running `signet setup` after
+	// an upgrade resolves the path afresh and overwrites the stale entry.
 	const cliEntry = process.argv[1] || "";
 	const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
 	if (existsSync(mcpJs)) {
