@@ -3,8 +3,8 @@ Repo: github.com/signetai/signetai
 GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 Branching: <username>/<feature> off main
 Conventional commits: type(scope) subject — reserve `feat:` for user-facing features only; use `fix:`, `refactor:`, `chore:`, or `perf:` for internal changes (feat bumps minor version)
-Last Updated: 2026/03/24
-This file: AGENTS.md -> Symlinked to CLAUDE.md
+Last Updated: 2026/04/02
+This file: AGENTS.md (canonical), `CLAUDE.md -> AGENTS.md`
 ---
 
 IMPORTANT: Do not overwrite or destroy this document or its symbolic links.
@@ -12,12 +12,12 @@ Running `/init` is **strongly** discouraged.
 
 This file provides guidance to AI assistants working on this repository.
 It is version controlled and co-maintained by human developers and AI
-assistants. Changes to this document should be thoughtful and express good judgement.
+assistants. Changes to this document should be thoughtful and express good judgment.
 
 Session Protocol (MANDATORY)
 ---
 
-Before starting any new feature, implementation, fix, refactor, or review,
+For major feature work, or any change that touches spec-governed behavior,
 agents MUST:
 
 1. Read `docs/specs/INDEX.md` at the start of the session.
@@ -26,8 +26,10 @@ agents MUST:
 4. Keep `INDEX.md` and `dependencies.yaml` in sync when adding or changing spec work.
 5. Re-check implementation decisions against the integration contracts and invariants in `INDEX.md` before finishing.
 
-If work is not represented in the spec system, add a planning stub first (or update
-a relevant existing spec) before implementation.
+Routine bug fixes, narrow refactors, tests, and docs-only edits usually stay
+out of the planning tier. If the change does not create or alter a durable
+product contract, schema/API boundary, dependency edge, or roadmap-level
+capability, do not create a planning spec for it.
 
 Incident -> Guardrail Loop (MANDATORY)
 ---
@@ -86,18 +88,14 @@ were the following. Prevent them proactively:
 8. **Code hygiene misses (unused vars/assignments, stale comments)**
    - Run lint and remove dead variables/imports before review.
    - Keep inline comments aligned with actual implementation behavior.
-   - Do **not** run `biome check --write` or `--unsafe` blindly across
-     `packages/cli/dashboard/`. Biome currently misfires on Svelte 5 rune
-     patterns (`$props`, `$state`, bindable refs, runtime component imports)
-     and can mass-convert required `let` / runtime imports into broken
-     `const` / `import type` forms. Scope autofix to a few files at a time,
-     inspect the diff, and immediately rerun `cd packages/cli/dashboard &&
-     bun run check` after any automated rewrite.
+   - In `packages/cli/dashboard/`, never run broad Biome autofix blindly.
+     Scope rewrites narrowly, inspect the diff, and rerun
+     `cd packages/cli/dashboard && bun run check` after each automated pass.
 
 PR Readiness Checklist (MANDATORY Before Opening PR)
 ---
 
-- [ ] Spec alignment validated (`INDEX.md` + `dependencies.yaml`).
+- [ ] Spec alignment validated (`INDEX.md` + `dependencies.yaml`) when the change touches spec-governed behavior or introduces new planned work.
 - [ ] Agent scoping verified on all new/changed data queries.
 - [ ] Input/config validation and bounds checks added.
 - [ ] Error handling and fallback paths tested (no silent swallow).
@@ -116,9 +114,9 @@ restarts, reconnects, partial streams).
 4. If a tradeoff is required, choose correctness and robustness over short-term
 convenience.
 5. All codebase changes are reviewed by agents during CI/CD, as well as human developers.
-6. Long term maintainability is a core priority. If you add new functionality,
+6. Long-term maintainability is a core priority. If you add new functionality,
 first check if there are shared logic that can be extracted to a separate module.
-7. Duplicate logic across mulitple files is a code smell and should be avoided.
+7. Duplicate logic across multiple files is a code smell and should be avoided.
 8. Don't be afraid to change existing code.
 9. Don't take shortcuts by just adding local logic to solve a problem.
 
@@ -143,7 +141,9 @@ bun run deploy:web       # Shortcut for web wrangler deploy
 order will cause dependency errors:
 
 ```
-build:core → build:connector-base → build:deps (parallel) → build:signetai
+build:core → build:connector-base → build:opencode-plugin → build:native
+→ build:oh-my-pi-extension → build:connector-oh-my-pi → build:deps
+(parallel filtered workspace builds) → build:signetai
 ```
 
 ### Testing
@@ -227,14 +227,15 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
 | `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
 | `@signet/connector-codex` | Codex CLI connector: hooks and plugin | node |
+| `@signet/connector-oh-my-pi` | Oh My Pi connector: install-time integration and config sync | node |
 | `@signet/opencode-plugin` | OpenCode runtime plugin: memory tools and session hooks | node |
+| `@signet/oh-my-pi-extension` | Oh My Pi browser/runtime extension bundle | browser |
 | `@signetai/signet-memory-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
-| `@signet/tray` | System tray application | node |
+| `@signet/tray` | Desktop app packaging and local runtime shell | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
 | `@signet/web` | Marketing website (Astro static, Cloudflare Pages) | cloudflare |
 | `@signet/native` | Native accelerators (SIMD vector ops, napi-rs) | node |
 | `predictor` | Predictive memory scorer sidecar (Rust) | rust |
-
 
 ### Package Responsibilities
 
@@ -276,6 +277,11 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 **@signet/sdk** - Third-party integration
 - SignetSDK class for embedding Signet in apps
 
+**packages/daemon-rs** - Rust daemon shadow runtime
+- Shadow rewrite of `@signet/daemon` used for parity work and divergence logging
+- Desktop packaging currently stages its bundled daemon binary from here
+- Behavioral changes in the JS daemon must preserve parity expectations here
+
 **@signet/connector-* packages** - Platform-specific connectors (install-time)
 - Install hooks into harness config files
 - Generate harness-specific CLAUDE.md/AGENTS.md
@@ -283,6 +289,18 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 - Call daemon API for session lifecycle
 - Distinct from `packages/daemon/src/connectors/` which is the
   daemon-side runtime connector framework (filesystem watch, registry)
+
+**@signetai/signet-memory-openclaw** - OpenClaw adapter runtime package
+- Ships the OpenClaw/ClawDBot runtime plugin bundle from `packages/adapters/openclaw`
+- Calls the daemon at runtime and threads Signet session metadata into the harness path
+
+**@signet/connector-oh-my-pi** + **@signet/oh-my-pi-extension** - Oh My Pi integration
+- Install-time connector plus bundled extension/runtime client
+- Uses the same daemon hook surface and runtime path signaling as other harness integrations
+
+**@signet/tray** - Desktop shell
+- Builds the Tauri desktop app and stages the Rust daemon binary for local packaging
+- Treat desktop-specific runtime assumptions as a separate surface, not just a wrapper around CLI docs
 
 **@signet/web** - Marketing website
 - Astro static site deployed to Cloudflare Pages
@@ -360,9 +378,9 @@ not the daemon's process working directory.
 ### Database Migrations
 
 `packages/core/src/migrations/` contains numbered migrations
-(001-baseline through 039-dedup-entity-dependencies). These run
-automatically on daemon startup. Add new migrations as sequential
-`.ts` files and register them in the migrations index.
+(001-baseline through 054-task-agent-scope, plus future sequential adds).
+These run automatically on daemon startup. Add new migrations as
+sequential `.ts` files and register them in the migrations index.
 
 ### Auth Middleware
 
@@ -499,10 +517,20 @@ bun src/cli.ts status    # Check status
 
 ## Specs Pipeline
 
-All feature design and research flows through a structured pipeline.
+Major feature design and research flows through a structured pipeline.
 The [Spec Index](docs/specs/INDEX.md) is the EPIC — it defines how
 approved specs compose into a coherent system. When deciding what
 ships next, start there.
+
+### When the spec pipeline applies
+
+Use the spec pipeline for major product capabilities, architectural changes,
+schema work, API contracts, cross-package coordination, roadmap sequencing, or
+other work that needs research-backed decisions and dependency tracking.
+
+Skip it for routine bug fixes, small UX polish, narrow refactors, test
+coverage, docs cleanup, and other maintenance that stays inside existing
+contracts.
 
 ### Pipeline Tiers
 
@@ -537,9 +565,11 @@ updates. The INDEX registry status updates.
    must trace back to at least one research source. If there is no
    research doc, write one first — even a brief one stating the
    question and known prior art.
-2. **No implementation without approval.** Do not begin feature
-   implementation from a planning doc. It must be in approved/ with
-   success criteria defined in the INDEX.
+2. **No major feature implementation without approval.** Do not begin
+   feature or architectural implementation from a planning doc. It must
+   be in approved/ with success criteria defined in the INDEX. Routine
+   bug fixes, maintenance, and narrow refactors that stay inside current
+   contracts do not need a planning spec first.
 3. **Move, don't copy.** When a spec graduates (planning → approved,
    approved → complete), move the file. Update `dependencies.yaml`
    path. Update INDEX registry. Never have the same spec in two tiers.
