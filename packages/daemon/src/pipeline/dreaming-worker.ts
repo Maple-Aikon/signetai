@@ -39,6 +39,24 @@ export function startDreamingWorker(
 	let active = false;
 	let stopped = false;
 
+	// Sweep orphaned passes from unclean shutdown: any 'running' record
+	// for this agent was left by a crash or forced stop — mark it failed
+	// so the status API doesn't show a forever-running ghost pass.
+	accessor.withWriteTx((db) => {
+		const orphaned = db
+			.prepare(
+				`UPDATE dreaming_passes
+				 SET status = 'failed',
+				     completed_at = datetime('now'),
+				     error = 'Orphaned by daemon restart'
+				 WHERE agent_id = ? AND status = 'running'`,
+			)
+			.run(agentId);
+		if (orphaned.changes > 0) {
+			logger.warn("dreaming-worker", `Swept ${orphaned.changes} orphaned running pass(es) from prior shutdown`);
+		}
+	});
+
 	async function check(): Promise<void> {
 		if (stopped || active) return;
 

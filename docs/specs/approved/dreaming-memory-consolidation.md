@@ -454,7 +454,6 @@ the spec can move to `complete`.
    - The self-improvement loop (section "Self-Improvement Loop")
      is not active — dream pass N+1 cannot review dream pass N's
      decisions and course-correct
-   - MEMORY.md is not part of dreaming context
    - No session transcript is saved for the dreaming pass itself
 
 2. **Incremental delta filtering.** The spec (section "Incremental
@@ -491,13 +490,11 @@ the spec can move to `complete`.
    The API surface (`GET /api/dream/status`) provides the data but
    there's no frontend consumer.
 
-7. **Identity context injection.** The spec (section "Identity")
-   requires the dreaming agent receive the full identity stack
-   (AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md). Currently,
-   the prompt includes a brief task description and the graph/summary
-   data, but does not load or inject the identity files. This limits
-   the agent's ability to make judgment calls about what matters to
-   this specific agent and user.
+7. **~~Identity context injection.~~** (RESOLVED) The prompt now loads
+   and injects all five identity files (AGENTS.md, SOUL.md, IDENTITY.md,
+   USER.md into `<identity>`, MEMORY.md into `<working_memory>`).
+   This was implemented in Phase 1 — the deferred item was documented
+   in error.
 
 
 ## Open Questions

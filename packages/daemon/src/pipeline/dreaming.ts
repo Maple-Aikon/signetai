@@ -378,6 +378,25 @@ function fetchEntityGraph(
 	return { entities, aspects, attributes, dependencies };
 }
 
+/** Log when any graph query hit its row cap — signals incomplete data. */
+function warnIfTruncated(
+	graph: ReturnType<typeof fetchEntityGraph>,
+	limits: { entities?: number; aspects?: number; attributes?: number; dependencies?: number },
+): void {
+	const truncated: string[] = [];
+	if (graph.entities.length >= (limits.entities ?? 2000)) truncated.push(`entities(${graph.entities.length})`);
+	if (graph.aspects.length >= (limits.aspects ?? 10_000)) truncated.push(`aspects(${graph.aspects.length})`);
+	if (graph.attributes.length >= (limits.attributes ?? 50_000))
+		truncated.push(`attributes(${graph.attributes.length})`);
+	if (graph.dependencies.length >= (limits.dependencies ?? 10_000))
+		truncated.push(`dependencies(${graph.dependencies.length})`);
+	if (truncated.length > 0) {
+		logger.warn("dreaming", "Entity graph truncated by row limits — dreaming pass will operate on a partial snapshot", {
+			truncated,
+		});
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Prompt construction
 // ---------------------------------------------------------------------------
@@ -502,6 +521,7 @@ Guidelines:
 - When merging, pick the best canonical name as the target
 - Provide clear reasons for all deletions and merges
 - Be conservative — only change what you're confident about
+- "update_aspect" is ADDITIVE — it adds new attributes to an aspect without removing existing ones. To replace a stale attribute, use "supersede_attribute" instead
 </task>
 
 ${summaryText ? `<recent_sessions>\n${summaryText}\n</recent_sessions>` : ""}
@@ -520,7 +540,7 @@ Respond with ONLY a JSON object in this exact format (no markdown code fences, n
     { "op": "create_entity", "name": "...", "type": "person|project|system|tool|concept|skill|task", "aspects": [{"name": "...", "attributes": ["..."]}] },
     { "op": "merge_entities", "source": ["entity name 1", "entity name 2"], "target": "canonical name", "reason": "..." },
     { "op": "delete_entity", "name": "...", "reason": "..." },
-    { "op": "update_aspect", "entity": "...", "aspect": "...", "attributes": ["new attribute 1", "new attribute 2"] },
+    { "op": "update_aspect", "entity": "...", "aspect": "...", "attributes": ["attribute to add 1", "attribute to add 2"] },
     { "op": "delete_aspect", "entity": "...", "aspect": "...", "reason": "..." },
     { "op": "supersede_attribute", "entity": "...", "aspect": "...", "old": "old content", "new": "new content" },
     { "op": "create_attribute", "entity": "...", "aspect": "...", "content": "..." },
@@ -895,6 +915,8 @@ function applyDeleteEntity(
 	return "applied";
 }
 
+/** Additive: inserts new attributes into an aspect. Does NOT replace existing ones.
+ *  For replacement semantics, the LLM should use supersede_attribute instead. */
 function applyUpdateAspect(
 	db: WriteDb,
 	agentId: string,
@@ -1086,6 +1108,8 @@ export async function runDreamingPass(
 			return { summaries, graph };
 		});
 
+		warnIfTruncated(graph, graphLimits);
+
 		if (mode === "incremental" && summaries.length === 0 && graph.entities.length === 0) {
 			accessor.withWriteTx((db) => {
 				db.prepare(
@@ -1137,6 +1161,22 @@ export async function runDreamingPass(
 		// state and the token counter unreset (which would re-trigger).
 		const { applied, skipped, failed, errors } = accessor.withWriteTx((db) => {
 			const result2 = applyMutations(db, agentId, result.mutations);
+
+			// Post-mutation integrity check: detect orphaned aspects (entity
+			// deleted but aspects left behind) which signals a partial merge/
+			// delete failure within a multi-statement handler.
+			const orphanedAspects = db
+				.prepare(
+					`SELECT COUNT(*) AS cnt FROM entity_aspects ea
+					 WHERE ea.agent_id = ?
+					   AND NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = ea.entity_id)`,
+				)
+				.get(agentId) as { cnt: number };
+			if (orphanedAspects.cnt > 0) {
+				logger.warn("dreaming", "Post-mutation integrity: found orphaned aspects with no parent entity", {
+					count: orphanedAspects.cnt,
+				});
+			}
 
 			// Complete pass record + reset token counter in same tx
 			db.prepare(
