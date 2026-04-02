@@ -435,6 +435,41 @@ cannot suppress them. This is a hard retrieval invariant.
 - The track cannot violate existing runtime guarantees: fail-open scoring,
   deterministic fallback, bounded latency, and constraint surfacing.
 
+### Dreaming Memory Consolidation <-> Knowledge Architecture
+
+- Dreaming reads the full entity graph (entities, aspects, attributes,
+  dependencies) as input to reasoning passes.
+- Dreaming writes graph mutations through the same KA schema: creates,
+  merges, deletes entities; updates/deletes aspects; supersedes/creates/
+  deletes attributes; rewrites dependency edges during merges.
+- Pinned entities (KA-6) cannot be deleted by dreaming — enforced at
+  mutation application time, reported as `skipped`.
+- Constraint attributes (`kind='constraint'`) cannot be superseded or
+  deleted by dreaming — invariant 5 holds.
+- Dreaming does not modify memories, embeddings, or retention state.
+  It only mutates the entity graph layer.
+
+### Dreaming Memory Consolidation <-> Session Continuity
+
+- Dreaming token accumulation hooks into the summary worker: each
+  session summary's transcript token count feeds `dreaming_state`.
+- Phase 2 will make dreaming passes into real sessions (session-start,
+  transcript, session-end summary), creating a self-improvement loop
+  where dream pass N+1 can review dream pass N's decisions.
+- Until Phase 2, dreaming passes are standalone LLM calls with no
+  session continuity or memory of prior passes.
+
+### Dreaming Memory Consolidation <-> Pipeline V2
+
+- Phase 1: dreaming and Pipeline V2 can run concurrently. SQLite write
+  serialization prevents data corruption but not logical inconsistency
+  (extraction may create entities between dreaming's read and write).
+- Phase 2 contract: when `dreaming.enabled: true`, Pipeline V2
+  extraction workers should be OFF. One knowledge graph writer at a
+  time. Summary workers and retention continue regardless.
+- Pipeline V2 remains the default for users without dreaming configured.
+  Dreaming is opt-in and requires a capable model provider.
+
 ### Multi-Agent <-> All Specs
 
 - `agent_id` column appears on every data table (see invariant 1).
@@ -722,6 +757,7 @@ Legend:
 | `postinstall-behavior-migration-audit` | planning | `docs/specs/planning/postinstall-behavior-migration-audit.md` | `memory-pipeline-v2` | - | Stub: ensure post-install behavior is daemon/CLI-owned |
 | `docker-self-hosting-stack` | planning | `docs/specs/planning/docker-self-hosting-stack.md` | `signet-runtime` | - | First-party Docker image + Compose + Caddy deployment contract with team-mode bootstrap path and operations runbook |
 | `system-prompt-extraction` | approved | `docs/specs/approved/system-prompt-extraction.md` | - | - | Move Signet system prompt injection to session-start runtime context and keep AGENTS.md as user-owned identity content |
+| `dreaming-memory-consolidation` | approved | `docs/specs/approved/dreaming-memory-consolidation.md` | `memory-pipeline-v2`, `knowledge-architecture-schema` | - | Phase 1 (consolidation engine, trigger, config, API, CLI) delivered in PR #442. Phase 2 (dreaming-as-session, incremental deltas, V2 exclusion, chunked compaction, dashboard, identity context) deferred. |
 | `ci-changed-files-selective` | planning | `docs/specs/planning/ci-changed-files-selective.md` | `memory-pipeline-v2` | - | Stub: selective PR CI by changed package graph |
 | `ci-contract-invariants-lane` | planning | `docs/specs/planning/ci-contract-invariants-lane.md` | `knowledge-architecture-schema` | - | Stub: mandatory fast invariant contract checks, including frozen lockfile integrity |
 | `ci-flaky-test-quarantine` | planning | `docs/specs/planning/ci-flaky-test-quarantine.md` | `ci-contract-invariants-lane` | - | Stub: flaky detection, quarantine, threshold policy |
@@ -808,6 +844,15 @@ fallback and latency bounds.
 ranking quality without violating traversal bounds, agent scoping, or
 constraint surfacing invariants.
 
+
+**dreaming-memory-consolidation**: Entity graph density increases after
+a dreaming pass. Duplicate and near-duplicate entities are merged
+automatically. Stale or junk attributes are pruned without manual
+intervention. Token spend per pass is bounded and configurable. Phase 1
+(mechanical consolidation engine) is delivered. Phase 2 (dreaming as a
+session, incremental deltas, pipeline mutual exclusion, chunked
+compaction, dashboard observability, identity context injection) is
+required before spec moves to `complete`.
 
 **wave-9 strategic stubs**: The strategic backlog items listed in Wave 9
 are intentionally tracked as planning stubs and require dedicated planning
