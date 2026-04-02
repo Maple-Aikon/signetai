@@ -205,6 +205,7 @@ export async function doStart(options: PathOptions, deps: Deps): Promise<void> {
 	}
 
 	spinner.fail("Failed to start daemon");
+	process.exit(1);
 }
 
 export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
@@ -225,6 +226,7 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 	}
 
 	spinner.fail("Failed to stop daemon");
+	process.exit(1);
 }
 
 export async function doRestart(options: RestartOptions, deps: Deps): Promise<void> {
@@ -238,7 +240,7 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 		const stopped = await deps.stopDaemon(basePath);
 		if (!stopped) {
 			spinner.fail("Failed to stop daemon");
-			return;
+			process.exit(1);
 		}
 		await deps.sleep(500);
 	}
@@ -253,7 +255,7 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 		}
 	} else {
 		spinner.fail("Failed to restart daemon");
-		return;
+		process.exit(1);
 	}
 
 	if (options.openclaw === false || !isOpenClawDetected()) {
