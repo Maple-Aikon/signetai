@@ -8,7 +8,7 @@ interface DreamDeps {
 interface DreamState {
 	readonly tokensSinceLastPass: number;
 	readonly lastPassAt: string | null;
-	readonly lastPassSummaryId: string | null;
+	readonly lastPassId: string | null;
 	readonly lastPassMode: string | null;
 }
 

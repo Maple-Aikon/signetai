@@ -2581,7 +2581,7 @@ Requires `admin` permission.
   "state": {
     "tokensSinceLastPass": 42000,
     "lastPassAt": "2026-04-01T12:00:00.000Z",
-    "lastPassSummaryId": "abc-123",
+    "lastPassId": "abc-123",
     "lastPassMode": "incremental"
   },
   "config": {

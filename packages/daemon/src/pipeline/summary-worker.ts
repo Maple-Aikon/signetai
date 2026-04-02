@@ -26,6 +26,7 @@ import { writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
+import { addDreamingTokens } from "./dreaming";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -588,7 +589,6 @@ async function processJob(
 		// Track summary tokens for dreaming trigger
 		try {
 			const tokens = Math.ceil(result.summary.length / 4);
-			const { addDreamingTokens } = await import("./dreaming.js");
 			addDreamingTokens(accessor, job.agent_id, tokens);
 		} catch (e) {
 			logger.warn("summary-worker", "Failed to accumulate dreaming tokens (non-fatal)", {

@@ -107,7 +107,7 @@ its token count is added to a running total persisted in the database.
 dreaming_state:
   tokens_since_last_pass: 0
   last_pass_at: null
-  last_pass_summary_id: null
+  last_pass_id: null
 ```
 
 When `tokens_since_last_pass` exceeds the configured threshold, the

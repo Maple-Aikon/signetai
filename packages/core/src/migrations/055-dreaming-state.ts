@@ -9,11 +9,10 @@ import type { MigrationDb } from "./index";
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_state (
-			id TEXT PRIMARY KEY DEFAULT 'singleton',
-			agent_id TEXT NOT NULL DEFAULT 'default',
+			agent_id TEXT PRIMARY KEY NOT NULL DEFAULT 'default',
 			tokens_since_last_pass INTEGER NOT NULL DEFAULT 0,
 			last_pass_at TEXT,
-			last_pass_summary_id TEXT,
+			last_pass_id TEXT,
 			last_pass_mode TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))

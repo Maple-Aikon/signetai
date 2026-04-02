@@ -5,7 +5,7 @@
  * produces structured graph mutations (create, merge, update, delete,
  * supersede), and applies them transactionally.
  *
- * See docs/specs/planning/dreaming-memory-consolidation.md
+ * See docs/specs/approved/dreaming-memory-consolidation.md
  */
 
 import { randomUUID } from "node:crypto";
@@ -35,7 +35,7 @@ export interface DreamingResult {
 export interface DreamingState {
 	readonly tokensSinceLastPass: number;
 	readonly lastPassAt: string | null;
-	readonly lastPassSummaryId: string | null;
+	readonly lastPassId: string | null;
 	readonly lastPassMode: string | null;
 }
 
@@ -105,24 +105,24 @@ export function getDreamingState(accessor: DbAccessor, agentId: string): Dreamin
 		const row = db
 			.prepare(
 				`SELECT tokens_since_last_pass, last_pass_at,
-				        last_pass_summary_id, last_pass_mode
+				        last_pass_id, last_pass_mode
 				 FROM dreaming_state WHERE agent_id = ?`,
 			)
 			.get(agentId) as
 			| {
 					tokens_since_last_pass: number;
 					last_pass_at: string | null;
-					last_pass_summary_id: string | null;
+					last_pass_id: string | null;
 					last_pass_mode: string | null;
 			  }
 			| undefined;
 		if (!row) {
-			return { tokensSinceLastPass: 0, lastPassAt: null, lastPassSummaryId: null, lastPassMode: null };
+			return { tokensSinceLastPass: 0, lastPassAt: null, lastPassId: null, lastPassMode: null };
 		}
 		return {
 			tokensSinceLastPass: row.tokens_since_last_pass,
 			lastPassAt: row.last_pass_at,
-			lastPassSummaryId: row.last_pass_summary_id,
+			lastPassId: row.last_pass_id,
 			lastPassMode: row.last_pass_mode,
 		};
 	});
@@ -140,9 +140,9 @@ export function addDreamingTokens(accessor: DbAccessor, agentId: string, tokens:
 			).run(tokens, agentId);
 		} else {
 			db.prepare(
-				`INSERT INTO dreaming_state (id, agent_id, tokens_since_last_pass)
-				 VALUES (?, ?, ?)`,
-			).run(randomUUID(), agentId, tokens);
+				`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass)
+				 VALUES (?, ?)`,
+			).run(agentId, tokens);
 		}
 	});
 }
@@ -154,16 +154,16 @@ function resetDreamingTokens(db: WriteDb, agentId: string, passId: string, mode:
 			`UPDATE dreaming_state
 			 SET tokens_since_last_pass = 0,
 			     last_pass_at = datetime('now'),
-			     last_pass_summary_id = ?,
+			     last_pass_id = ?,
 			     last_pass_mode = ?,
 			     updated_at = datetime('now')
 			 WHERE agent_id = ?`,
 		).run(passId, mode, agentId);
 	} else {
 		db.prepare(
-			`INSERT INTO dreaming_state (id, agent_id, tokens_since_last_pass, last_pass_at, last_pass_summary_id, last_pass_mode)
-			 VALUES (?, ?, 0, datetime('now'), ?, ?)`,
-		).run(randomUUID(), agentId, passId, mode);
+			`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass, last_pass_at, last_pass_id, last_pass_mode)
+			 VALUES (?, 0, datetime('now'), ?, ?)`,
+		).run(agentId, passId, mode);
 	}
 }
 
@@ -637,7 +637,7 @@ function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation)
 		const srcId = resolveEntity(db, agentId, src);
 		if (!srcId || srcId === targetId) continue;
 
-		// Move aspects to target
+		// Move non-colliding aspects to target
 		db.prepare(
 			`UPDATE entity_aspects SET entity_id = ?, updated_at = datetime('now')
 			 WHERE entity_id = ? AND agent_id = ?
@@ -645,6 +645,60 @@ function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation)
 			     SELECT canonical_name FROM entity_aspects WHERE entity_id = ? AND agent_id = ?
 			   )`,
 		).run(targetId, srcId, agentId, targetId, agentId);
+
+		// For colliding aspects (same canonical_name on both entities),
+		// copy active attributes from the source aspect into the target aspect
+		// so they aren't lost in the cascade delete below.
+		const collidingSourceAspects = db
+			.prepare(
+				`SELECT sa.id AS srcAspectId, ta.id AS tgtAspectId
+				 FROM entity_aspects sa
+				 JOIN entity_aspects ta
+				   ON ta.entity_id = ? AND ta.agent_id = ? AND ta.canonical_name = sa.canonical_name
+				 WHERE sa.entity_id = ? AND sa.agent_id = ?`,
+			)
+			.all(targetId, agentId, srcId, agentId) as Array<{ srcAspectId: string; tgtAspectId: string }>;
+
+		for (const { srcAspectId, tgtAspectId } of collidingSourceAspects) {
+			// Copy active attributes that don't already exist on the target aspect
+			const srcAttrs = db
+				.prepare(
+					`SELECT content, normalized_content, kind, confidence, importance
+					 FROM entity_attributes
+					 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
+				)
+				.all(srcAspectId, agentId) as Array<{
+				content: string;
+				normalized_content: string;
+				kind: string;
+				confidence: number;
+				importance: number;
+			}>;
+			for (const attr of srcAttrs) {
+				const exists = db
+					.prepare(
+						`SELECT 1 FROM entity_attributes
+						 WHERE aspect_id = ? AND agent_id = ? AND normalized_content = ?`,
+					)
+					.get(tgtAspectId, agentId, attr.normalized_content);
+				if (!exists) {
+					db.prepare(
+						`INSERT INTO entity_attributes
+						 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+					).run(
+						randomUUID(),
+						tgtAspectId,
+						agentId,
+						attr.kind,
+						attr.content,
+						attr.normalized_content,
+						attr.confidence,
+						attr.importance,
+					);
+				}
+			}
+		}
 
 		// Move dependencies (source side)
 		db.prepare(
@@ -658,11 +712,13 @@ function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation)
 			 WHERE target_entity_id = ? AND agent_id = ?`,
 		).run(targetId, srcId, agentId);
 
-		// Move memory mentions
+		// Move memory mentions (OR IGNORE skips duplicates)
 		db.prepare(
 			`UPDATE OR IGNORE memory_entity_mentions SET entity_id = ?
 			 WHERE entity_id = ?`,
 		).run(targetId, srcId);
+		// Clean up any remaining source mentions (duplicates skipped above)
+		db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(srcId);
 
 		// Transfer mention count
 		db.prepare(
@@ -706,6 +762,7 @@ function applyDeleteEntity(db: WriteDb, agentId: string, mut: DreamingMutation):
 	db.prepare(
 		"DELETE FROM entity_dependencies WHERE (source_entity_id = ? OR target_entity_id = ?) AND agent_id = ?",
 	).run(entityId, entityId, agentId);
+	db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(entityId);
 	db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(entityId, agentId);
 	return "applied";
 }
