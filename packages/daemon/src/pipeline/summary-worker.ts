@@ -26,7 +26,7 @@ import { writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
-import { addDreamingTokens, countTokens } from "./dreaming";
+import { addDreamingTokens } from "./dreaming";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -37,6 +37,7 @@ import {
 	resolveDefaultOllamaFallbackMaxContextTokens,
 } from "./provider";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
+import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1157,7 +1158,7 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 		if (!row) return;
 
 		const now = new Date().toISOString();
-		const tokenCount = Math.ceil(result.summary.length / 4);
+		const tokenCount = countTokens(result.summary);
 		const sourceType = job.trigger === "checkpoint_extract" ? "checkpoint" : "summary";
 
 		// Upsert: check for existing row first since ON CONFLICT doesn't
@@ -1258,7 +1259,7 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 					chunkId,
 					job.project,
 					leaf,
-					Math.ceil(leaf.length / 4),
+					countTokens(leaf),
 					job.created_at,
 					now,
 					job.harness,

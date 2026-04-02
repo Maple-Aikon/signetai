@@ -12,20 +12,9 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
-import { Tiktoken } from "js-tiktoken/lite";
-import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
-
-// Module-level tokenizer — same vocab used by memory-head.ts.
-// cl100k_base (GPT-4/3.5 BPE) is a reasonable approximation for all
-// hosted LLM APIs; actual model tokenizers differ slightly but this
-// is far more accurate than the length/4 heuristic.
-const tok = new Tiktoken(cl100k_base);
-
-export function countTokens(text: string): number {
-	return tok.encode(text).length;
-}
+import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -616,6 +605,30 @@ function isValidMutation(v: unknown): v is DreamingMutation {
 // Mutation execution
 // ---------------------------------------------------------------------------
 
+/**
+ * Insert a single attribute row under `aspectId`, deduplicating by
+ * `normalizedContent`.  Shared by all mutation handlers that create
+ * attributes so the column list only lives in one place.
+ */
+function insertAttr(
+	db: WriteDb,
+	aspectId: string,
+	agentId: string,
+	content: string,
+	normalized: string,
+	kind = "attribute",
+	confidence = 0.8,
+	importance = 0.5,
+): string {
+	const id = randomUUID();
+	db.prepare(
+		`INSERT INTO entity_attributes
+		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+	).run(id, aspectId, agentId, kind, content, normalized, confidence, importance);
+	return id;
+}
+
 function parseDreamingResult(raw: string): DreamingResult {
 	// Strip markdown code fences if present
 	let cleaned = raw.trim();
@@ -782,11 +795,7 @@ function applyCreateEntity(
 				)
 				.get(aspectId, agentId, normalized);
 			if (!exists) {
-				db.prepare(
-					`INSERT INTO entity_attributes
-					 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
-					 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-				).run(randomUUID(), aspectId, agentId, content.trim(), normalized);
+				insertAttr(db, aspectId, agentId, content.trim(), normalized);
 			}
 		}
 	}
@@ -869,25 +878,19 @@ function applyMergeEntities(
 					)
 					.get(tgtAspectId, agentId, attr.normalized_content);
 				if (!exists) {
-					db.prepare(
-						`INSERT INTO entity_attributes
-						 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
-						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
-					).run(
-						randomUUID(),
+					insertAttr(
+						db,
 						tgtAspectId,
 						agentId,
-						attr.kind,
 						attr.content,
 						attr.normalized_content,
+						attr.kind,
 						attr.confidence,
 						attr.importance,
 					);
 				}
 			}
 		}
-
-		// Move dependencies (source side)
 		// OR IGNORE handles collision when T→X already exists (S→X can't become T→X)
 		// Check ahead of time whether S→T exists so we know if a self-loop will be
 		// created below (S→T becomes T→T after the rewrite).
@@ -1045,11 +1048,7 @@ function applyUpdateAspect(
 
 	const aspectId = resolveOrCreateAspect(db, entityId, agentId, mut.aspect);
 	for (const { content, normalized } of toInsert) {
-		db.prepare(
-			`INSERT INTO entity_attributes
-			 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
-			 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-		).run(randomUUID(), aspectId, agentId, content, normalized);
+		insertAttr(db, aspectId, agentId, content, normalized);
 	}
 	return "applied";
 }
@@ -1111,13 +1110,8 @@ function applySupersede(
 	if (!oldAttr) return "skipped";
 
 	// Create new attribute
-	const newId = randomUUID();
 	const normalizedNew = mut.new.trim().toLowerCase();
-	db.prepare(
-		`INSERT INTO entity_attributes
-		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
-		 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-	).run(newId, aspectId, agentId, mut.new.trim(), normalizedNew);
+	const newId = insertAttr(db, aspectId, agentId, mut.new.trim(), normalizedNew);
 
 	// Mark old as superseded
 	db.prepare(
@@ -1148,11 +1142,7 @@ function applyCreateAttribute(
 		.get(aspectId, agentId, normalized);
 	if (exists) return "skipped";
 
-	db.prepare(
-		`INSERT INTO entity_attributes
-		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
-		 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-	).run(randomUUID(), aspectId, agentId, mut.content.trim(), normalized);
+	insertAttr(db, aspectId, agentId, mut.content.trim(), normalized);
 	return "applied";
 }
 
