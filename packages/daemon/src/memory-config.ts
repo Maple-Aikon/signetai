@@ -13,6 +13,7 @@ import {
 	parseSimpleYaml,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth/config";
+import { logger } from "./logger";
 
 export interface EmbeddingConfig {
 	provider: "native" | "ollama" | "openai" | "none";
@@ -935,6 +936,15 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	};
 }
 
+function clampWarn(field: string, raw: unknown, min: number, max: number, fallback: number): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+	const clamped = Math.max(min, Math.min(max, raw));
+	if (clamped !== raw) {
+		logger.warn("config", `dreaming.${field} out of range [${min}, ${max}]: ${raw} → clamped to ${clamped}`);
+	}
+	return clamped;
+}
+
 export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfig {
 	const mem = yaml.memory as Record<string, unknown> | undefined;
 	const raw = mem?.dreaming as Record<string, unknown> | undefined;
@@ -942,13 +952,13 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 	const dd = DEFAULT_DREAMING;
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : dd.enabled,
-		tokenThreshold: clampPositive(raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
+		tokenThreshold: clampWarn("tokenThreshold", raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
 		provider: isDreamingProvider(raw.provider) ? raw.provider : dd.provider,
 		model: typeof raw.model === "string" && raw.model.trim().length > 0 ? raw.model : dd.model,
 		endpoint: parseOptionalUrl(raw.endpoint),
-		timeout: clampPositive(raw.timeout, 30_000, 600_000, dd.timeout),
-		maxInputTokens: clampPositive(raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
-		maxOutputTokens: clampPositive(raw.maxOutputTokens, 1_000, 128_000, dd.maxOutputTokens),
+		timeout: clampWarn("timeout", raw.timeout, 30_000, 600_000, dd.timeout),
+		maxInputTokens: clampWarn("maxInputTokens", raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
+		maxOutputTokens: clampWarn("maxOutputTokens", raw.maxOutputTokens, 1_000, 128_000, dd.maxOutputTokens),
 		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,
 	};
 }

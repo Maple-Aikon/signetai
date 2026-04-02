@@ -637,12 +637,19 @@ function applyMutations(
 
 	for (const mut of mutations) {
 		try {
+			// merge_entities returns a rich { applied, skipped } object because
+			// a single mutation can have mixed pinned/non-pinned sources — both
+			// counters must be updated to reflect the full picture.
+			if (mut.op === "merge_entities") {
+				const r = applyMergeEntities(db, agentId, mut);
+				applied += r.applied;
+				skipped += r.skipped;
+				continue;
+			}
 			const result = (() => {
 				switch (mut.op) {
 					case "create_entity":
 						return applyCreateEntity(db, agentId, mut);
-					case "merge_entities":
-						return applyMergeEntities(db, agentId, mut);
 					case "delete_entity":
 						return applyDeleteEntity(db, agentId, mut);
 					case "update_aspect":
@@ -764,17 +771,18 @@ function applyMergeEntities(
 	db: WriteDb,
 	agentId: string,
 	mut: DreamingMutation & { op: "merge_entities" },
-): "applied" | "skipped" {
-	if (!mut.source || !mut.target || mut.source.length === 0) return "skipped";
+): { applied: number; skipped: number } {
+	if (!mut.source || !mut.target || mut.source.length === 0) return { applied: 0, skipped: 1 };
 
 	// Resolve target — do NOT create; if the target doesn't exist, skip
 	const targetId = resolveEntity(db, agentId, mut.target);
 	if (!targetId) {
 		logger.warn("dreaming", `Merge target "${mut.target}" not found, skipping`);
-		return "skipped";
+		return { applied: 0, skipped: 1 };
 	}
 
 	let merged = 0;
+	let pinnedSkipped = 0;
 	for (const src of mut.source) {
 		const srcId = resolveEntity(db, agentId, src);
 		if (!srcId || srcId === targetId) continue;
@@ -785,6 +793,7 @@ function applyMergeEntities(
 			| undefined;
 		if (srcRow?.pinned === 1) {
 			logger.warn("dreaming", `Merge source "${src}" is pinned, skipping`);
+			pinnedSkipped++;
 			continue;
 		}
 		merged++;
@@ -925,7 +934,7 @@ function applyMergeEntities(
 		db.prepare("DELETE FROM entity_aspects WHERE entity_id = ? AND agent_id = ?").run(srcId, agentId);
 		db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(srcId, agentId);
 	}
-	return merged > 0 ? "applied" : "skipped";
+	return { applied: merged > 0 ? 1 : 0, skipped: (merged === 0 ? 1 : 0) + pinnedSkipped };
 }
 
 function applyDeleteEntity(
@@ -983,24 +992,38 @@ function applyUpdateAspect(
 
 	const entityId = resolveEntity(db, agentId, mut.entity);
 	if (!entityId) return "skipped";
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, mut.aspect);
 
-	for (const content of mut.attributes) {
-		if (!content || content.trim().length < 5) continue;
-		const normalized = content.trim().toLowerCase();
-		const exists = db
-			.prepare(
-				`SELECT 1 FROM entity_attributes
-				 WHERE aspect_id = ? AND agent_id = ? AND normalized_content = ?`,
-			)
-			.get(aspectId, agentId, normalized);
-		if (!exists) {
-			db.prepare(
-				`INSERT INTO entity_attributes
-				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
-				 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
-			).run(randomUUID(), aspectId, agentId, content.trim(), normalized);
-		}
+	// Pre-filter: drop attributes that are too short before touching the DB.
+	// This prevents creating an empty aspect row as a side effect.
+	const candidates = mut.attributes
+		.filter((a) => a && a.trim().length >= 5)
+		.map((a) => ({ content: a.trim(), normalized: a.trim().toLowerCase() }));
+	if (candidates.length === 0) return "skipped";
+
+	// If the aspect already exists, filter out attributes that are already present.
+	// Only create the aspect if at least one new attribute will actually be inserted.
+	const existingAspectId = resolveAspect(db, entityId, agentId, mut.aspect);
+	const toInsert = existingAspectId
+		? candidates.filter(({ normalized }) => {
+				const exists = db
+					.prepare(
+						`SELECT 1 FROM entity_attributes
+					 WHERE aspect_id = ? AND agent_id = ? AND normalized_content = ?`,
+					)
+					.get(existingAspectId, agentId, normalized);
+				return !exists;
+			})
+		: candidates;
+
+	if (toInsert.length === 0) return "skipped";
+
+	const aspectId = resolveOrCreateAspect(db, entityId, agentId, mut.aspect);
+	for (const { content, normalized } of toInsert) {
+		db.prepare(
+			`INSERT INTO entity_attributes
+			 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+			 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', datetime('now'), datetime('now'))`,
+		).run(randomUUID(), aspectId, agentId, content, normalized);
 	}
 	return "applied";
 }

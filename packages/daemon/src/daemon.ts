@@ -8183,6 +8183,10 @@ app.use("/api/dream/*", async (c, next) => {
 });
 
 app.get("/api/dream/status", (c) => {
+	// loadMemoryConfig on each request intentionally: this is a polled
+	// admin endpoint and callers expect fresh config values after an
+	// agent.yaml edit without restarting the daemon. Consistent with
+	// other polled status endpoints in this file.
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const accessor = getDbAccessor();
 	const agentId = resolveAgentId({
