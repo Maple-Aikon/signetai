@@ -5,9 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getExtractionStatusNotice, getStatusReport, showDoctor } from "./health.js";
 
+const originalHome = process.env.HOME;
 const originalOpenClawConfig = process.env.OPENCLAW_CONFIG_PATH;
 
 afterEach(() => {
+	if (originalHome === undefined) {
+		delete process.env.HOME;
+	} else {
+		process.env.HOME = originalHome;
+	}
+
 	if (originalOpenClawConfig === undefined) {
 		process.env.OPENCLAW_CONFIG_PATH = undefined;
 	} else {
@@ -318,6 +325,7 @@ describe("status report openclaw runtime", () => {
 			);
 			process.env.OPENCLAW_CONFIG_PATH = cfgPath;
 			const report = await getStatusReport(workspace, depsFor(workspace));
+			expect(report.openclawDualSystem).toBe(false);
 			expect(report.openclawRuntime).toBe("legacy");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -351,6 +359,7 @@ describe("status report openclaw runtime", () => {
 			);
 			process.env.OPENCLAW_CONFIG_PATH = cfgPath;
 			const report = await getStatusReport(workspace, depsFor(workspace));
+			expect(report.openclawDualSystem).toBe(true);
 			expect(report.openclawRuntime).toBe("dual");
 		} finally {
 			rmSync(root, { recursive: true, force: true });

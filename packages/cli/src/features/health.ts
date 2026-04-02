@@ -1,6 +1,7 @@
 import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-openclaw";
 import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
 import chalk from "chalk";
+import { join } from "node:path";
 import { daemonAccessLines } from "../lib/network.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
@@ -66,6 +67,7 @@ interface StatusReport {
 		readonly origin: string | null;
 		readonly snapshot: string | null;
 	};
+	readonly openclawDualSystem: boolean;
 	readonly openclawRuntime: OpenClawRuntimeState;
 	readonly openclawWorkspaceLinked: boolean;
 	readonly openclawWorkspaceUnprotected: boolean;
@@ -121,6 +123,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 			origin: git.origin,
 			snapshot,
 		},
+		openclawDualSystem: openclawRuntime === "dual",
 		openclawRuntime,
 		openclawWorkspaceLinked,
 		openclawWorkspaceUnprotected: openclawWorkspaceLinked && git.origin === null && snapshot === null,
