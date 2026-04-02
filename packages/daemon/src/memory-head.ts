@@ -2,9 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Tiktoken } from "js-tiktoken/lite";
+import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
+
+const MEMORY_HEAD_MAX_TOKENS = 5000;
+const headTok = new Tiktoken(cl100k_base);
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -28,9 +33,19 @@ function hashContent(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
 }
 
-function projectMemoryMd(content: string): string {
+function truncateTokens(text: string, limit: number): string {
+	if (limit < 1) return "";
+	const tokens = headTok.encode(text);
+	if (tokens.length <= limit) return text;
+	return headTok.decode(tokens.slice(0, limit)).trimEnd();
+}
+
+function projectMemoryMd(content: string): { readonly body: string; readonly file: string } {
 	const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
-	return `<!-- generated ${stamp} -->\n\n${content}`;
+	const prefix = `<!-- generated ${stamp} -->\n\n`;
+	const budget = MEMORY_HEAD_MAX_TOKENS - headTok.encode(prefix).length;
+	const body = truncateTokens(content, budget);
+	return { body, file: `${prefix}${body}` };
 }
 
 function acquireHeadLease(agentId: string, owner: string, ttlMs: number): LeaseResult {
@@ -133,7 +148,7 @@ function releaseHeadLease(agentId: string, token: string): void {
 	}
 }
 
-function writeProjection(content: string): void {
+function writeProjection(file: string): void {
 	const agentsDir = getAgentsDir();
 	const path = join(agentsDir, "MEMORY.md");
 	if (existsSync(path)) {
@@ -142,7 +157,7 @@ function writeProjection(content: string): void {
 		mkdirSync(join(agentsDir, "memory"), { recursive: true });
 		writeFileSync(backup, readFileSync(path, "utf-8"));
 	}
-	writeFileSync(path, projectMemoryMd(content));
+	writeFileSync(path, file);
 }
 
 export function writeMemoryHead(
@@ -165,6 +180,7 @@ export function writeMemoryHead(
 		}
 	}
 
+	const projected = projectMemoryMd(trimmed);
 	const agentId = opts?.agentId ?? "default";
 	const owner = opts?.owner ?? `memory-head:${process.pid}:${randomUUID().slice(0, 8)}`;
 	const ttlMs = loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs;
@@ -176,7 +192,7 @@ export function writeMemoryHead(
 
 	if (!lease.ok) {
 		try {
-			writeProjection(content);
+			writeProjection(projected.file);
 			return { ok: true, revision: 0 };
 		} catch (error) {
 			return {
@@ -186,15 +202,15 @@ export function writeMemoryHead(
 		}
 	}
 
-	const next = lease.row.hash === hashContent(content) ? lease.row.revision : lease.row.revision + 1;
-	const committed = finalizeHeadWrite(agentId, lease.row.token, content, next);
+	const next = lease.row.hash === hashContent(projected.body) ? lease.row.revision : lease.row.revision + 1;
+	const committed = finalizeHeadWrite(agentId, lease.row.token, projected.body, next);
 	if (!committed) {
 		releaseHeadLease(agentId, lease.row.token);
 		return { ok: false, error: "Failed to commit MEMORY.md head state" };
 	}
 
 	try {
-		writeProjection(content);
+		writeProjection(projected.file);
 		return { ok: true, revision: next };
 	} catch (error) {
 		return {

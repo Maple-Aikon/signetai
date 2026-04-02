@@ -13,7 +13,7 @@
     },
     "packages/adapters/openclaw": {
       "name": "@signetai/signet-memory-openclaw",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@sinclair/typebox": "0.34.47",
       },
@@ -27,7 +27,7 @@
     },
     "packages/cli": {
       "name": "@signet/cli",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
@@ -95,7 +95,7 @@
     },
     "packages/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -109,7 +109,7 @@
     },
     "packages/connector-claude-code": {
       "name": "@signet/connector-claude-code",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -121,7 +121,7 @@
     },
     "packages/connector-codex": {
       "name": "@signet/connector-codex",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -133,7 +133,7 @@
     },
     "packages/connector-oh-my-pi": {
       "name": "@signet/connector-oh-my-pi",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -145,7 +145,7 @@
     },
     "packages/connector-openclaw": {
       "name": "@signet/connector-openclaw",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "json5": "^2.2.3",
@@ -157,7 +157,7 @@
     },
     "packages/connector-opencode": {
       "name": "@signet/connector-opencode",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -169,7 +169,7 @@
     },
     "packages/core": {
       "name": "@signet/core",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "sqlite-vec": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
@@ -191,7 +191,7 @@
     },
     "packages/daemon": {
       "name": "@signet/daemon",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
         "signet-mcp": "./dist/mcp-stdio.js",
@@ -208,6 +208,7 @@
         "graphology-communities-louvain": "^2.0.2",
         "graphology-types": "^0.24.8",
         "hono": "^4.8.0",
+        "js-tiktoken": "^1.0.21",
         "libsodium-wrappers": "^0.8.2",
         "onnxruntime-node": "1.21.0",
         "sharp": "^0.34.1",
@@ -224,7 +225,7 @@
     },
     "packages/extension": {
       "name": "@signet/extension",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "devDependencies": {
         "@types/chrome": "^0.0.287",
         "typescript": "^5.7.0",
@@ -232,14 +233,14 @@
     },
     "packages/native": {
       "name": "@signet/native",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "devDependencies": {
         "@napi-rs/cli": "^3.5.1",
       },
     },
     "packages/oh-my-pi-extension": {
       "name": "@signet/oh-my-pi-extension",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "^13.16.4",
         "@signet/core": "workspace:*",
@@ -252,7 +253,7 @@
     },
     "packages/opencode-plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -262,7 +263,7 @@
     },
     "packages/sdk": {
       "name": "@signet/sdk",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
@@ -278,7 +279,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -309,7 +310,7 @@
     },
     "packages/tray": {
       "name": "@signet/tray",
-      "version": "0.86.3",
+      "version": "0.91.4",
       "dependencies": {
         "@signet/sdk": "workspace:*",
         "@tauri-apps/api": "^2.5.0",
@@ -2420,6 +2421,8 @@
     "jiti": ["jiti@2.6.1", "", { "bin": { "jiti": "lib/jiti-cli.mjs" } }, "sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ=="],
 
     "jose": ["jose@6.1.3", "", {}, "sha512-0TpaTfihd4QMNwrz/ob2Bp7X04yuxJkjRGi4aKmOqwhov54i6u79oCv7T+C7lo70MKH6BesI3vscD1yb/yzKXQ=="],
+
+    "js-tiktoken": ["js-tiktoken@1.0.21", "", { "dependencies": { "base64-js": "^1.5.1" } }, "sha512-biOj/6M5qdgx5TKjDnFT1ymSpM5tbd3ylwDtrQvFQSu0Z7bBYko2dF+W/aUkXUPuk6IVpRxk/3Q2sHOzGlS36g=="],
 
     "js-tokens": ["js-tokens@4.0.0", "", {}, "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="],
 
