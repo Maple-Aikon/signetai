@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.11] - 2026-04-02
+
+### Bug Fixes
+
+- **cli**: use wall-clock deadline for daemon startup poll and exit non-zero on failure (#445)
+
+
 ## [0.91.10] - 2026-04-02
 
 ### Bug Fixes
