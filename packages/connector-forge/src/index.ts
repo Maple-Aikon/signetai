@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
@@ -62,7 +71,7 @@ function buildMcpServer(basePath: string): JsonObject {
 	const mcp = resolveSignetMcp();
 	return {
 		command: mcp.command,
-		args: mcp.args,
+		...(mcp.args.length > 0 ? { args: mcp.args } : {}),
 		env: {
 			SIGNET_PATH: basePath,
 		},
@@ -160,6 +169,8 @@ export class ForgeConnector extends BaseConnector {
 			}
 		}
 
+		this.removeSkillSymlinks(filesRemoved);
+
 		const mcpPath = this.getMcpConfigPath();
 		if (existsSync(mcpPath)) {
 			try {
@@ -200,6 +211,27 @@ export class ForgeConnector extends BaseConnector {
 			return "signet" in servers;
 		} catch {
 			return false;
+		}
+	}
+
+	private removeSkillSymlinks(filesRemoved: string[]): void {
+		const skillsDir = this.getSkillsPath();
+		if (!existsSync(skillsDir)) return;
+
+		try {
+			for (const entry of readdirSync(skillsDir)) {
+				const target = join(skillsDir, entry);
+				if (lstatSync(target).isSymbolicLink()) {
+					unlinkSync(target);
+					filesRemoved.push(target);
+				}
+			}
+			// Remove the skills directory itself if now empty
+			if (readdirSync(skillsDir).length === 0) {
+				rmSync(skillsDir, { force: true });
+			}
+		} catch {
+			// Leave unreadable skills directory untouched.
 		}
 	}
 

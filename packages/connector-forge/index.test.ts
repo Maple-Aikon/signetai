@@ -31,7 +31,8 @@ afterEach(() => {
 	if (typeof originalHome === "string") {
 		process.env.HOME = originalHome;
 	} else {
-		process.env.HOME = undefined;
+		// biome-ignore lint/performance/noDelete: env vars coerce undefined to "undefined"
+		delete process.env.HOME;
 	}
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
@@ -90,6 +91,9 @@ describe("ForgeConnector", () => {
 			throw new Error("Expected signet MCP server in Forge config");
 		}
 		expect(signet.command).toBe(process.platform === "win32" ? process.execPath : "signet-mcp");
+		if (process.platform !== "win32") {
+			expect(Reflect.has(signet, "args")).toBe(false);
+		}
 		const env = signet.env;
 		expect(isJsonObject(env)).toBe(true);
 		if (!isJsonObject(env)) {
@@ -123,12 +127,18 @@ describe("ForgeConnector", () => {
 
 		const connector = new ForgeConnector();
 		await connector.install(basePath);
+		const skillPath = join(forgeHome, "skills", "test-skill");
+		expect(existsSync(skillPath)).toBe(true);
+		expect(lstatSync(skillPath).isSymbolicLink()).toBe(true);
+
 		const uninstall = await connector.uninstall();
 		const config = readJsonObject(join(forgeHome, ".mcp.json"));
 		const servers = config.mcpServers;
 
 		expect(uninstall.configsPatched).toContain(join(forgeHome, ".mcp.json"));
 		expect(uninstall.filesRemoved).toContain(join(forgeHome, "AGENTS.md"));
+		expect(uninstall.filesRemoved).toContain(skillPath);
+		expect(existsSync(skillPath)).toBe(false);
 		expect(isJsonObject(servers)).toBe(true);
 		if (!isJsonObject(servers)) {
 			throw new Error("Expected mcpServers in Forge config");
