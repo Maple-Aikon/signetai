@@ -1,0 +1,241 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import { expandHome, hasValidIdentity } from "@signet/core";
+
+const SIGNET_FORGE_MARKER = "Managed by Signet (@signet/connector-forge)";
+
+type JsonObject = Record<string, unknown>;
+
+function getHomeDir(): string {
+	const home = process.env.HOME?.trim();
+	return home && home.length > 0 ? home : homedir();
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readJsonObject(path: string): JsonObject {
+	if (!existsSync(path)) {
+		return {};
+	}
+
+	const raw = readFileSync(path, "utf-8");
+	const parsed: unknown = JSON.parse(raw);
+	if (!isJsonObject(parsed)) {
+		throw new Error("Forge MCP config must be a top-level object");
+	}
+
+	return parsed;
+}
+
+function readMcpServers(config: JsonObject): JsonObject {
+	if (!("mcpServers" in config)) {
+		return {};
+	}
+
+	const current = config.mcpServers;
+	if (isJsonObject(current)) {
+		return { ...current };
+	}
+
+	throw new Error("Forge MCP config field 'mcpServers' must be an object");
+}
+
+function resolveSignetMcp(): { command: string; args: string[] } {
+	if (process.platform !== "win32") {
+		return { command: "signet-mcp", args: [] };
+	}
+
+	const entry = process.argv[1] || "";
+	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
+	if (existsSync(mcpJs)) {
+		return { command: process.execPath, args: [mcpJs] };
+	}
+
+	return { command: "signet-mcp", args: [] };
+}
+
+function buildMcpServer(basePath: string): JsonObject {
+	const mcp = resolveSignetMcp();
+	return {
+		command: mcp.command,
+		args: mcp.args,
+		env: {
+			SIGNET_PATH: basePath,
+		},
+	};
+}
+
+export class ForgeConnector extends BaseConnector {
+	readonly name = "ForgeCode";
+	readonly harnessId = "forge";
+
+	private getForgeHome(): string {
+		return join(getHomeDir(), "forge");
+	}
+
+	private getAgentsPath(): string {
+		return join(this.getForgeHome(), "AGENTS.md");
+	}
+
+	private getSkillsPath(): string {
+		return join(this.getForgeHome(), "skills");
+	}
+
+	private getMcpConfigPath(): string {
+		return join(this.getForgeHome(), ".mcp.json");
+	}
+
+	getConfigPath(): string {
+		return this.getMcpConfigPath();
+	}
+
+	async install(basePath: string): Promise<InstallResult> {
+		const filesWritten: string[] = [];
+		const configsPatched: string[] = [];
+		const expandedBasePath = expandHome(basePath || join(getHomeDir(), ".agents"));
+
+		if (!hasValidIdentity(expandedBasePath)) {
+			return {
+				success: false,
+				message: `No valid Signet identity found at ${expandedBasePath}`,
+				filesWritten,
+			};
+		}
+
+		const mcpPath = this.getMcpConfigPath();
+		let config: JsonObject;
+		try {
+			config = readJsonObject(mcpPath);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : "unknown error";
+			return {
+				success: false,
+				message: `Failed to read Forge MCP config: ${message}`,
+				filesWritten,
+			};
+		}
+
+		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+		if (strippedAgentsPath !== null) {
+			filesWritten.push(strippedAgentsPath);
+		}
+
+		const forgeHome = this.getForgeHome();
+		mkdirSync(forgeHome, { recursive: true });
+
+		const agentsPath = this.generateAgentsMd(expandedBasePath);
+		filesWritten.push(agentsPath);
+
+		this.registerMcpServer(config, expandedBasePath);
+		atomicWriteJson(mcpPath, config);
+		configsPatched.push(mcpPath);
+
+		const skillsSource = join(expandedBasePath, "skills");
+		if (existsSync(skillsSource)) {
+			this.symlinkSkills(skillsSource, this.getSkillsPath());
+		}
+
+		return {
+			success: true,
+			message: "ForgeCode integration installed successfully",
+			filesWritten,
+			configsPatched,
+		};
+	}
+
+	async uninstall(): Promise<UninstallResult> {
+		const filesRemoved: string[] = [];
+		const configsPatched: string[] = [];
+
+		const agentsPath = this.getAgentsPath();
+		if (existsSync(agentsPath)) {
+			const content = readFileSync(agentsPath, "utf-8");
+			if (content.includes(SIGNET_FORGE_MARKER)) {
+				rmSync(agentsPath, { force: true });
+				filesRemoved.push(agentsPath);
+			}
+		}
+
+		const mcpPath = this.getMcpConfigPath();
+		if (existsSync(mcpPath)) {
+			try {
+				const config = readJsonObject(mcpPath);
+				const patched = this.removeMcpServer(config);
+				if (patched) {
+					if (Object.keys(config).length === 0) {
+						rmSync(mcpPath, { force: true });
+						filesRemoved.push(mcpPath);
+					} else {
+						atomicWriteJson(mcpPath, config);
+						configsPatched.push(mcpPath);
+					}
+				}
+			} catch {
+				// Leave unreadable user config untouched.
+			}
+		}
+
+		return { filesRemoved, configsPatched };
+	}
+
+	isInstalled(): boolean {
+		if (existsSync(this.getAgentsPath())) {
+			try {
+				const content = readFileSync(this.getAgentsPath(), "utf-8");
+				if (content.includes(SIGNET_FORGE_MARKER)) {
+					return true;
+				}
+			} catch {
+				// Ignore unreadable AGENTS.md and fall through to MCP config check.
+			}
+		}
+
+		try {
+			const config = readJsonObject(this.getMcpConfigPath());
+			const servers = readMcpServers(config);
+			return "signet" in servers;
+		} catch {
+			return false;
+		}
+	}
+
+	private generateAgentsMd(basePath: string): string {
+		const sourcePath = join(basePath, "AGENTS.md");
+		const targetPath = this.getAgentsPath();
+		const content = readFileSync(sourcePath, "utf-8").trim();
+		const extras = this.composeIdentityExtras(basePath);
+		const body = extras ? `${content}${extras}` : content;
+		writeFileSync(
+			targetPath,
+			`# ${SIGNET_FORGE_MARKER}\n${this.generateHeader(sourcePath, this.name)}${body}\n`,
+			"utf-8",
+		);
+		return targetPath;
+	}
+
+	private registerMcpServer(config: JsonObject, basePath: string): void {
+		const servers = readMcpServers(config);
+		servers.signet = buildMcpServer(basePath);
+		config.mcpServers = servers;
+	}
+
+	private removeMcpServer(config: JsonObject): boolean {
+		const servers = readMcpServers(config);
+		if (!("signet" in servers)) {
+			return false;
+		}
+
+		Reflect.deleteProperty(servers, "signet");
+		if (Object.keys(servers).length === 0) {
+			Reflect.deleteProperty(config, "mcpServers");
+			return true;
+		}
+
+		config.mcpServers = servers;
+		return true;
+	}
+}

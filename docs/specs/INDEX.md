@@ -51,6 +51,7 @@ flowchart TD
     CIR[Cryptographic Identity Roadmap]
     CPY[Connector: Py Agent]
     CHA[Connector: Hermes Agent]
+    CFC[Connector: ForgeCode]
     PAPI[Plugin API Ecosystem]
     CUV[Constellation Unified Viewer]
     DIR[Dashboard IA Refactor]
@@ -108,6 +109,7 @@ flowchart TD
   MA --> CIR
   SR --> CPY
   SR --> CHA
+  SR --> CFC
   SR --> PAPI
   KA --> CUV
   SR --> DIR
@@ -141,6 +143,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `dogfood-hardening-2026-03-29` | RESEARCH-DOGFOOD-HARDENING-2026-03-29 | Which runtime, MCP, and knowledge-surface regressions from the March 29, 2026 dogfood run need durable hardening? |
 | `marketplace-official-skills` | RESEARCH-MARKETPLACE-OFFICIAL-SKILLS | How should the dashboard marketplace spotlight Signet official skills without hiding the broader community catalog? |
 | `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
+| `connector-forgecode` | RESEARCH-REFERENCE-REPOS | How should Signet bridge its portable identity, skills, and MCP surfaces into ForgeCode's `~/forge` environment without relying on unavailable lifecycle hooks? |
 
 ### Research Adoption Ledger (high-impact)
 
