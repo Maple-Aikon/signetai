@@ -1,7 +1,7 @@
 ---
 title: "Connector: ForgeCode"
 id: connector-forgecode
-status: planning
+status: complete
 informed_by:
   - docs/research/technical/RESEARCH-REFERENCE-REPOS.md
 section: "Connectors"
@@ -20,7 +20,7 @@ draft_quality: "implementation-aligned planning stub derived from reference-repo
 
 Spec metadata:
 - ID: `connector-forgecode`
-- Status: `planning`
+- Status: `complete`
 - Hard depends on: `signet-runtime`
 - Registry: `docs/specs/INDEX.md`
 

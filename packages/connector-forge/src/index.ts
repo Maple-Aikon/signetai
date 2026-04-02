@@ -252,7 +252,7 @@ export class ForgeConnector extends BaseConnector {
 				// so user-created symlinks elsewhere are never touched.
 				const linkTarget = readlinkSync(target);
 				const resolved = linkTarget.startsWith("/") ? linkTarget : join(skillsDir, linkTarget);
-				if (!resolved.startsWith(signetSkillsSource)) continue;
+				if (!resolved.startsWith(`${signetSkillsSource}/`) && resolved !== signetSkillsSource) continue;
 				unlinkSync(target);
 				filesRemoved.push(target);
 			}
