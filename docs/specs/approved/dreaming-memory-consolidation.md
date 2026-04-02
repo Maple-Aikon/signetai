@@ -119,8 +119,6 @@ memory:
   dreaming:
     enabled: true
     tokenThreshold: 100000    # trigger after ~100k tokens of summaries
-    provider: "anthropic"     # which LLM provider to use
-    model: "claude-sonnet-4-6"  # default model for dreaming passes
     maxInputTokens: 128000    # context budget per pass
     backfillOnFirstRun: true  # run compaction on first dreaming pass
 ```
@@ -425,9 +423,11 @@ The mechanical consolidation engine is complete:
   5 minutes and fires when threshold is crossed.
 - **Compact and incremental modes.** First pass auto-runs in compact
   mode when `backfillOnFirstRun: true`. Manual trigger via API/CLI.
-- **Config surface.** `agent.yaml` > `memory.dreaming` with provider,
-  model, threshold, budget, backfill, endpoint, timeout settings.
-  Providers: `anthropic`, `openrouter`, `ollama`.
+- **Config surface.** `agent.yaml` > `memory.dreaming` with threshold,
+  budget, backfill, and timeout settings. Provider and model are
+  inherited from the synthesis provider (no separate dreaming-specific
+  provider config -- avoids duplication and supports all synthesis
+  backends including `claude-code`, `codex`, `opencode`, etc.).
 - **API.** `GET /api/dream/status`, `POST /api/dream/trigger`.
 - **CLI.** `signet dream status`, `signet dream trigger [--compact]`.
 - **DB migration 055.** `dreaming_state` (per-agent PK) and

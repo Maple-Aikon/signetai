@@ -430,15 +430,9 @@ export interface PipelineHintsConfig {
 	readonly poll: number;
 }
 
-export const DREAMING_PROVIDERS = ["anthropic", "openrouter", "ollama"] as const;
-export type DreamingProvider = (typeof DREAMING_PROVIDERS)[number];
-
 export interface DreamingConfig {
 	readonly enabled: boolean;
 	readonly tokenThreshold: number;
-	readonly provider: DreamingProvider;
-	readonly model: string;
-	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly maxInputTokens: number;
 	readonly maxOutputTokens: number;

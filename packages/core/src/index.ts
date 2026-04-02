@@ -20,7 +20,6 @@ export {
 	ATTRIBUTE_STATUSES,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
-	DREAMING_PROVIDERS,
 } from "./types";
 export type {
 	LlmProvider,
@@ -78,7 +77,6 @@ export type {
 	PipelineModelRegistryConfig,
 	PipelineHintsConfig,
 	DreamingConfig,
-	DreamingProvider,
 	ModelRegistryEntry,
 } from "./types";
 export {

@@ -7,16 +7,15 @@
 import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { logger } from "../logger";
+import { getSynthesisProvider } from "../synthesis-llm";
 import {
 	type DreamingMode,
-	type LlmGenerateFn,
 	createDreamingPass,
 	getDreamingState,
 	recordDreamingFailure,
 	runDreamingPass,
 	shouldTriggerDreaming,
 } from "./dreaming";
-import type { LlmProvider } from "./provider";
 
 /** Thrown when a trigger is attempted while a pass is already in-flight. */
 export class AlreadyRunningError extends Error {
@@ -51,7 +50,6 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
 export function startDreamingWorker(
 	accessor: DbAccessor,
-	generate: LlmGenerateFn,
 	cfg: DreamingConfig,
 	agentsDir: string,
 	agentId: string,
@@ -96,7 +94,8 @@ export function startDreamingWorker(
 			});
 
 			active = true;
-			const p = runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+			const synth = getSynthesisProvider();
+			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, agentId, mode);
 			activePassPromise = p;
 			await p;
 		} catch (e) {
@@ -123,8 +122,6 @@ export function startDreamingWorker(
 
 	logger.info("dreaming-worker", "Dreaming worker started", {
 		threshold: cfg.tokenThreshold,
-		provider: cfg.provider,
-		model: cfg.model,
 	});
 
 	return {
@@ -142,7 +139,8 @@ export function startDreamingWorker(
 		async trigger(mode: DreamingMode) {
 			if (active) throw new AlreadyRunningError();
 			active = true;
-			const p = runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode);
+			const synth = getSynthesisProvider();
+			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, agentId, mode);
 			activePassPromise = p;
 			try {
 				return await p;
@@ -159,7 +157,8 @@ export function startDreamingWorker(
 			if (active) throw new AlreadyRunningError();
 			const passId = createDreamingPass(accessor, agentId, mode);
 			active = true;
-			const p = runDreamingPass(accessor, generate, cfg, agentsDir, agentId, mode, passId);
+			const synth = getSynthesisProvider();
+			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, agentId, mode, passId);
 			activePassPromise = p;
 			p.catch((e) => {
 				recordDreamingFailure(accessor, agentId);

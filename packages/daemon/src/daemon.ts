@@ -131,7 +131,6 @@ import {
 import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
 import { type LogCategory, type LogEntry, logger } from "./logger";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
-import type { DreamingConfig } from "@signet/core";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
@@ -931,53 +930,6 @@ function parseIsoDateQuery(raw: string | undefined): string | undefined {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return undefined;
 	return date.toISOString();
-}
-
-/**
- * Create an LlmProvider for the dreaming worker from its config.
- * Falls back to ollama when the requested provider isn't available.
- */
-function resolveDreamingProvider(
-	cfg: DreamingConfig,
-	anthropicKey?: string,
-	openRouterKey?: string,
-): import("@signet/core").LlmProvider {
-	const ollamaBase = normalizeRuntimeBaseUrl(
-		cfg.provider === "ollama" ? cfg.endpoint : undefined,
-		"http://127.0.0.1:11434",
-	);
-	const timeout = cfg.timeout;
-	// When falling back to Ollama due to missing API key, cfg.model is the
-	// non-Ollama model name (e.g. "claude-sonnet-4-6"). Use the Ollama default.
-	const ollamaFallback = () =>
-		createOllamaProvider({ model: DEFAULT_OLLAMA_FALLBACK_MODEL, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
-
-	switch (cfg.provider) {
-		case "anthropic":
-			if (!anthropicKey) {
-				logger.warn("dreaming", "ANTHROPIC_API_KEY not found for dreaming, falling back to ollama");
-				return ollamaFallback();
-			}
-			return createAnthropicProvider({ model: cfg.model, apiKey: anthropicKey, defaultTimeoutMs: timeout });
-		case "openrouter":
-			if (!openRouterKey) {
-				logger.warn("dreaming", "OPENROUTER_API_KEY not found for dreaming, falling back to ollama");
-				return ollamaFallback();
-			}
-			return createOpenRouterProvider({
-				model: cfg.model,
-				apiKey: openRouterKey,
-				baseUrl: normalizeRuntimeBaseUrl(cfg.endpoint, "https://openrouter.ai/api/v1"),
-				defaultTimeoutMs: timeout,
-			});
-		case "ollama":
-			return createOllamaProvider({ model: cfg.model, baseUrl: ollamaBase, defaultTimeoutMs: timeout });
-		default: {
-			const _exhaustive: never = cfg.provider;
-			logger.warn("dreaming", `Unknown dreaming provider "${_exhaustive}", falling back to ollama`);
-			return ollamaFallback();
-		}
-	}
 }
 
 function getConfiguredProviderHints(agentsDir: string): {
@@ -12369,12 +12321,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// per agent (Phase 2 / dreaming-as-session work).
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
-			const dreamCfg = memoryCfg.dreaming;
-			const dreamProvider = resolveDreamingProvider(dreamCfg, anthropicApiKey, openRouterApiKey);
 			dreamingWorkerHandle = startDreamingWorker(
 				getDbAccessor(),
-				dreamProvider.generate.bind(dreamProvider),
-				dreamCfg,
+				memoryCfg.dreaming,
 				AGENTS_DIR,
 				resolveAgentId({}),
 			);

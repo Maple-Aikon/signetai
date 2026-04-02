@@ -2585,8 +2585,6 @@ Requires `admin` permission.
     "lastPassMode": "incremental"
   },
   "config": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-6",
     "tokenThreshold": 100000,
     "backfillOnFirstRun": true
   },

@@ -2,9 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
-	DREAMING_PROVIDERS,
 	type DreamingConfig,
-	type DreamingProvider,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
@@ -35,17 +33,9 @@ export interface MemorySearchConfig {
 export { PIPELINE_FLAGS };
 export type { PipelineFlag, PipelineV2Config, DreamingConfig };
 
-const DREAMING_SET = new Set<string>(DREAMING_PROVIDERS);
-function isDreamingProvider(v: unknown): v is DreamingProvider {
-	return typeof v === "string" && DREAMING_SET.has(v);
-}
-
 export const DEFAULT_DREAMING: DreamingConfig = {
 	enabled: false,
 	tokenThreshold: 100_000,
-	provider: "anthropic",
-	model: "claude-sonnet-4-6",
-	endpoint: undefined,
 	timeout: 300_000,
 	maxInputTokens: 128_000,
 	maxOutputTokens: 16_000,
@@ -953,9 +943,6 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : dd.enabled,
 		tokenThreshold: clampWarn("tokenThreshold", raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
-		provider: isDreamingProvider(raw.provider) ? raw.provider : dd.provider,
-		model: typeof raw.model === "string" && raw.model.trim().length > 0 ? raw.model : dd.model,
-		endpoint: parseOptionalUrl(raw.endpoint),
 		timeout: clampWarn("timeout", raw.timeout, 30_000, 600_000, dd.timeout),
 		maxInputTokens: clampWarn("maxInputTokens", raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
 		maxOutputTokens: clampWarn("maxOutputTokens", raw.maxOutputTokens, 1_000, 128_000, dd.maxOutputTokens),
