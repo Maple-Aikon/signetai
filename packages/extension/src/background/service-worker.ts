@@ -3,16 +3,32 @@
  * Handles: context menus, health polling, badge updates, and message routing
  */
 
-import { checkHealth, dispatchBrowserTool, getIdentity, rememberMemory } from "../shared/api.js";
+import { checkHealth, dispatchBrowserTool, rememberMemory } from "../shared/api.js";
 import { getConfig } from "../shared/config.js";
 
 type HealthState = "healthy" | "degraded" | "offline";
-type TranscribeFormat = "summary" | "bullet" | "checklist" | "json";
 
 interface InjectResult {
 	readonly ok: boolean;
 	readonly tabId?: number;
 	readonly error?: string;
+}
+
+interface AskOverlayResponse {
+	readonly ok: boolean;
+	readonly error?: string;
+}
+
+interface AskOverlayOptions {
+	readonly text?: string;
+	readonly presetAction?: "transcribe";
+	readonly autoSubmit?: boolean;
+	readonly promptText?: string;
+}
+
+interface AskSignetModelOption {
+	readonly id: string;
+	readonly label: string;
 }
 
 interface PageContext {
@@ -28,12 +44,12 @@ interface PageContext {
 
 const MENU_IDS = {
 	root: "signet-tools",
-	remember: "signet-remember",
-	transcribeSummary: "signet-transcribe-summary",
-	transcribeBullet: "signet-transcribe-bullet",
-	transcribeChecklist: "signet-transcribe-checklist",
-	transcribeJson: "signet-transcribe-json",
-	sendSelection: "signet-send-selection",
+	askSignet: "signet-ask-signet",
+	rememberSelection: "signet-remember-selection",
+	transcribe: "signet-transcribe",
+	sendToSignet: "signet-send-to-signet",
+	viewMcpServers: "signet-view-mcp-servers",
+	bookmark: "signet-bookmark",
 } as const;
 
 const BADGE_COLORS: Record<HealthState, string> = {
@@ -48,6 +64,8 @@ const BADGE_TEXT: Record<HealthState, string> = {
 	offline: "X",
 };
 
+const MAX_TRANSCRIBE_CHARS = 10_000;
+
 let currentState: HealthState = "offline";
 
 function delay(ms: number): Promise<void> {
@@ -56,6 +74,122 @@ function delay(ms: number): Promise<void> {
 
 function normalizeBaseUrl(url: string): string {
 	return url.replace(/\/$/, "");
+}
+
+function buildAuthHeaders(authToken: string): Record<string, string> {
+	const headers: Record<string, string> = { "Content-Type": "application/json" };
+	if (authToken) {
+		headers.Authorization = `Bearer ${authToken}`;
+	}
+	return headers;
+}
+
+function resolveDaemonCandidates(primaryDaemonUrl: string): string[] {
+	const normalizedPrimary = normalizeBaseUrl(primaryDaemonUrl);
+	const candidates = [normalizedPrimary];
+
+	try {
+		const parsed = new URL(normalizedPrimary);
+		const isLocal = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+		if (isLocal) {
+			const altHost = parsed.hostname === "localhost" ? "127.0.0.1" : "localhost";
+			const protocol = parsed.protocol || "http:";
+			if (parsed.port !== "3850") {
+				candidates.push(`${protocol}//${parsed.hostname}:3850`);
+			}
+			candidates.push(`${protocol}//${altHost}${parsed.port ? `:${parsed.port}` : ""}`);
+			candidates.push(`${protocol}//${altHost}:3850`);
+		}
+	} catch {
+		// Ignore invalid user-supplied URL and fall back to default localhost candidates below.
+	}
+
+	candidates.push("http://127.0.0.1:3850", "http://localhost:3850");
+	return [...new Set(candidates.map((url) => normalizeBaseUrl(url)).filter(Boolean))];
+}
+
+async function fetchDaemonWithFallback(
+	path: string,
+	init: RequestInit,
+): Promise<{ ok: true; response: Response } | { ok: false; error: string }> {
+	const config = await getConfig();
+	const attempts: string[] = [];
+	const candidates = resolveDaemonCandidates(config.daemonUrl);
+
+	for (const baseUrl of candidates) {
+		try {
+			const response = await fetch(`${baseUrl}${path}`, init);
+			if (response.ok) return { ok: true, response };
+			if (response.status < 500 && response.status !== 404) {
+				return { ok: true, response };
+			}
+			const detail = (await response.text().catch(() => "")).trim();
+			attempts.push(`${baseUrl} (${response.status}${detail ? `: ${detail}` : ""})`);
+		} catch (error) {
+			attempts.push(`${baseUrl} (${error instanceof Error ? error.message : "request failed"})`);
+		}
+	}
+
+	return {
+		ok: false,
+		error: `Unable to reach Signet daemon. Tried: ${attempts.join("; ") || "no endpoints"}`,
+	};
+}
+
+
+async function fetchAskSignetModels(): Promise<{
+	ok: boolean;
+	options?: AskSignetModelOption[];
+	defaultModelId?: string;
+	error?: string;
+}> {
+	const config = await getConfig();
+	const request = await fetchDaemonWithFallback("/api/os/chat/models", {
+		method: "GET",
+		headers: buildAuthHeaders(config.authToken),
+	});
+	if (!request.ok) {
+		return { ok: false, error: request.error };
+	}
+	const response = request.response;
+	if (!response.ok) {
+		const detail = await response.text().catch(() => "");
+		return { ok: false, error: detail || `Model request failed (${response.status})` };
+	}
+
+	const data = (await response.json()) as {
+		options?: AskSignetModelOption[];
+		defaultModelId?: string;
+	};
+	const options = Array.isArray(data.options) ? data.options.filter((m) => m && m.id && m.label) : [];
+	if (options.length === 0) {
+		return { ok: false, error: "No providers found." };
+	}
+	return { ok: true, options, defaultModelId: data.defaultModelId };
+}
+
+async function askSignetChat(message: string, modelId: string): Promise<{ ok: boolean; response?: string; error?: string }> {
+	const config = await getConfig();
+	const request = await fetchDaemonWithFallback("/api/os/chat", {
+		method: "POST",
+		headers: buildAuthHeaders(config.authToken),
+		body: JSON.stringify({ message, modelId }),
+	});
+	if (!request.ok) {
+		return { ok: false, error: request.error };
+	}
+	const response = request.response;
+	if (!response.ok) {
+		const detail = await response.text().catch(() => "");
+		return { ok: false, error: detail || `Request failed (${response.status})` };
+	}
+
+	const data = (await response.json()) as { response?: string };
+	const text = (data.response ?? "").trim();
+	if (!text) {
+		return { ok: false, error: "Signet returned an empty response." };
+	}
+	return { ok: true, response: text };
 }
 
 function buildDashboardUrl(baseUrl: string, hash = ""): string {
@@ -69,49 +203,49 @@ function createContextMenus(): void {
 		chrome.contextMenus.create({
 			id: MENU_IDS.root,
 			title: "Signet",
-			contexts: ["selection"],
+			contexts: ["all"],
 		});
 
 		chrome.contextMenus.create({
-			id: MENU_IDS.remember,
+			id: MENU_IDS.askSignet,
+			parentId: MENU_IDS.root,
+			title: "Ask Signet",
+			contexts: ["all"],
+		});
+
+		chrome.contextMenus.create({
+			id: MENU_IDS.transcribe,
+			parentId: MENU_IDS.root,
+			title: "Transcribe",
+			contexts: ["all"],
+		});
+
+		chrome.contextMenus.create({
+			id: MENU_IDS.sendToSignet,
+			parentId: MENU_IDS.root,
+			title: "Send to Signet Os",
+			contexts: ["all"],
+		});
+
+		chrome.contextMenus.create({
+			id: MENU_IDS.viewMcpServers,
+			parentId: MENU_IDS.root,
+			title: "View MCP Servers",
+			contexts: ["all"],
+		});
+
+		chrome.contextMenus.create({
+			id: MENU_IDS.bookmark,
+			parentId: MENU_IDS.root,
+			title: "Bookmark",
+			contexts: ["all"],
+		});
+
+		chrome.contextMenus.create({
+			id: MENU_IDS.rememberSelection,
 			parentId: MENU_IDS.root,
 			title: "Remember Selection",
-			contexts: ["selection"],
-		});
-
-		chrome.contextMenus.create({
-			id: MENU_IDS.transcribeSummary,
-			parentId: MENU_IDS.root,
-			title: "Transcribe as Summary",
-			contexts: ["selection"],
-		});
-
-		chrome.contextMenus.create({
-			id: MENU_IDS.transcribeBullet,
-			parentId: MENU_IDS.root,
-			title: "Transcribe as Bullet Points",
-			contexts: ["selection"],
-		});
-
-		chrome.contextMenus.create({
-			id: MENU_IDS.transcribeChecklist,
-			parentId: MENU_IDS.root,
-			title: "Transcribe as Checklist",
-			contexts: ["selection"],
-		});
-
-		chrome.contextMenus.create({
-			id: MENU_IDS.transcribeJson,
-			parentId: MENU_IDS.root,
-			title: "Transcribe as JSON",
-			contexts: ["selection"],
-		});
-
-		chrome.contextMenus.create({
-			id: MENU_IDS.sendSelection,
-			parentId: MENU_IDS.root,
-			title: "Send Selection to Signet",
-			contexts: ["selection"],
+			contexts: ["all"],
 		});
 	});
 }
@@ -149,45 +283,6 @@ async function sendTabMessage<T>(tabId: number, message: unknown): Promise<T | n
 			resolve((response as T | null) ?? null);
 		});
 	});
-}
-
-function transcribeSelection(text: string, format: TranscribeFormat, identityName: string): string {
-	const cleaned = text.trim();
-	if (!cleaned) return "";
-
-	if (format === "json") {
-		return JSON.stringify(
-			{
-				agent: identityName,
-				type: "transcription",
-				summary: cleaned.slice(0, 220),
-				length: cleaned.length,
-				timestamp: new Date().toISOString(),
-				content: cleaned,
-			},
-			null,
-			2,
-		);
-	}
-
-	const sentences = cleaned
-		.split(/(?<=[.!?])\s+/)
-		.map((part) => part.trim())
-		.filter(Boolean)
-		.slice(0, 8);
-
-	if (format === "bullet") {
-		const items = sentences.length > 0 ? sentences : [cleaned];
-		return items.map((item) => `• ${item}`).join("\n");
-	}
-
-	if (format === "checklist") {
-		const items = sentences.length > 0 ? sentences : [cleaned];
-		return items.map((item) => `- [ ] ${item}`).join("\n");
-	}
-
-	const lead = sentences.length > 0 ? sentences.slice(0, 2).join(" ") : cleaned;
-	return `${lead}\n\nTranscribed by ${identityName}.`;
 }
 
 function formatSelectionBundle(context: PageContext): string {
@@ -357,36 +452,115 @@ async function openDashboardAndInject(url: string, payload: string, autoSend: bo
 	};
 }
 
-async function handleTranscribe(tab: chrome.tabs.Tab, selectedText: string, format: TranscribeFormat): Promise<void> {
-	if (!selectedText) return;
+function formatBookmark(context: PageContext): string {
+	return [
+		"[Signet Bookmark]",
+		`Title: ${context.pageTitle || "Untitled"}`,
+		`URL: ${context.pageUrl || "unknown"}`,
+		`Saved At: ${new Date().toISOString()}`,
+	].join("\n");
+}
+
+function buildTranscribeOverlayPrompt(context: PageContext, textToTranscribe: string): string {
+	const clippedText =
+		textToTranscribe.length > MAX_TRANSCRIBE_CHARS
+			? `${textToTranscribe.slice(0, MAX_TRANSCRIBE_CHARS)}\n\n[Truncated by Signet for overlay transcription request.]`
+			: textToTranscribe;
+	return [
+		"Transcribe the following content into clean, readable text.",
+		"Keep all facts and meaning intact.",
+		"Do not add new information.",
+		"If the content is already text, produce a polished transcript preserving structure.",
+		"",
+		`Source: ${context.pageTitle || "Untitled"} (${context.pageUrl || "unknown"})`,
+		"",
+		"Content:",
+		clippedText,
+	].join("\n");
+}
+
+async function handleTranscribe(tab: chrome.tabs.Tab, selectedText: string): Promise<void> {
 	const context = await getPageContext(tab, selectedText);
-	const identity = await getIdentity();
-	const identityName = identity?.name ?? "Signet Agent";
-	const transcription = transcribeSelection(selectedText, format, identityName);
-	if (!transcription) return;
+	const textToTranscribe = (
+		selectedText ||
+		context.selectedText ||
+		[
+			`Page Title: ${context.pageTitle || "Untitled"}`,
+			`Page URL: ${context.pageUrl || "unknown"}`,
+			context.links.length > 0 ? `Page Links:\n${context.links.slice(0, 10).join("\n")}` : "",
+		]
+			.filter(Boolean)
+			.join("\n\n")
+	).trim();
+	if (!textToTranscribe) return;
+
+	const promptText = buildTranscribeOverlayPrompt(context, textToTranscribe);
+	await handleAskSignet(tab, selectedText, {
+		text: textToTranscribe,
+		presetAction: "transcribe",
+		autoSubmit: true,
+		promptText,
+	});
+}
+
+async function handleViewMcpServers(): Promise<void> {
+	const config = await getConfig();
+	const dashboardUrl = buildDashboardUrl(config.daemonUrl, "os");
+	await createTab(dashboardUrl);
+}
+
+async function handleBookmark(tab: chrome.tabs.Tab, selectedText: string): Promise<void> {
+	const context = await getPageContext(tab, selectedText);
+	await rememberMemory({
+		content: formatBookmark(context),
+		tags: "bookmark,browser-extension,right-click",
+		importance: 0.55,
+		type: "fact",
+		source_type: "browser-extension",
+	});
+}
+
+async function handleRememberSelection(tab: chrome.tabs.Tab, selectedText: string): Promise<void> {
+	const context = await getPageContext(tab, selectedText);
+	const selected = selectedText || context.selectedText;
+
+	if (selected.trim()) {
+		await rememberMemory({
+			content: [
+				"[Signet Remember Selection]",
+				`Source: ${context.pageTitle} (${context.pageUrl})`,
+				"",
+				selected,
+			].join("\n"),
+			tags: "remember,selection,browser-extension,right-click",
+			importance: 0.68,
+			type: "note",
+			source_type: "browser-extension",
+		});
+		return;
+	}
 
 	await rememberMemory({
 		content: [
-			"[Signet Transcribe]",
-			`Format: ${format}`,
+			"[Signet Remember Selection]",
 			`Source: ${context.pageTitle} (${context.pageUrl})`,
 			"",
-			transcription,
+			"No text was selected; saved current page reference.",
 		].join("\n"),
-		tags: "transcribe,browser-extension,right-click",
-		importance: 0.72,
+		tags: "remember,page,browser-extension,right-click",
+		importance: 0.5,
 		type: "note",
 		source_type: "browser-extension",
 	});
 }
 
-async function handleSendSelection(tab: chrome.tabs.Tab, selectedText: string): Promise<void> {
-	if (!selectedText) return;
+async function handleSendToSignet(tab: chrome.tabs.Tab, selectedText: string): Promise<void> {
 	const context = await getPageContext(tab, selectedText);
 	const payload = formatSelectionBundle(context);
+	const action = (selectedText || context.selectedText).trim() ? "send-selection" : "send-page";
 
 	await dispatchBrowserTool({
-		action: "send-selection",
+		action,
 		payload,
 		pageTitle: context.pageTitle,
 		pageUrl: context.pageUrl,
@@ -404,46 +578,75 @@ async function handleSendSelection(tab: chrome.tabs.Tab, selectedText: string): 
 	await openDashboardAndInject(dashboardUrl, payload, true);
 }
 
+async function ensureContentScriptInjected(tabId: number): Promise<boolean> {
+	if (!chrome.scripting?.executeScript) return false;
+	try {
+		await chrome.scripting.executeScript({
+			target: { tabId },
+			files: ["content/content.js"],
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function handleAskSignet(tab: chrome.tabs.Tab, selectedText: string, options?: AskOverlayOptions): Promise<void> {
+	if (!tab.id) return;
+	const context = await getPageContext(tab, selectedText);
+	const prefill = (options?.text || selectedText || context.selectedText || "").trim();
+	const message = {
+		action: "show-ask-signet-overlay",
+		text: prefill,
+		pageUrl: context.pageUrl,
+		pageTitle: context.pageTitle,
+		presetAction: options?.presetAction,
+		autoSubmit: options?.autoSubmit,
+		promptText: options?.promptText,
+	};
+
+	let overlayResult = await sendTabMessage<AskOverlayResponse>(tab.id, message);
+	if (overlayResult?.ok) return;
+
+	const injected = await ensureContentScriptInjected(tab.id);
+	if (!injected) return;
+
+	overlayResult = await sendTabMessage<AskOverlayResponse>(tab.id, message);
+	if (overlayResult?.ok) return;
+}
+
 async function handleContextMenuClick(info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab): Promise<void> {
 	if (!tab?.id) return;
 
 	const selectedText = (info.selectionText ?? "").trim();
-	const pageUrl = info.pageUrl ?? tab.url ?? "";
-	const pageTitle = tab.title ?? "";
 
-	if (info.menuItemId === MENU_IDS.remember) {
-		if (!selectedText) return;
-		chrome.tabs.sendMessage(tab.id, {
-			action: "show-save-panel",
-			text: selectedText,
-			pageUrl,
-			pageTitle,
-		});
+	if (info.menuItemId === MENU_IDS.askSignet) {
+		await handleAskSignet(tab, selectedText);
 		return;
 	}
 
-	if (info.menuItemId === MENU_IDS.transcribeSummary) {
-		await handleTranscribe(tab, selectedText, "summary");
+	if (info.menuItemId === MENU_IDS.transcribe) {
+		await handleTranscribe(tab, selectedText);
 		return;
 	}
 
-	if (info.menuItemId === MENU_IDS.transcribeBullet) {
-		await handleTranscribe(tab, selectedText, "bullet");
+	if (info.menuItemId === MENU_IDS.sendToSignet) {
+		await handleSendToSignet(tab, selectedText);
 		return;
 	}
 
-	if (info.menuItemId === MENU_IDS.transcribeChecklist) {
-		await handleTranscribe(tab, selectedText, "checklist");
+	if (info.menuItemId === MENU_IDS.viewMcpServers) {
+		await handleViewMcpServers();
 		return;
 	}
 
-	if (info.menuItemId === MENU_IDS.transcribeJson) {
-		await handleTranscribe(tab, selectedText, "json");
+	if (info.menuItemId === MENU_IDS.bookmark) {
+		await handleBookmark(tab, selectedText);
 		return;
 	}
 
-	if (info.menuItemId === MENU_IDS.sendSelection) {
-		await handleSendSelection(tab, selectedText);
+	if (info.menuItemId === MENU_IDS.rememberSelection) {
+		await handleRememberSelection(tab, selectedText);
 	}
 }
 
@@ -496,6 +699,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 		getConfig().then((config) => {
 			sendResponse({ url: config.daemonUrl });
 		});
+		return true;
+	}
+
+	if (message.action === "ask-signet-models") {
+		fetchAskSignetModels()
+			.then((result) => sendResponse(result))
+			.catch((error: unknown) => {
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : "Failed to load models",
+				});
+			});
+		return true;
+	}
+
+	if (message.action === "ask-signet-chat") {
+		askSignetChat(String(message.message ?? ""), String(message.modelId ?? ""))
+			.then((result) => sendResponse(result))
+			.catch((error: unknown) => {
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : "Ask Signet request failed",
+				});
+			});
 		return true;
 	}
 

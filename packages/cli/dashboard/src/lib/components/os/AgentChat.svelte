@@ -1,5 +1,5 @@
 <script lang="ts">
-import { API_BASE } from "$lib/api";
+import { API_BASE, getIdentity } from "$lib/api";
 import {
 	os,
 	fetchTrayEntries,
@@ -10,8 +10,11 @@ import {
 	setAgentSession,
 } from "$lib/stores/os.svelte";
 import Bot from "@lucide/svelte/icons/bot";
+import Check from "@lucide/svelte/icons/check";
+import Copy from "@lucide/svelte/icons/copy";
 import Cpu from "@lucide/svelte/icons/cpu";
 import ExternalLink from "@lucide/svelte/icons/external-link";
+import Mic from "@lucide/svelte/icons/mic";
 import Send from "@lucide/svelte/icons/send";
 import User from "@lucide/svelte/icons/user";
 import Wrench from "@lucide/svelte/icons/wrench";
@@ -22,6 +25,11 @@ interface ChatModelOption {
 	label: string;
 	description: string;
 	provider: string;
+}
+
+interface AudioInputOption {
+	id: string;
+	label: string;
 }
 
 interface ToolCall {
@@ -57,19 +65,62 @@ interface SendInvocation {
 	clearInput?: boolean;
 }
 
+type SpeechRecognitionInstance = {
+	continuous: boolean;
+	interimResults: boolean;
+	lang: string;
+	onresult: ((event: Event) => void) | null;
+	onerror: ((event: Event) => void) | null;
+	onend: (() => void) | null;
+	start: (track?: MediaStreamTrack) => void;
+	stop: () => void;
+};
+
+type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
+
 let messages = $state<ChatMessage[]>([]);
 let input = $state("");
 let loading = $state(false);
 let loadingStatus = $state("");
 let chatEl: HTMLDivElement | null = $state(null);
+let inputEl: HTMLInputElement | null = $state(null);
 let modelOptions = $state<ChatModelOption[]>([]);
 let selectedModelId = $state("");
 let modelOptionsLoading = $state(true);
 let modelOptionsError = $state<string | null>(null);
+let speechSupported = $state(false);
+let listening = $state(false);
+let voiceBusy = $state(false);
+let voiceError = $state<string | null>(null);
+let recognition: SpeechRecognitionInstance | null = null;
+let activeMicStream: MediaStream | null = null;
+let microphoneOptions = $state<AudioInputOption[]>([]);
+let selectedMicrophoneId = $state("default");
+let signetIdentityName = $state("your Signet identity");
+let copiedMessageTimestamp = $state<number | null>(null);
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
 const AGENT_EXEC_TIMEOUT_MS = 30_000;
 
 onMount(() => {
 	void loadChatModels();
+	void loadIdentityName();
+	void loadMicrophoneOptions();
+	speechSupported = Boolean(getSpeechRecognitionCtor());
+	const handleDeviceChange = () => {
+		void loadMicrophoneOptions();
+	};
+	navigator.mediaDevices?.addEventListener?.("devicechange", handleDeviceChange);
+	return () => {
+		if (copyResetTimer) {
+			clearTimeout(copyResetTimer);
+			copyResetTimer = null;
+		}
+		if (recognition && listening) {
+			recognition.stop();
+		}
+		releaseActiveMicStream();
+		navigator.mediaDevices?.removeEventListener?.("devicechange", handleDeviceChange);
+	};
 });
 
 async function loadChatModels(): Promise<void> {
@@ -99,6 +150,175 @@ async function loadChatModels(): Promise<void> {
 		modelOptionsError = err instanceof Error ? err.message : "Unable to load chat models";
 	} finally {
 		modelOptionsLoading = false;
+	}
+}
+
+async function loadIdentityName(): Promise<void> {
+	try {
+		const identity = await getIdentity();
+		const resolved = identity?.name?.trim();
+		if (resolved && resolved.toLowerCase() !== "unknown") {
+			signetIdentityName = resolved.toLowerCase();
+		}
+	} catch {
+		// Keep fallback copy when identity is unavailable.
+	}
+}
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+	if (typeof window === "undefined") return null;
+	const maybeCtor = (window as Window & { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor })
+		.SpeechRecognition ??
+		(window as Window & { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
+	return maybeCtor ?? null;
+}
+
+function releaseActiveMicStream(): void {
+	if (!activeMicStream) return;
+	for (const track of activeMicStream.getTracks()) {
+		track.stop();
+	}
+	activeMicStream = null;
+}
+
+async function loadMicrophoneOptions(): Promise<void> {
+	if (!navigator.mediaDevices?.enumerateDevices) return;
+	const devices = await navigator.mediaDevices.enumerateDevices();
+	const discovered = devices
+		.filter((device) => device.kind === "audioinput")
+		.map((device, index) => ({
+			id: device.deviceId,
+			label: device.label?.trim() || `Microphone ${index + 1}`,
+		}));
+	const options: AudioInputOption[] = [
+		{ id: "default", label: "Browser default microphone" },
+		...discovered.filter((device) => device.id !== "default"),
+	];
+	microphoneOptions = options;
+	if (!selectedMicrophoneId || !options.some((option) => option.id === selectedMicrophoneId)) {
+		selectedMicrophoneId = "default";
+	}
+}
+
+async function requestMicrophoneStream(deviceId?: string): Promise<MediaStream> {
+	if (!navigator.mediaDevices?.getUserMedia) {
+		throw new Error("Microphone capture is not supported in this browser.");
+	}
+	if (deviceId && deviceId !== "default") {
+		try {
+			return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+		} catch {
+			return await navigator.mediaDevices.getUserMedia({ audio: true });
+		}
+	}
+	return await navigator.mediaDevices.getUserMedia({ audio: true });
+}
+
+function appendVoiceTranscript(text: string): void {
+	const transcript = text.trim();
+	if (!transcript) return;
+	input = transcript;
+	inputEl?.focus();
+}
+
+function extractTranscriptFromVoiceEvent(event: Event): string {
+	const speechEvent = event as Event & {
+		results?: ArrayLike<{
+			isFinal?: boolean;
+			0?: { transcript?: string };
+			item?: (index: number) => { transcript?: string } | null;
+		}> & {
+			item?: (index: number) => {
+				isFinal?: boolean;
+				0?: { transcript?: string };
+				item?: (index: number) => { transcript?: string } | null;
+			} | null;
+		};
+	};
+	const list = speechEvent.results;
+	if (!list) return "";
+
+	let transcript = "";
+	for (let index = 0; index < list.length; index += 1) {
+		const result = list[index] ?? list.item?.(index) ?? null;
+		const primaryAlt = result?.[0] ?? result?.item?.(0) ?? null;
+		const chunk = typeof primaryAlt?.transcript === "string" ? primaryAlt.transcript.trim() : "";
+		if (!chunk) continue;
+		transcript += `${chunk} `;
+	}
+
+	if (transcript.trim()) return transcript.trim();
+
+	const fallbackTranscript = (event as Event & { transcript?: string }).transcript;
+	return typeof fallbackTranscript === "string" ? fallbackTranscript.trim() : "";
+}
+
+async function toggleVoiceCapture(): Promise<void> {
+	voiceError = null;
+	if (listening) {
+		voiceBusy = true;
+		recognition?.stop();
+		return;
+	}
+
+	const ctor = getSpeechRecognitionCtor();
+	if (!ctor) {
+		voiceError = "Voice input is not supported in this browser.";
+		return;
+	}
+
+	voiceBusy = true;
+	try {
+		releaseActiveMicStream();
+		activeMicStream = await requestMicrophoneStream(selectedMicrophoneId || undefined);
+		await loadMicrophoneOptions();
+		const inputBase = input.trim();
+		recognition = new ctor();
+		recognition.continuous = false;
+		recognition.interimResults = true;
+		recognition.lang = navigator.language || "en-US";
+		recognition.onresult = (event: Event) => {
+			const transcript = extractTranscriptFromVoiceEvent(event);
+			if (!transcript) return;
+			const merged = inputBase ? `${inputBase} ${transcript}` : transcript;
+			appendVoiceTranscript(merged);
+		};
+		recognition.onerror = (event: Event) => {
+			const errorValue = (event as Event & { error?: string }).error;
+			if (errorValue === "no-speech") {
+				voiceError = "No speech detected. Try speaking immediately after the mic turns active.";
+			} else if (errorValue && errorValue !== "aborted") {
+				voiceError = `Voice capture failed: ${errorValue}`;
+			}
+			listening = false;
+			voiceBusy = false;
+			recognition = null;
+			releaseActiveMicStream();
+		};
+		recognition.onend = () => {
+			listening = false;
+			voiceBusy = false;
+			recognition = null;
+			releaseActiveMicStream();
+		};
+		listening = true;
+		voiceBusy = false;
+		const selectedTrack = activeMicStream.getAudioTracks()[0] ?? undefined;
+		if (selectedTrack) {
+			try {
+				recognition.start(selectedTrack);
+			} catch {
+				recognition.start();
+			}
+		} else {
+			recognition.start();
+		}
+	} catch (error) {
+		voiceError = error instanceof Error ? error.message : "Unable to access microphone.";
+		listening = false;
+		voiceBusy = false;
+		recognition = null;
+		releaseActiveMicStream();
 	}
 }
 
@@ -582,6 +802,66 @@ function handleKeydown(e: KeyboardEvent) {
 	}
 }
 
+function handleInputDragOver(e: DragEvent): void {
+	const types = e.dataTransfer?.types;
+	if (!types) return;
+	if (!types.includes("application/x-signet-chat-snippet")) return;
+	e.preventDefault();
+	if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+}
+
+function insertTextAtCursor(target: HTMLInputElement, text: string): void {
+	const start = target.selectionStart ?? target.value.length;
+	const end = target.selectionEnd ?? target.value.length;
+	const before = target.value.slice(0, start);
+	const after = target.value.slice(end);
+	target.value = `${before}${text}${after}`;
+	const nextPos = start + text.length;
+	target.selectionStart = nextPos;
+	target.selectionEnd = nextPos;
+	input = target.value;
+}
+
+function handleInputDrop(e: DragEvent): void {
+	const snippet = e.dataTransfer?.getData("application/x-signet-chat-snippet")?.trim();
+	if (!snippet) return;
+	e.preventDefault();
+	if (!inputEl) {
+		input = `${input}${input ? " " : ""}${snippet}`.trim();
+		return;
+	}
+	insertTextAtCursor(inputEl, snippet);
+}
+
+async function copyMessageContent(content: string, timestamp: number): Promise<void> {
+	const text = content.trim();
+	if (!text) return;
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(text);
+		} else {
+			const area = document.createElement("textarea");
+			area.value = text;
+			area.style.position = "fixed";
+			area.style.opacity = "0";
+			document.body.appendChild(area);
+			area.focus();
+			area.select();
+			document.execCommand("copy");
+			area.remove();
+		}
+		copiedMessageTimestamp = timestamp;
+		if (copyResetTimer) clearTimeout(copyResetTimer);
+		copyResetTimer = setTimeout(() => {
+			if (copiedMessageTimestamp === timestamp) {
+				copiedMessageTimestamp = null;
+			}
+		}, 1800);
+	} catch {
+		// Ignore clipboard failures silently; chat remains usable.
+	}
+}
+
 function formatTime(ts: number): string {
 	return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -606,7 +886,7 @@ function scrollToWidget(serverId: string): void {
 			<div class="chat-empty">
 				<Bot class="size-5 opacity-30" />
 				<span class="sig-label" style="color: var(--sig-text-muted)">
-					Ask me anything — I'll pull up the right app and show you the data live.
+					Ask {signetIdentityName} a question, or anything you want.
 				</span>
 			</div>
 		{/if}
@@ -621,6 +901,22 @@ function scrollToWidget(serverId: string): void {
 					{/if}
 				</div>
 				<div class="chat-msg-body">
+					{#if msg.role === "agent"}
+						<div class="chat-msg-actions">
+							<button
+								class="chat-copy-btn"
+								type="button"
+								title="Copy response"
+								onclick={() => copyMessageContent(msg.content, msg.timestamp)}
+							>
+								{#if copiedMessageTimestamp === msg.timestamp}
+									<Check class="size-3" />
+								{:else}
+									<Copy class="size-3" />
+								{/if}
+							</button>
+						</div>
+					{/if}
 					<div class="chat-msg-content">{msg.content}</div>
 					{#if msg.toolCalls && msg.toolCalls.length > 0}
 						<div class="chat-tool-calls">
@@ -681,36 +977,79 @@ function scrollToWidget(serverId: string): void {
 		{#if modelOptionsError}
 			<div class="chat-model-error">{modelOptionsError}</div>
 		{/if}
-		<select
-			class="chat-model-select"
-			bind:value={selectedModelId}
-			disabled={loading || modelOptionsLoading}
-			title="Choose chat model"
-		>
-			{#if modelOptions.length > 0}
-				{#each modelOptions as option (option.id)}
-					<option value={option.id}>{option.label}</option>
-				{/each}
-			{:else}
-				<option value="" disabled>No providers found</option>
+		{#if voiceError}
+			<div class="chat-model-error">{voiceError}</div>
+		{/if}
+		<div class="chat-input-controls">
+			<select
+				class="chat-mic-select"
+				bind:value={selectedMicrophoneId}
+				disabled={loading || listening || microphoneOptions.length === 0}
+				title="Choose microphone"
+			>
+				{#if microphoneOptions.length > 0}
+					{#each microphoneOptions as mic (mic.id)}
+						<option value={mic.id}>{mic.label}</option>
+					{/each}
+				{:else}
+					<option value="" disabled>No microphones found</option>
+				{/if}
+			</select>
+			<select
+				class="chat-model-select"
+				bind:value={selectedModelId}
+				disabled={loading || modelOptionsLoading}
+				title="Choose chat model"
+			>
+				{#if modelOptions.length > 0}
+					{#each modelOptions as option (option.id)}
+						<option value={option.id}>{option.label}</option>
+					{/each}
+				{:else}
+					<option value="" disabled>No providers found</option>
+				{/if}
+			</select>
+		</div>
+		<div class="chat-input-compose">
+			<input
+				type="text"
+				class="chat-input"
+				placeholder="Ask your agent..."
+				bind:this={inputEl}
+				bind:value={input}
+				onkeydown={handleKeydown}
+				ondragover={handleInputDragOver}
+				ondrop={handleInputDrop}
+				disabled={loading}
+			/>
+			{#if speechSupported}
+				<button
+					class="chat-voice-btn"
+					class:active={listening}
+					title={listening ? "Stop voice input" : "Use microphone"}
+					onclick={toggleVoiceCapture}
+					disabled={loading || (voiceBusy && !listening)}
+				>
+					{#if listening}
+						<span class="chat-voice-bars" aria-hidden="true">
+							<span class="bar"></span>
+							<span class="bar"></span>
+							<span class="bar"></span>
+						</span>
+					{:else}
+						<Mic class="size-3.5" />
+					{/if}
+				</button>
 			{/if}
-		</select>
-		<input
-			type="text"
-			class="chat-input"
-			placeholder="Ask your agent..."
-			bind:value={input}
-			onkeydown={handleKeydown}
-			disabled={loading}
-		/>
-		<button
-			class="chat-send-btn"
-			title="Send message"
-			onclick={send}
-			disabled={loading || !selectedModelId || !input.trim()}
-		>
-			<Send class="size-3.5" />
-		</button>
+			<button
+				class="chat-send-btn"
+				title="Send message"
+				onclick={send}
+				disabled={loading || !selectedModelId || !input.trim()}
+			>
+				<Send class="size-3.5" />
+			</button>
+		</div>
 	</div>
 </div>
 
@@ -806,6 +1145,33 @@ function scrollToWidget(serverId: string): void {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
+	}
+
+	.chat-msg-actions {
+		display: flex;
+		justify-content: flex-end;
+		margin-bottom: 1px;
+	}
+
+	.chat-copy-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		padding: 0;
+		border-radius: 6px;
+		border: 1px solid var(--sig-border);
+		background: var(--sig-bg);
+		color: var(--sig-text-muted);
+		cursor: pointer;
+		transition: all var(--dur) var(--ease);
+	}
+
+	.chat-copy-btn:hover {
+		border-color: var(--sig-highlight);
+		color: var(--sig-highlight);
+		background: color-mix(in srgb, var(--sig-highlight) 10%, var(--sig-bg));
 	}
 
 	.chat-msg-content {
@@ -983,9 +1349,9 @@ function scrollToWidget(serverId: string): void {
 	/* Input bar */
 	.chat-input-bar {
 		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 6px;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 8px;
 		padding: 8px var(--space-md);
 		border-top: 1px solid var(--sig-border);
 		background: var(--sig-surface);
@@ -1000,9 +1366,16 @@ function scrollToWidget(serverId: string): void {
 		color: var(--sig-danger, #8a4545);
 	}
 
-	.chat-model-select {
-		width: 220px;
-		max-width: 42%;
+	.chat-input-controls {
+		display: flex;
+		gap: 6px;
+		width: 100%;
+	}
+
+	.chat-model-select,
+	.chat-mic-select {
+		flex: 1 1 220px;
+		min-width: 0;
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--sig-text);
@@ -1014,26 +1387,33 @@ function scrollToWidget(serverId: string): void {
 		transition: border-color var(--dur) var(--ease);
 	}
 
-	.chat-model-select:focus {
+	.chat-model-select:focus,
+	.chat-mic-select:focus {
 		border-color: var(--sig-accent);
 	}
 
-	.chat-model-select:disabled {
+	.chat-model-select:disabled,
+	.chat-mic-select:disabled {
 		opacity: 0.5;
 	}
 
+	.chat-input-compose {
+		position: relative;
+		width: 100%;
+	}
+
 	.chat-input {
-		flex: 1;
-		min-width: 0;
+		width: 100%;
 		font-family: var(--font-mono);
 		font-size: 12px;
 		color: var(--sig-text);
 		background: var(--sig-bg);
-		border: 1px solid var(--sig-border);
+		border: 1px solid color-mix(in srgb, var(--sig-highlight) 65%, var(--sig-border));
 		border-radius: 6px;
-		padding: 6px 10px;
+		padding: 8px 78px 8px 10px;
 		outline: none;
-		transition: border-color var(--dur) var(--ease);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 22%, transparent);
+		transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 	}
 
 	.chat-input::placeholder {
@@ -1042,7 +1422,8 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-input:focus {
-		border-color: var(--sig-accent);
+		border-color: var(--sig-highlight);
+		box-shadow: var(--sig-glow-highlight);
 	}
 
 	.chat-input:disabled {
@@ -1053,6 +1434,10 @@ function scrollToWidget(serverId: string): void {
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		position: absolute;
+		right: 6px;
+		top: 50%;
+		transform: translateY(-50%);
 		width: 30px;
 		height: 30px;
 		padding: 0;
@@ -1062,7 +1447,80 @@ function scrollToWidget(serverId: string): void {
 		color: var(--sig-text-muted);
 		cursor: pointer;
 		transition: all var(--dur) var(--ease);
-		flex-shrink: 0;
+		z-index: 2;
+	}
+
+	.chat-voice-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		position: absolute;
+		right: 42px;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 30px;
+		height: 30px;
+		padding: 0;
+		border: 1px solid var(--sig-border);
+		border-radius: 6px;
+		background: var(--sig-surface);
+		color: var(--sig-text-muted);
+		cursor: pointer;
+		transition: all var(--dur) var(--ease);
+		z-index: 2;
+	}
+
+	.chat-voice-btn:hover:not(:disabled) {
+		border-color: var(--sig-highlight);
+		color: var(--sig-highlight);
+		background: color-mix(in srgb, var(--sig-highlight) 10%, var(--sig-surface));
+	}
+
+	.chat-voice-btn.active {
+		border-color: color-mix(in srgb, var(--sig-highlight) 70%, var(--sig-warning));
+		color: var(--sig-highlight);
+		box-shadow: var(--sig-glow-highlight);
+	}
+
+	.chat-voice-btn:disabled {
+		opacity: 0.3;
+		cursor: default;
+	}
+
+	.chat-voice-bars {
+		display: inline-flex;
+		align-items: flex-end;
+		gap: 2px;
+		height: 12px;
+	}
+
+	.chat-voice-bars .bar {
+		width: 2px;
+		height: 100%;
+		border-radius: 2px;
+		background: currentColor;
+		transform-origin: center bottom;
+		animation: chatVoiceWave 0.9s ease-in-out infinite;
+	}
+
+	.chat-voice-bars .bar:nth-child(2) {
+		animation-delay: 0.15s;
+	}
+
+	.chat-voice-bars .bar:nth-child(3) {
+		animation-delay: 0.3s;
+	}
+
+	@keyframes chatVoiceWave {
+		0%,
+		100% {
+			transform: scaleY(0.35);
+			opacity: 0.45;
+		}
+		50% {
+			transform: scaleY(1);
+			opacity: 1;
+		}
 	}
 
 	.chat-send-btn:hover:not(:disabled) {

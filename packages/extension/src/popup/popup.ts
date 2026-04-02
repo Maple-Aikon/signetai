@@ -309,12 +309,16 @@ async function init(): Promise<void> {
 	const openDashboard = document.getElementById("open-dashboard");
 	const openOptions = document.getElementById("open-options");
 	const toolStatus = document.getElementById("tool-status");
+	const navTargetSelect = document.getElementById("nav-target-select") as HTMLSelectElement | null;
+	const navOpenTargetBtn = document.getElementById("nav-open-target") as HTMLButtonElement | null;
+	const noteSection = document.getElementById("tool-note-section") as HTMLDivElement | null;
 	const noteInput = document.getElementById("tool-note-input") as HTMLTextAreaElement | null;
 	const transcribeFormat = document.getElementById("transcribe-format") as HTMLSelectElement | null;
 
 	const capturePageBtn = document.getElementById("tool-capture-page") as HTMLButtonElement | null;
 	const saveBookmarkBtn = document.getElementById("tool-save-bookmark") as HTMLButtonElement | null;
 	const writeNoteBtn = document.getElementById("tool-write-note") as HTMLButtonElement | null;
+	const openOsChatBtn = document.getElementById("tool-open-os-chat") as HTMLButtonElement | null;
 	const sendPageBtn = document.getElementById("tool-send-page") as HTMLButtonElement | null;
 	const transcribeBtn = document.getElementById("tool-transcribe-highlight") as HTMLButtonElement | null;
 	const sendSelectionBtn = document.getElementById("tool-send-selection") as HTMLButtonElement | null;
@@ -330,11 +334,15 @@ async function init(): Promise<void> {
 		!openDashboard ||
 		!openOptions ||
 		!toolStatus ||
+		!navTargetSelect ||
+		!navOpenTargetBtn ||
+		!noteSection ||
 		!noteInput ||
 		!transcribeFormat ||
 		!capturePageBtn ||
 		!saveBookmarkBtn ||
 		!writeNoteBtn ||
+		!openOsChatBtn ||
 		!sendPageBtn ||
 		!transcribeBtn ||
 		!sendSelectionBtn
@@ -342,24 +350,22 @@ async function init(): Promise<void> {
 		return;
 	}
 
-	const navButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-nav-target]"));
 	const memoryListEl = memoryList as HTMLElement;
 	const memoriesStat = memoriesStatEl as HTMLElement;
 	const embeddedStat = embeddedStatEl as HTMLElement;
 	const pipelineStat = pipelineStatEl as HTMLElement;
 	const searchInputEl = searchInput as HTMLInputElement;
+	const noteSectionEl = noteSection as HTMLDivElement;
 
 	const openDashboardHash = async (hash = ""): Promise<void> => {
 		const cfg = await getConfig();
 		chrome.tabs.create({ url: buildDashboardUrl(cfg.daemonUrl, hash) });
 	};
 
-	for (const navButton of navButtons) {
-		navButton.addEventListener("click", () => {
-			const target = navButton.dataset.navTarget ?? "";
-			void openDashboardHash(target);
-		});
-	}
+	navOpenTargetBtn.addEventListener("click", () => {
+		const target = navTargetSelect.value || "home";
+		void openDashboardHash(target);
+	});
 
 	openDashboard.addEventListener("click", () => {
 		void openDashboardHash();
@@ -368,6 +374,18 @@ async function init(): Promise<void> {
 	openOptions.addEventListener("click", () => {
 		chrome.runtime.openOptionsPage();
 	});
+
+	openOsChatBtn.addEventListener("click", () => {
+		void openDashboardHash("os");
+	});
+
+	let noteSectionVisible = false;
+	const setNoteSectionVisible = (visible: boolean): void => {
+		noteSectionVisible = visible;
+		noteSectionEl.hidden = !visible;
+		writeNoteBtn.textContent = visible ? "Save Note" : "Write Note";
+	};
+	setNoteSectionVisible(false);
 
 	let recentMemories: readonly Memory[] = [];
 	let online = false;
@@ -460,6 +478,13 @@ async function init(): Promise<void> {
 	});
 
 	writeNoteBtn.addEventListener("click", async () => {
+		if (!noteSectionVisible) {
+			setNoteSectionVisible(true);
+			noteInput.focus();
+			setToolStatus(toolStatus, "Note editor opened.");
+			return;
+		}
+
 		const note = noteInput.value.trim();
 		if (!note) {
 			setToolStatus(toolStatus, "Write a note first.", "error");
@@ -479,6 +504,7 @@ async function init(): Promise<void> {
 		if (result.success) {
 			setToolStatus(toolStatus, "Note saved to Signet memory.", "success");
 			noteInput.value = "";
+			setNoteSectionVisible(false);
 			if (online) await refreshOverview();
 		} else {
 			setToolStatus(toolStatus, "Note save failed.", "error");

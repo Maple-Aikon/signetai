@@ -236,8 +236,10 @@ function handleRenderDragLeave(): void {
 function handleRenderDrop(e: DragEvent): void {
 	e.preventDefault();
 	renderWindowDragOver = false;
-	const appId = e.dataTransfer?.getData("text/plain")?.trim();
-	if (!appId) return;
+	const explicitAppId = e.dataTransfer?.getData("application/x-signet-app-id")?.trim() || "";
+	const fallbackText = e.dataTransfer?.getData("text/plain")?.trim() || "";
+	const appId = explicitAppId || fallbackText;
+	if (!appId || !os.entries.some((entry) => entry.id === appId)) return;
 	void loadAppIntoRenderWindow(appId);
 }
 

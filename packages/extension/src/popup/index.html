@@ -33,14 +33,18 @@
 
     <section class="section nav-section">
       <div class="section-title">Signet Page Navigator</div>
-      <div class="nav-grid">
-        <button class="nav-btn" data-nav-target="home">Overview</button>
-        <button class="nav-btn" data-nav-target="cortex-memory/constellation">Ontology</button>
-        <button class="nav-btn" data-nav-target="tasks">Tasks</button>
-        <button class="nav-btn" data-nav-target="audit">Audit</button>
-        <button class="nav-btn" data-nav-target="secrets">Secrets</button>
-        <button class="nav-btn" data-nav-target="skills">Skills</button>
-        <button class="nav-btn nav-btn-wide" data-nav-target="cortex-memory/memories">View Memories</button>
+      <div class="nav-row">
+        <select id="nav-target-select" class="tool-select nav-select">
+          <option value="home">Overview</option>
+          <option value="cortex-memory/constellation">Ontology</option>
+          <option value="tasks">Tasks</option>
+          <option value="audit">Audit</option>
+          <option value="secrets">Secrets</option>
+          <option value="skills">Skills</option>
+          <option value="cortex-memory/memories">View Memories</option>
+          <option value="os">OS Chat</option>
+        </select>
+        <button class="tool-btn nav-open-btn" id="nav-open-target">Open</button>
       </div>
     </section>
 
@@ -50,15 +54,18 @@
         <button class="tool-btn" id="tool-capture-page">Capture Page</button>
         <button class="tool-btn" id="tool-save-bookmark">Save Bookmark</button>
         <button class="tool-btn" id="tool-write-note">Write Note</button>
+        <button class="tool-btn" id="tool-open-os-chat">OS Chat</button>
         <button class="tool-btn" id="tool-send-page">Send Page to Signet</button>
       </div>
 
-      <textarea
-        id="tool-note-input"
-        class="tool-note-input"
-        rows="3"
-        placeholder="Add page notes for Signet..."
-      ></textarea>
+      <div class="tool-note-section" id="tool-note-section" hidden>
+        <textarea
+          id="tool-note-input"
+          class="tool-note-input"
+          rows="3"
+          placeholder="Add page notes for Signet..."
+        ></textarea>
+      </div>
 
       <div class="tool-row">
         <select id="transcribe-format" class="tool-select">

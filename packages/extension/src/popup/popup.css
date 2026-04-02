@@ -163,7 +163,20 @@ body {
 	color: var(--sig-text-muted);
 }
 
-.nav-grid,
+.nav-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px;
+}
+
+.nav-select {
+	min-width: 0;
+}
+
+.nav-open-btn {
+	min-width: 68px;
+}
+
 .tool-grid {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
@@ -195,6 +208,12 @@ body {
 }
 
 .tools-section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.tool-note-section {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
