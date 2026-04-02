@@ -13,7 +13,7 @@ success_criteria:
   - "ForgeCode discovers Signet MCP tools from `~/forge/.mcp.json` while preserving unrelated MCP servers"
   - "`signet setup --harness forge` performs the connector install after binary provisioning instead of leaving Forge integration as a no-op"
 scope_boundary: "Covers the TypeScript connector that prepares ForgeCode's global AGENTS.md, skills, and MCP config; does not modify ForgeCode source, add lifecycle hooks that ForgeCode does not expose, or replace Signet's first-party Forge binary management flow"
-draft_quality: "implementation-aligned planning stub derived from reference-repo comparison"
+draft_quality: "implementation-aligned"
 ---
 
 # Connector: ForgeCode

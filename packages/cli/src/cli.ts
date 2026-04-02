@@ -299,10 +299,7 @@ async function configureHarnessHooks(
 		}
 		case "forge": {
 			const connector = new ForgeConnector();
-			const result = await connector.install(basePath);
-			if (!result.success) {
-				throw new Error(result.message);
-			}
+			await connector.install(basePath);
 			break;
 		}
 	}

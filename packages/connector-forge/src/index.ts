@@ -59,12 +59,19 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 		return { command: "signet-mcp", args: [] };
 	}
 
-	const entry = process.argv[1] || "";
-	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
+	// On Windows, spawn() without shell:true cannot resolve .cmd wrappers —
+	// use node + the mcp-stdio.js entry point directly instead.
+	// argv[1] is e.g. .../signetai/bin/signet.js; mcp-stdio.js lives at
+	// .../signetai/dist/mcp-stdio.js (matches Claude Code / OpenCode pattern).
+	const cliEntry = process.argv[1] || "";
+	const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
 	if (existsSync(mcpJs)) {
 		return { command: process.execPath, args: [mcpJs] };
 	}
 
+	console.warn(
+		`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
+	);
 	return { command: "signet-mcp", args: [] };
 }
 
