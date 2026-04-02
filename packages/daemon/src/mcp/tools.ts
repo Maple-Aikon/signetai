@@ -752,9 +752,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				session_key: z.string().describe("Current session key"),
 				agent_id: z.string().optional().describe("Agent id scope (default: default)"),
-				ratings: z.record(z.number()).describe("Map of memory ID to relevance score (-1 to 1)"),
+				ratings: z.object({}).catchall(z.number()).describe("Map of memory ID to relevance score (-1 to 1)"),
 				paths: z
-					.record(
+					.object({})
+					.catchall(
 						z.object({
 							entity_ids: z.array(z.string()).optional(),
 							aspect_ids: z.array(z.string()).optional(),
@@ -764,7 +765,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.optional()
 					.describe("Optional path provenance keyed by memory id"),
 				rewards: z
-					.record(
+					.object({})
+					.catchall(
 						z.object({
 							forward_citation: z.number().optional(),
 							update_after_retrieval: z.number().optional(),
@@ -976,7 +978,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				command: z.string().describe("Shell command to execute"),
 				secrets: z
-					.record(z.string(), z.string())
+					.object({})
+					.catchall(z.string())
 					.describe(
 						'Map of env var name → secret ref, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" } or { "DB_PASSWORD": "op://vault/item/password" }',
 					),
@@ -1297,7 +1300,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				server_id: z.string().describe("Installed Tool Server id"),
 				tool: z.string().describe("Tool name exposed by that server"),
-				args: z.record(z.unknown()).optional().describe("Tool argument object"),
+				args: z.object({}).catchall(z.unknown()).optional().describe("Tool argument object"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
