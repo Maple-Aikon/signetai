@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { doRestart, doStop, requestPipelinePauseApi, summarizePipelineToggle } from "./daemon.js";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { doRestart, doStart, doStop, requestPipelinePauseApi, summarizePipelineToggle } from "./daemon.js";
 
 describe("requestPipelinePauseApi", () => {
 	it("uses the live daemon pause endpoint when available", async () => {
@@ -119,5 +119,64 @@ describe("daemon lifecycle recovery", () => {
 		await doStop({}, deps);
 
 		expect(stopped).toBe(true);
+	});
+});
+
+// Regression: #429 — failure paths must exit non-zero
+describe("daemon exit codes on failure", () => {
+	let exitSpy: ReturnType<typeof spyOn>;
+
+	afterEach(() => {
+		exitSpy?.mockRestore();
+	});
+
+	it("doStart exits with code 1 when startDaemon returns false", async () => {
+		exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+
+		const deps = makeDeps({ startDaemon: async () => false });
+
+		await expect(doStart({}, deps)).rejects.toThrow("EXIT_1");
+		expect(exitSpy).toHaveBeenCalledWith(1);
+	});
+
+	it("doStop exits with code 1 when stopDaemon returns false", async () => {
+		exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+
+		const deps = makeDeps({
+			isDaemonRunning: async () => true,
+			stopDaemon: async () => false,
+		});
+
+		await expect(doStop({}, deps)).rejects.toThrow("EXIT_1");
+		expect(exitSpy).toHaveBeenCalledWith(1);
+	});
+
+	it("doRestart exits with code 1 when startDaemon returns false", async () => {
+		exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+
+		const deps = makeDeps({ startDaemon: async () => false });
+
+		await expect(doRestart({ openclaw: false }, deps)).rejects.toThrow("EXIT_1");
+		expect(exitSpy).toHaveBeenCalledWith(1);
+	});
+
+	it("doRestart exits with code 1 when stopDaemon returns false during restart", async () => {
+		exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+
+		const deps = makeDeps({
+			isDaemonRunning: async () => true,
+			stopDaemon: async () => false,
+		});
+
+		await expect(doRestart({ openclaw: false }, deps)).rejects.toThrow("EXIT_1");
+		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 });
