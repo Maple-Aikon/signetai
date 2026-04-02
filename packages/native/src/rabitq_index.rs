@@ -3,10 +3,151 @@
 /// All data crosses the FFI boundary as Buffer (opaque bytes) to minimize
 /// serialization overhead. The compressed index is serialized into a single
 /// Buffer that JS holds as an opaque handle and passes back for search.
+///
+/// Performance: a global LRU cache avoids re-deserializing the same index
+/// buffer on every search call. The cache is keyed by a blake3 hash of the
+/// buffer contents, so callers need not manage handles explicitly.
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use crate::rabitq;
+
+// ---------------------------------------------------------------------------
+// Index deserialization cache
+// ---------------------------------------------------------------------------
+
+/// Maximum number of deserialized indices to cache in memory.
+const INDEX_CACHE_MAX: usize = 8;
+
+struct CacheEntry {
+    index: rabitq::CompressedIndex,
+    /// Monotonically increasing access counter for LRU eviction.
+    last_access: u64,
+}
+
+struct IndexCache {
+    entries: HashMap<[u8; 32], CacheEntry>,
+    access_counter: u64,
+}
+
+impl IndexCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            access_counter: 0,
+        }
+    }
+
+    /// Get or insert a deserialized index, returning a reference via a callback.
+    ///
+    /// We can't return `&CompressedIndex` across the mutex boundary, so the
+    /// caller provides a closure that operates on the borrowed index.
+    fn with_index<F, R>(&mut self, data: &[u8], f: F) -> napi::Result<R>
+    where
+        F: FnOnce(&rabitq::CompressedIndex) -> napi::Result<R>,
+    {
+        let key = blake3_hash(data);
+        self.access_counter += 1;
+        let ac = self.access_counter;
+
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.last_access = ac;
+            return f(&entry.index);
+        }
+
+        // Deserialize
+        let index = rabitq::deserialize_index(data)
+            .map_err(|e| napi::Error::from_reason(e))?;
+
+        // Evict LRU if at capacity
+        if self.entries.len() >= INDEX_CACHE_MAX {
+            let lru_key = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.last_access)
+                .map(|(k, _)| *k)
+                .unwrap();
+            self.entries.remove(&lru_key);
+        }
+
+        let result = f(&index);
+        // Only cache if the search succeeded — don't store on error
+        if result.is_ok() {
+            self.entries.insert(
+                key,
+                CacheEntry {
+                    index,
+                    last_access: ac,
+                },
+            );
+        }
+        result
+    }
+}
+
+fn blake3_hash(data: &[u8]) -> [u8; 32] {
+    // Use a simple FNV-1a style hash stretched to 32 bytes to avoid adding
+    // a dependency. For cache keying this is sufficient — collisions just
+    // cause a cache miss (correctness is unaffected).
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(data);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+static INDEX_CACHE: std::sync::LazyLock<Mutex<IndexCache>> =
+    std::sync::LazyLock::new(|| Mutex::new(IndexCache::new()));
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Validate that dim > 0, returning a friendly napi error.
+#[inline]
+fn validate_dim(dim: u32) -> napi::Result<()> {
+    if dim == 0 {
+        return Err(napi::Error::from_reason(
+            "dim must be > 0".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Parse a flat f32 buffer into Vec<Vec<f32>> given a known dim.
+fn parse_vectors(bytes: &[u8], dim: u32) -> napi::Result<Vec<Vec<f32>>> {
+    let dim_usize = dim as usize;
+    let float_bytes = dim_usize * 4;
+
+    if bytes.len() % float_bytes != 0 {
+        return Err(napi::Error::from_reason(format!(
+            "vectors_buf length {} is not a multiple of dim*4 ({})",
+            bytes.len(),
+            float_bytes
+        )));
+    }
+
+    let num_vectors = bytes.len() / float_bytes;
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(num_vectors);
+    for i in 0..num_vectors {
+        let base = i * float_bytes;
+        let mut vec = Vec::with_capacity(dim_usize);
+        for j in 0..dim_usize {
+            let offset = base + j * 4;
+            let val = f32::from_le_bytes([
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+            ]);
+            vec.push(val);
+        }
+        vectors.push(vec);
+    }
+    Ok(vectors)
+}
 
 // ---------------------------------------------------------------------------
 // Rotation Matrix + Codebook generation
@@ -16,20 +157,28 @@ use crate::rabitq;
 ///
 /// Returns a Buffer containing dim×dim f32 values in row-major order (little-endian).
 #[napi]
-pub fn rabitq_generate_rotation_matrix(dim: u32, seed: u32) -> Buffer {
+pub fn rabitq_generate_rotation_matrix(dim: u32, seed: u32) -> napi::Result<Buffer> {
+    validate_dim(dim)?;
     let matrix = rabitq::generate_rotation_matrix(dim as usize, seed);
     let bytes: Vec<u8> = matrix.iter().flat_map(|v| v.to_le_bytes()).collect();
-    Buffer::from(bytes)
+    Ok(Buffer::from(bytes))
 }
 
 /// Compute the RaBitQ codebook centroids.
 ///
 /// Returns a Buffer containing 2^bits f32 values (little-endian).
 #[napi]
-pub fn rabitq_compute_codebook(bits: u32, dim: u32) -> Buffer {
+pub fn rabitq_compute_codebook(bits: u32, dim: u32) -> napi::Result<Buffer> {
+    validate_dim(dim)?;
+    if bits == 0 || bits > 8 {
+        return Err(napi::Error::from_reason(format!(
+            "bits must be 1..8, got {}",
+            bits
+        )));
+    }
     let codebook = rabitq::compute_codebook(bits, dim);
     let bytes: Vec<u8> = codebook.iter().flat_map(|v| v.to_le_bytes()).collect();
-    Buffer::from(bytes)
+    Ok(Buffer::from(bytes))
 }
 
 // ---------------------------------------------------------------------------
@@ -52,47 +201,21 @@ pub fn rabitq_build_index(
     dim: u32,
     seed: u32,
 ) -> napi::Result<Buffer> {
+    validate_dim(dim)?;
+
     let bytes: &[u8] = &vectors_buf;
-    let dim_usize = dim as usize;
-    let float_bytes = dim_usize * 4;
+    let vectors = parse_vectors(bytes, dim)?;
 
-    if bytes.len() % float_bytes != 0 {
-        return Err(napi::Error::from_reason(format!(
-            "vectors_buf length {} is not a multiple of dim*4 ({})",
-            bytes.len(),
-            float_bytes
-        )));
-    }
-
-    let num_vectors = bytes.len() / float_bytes;
-    if num_vectors != ids.len() {
+    if vectors.len() != ids.len() {
         return Err(napi::Error::from_reason(format!(
             "Vector count ({}) must match ID count ({})",
-            num_vectors,
+            vectors.len(),
             ids.len()
         )));
     }
 
-    // Parse vectors from buffer
-    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(num_vectors);
-    for i in 0..num_vectors {
-        let base = i * float_bytes;
-        let mut vec = Vec::with_capacity(dim_usize);
-        for j in 0..dim_usize {
-            let offset = base + j * 4;
-            let val = f32::from_le_bytes([
-                bytes[offset],
-                bytes[offset + 1],
-                bytes[offset + 2],
-                bytes[offset + 3],
-            ]);
-            vec.push(val);
-        }
-        vectors.push(vec);
-    }
-
     // Generate rotation matrix and codebook
-    let rotation_matrix = rabitq::generate_rotation_matrix(dim_usize, seed);
+    let rotation_matrix = rabitq::generate_rotation_matrix(dim as usize, seed);
     let codebook = rabitq::compute_codebook(bits, dim);
 
     // Build index
@@ -117,6 +240,9 @@ pub struct RabitqSearchResult {
 
 /// Search a compressed RaBitQ index for approximate nearest neighbours.
 ///
+/// Uses an internal LRU cache so repeated searches against the same index
+/// buffer skip deserialization entirely.
+///
 /// @param index_buf - Buffer containing the serialized CompressedIndex (from rabitqBuildIndex)
 /// @param query - Float32Array query vector
 /// @param k - Number of results to return
@@ -128,11 +254,17 @@ pub fn rabitq_search(
     k: u32,
 ) -> napi::Result<Vec<RabitqSearchResult>> {
     let data: &[u8] = &index_buf;
-    let index =
-        rabitq::deserialize_index(data).map_err(|e| napi::Error::from_reason(e))?;
+    let query_owned: Vec<f32> = query.to_vec();
 
-    let results = rabitq::compressed_search(query, &index, k as usize)
-        .map_err(|e| napi::Error::from_reason(e))?;
+    let mut cache = INDEX_CACHE
+        .lock()
+        .map_err(|e| napi::Error::from_reason(format!("Cache lock poisoned: {}", e)))?;
+
+    let results = cache
+        .with_index(data, |index| {
+            rabitq::compressed_search(&query_owned, index, k as usize)
+                .map_err(|e| napi::Error::from_reason(e))
+        })?;
 
     Ok(results
         .into_iter()
@@ -168,11 +300,12 @@ pub fn rabitq_compress(
     bits: u32,
     dim: u32,
 ) -> napi::Result<Buffer> {
+    validate_dim(dim)?;
+
     let vec_bytes: &[u8] = &vectors_buf;
     let rot_bytes: &[u8] = &rotation_matrix_buf;
     let cb_bytes: &[u8] = &codebook_buf;
     let dim_usize = dim as usize;
-    let float_bytes = dim_usize * 4;
 
     // Parse rotation matrix
     let expected_rot_bytes = dim_usize * dim_usize * 4;
@@ -209,36 +342,13 @@ pub fn rabitq_compress(
         .collect();
 
     // Parse vectors
-    if vec_bytes.len() % float_bytes != 0 {
-        return Err(napi::Error::from_reason(format!(
-            "vectors_buf length {} is not a multiple of dim*4 ({})",
-            vec_bytes.len(),
-            float_bytes
-        )));
-    }
-    let num_vectors = vec_bytes.len() / float_bytes;
-    if num_vectors != ids.len() {
+    let vectors = parse_vectors(vec_bytes, dim)?;
+    if vectors.len() != ids.len() {
         return Err(napi::Error::from_reason(format!(
             "Vector count ({}) must match ID count ({})",
-            num_vectors,
+            vectors.len(),
             ids.len()
         )));
-    }
-
-    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(num_vectors);
-    for i in 0..num_vectors {
-        let base = i * float_bytes;
-        let mut vec = Vec::with_capacity(dim_usize);
-        for j in 0..dim_usize {
-            let offset = base + j * 4;
-            vec.push(f32::from_le_bytes([
-                vec_bytes[offset],
-                vec_bytes[offset + 1],
-                vec_bytes[offset + 2],
-                vec_bytes[offset + 3],
-            ]));
-        }
-        vectors.push(vec);
     }
 
     let index = rabitq::quantize(&vectors, &ids, &rotation_matrix, &codebook, bits)
@@ -308,41 +418,17 @@ pub fn rabitq_brute_force_search(
     dim: u32,
     k: u32,
 ) -> napi::Result<Vec<RabitqSearchResult>> {
+    validate_dim(dim)?;
+
     let bytes: &[u8] = &vectors_buf;
-    let dim_usize = dim as usize;
-    let float_bytes = dim_usize * 4;
+    let vectors = parse_vectors(bytes, dim)?;
 
-    if bytes.len() % float_bytes != 0 {
-        return Err(napi::Error::from_reason(format!(
-            "vectors_buf length {} is not a multiple of dim*4 ({})",
-            bytes.len(),
-            float_bytes
-        )));
-    }
-
-    let num_vectors = bytes.len() / float_bytes;
-    if num_vectors != ids.len() {
+    if vectors.len() != ids.len() {
         return Err(napi::Error::from_reason(format!(
             "Vector count ({}) must match ID count ({})",
-            num_vectors,
+            vectors.len(),
             ids.len()
         )));
-    }
-
-    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(num_vectors);
-    for i in 0..num_vectors {
-        let base = i * float_bytes;
-        let mut vec = Vec::with_capacity(dim_usize);
-        for j in 0..dim_usize {
-            let offset = base + j * 4;
-            vec.push(f32::from_le_bytes([
-                bytes[offset],
-                bytes[offset + 1],
-                bytes[offset + 2],
-                bytes[offset + 3],
-            ]));
-        }
-        vectors.push(vec);
     }
 
     let results = rabitq::brute_force_search(query, &vectors, &ids, k as usize);

@@ -4,6 +4,7 @@ pub mod db;
 pub mod error;
 pub mod migrations;
 pub mod queries;
+pub mod rabitq;
 pub mod search;
 pub mod types;
 

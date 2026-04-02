@@ -429,6 +429,7 @@ fn unpack_4bit_pair(byte: u8) -> (u8, u8) {
 // ---------------------------------------------------------------------------
 
 /// Metadata for a single compressed vector.
+#[derive(Debug)]
 pub struct CompressedVector {
     /// Original vector ID.
     pub id: String,
@@ -443,6 +444,7 @@ pub struct CompressedVector {
 }
 
 /// Immutable compressed index holding all quantized vectors and metadata.
+#[derive(Debug)]
 pub struct CompressedIndex {
     /// Number of bits per coordinate (e.g. 4 → 16 centroids).
     pub bits: u32,
@@ -752,6 +754,13 @@ pub fn compressed_search(
             }
         }
 
+        // Guard: skip zero-norm vectors — they carry no directional info
+        // and would cause division by zero below.
+        if cv.norm <= 0.0 {
+            scores.push((vi, f64::NEG_INFINITY));
+            continue;
+        }
+
         let scale = cv.max_dev;
         let approx_dot = scale * dot_approx + cv.mean * query_rotated_sum;
 
@@ -886,7 +895,25 @@ pub fn serialize_index(index: &CompressedIndex) -> Vec<u8> {
     buf
 }
 
+/// Maximum supported dimensionality to prevent OOM from malformed data.
+const MAX_DIM: u32 = 65536;
+
+/// Maximum number of vectors to prevent OOM from malformed data.
+const MAX_VECTOR_COUNT: u32 = 100_000_000; // 100M vectors
+
+/// Maximum codebook entries (2^bits; bits capped at 8 → 256 entries).
+const MAX_CODEBOOK_LEN: u32 = 256;
+
+/// Maximum byte length for a single vector ID string.
+const MAX_ID_LEN: u32 = 65536;
+
+/// Maximum byte length for a single vector's codes array.
+const MAX_CODES_LEN: u32 = 1_000_000;
+
 /// Deserialize a CompressedIndex from a byte buffer produced by `serialize_index`.
+///
+/// Applies sanity caps on all sizes read from the binary format to prevent
+/// OOM allocations from truncated or adversarial buffers.
 pub fn deserialize_index(data: &[u8]) -> Result<CompressedIndex, String> {
     if data.len() < 24 {
         return Err("Buffer too short for header".to_string());
@@ -923,11 +950,43 @@ pub fn deserialize_index(data: &[u8]) -> Result<CompressedIndex, String> {
     }
 
     let bits = read_u32(data, &mut pos)?;
+    if bits == 0 || bits > 8 {
+        return Err(format!("Invalid bits value: {} (must be 1..8)", bits));
+    }
+
     let dim = read_u32(data, &mut pos)?;
+    if dim > MAX_DIM {
+        return Err(format!(
+            "Dimension {} exceeds maximum {} — possible corrupt data",
+            dim, MAX_DIM
+        ));
+    }
+
     let count = read_u32(data, &mut pos)?;
+    if count > MAX_VECTOR_COUNT {
+        return Err(format!(
+            "Vector count {} exceeds maximum {} — possible corrupt data",
+            count, MAX_VECTOR_COUNT
+        ));
+    }
 
     // Codebook
-    let codebook_len = read_u32(data, &mut pos)? as usize;
+    let codebook_len = read_u32(data, &mut pos)?;
+    if codebook_len > MAX_CODEBOOK_LEN {
+        return Err(format!(
+            "Codebook length {} exceeds maximum {}",
+            codebook_len, MAX_CODEBOOK_LEN
+        ));
+    }
+    let codebook_len = codebook_len as usize;
+    // Verify the buffer actually has enough bytes before allocating
+    let codebook_bytes_needed = codebook_len * 4;
+    if pos + codebook_bytes_needed > data.len() {
+        return Err(format!(
+            "Buffer too short for codebook: need {} bytes at offset {}, have {}",
+            codebook_bytes_needed, pos, data.len()
+        ));
+    }
     let mut codebook = Vec::with_capacity(codebook_len);
     for _ in 0..codebook_len {
         codebook.push(read_f32(data, &mut pos)?);
@@ -935,6 +994,13 @@ pub fn deserialize_index(data: &[u8]) -> Result<CompressedIndex, String> {
 
     // Rotation matrix
     let rot_len = (dim as usize) * (dim as usize);
+    let rot_bytes_needed = rot_len * 4;
+    if pos + rot_bytes_needed > data.len() {
+        return Err(format!(
+            "Buffer too short for rotation matrix: need {} bytes at offset {}, have {}",
+            rot_bytes_needed, pos, data.len()
+        ));
+    }
     let mut rotation_matrix = Vec::with_capacity(rot_len);
     for _ in 0..rot_len {
         rotation_matrix.push(read_f32(data, &mut pos)?);
@@ -942,8 +1008,15 @@ pub fn deserialize_index(data: &[u8]) -> Result<CompressedIndex, String> {
 
     // Vectors
     let mut vectors = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        let id_len = read_u32(data, &mut pos)? as usize;
+    for vi in 0..(count as usize) {
+        let id_len = read_u32(data, &mut pos)?;
+        if id_len > MAX_ID_LEN {
+            return Err(format!(
+                "Vector {} id length {} exceeds maximum {}",
+                vi, id_len, MAX_ID_LEN
+            ));
+        }
+        let id_len = id_len as usize;
         if pos + id_len > data.len() {
             return Err("Unexpected end of buffer reading id".to_string());
         }
@@ -955,7 +1028,14 @@ pub fn deserialize_index(data: &[u8]) -> Result<CompressedIndex, String> {
         let mean = read_f32(data, &mut pos)?;
         let max_dev = read_f32(data, &mut pos)?;
 
-        let codes_len = read_u32(data, &mut pos)? as usize;
+        let codes_len = read_u32(data, &mut pos)?;
+        if codes_len > MAX_CODES_LEN {
+            return Err(format!(
+                "Vector {} codes length {} exceeds maximum {}",
+                vi, codes_len, MAX_CODES_LEN
+            ));
+        }
+        let codes_len = codes_len as usize;
         if pos + codes_len > data.len() {
             return Err("Unexpected end of buffer reading codes".to_string());
         }
@@ -1210,5 +1290,124 @@ mod tests {
             4,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_zero_norm_vector_does_not_corrupt_search() {
+        let dim = 16;
+        let r = generate_rotation_matrix(dim, 42);
+        let cb = compute_codebook(4, dim as u32);
+        let mut rng = make_rng(500);
+
+        // Build an index with normal vectors
+        let mut vectors: Vec<Vec<f32>> = Vec::new();
+        let mut ids: Vec<String> = Vec::new();
+        for i in 0..5 {
+            let mut v = random_vector(dim, &mut rng);
+            normalize(&mut v);
+            vectors.push(v);
+            ids.push(format!("v{}", i));
+        }
+
+        let mut index = quantize(&vectors, &ids, &r, &cb, 4).unwrap();
+
+        // Inject a zero-norm vector (simulating an edge case)
+        index.vectors.push(CompressedVector {
+            id: "zero".to_string(),
+            norm: 0.0,
+            mean: 0.0,
+            max_dev: 1.0,
+            codes: vec![0u8; (dim + 1) / 2],
+        });
+        index.count += 1;
+
+        // Search should succeed without NaN/Inf and should rank
+        // the zero-norm vector last (NEG_INFINITY score)
+        let query = &vectors[0];
+        let results = compressed_search(query, &index, 10).unwrap();
+
+        // All scores should be finite except possibly the zero-norm vector
+        for result in &results {
+            if result.id == "zero" {
+                assert!(
+                    result.score == f64::NEG_INFINITY,
+                    "Zero-norm vector should get NEG_INFINITY score, got {}",
+                    result.score
+                );
+            } else {
+                assert!(
+                    result.score.is_finite(),
+                    "Non-zero vector {} got non-finite score {}",
+                    result.id,
+                    result.score
+                );
+            }
+        }
+
+        // The zero-norm vector should be ranked last
+        let last = results.last().unwrap();
+        assert_eq!(last.id, "zero", "Zero-norm vector should be ranked last");
+    }
+
+    #[test]
+    fn test_deserialize_rejects_truncated_buffer() {
+        // A buffer that's too short for the header
+        assert!(deserialize_index(&[0u8; 10]).is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_bad_magic() {
+        let mut buf = vec![0u8; 24];
+        // Wrong magic
+        buf[0..4].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
+        assert!(deserialize_index(&buf).is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_huge_dim() {
+        // Craft a header with valid magic/version but absurd dim
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x52425100u32.to_le_bytes()); // magic
+        buf.extend_from_slice(&1u32.to_le_bytes()); // version
+        buf.extend_from_slice(&4u32.to_le_bytes()); // bits
+        buf.extend_from_slice(&999_999u32.to_le_bytes()); // dim (exceeds MAX_DIM)
+        buf.extend_from_slice(&0u32.to_le_bytes()); // count
+        buf.extend_from_slice(&0u32.to_le_bytes()); // codebook_len
+
+        let result = deserialize_index(&buf);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("exceeds maximum"),
+            "Should reject oversized dim"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_rejects_huge_count() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x52425100u32.to_le_bytes()); // magic
+        buf.extend_from_slice(&1u32.to_le_bytes()); // version
+        buf.extend_from_slice(&4u32.to_le_bytes()); // bits
+        buf.extend_from_slice(&16u32.to_le_bytes()); // dim
+        buf.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // count (huge)
+        buf.extend_from_slice(&0u32.to_le_bytes()); // codebook_len
+
+        let result = deserialize_index(&buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_invalid_bits() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x52425100u32.to_le_bytes()); // magic
+        buf.extend_from_slice(&1u32.to_le_bytes()); // version
+        buf.extend_from_slice(&0u32.to_le_bytes()); // bits = 0 (invalid)
+        buf.extend_from_slice(&16u32.to_le_bytes()); // dim
+        buf.extend_from_slice(&0u32.to_le_bytes()); // count
+        buf.extend_from_slice(&0u32.to_le_bytes()); // codebook_len
+
+        let result = deserialize_index(&buf);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid bits"));
     }
 }
