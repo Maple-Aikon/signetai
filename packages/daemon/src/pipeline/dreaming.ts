@@ -47,6 +47,7 @@ interface DreamingPassRow {
 	readonly completedAt: string | null;
 	readonly tokensConsumed: number | null;
 	readonly mutationsApplied: number | null;
+	readonly mutationsSkipped: number | null;
 	readonly mutationsFailed: number | null;
 	readonly summary: string | null;
 	readonly error: string | null;
@@ -196,10 +197,11 @@ function completeDreamingPass(
 			     completed_at = datetime('now'),
 			     tokens_consumed = ?,
 			     mutations_applied = ?,
+			     mutations_skipped = ?,
 			     mutations_failed = ?,
 			     summary = ?
 			 WHERE id = ?`,
-		).run(result.tokensConsumed, result.applied, result.failed, result.summary, passId);
+		).run(result.tokensConsumed, result.applied, result.skipped, result.failed, result.summary, passId);
 		resetDreamingTokens(db, agentId, passId, mode);
 	});
 }
@@ -223,6 +225,7 @@ export function getDreamingPasses(accessor: DbAccessor, agentId: string, limit =
 				`SELECT id, mode, status, started_at AS startedAt,
 				        completed_at AS completedAt, tokens_consumed AS tokensConsumed,
 				        mutations_applied AS mutationsApplied,
+				        mutations_skipped AS mutationsSkipped,
 				        mutations_failed AS mutationsFailed,
 				        summary, error
 				 FROM dreaming_passes
@@ -372,26 +375,36 @@ function buildDreamingPrompt(
 	}
 
 	let graphText = "";
+	// Character budget for graph section: ~30% of token budget (~4 chars/token)
+	const graphBudget = Math.floor(maxTokens * 0.3 * 4);
 	for (const entity of graph.entities) {
-		graphText += `\n## ${entity.name} (${entity.entityType})`;
-		if (entity.description) graphText += `\n${entity.description}`;
+		const entityHeader = `\n## ${entity.name} (${entity.entityType})${entity.description ? `\n${entity.description}` : ""}`;
+		if (graphText.length + entityHeader.length > graphBudget) break;
+		graphText += entityHeader;
 		const aspects = aspectsByEntity.get(entity.id) ?? [];
 		for (const aspect of aspects) {
-			graphText += `\n### ${aspect.name} (weight: ${aspect.weight.toFixed(2)})`;
+			const aspectLine = `\n### ${aspect.name} (weight: ${aspect.weight.toFixed(2)})`;
+			if (graphText.length + aspectLine.length > graphBudget) break;
+			graphText += aspectLine;
 			const attrs = attrsByAspect.get(aspect.id) ?? [];
 			for (const attr of attrs) {
 				const tag = attr.kind === "constraint" ? " [CONSTRAINT]" : "";
-				graphText += `\n- ${attr.content}${tag}`;
+				const attrLine = `\n- ${attr.content}${tag}`;
+				if (graphText.length + attrLine.length > graphBudget) break;
+				graphText += attrLine;
 			}
 		}
 		graphText += "\n";
 	}
 
 	let depText = "";
+	const depBudget = Math.floor(maxTokens * 0.05 * 4); // ~5% for dependencies
 	for (const dep of graph.dependencies) {
 		const src = entityMap.get(dep.sourceEntityId)?.name ?? dep.sourceEntityId;
 		const tgt = entityMap.get(dep.targetEntityId)?.name ?? dep.targetEntityId;
-		depText += `\n- ${src} --[${dep.dependencyType}]--> ${tgt} (strength: ${dep.strength.toFixed(2)}, confidence: ${dep.confidence.toFixed(2)})`;
+		const line = `\n- ${src} --[${dep.dependencyType}]--> ${tgt} (strength: ${dep.strength.toFixed(2)}, confidence: ${dep.confidence.toFixed(2)})`;
+		if (depText.length + line.length > depBudget) break;
+		depText += line;
 	}
 
 	let summaryText = "";
@@ -712,6 +725,12 @@ function applyMergeEntities(db: WriteDb, agentId: string, mut: DreamingMutation)
 			 WHERE target_entity_id = ? AND agent_id = ?`,
 		).run(targetId, srcId, agentId);
 
+		// Clean up self-loop dependencies created by the rewrite
+		db.prepare(
+			`DELETE FROM entity_dependencies
+			 WHERE source_entity_id = target_entity_id AND agent_id = ?`,
+		).run(agentId);
+
 		// Move memory mentions (OR IGNORE skips duplicates)
 		db.prepare(
 			`UPDATE OR IGNORE memory_entity_mentions SET entity_id = ?
@@ -844,6 +863,8 @@ function applySupersede(db: WriteDb, agentId: string, mut: DreamingMutation): "a
 
 	// Don't supersede constraints
 	if (oldAttr?.kind === "constraint") return "skipped";
+	// Old attribute must exist — don't create orphan replacements
+	if (!oldAttr) return "skipped";
 
 	// Create new attribute
 	const newId = randomUUID();
@@ -855,13 +876,11 @@ function applySupersede(db: WriteDb, agentId: string, mut: DreamingMutation): "a
 	).run(newId, aspectId, agentId, newContent.trim(), normalizedNew);
 
 	// Mark old as superseded
-	if (oldAttr) {
-		db.prepare(
-			`UPDATE entity_attributes
-			 SET status = 'superseded', superseded_by = ?, updated_at = datetime('now')
-			 WHERE id = ?`,
-		).run(newId, oldAttr.id);
-	}
+	db.prepare(
+		`UPDATE entity_attributes
+		 SET status = 'superseded', superseded_by = ?, updated_at = datetime('now')
+		 WHERE id = ?`,
+	).run(newId, oldAttr.id);
 	return "applied";
 }
 

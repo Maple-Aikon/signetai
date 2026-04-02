@@ -29,6 +29,7 @@ export function up(db: MigrationDb): void {
 			completed_at TEXT,
 			tokens_consumed INTEGER,
 			mutations_applied INTEGER,
+			mutations_skipped INTEGER,
 			mutations_failed INTEGER,
 			summary TEXT,
 			error TEXT,

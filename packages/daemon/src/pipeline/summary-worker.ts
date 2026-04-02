@@ -586,9 +586,11 @@ async function processJob(
 			});
 		}
 
-		// Track summary tokens for dreaming trigger
+		// Track session tokens for dreaming trigger (use transcript length
+		// as a proxy for the session's actual token consumption, not the
+		// compressed summary output)
 		try {
-			const tokens = Math.ceil(result.summary.length / 4);
+			const tokens = Math.ceil(job.transcript.length / 4);
 			addDreamingTokens(accessor, job.agent_id, tokens);
 		} catch (e) {
 			logger.warn("summary-worker", "Failed to accumulate dreaming tokens (non-fatal)", {

@@ -8205,8 +8205,15 @@ app.post("/api/dream/trigger", async (c) => {
 		return c.json({ error: "Dreaming worker not running" }, 503);
 	}
 
-	const body = await c.req.json().catch(() => ({}));
-	const mode = body.mode === "compact" ? "compact" : "incremental";
+	const contentType = c.req.header("content-type") ?? "";
+	let mode: "compact" | "incremental" = "incremental";
+	if (contentType.includes("application/json")) {
+		const parsed = await c.req.json().catch(() => null);
+		if (parsed === null) {
+			return c.json({ error: "Malformed JSON body" }, 400);
+		}
+		if (parsed.mode === "compact") mode = "compact";
+	}
 
 	try {
 		const result = await worker.trigger(mode);
