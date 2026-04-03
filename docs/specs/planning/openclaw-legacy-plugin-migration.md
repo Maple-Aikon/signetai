@@ -2,7 +2,9 @@
 title: "OpenClaw Legacy Plugin Migration"
 id: openclaw-legacy-plugin-migration
 status: planning
-informed_by: []
+informed_by:
+  - docs/research/technical/notebook-dump-2026-02-25.md
+  - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
 section: "OpenClaw"
 depends_on:
   - "openclaw-hardening"

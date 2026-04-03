@@ -331,6 +331,30 @@ describe("OpenClawConnector config patching", () => {
 		process.env.OPENCLAW_CONFIG_PATH = configPath;
 
 		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("plugin");
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
+	});
+
+	it("detects plugin runtime state from memory slot without plugin entry", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("plugin");
 		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
 	});
 

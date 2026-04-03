@@ -104,4 +104,59 @@ describe("syncTemplates openclaw migration", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("leaves dual-runtime openclaw configs on the discovered path during sync", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sync-openclaw-dual-"));
+		const basePath = join(root, "agents");
+		const openClawConfigPath = join(root, "openclaw.json");
+		const clawdbotConfigPath = join(root, "clawdbot.json");
+
+		try {
+			process.env.HOME = root;
+			process.env.OPENCLAW_CONFIG_PATH = openClawConfigPath;
+			process.env.CLAWDBOT_CONFIG_PATH = clawdbotConfigPath;
+			mkdirSync(basePath, { recursive: true });
+
+			writeFileSync(
+				openClawConfigPath,
+				JSON.stringify({
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {
+							"signet-memory-openclaw": { enabled: true },
+						},
+					},
+				}),
+			);
+			writeFileSync(
+				clawdbotConfigPath,
+				JSON.stringify({
+					hooks: {
+						internal: {
+							entries: {
+								"signet-memory": { enabled: true },
+							},
+						},
+					},
+				}),
+			);
+
+			const configureHarnessHooks = mock(async () => {});
+
+			await syncTemplates({
+				agentsDir: basePath,
+				configureHarnessHooks,
+				getSkillsSourceDir: () => join(root, "skills-src"),
+				getTemplatesDir: () => join(root, "templates"),
+				signetLogo: () => "signet",
+				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
+				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
+				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
+			});
+
+			expect(configureHarnessHooks).toHaveBeenCalledWith("openclaw", basePath, undefined);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
