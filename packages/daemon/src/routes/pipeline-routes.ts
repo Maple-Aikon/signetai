@@ -52,7 +52,6 @@ import {
 	restartPipelineRuntimeRef,
 	setOpenClawHeartbeat,
 	setPipelineTransition,
-	shuttingDown,
 	telemetryRef,
 } from "./state.js";
 import { STATUS_CACHE_TTL, cachedEmbeddingStatus, statusCacheTime } from "./utils.js";
@@ -64,9 +63,6 @@ const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promis
 };
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
-	if (shuttingDown) {
-		return c.json({ error: "Daemon is shutting down" }, 503);
-	}
 	if (pipelineTransition) {
 		return c.json({ error: "Pipeline transition already in progress" }, 409);
 	}
@@ -487,8 +483,11 @@ export function registerPipelineRoutes(app: Hono): void {
 			if (raw === null) {
 				return c.json({ error: "Malformed JSON body" }, 400);
 			}
-			if (typeof raw === "object" && raw !== null && "mode" in raw && raw.mode === "compact") {
-				mode = "compact";
+			if (typeof raw === "object" && raw !== null) {
+				const body = raw as { mode?: unknown };
+				if (body.mode === "compact") {
+					mode = "compact";
+				}
 			}
 		}
 
@@ -512,7 +511,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 
 		const client = predictorClientRef;
-		if (client === null) {
+		if (client == null) {
 			return c.json({
 				enabled: true,
 				alive: false,

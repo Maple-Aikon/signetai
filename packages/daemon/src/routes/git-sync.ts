@@ -218,13 +218,22 @@ async function hasAnyGitCredentials(): Promise<boolean> {
 		if (creds) return true;
 	}
 
-	const isGitHub = remoteUrl.includes("github.com");
+	const isGitHub = extractGitHubHost(remoteUrl);
 	if (isGitHub) {
 		if (await hasSecret("GITHUB_TOKEN")) return true;
 		if (await getGhCliToken()) return true;
 	}
 
 	return false;
+}
+
+function extractGitHubHost(url: string): boolean {
+	try {
+		const parsed = new URL(url.startsWith("https://") ? url : `https://${url}`);
+		return parsed.hostname === "github.com";
+	} catch {
+		return url.includes("github.com");
+	}
 }
 
 async function resolveGitCredentials(dir: string, remote: string): Promise<GitCredentials> {
@@ -254,7 +263,7 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 		}
 	}
 
-	const isGitHub = remoteUrl.includes("github.com") || remoteUrl.includes("github.com:");
+	const isGitHub = extractGitHubHost(remoteUrl);
 
 	if (isGitHub) {
 		try {

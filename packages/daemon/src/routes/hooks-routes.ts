@@ -1127,7 +1127,7 @@ function registerSynthesis(app: Hono): void {
 				}
 				logger.info("hooks", "MEMORY.md synthesized");
 			} finally {
-				if (worker && lockToken !== null) {
+				if (worker) {
 					worker.releaseWriteLock(lockToken);
 				}
 			}
