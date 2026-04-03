@@ -617,6 +617,7 @@ describe("Worker processing", () => {
 		);
 		await Bun.sleep(120);
 		const job = getJob(db, "mem-overload");
+		expect(job?.status).toBe("pending");
 		expect(worker.stats.overloaded).toBe(true);
 		expect(worker.stats.loadPerCpu).toBe(1.9);
 		expect(worker.stats.maxLoadPerCpu).toBe(0.8);

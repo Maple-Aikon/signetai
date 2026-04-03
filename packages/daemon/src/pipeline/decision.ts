@@ -7,7 +7,7 @@
  * never mutating memory content.
  */
 
-import { DECISION_ACTIONS, type DecisionAction, type ExtractedFact } from "@signet/core";
+import { DECISION_ACTIONS, buildFtsMatchQuery, type DecisionAction, type ExtractedFact } from "@signet/core";
 import { type DbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";
@@ -57,16 +57,6 @@ export interface FactDecisionResult {
 
 const CANDIDATE_LIMIT = 5;
 const VECTOR_OVERFETCH_MULTIPLIER = 2;
-
-function buildFtsMatchQuery(query: string): string | null {
-	const terms = query
-		.toLowerCase()
-		.split(/[^\p{L}\p{N}_]+/u)
-		.map((term) => term.trim())
-		.filter((term) => term.length > 0);
-	if (terms.length === 0) return null;
-	return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" ");
-}
 
 interface AllQuery<T> {
 	all(...args: readonly unknown[]): T;

@@ -8,9 +8,21 @@
 
 import type { LlmProvider } from "@signet/core";
 import { logger, type LogCategory } from "./logger";
+import { getSecret } from "./secrets.js";
 
 export const LLM_ROLES = ["extraction", "synthesis"] as const;
 export type LlmRole = (typeof LLM_ROLES)[number];
+
+export interface OpenAiChatMessage {
+	readonly role: "system" | "user" | "assistant";
+	readonly content: string;
+}
+
+interface OpenAiChatOptions {
+	readonly maxTokens?: number;
+	readonly model?: string;
+	readonly temperature?: number;
+}
 
 const ROLE_LABELS: Record<LlmRole, string> = {
 	extraction: "LlmProvider",
@@ -23,6 +35,7 @@ const ROLE_LOG_CATEGORIES: Record<LlmRole, LogCategory> = {
 };
 
 const providers: Partial<Record<LlmRole, LlmProvider>> = {};
+let cachedOpenAiApiKey: string | null | undefined;
 
 function initProvider(role: LlmRole, instance: LlmProvider): void {
 	if (providers[role]) {
@@ -40,8 +53,48 @@ export function getProvider(role: LlmRole): LlmProvider {
 	return provider;
 }
 
+export function getInteractiveLlmProviderOrNull(): LlmProvider | null {
+	return providers.synthesis ?? providers.extraction ?? null;
+}
+
 function closeProvider(role: LlmRole): void {
 	delete providers[role];
+}
+
+async function getOpenAiApiKey(): Promise<string> {
+	if (cachedOpenAiApiKey !== undefined) {
+		if (cachedOpenAiApiKey) return cachedOpenAiApiKey;
+		throw new Error("OPENAI_API_KEY not found in env or secrets");
+	}
+	cachedOpenAiApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
+	if (cachedOpenAiApiKey) return cachedOpenAiApiKey;
+	throw new Error("OPENAI_API_KEY not found in env or secrets");
+}
+
+export async function callLegacyOpenAiChat(
+	messages: readonly OpenAiChatMessage[],
+	opts: OpenAiChatOptions = {},
+): Promise<string> {
+	const apiKey = await getOpenAiApiKey();
+	const res = await fetch("https://api.openai.com/v1/chat/completions", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify({
+			model: opts.model ?? "gpt-4o",
+			max_tokens: opts.maxTokens ?? 2048,
+			...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+			messages,
+		}),
+	});
+	if (!res.ok) {
+		const errText = await res.text();
+		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
+	}
+	const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+	return data.choices?.[0]?.message?.content ?? "";
 }
 
 export function initLlmProvider(instance: LlmProvider): void {
@@ -73,5 +126,7 @@ export function getWidgetProvider(): LlmProvider {
 }
 
 export function getInteractiveLlmProvider(): LlmProvider {
-	return providers.synthesis ?? providers.extraction ?? getProvider("synthesis");
+	const provider = getInteractiveLlmProviderOrNull();
+	if (provider) return provider;
+	throw new Error("Interactive LLM provider not initialised — neither synthesis nor extraction provider is available");
 }

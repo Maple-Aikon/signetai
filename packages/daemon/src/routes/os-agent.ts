@@ -16,7 +16,7 @@
 
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { getInteractiveLlmProvider } from "../llm.js";
+import { callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -102,7 +102,7 @@ interface AgentAction {
 	summary?: string;
 }
 
-function buildAgentPrompt(messages: Array<{ role: string; content: string }>): string {
+function buildAgentPrompt(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): string {
 	const transcript = messages
 		.filter((message) => message.role !== "system")
 		.map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
@@ -110,10 +110,24 @@ function buildAgentPrompt(messages: Array<{ role: string; content: string }>): s
 	return `${AGENT_SYSTEM_PROMPT}\n\nConversation:\n${transcript}\n\nRespond with exactly one JSON action.`;
 }
 
-async function callAgentLlm(messages: Array<{ role: string; content: string }>): Promise<AgentAction> {
-	const raw = await getInteractiveLlmProvider().generate(buildAgentPrompt(messages), {
-		maxTokens: 512,
-	});
+async function callAgentLlm(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): Promise<AgentAction> {
+	let raw: string;
+	try {
+		raw = await callLegacyOpenAiChat(messages, {
+			model: "gpt-4o",
+			maxTokens: 512,
+			temperature: 0.1,
+		});
+	} catch (error) {
+		if (!(error instanceof Error) || error.message !== "OPENAI_API_KEY not found in env or secrets") {
+			throw error;
+		}
+		const provider = getInteractiveLlmProviderOrNull();
+		if (!provider) throw error;
+		raw = await provider.generate(buildAgentPrompt(messages), {
+			maxTokens: 512,
+		});
+	}
 
 	// Parse the action JSON
 	let cleaned = raw.trim();

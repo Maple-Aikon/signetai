@@ -8,7 +8,7 @@
 
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { getInteractiveLlmProvider } from "../llm.js";
+import { callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
 import { loadProbeResult } from "../mcp-probe.js";
 
 function buildPrompt(systemPrompt: string, userMessage: string): string {
@@ -16,7 +16,22 @@ function buildPrompt(systemPrompt: string, userMessage: string): string {
 }
 
 async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
-	return getInteractiveLlmProvider().generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
+	try {
+		return await callLegacyOpenAiChat(
+			[
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: userMessage },
+			],
+			{ model: "gpt-4o", maxTokens },
+		);
+	} catch (error) {
+		if (!(error instanceof Error) || error.message !== "OPENAI_API_KEY not found in env or secrets") {
+			throw error;
+		}
+		const provider = getInteractiveLlmProviderOrNull();
+		if (!provider) throw error;
+		return provider.generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
+	}
 }
 
 interface ChatRequest {

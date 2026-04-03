@@ -607,7 +607,7 @@ function logExternalOpenCodeEndpoint(role: RuntimeRole, enabled: boolean, endpoi
 	});
 }
 
-function logRuntimeStartup(
+function applyAndLogRuntimeStartup(
 	opts:
 		| (RuntimeStartupLogOptions<RuntimeProviderName> & { readonly role: "extraction" })
 		| (RuntimeStartupLogOptions<RuntimeSynthesisProviderName | null> & { readonly role: "synthesis" }),
@@ -698,7 +698,7 @@ async function resolveAndLogRuntimeStartup(
 		checkProviderAvailability: cfg.checkProviderAvailability,
 	});
 	if (cfg.role === "extraction") {
-		logRuntimeStartup({
+		applyAndLogRuntimeStartup({
 			role: "extraction",
 			configuredHint: cfg.configuredHint,
 			resolvedProvider: cfg.configuredProvider,
@@ -719,7 +719,7 @@ async function resolveAndLogRuntimeStartup(
 					? "none"
 					: runtime.effectiveProvider
 				: null;
-	logRuntimeStartup({
+	applyAndLogRuntimeStartup({
 		role: "synthesis",
 		configuredHint: cfg.configuredHint,
 		resolvedProvider: cfg.enabled ? cfg.configuredProvider : null,
@@ -11956,7 +11956,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		fallbackProvider: "ollama",
 		endpoints: synthesisEndpoints,
 		disabledMessage: "Synthesis disabled",
-		checkProviderAvailability: async () => true,
 	};
 	const runtimeStartupConfigs = [extractionStartupCfg, synthesisStartupCfg] as const;
 

@@ -105,6 +105,7 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
+	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,
 	type VectorSearchOptions,

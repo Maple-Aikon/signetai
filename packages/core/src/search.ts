@@ -71,7 +71,7 @@ interface DatabaseWrapper {
 	getMemories(type?: string): Memory[];
 }
 
-function buildFtsMatchQuery(query: string): string | null {
+export function buildFtsMatchQuery(query: string): string | null {
 	const terms = query
 		.toLowerCase()
 		.split(/[^\p{L}\p{N}_]+/u)
