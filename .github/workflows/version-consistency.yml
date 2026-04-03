@@ -23,6 +23,10 @@ jobs:
         shell: bash
         run: bun install --frozen-lockfile
 
+      - name: Verify Docker build pipeline stays aligned
+        shell: bash
+        run: bun test ./tests/integration/docker-build-regression.test.ts
+
       - name: Verify package versions are aligned
         shell: bash
         run: |
