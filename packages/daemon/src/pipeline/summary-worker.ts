@@ -1159,7 +1159,7 @@ export function insertSummaryFacts(
 
 			const importance = Math.min(item.importance ?? 0.3, 0.5);
 
-			if (isDuplicate(db as unknown as Database, item.content)) continue;
+			if (isDuplicate(db as unknown as Database, item.content, job.agent_id)) continue;
 
 			const id = crypto.randomUUID();
 			const type = item.type || inferType(item.content);

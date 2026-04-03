@@ -7,7 +7,15 @@
 
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentDefinition } from "./types";
+import type { AgentDefinition, ReadPolicy } from "./types";
+
+export type AgentRosterReadPolicy = "isolated" | "shared" | "group";
+
+export interface NormalizedAgentRosterEntry {
+	readonly name: string;
+	readonly readPolicy: AgentRosterReadPolicy;
+	readonly policyGroup: string | null;
+}
 
 /** Identity files that inherit from agent subdir (fall back to root). */
 const AGENT_SPECIFIC = new Set(["SOUL.md", "IDENTITY.md"]);
@@ -69,6 +77,54 @@ export function getAgentIdentityFiles(name: string, agentsDir: string): Record<s
 	}
 
 	return result;
+}
+
+function normalizeReadPolicy(readPolicy: unknown, policyGroup: unknown): {
+	readonly readPolicy: AgentRosterReadPolicy;
+	readonly policyGroup: string | null;
+} {
+	if (readPolicy === "shared") return { readPolicy: "shared", policyGroup: null };
+	if (readPolicy === "isolated") return { readPolicy: "isolated", policyGroup: null };
+	if (
+		typeof readPolicy === "object" &&
+		readPolicy !== null &&
+		(readPolicy as { type?: unknown }).type === "group" &&
+		typeof (readPolicy as { group?: unknown }).group === "string"
+	) {
+		return {
+			readPolicy: "group",
+			policyGroup: (readPolicy as { group: string }).group,
+		};
+	}
+	if (readPolicy === "group" && typeof policyGroup === "string") {
+		return { readPolicy: "group", policyGroup };
+	}
+	return { readPolicy: "isolated", policyGroup: null };
+}
+
+export function normalizeAgentRosterEntry(entry: unknown): NormalizedAgentRosterEntry | null {
+	if (typeof entry !== "object" || entry === null) return null;
+	const record = entry as Record<string, unknown>;
+	if (typeof record.name !== "string" || record.name.length === 0) return null;
+	const memory =
+		typeof record.memory === "object" && record.memory !== null ? (record.memory as Record<string, unknown>) : null;
+	const policy = normalizeReadPolicy(memory?.read_policy ?? record.read_policy, record.policy_group);
+	return {
+		name: record.name,
+		readPolicy: policy.readPolicy,
+		policyGroup: policy.policyGroup,
+	};
+}
+
+export function buildAgentMemoryConfig(
+	readPolicy: AgentRosterReadPolicy,
+	policyGroup: string | null,
+): { readonly read_policy?: ReadPolicy } {
+	if (readPolicy === "shared") return { read_policy: "shared" };
+	if (readPolicy === "group" && typeof policyGroup === "string" && policyGroup.length > 0) {
+		return { read_policy: { type: "group", group: policyGroup } };
+	}
+	return { read_policy: "isolated" };
 }
 
 /**

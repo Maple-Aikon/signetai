@@ -192,7 +192,10 @@ export {
 	scaffoldAgent,
 	getAgentIdentityFiles,
 	resolveAgentSkills,
+	buildAgentMemoryConfig,
+	normalizeAgentRosterEntry,
 } from "./agents";
+export type { AgentRosterReadPolicy, NormalizedAgentRosterEntry } from "./agents";
 
 // Skills unification
 export {

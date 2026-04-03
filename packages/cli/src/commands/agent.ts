@@ -1,6 +1,13 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatYaml, getAgentIdentityFiles, parseSimpleYaml, scaffoldAgent } from "@signet/core";
+import {
+	buildAgentMemoryConfig,
+	formatYaml,
+	getAgentIdentityFiles,
+	normalizeAgentRosterEntry,
+	parseSimpleYaml,
+	scaffoldAgent,
+} from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -39,8 +46,10 @@ function addToRoster(dir: string, name: string, policy: string, group: string | 
 	const filtered = roster.filter(
 		(e: unknown) => typeof e !== "object" || e === null || (e as Record<string, unknown>).name !== name,
 	);
-	const entry: Record<string, unknown> = { name, read_policy: policy };
-	if (group) entry.policy_group = group;
+	const entry: Record<string, unknown> = {
+		name,
+		memory: buildAgentMemoryConfig(policy === "shared" ? "shared" : policy === "group" ? "group" : "isolated", group),
+	};
 	filtered.push(entry);
 	cfg.agents = { ...agents, roster: filtered };
 	writeYaml(dir, cfg);
@@ -95,10 +104,18 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 				const cfg = readYaml(deps.AGENTS_DIR);
 				const agents = cfg.agents as Record<string, unknown> | undefined;
 				const roster = Array.isArray(agents?.roster) ? agents.roster : [];
-				rows = roster.filter(
-					(e): e is Row =>
-						typeof e === "object" && e !== null && typeof (e as Record<string, unknown>).name === "string",
-				);
+				rows = roster.flatMap((entry) => {
+					const normalized = normalizeAgentRosterEntry(entry);
+					if (!normalized) return [];
+					return [
+						{
+							id: normalized.name,
+							name: normalized.name,
+							read_policy: normalized.readPolicy,
+							policy_group: normalized.policyGroup ?? undefined,
+						},
+					];
+				});
 			}
 
 			if (rows.length === 0) {

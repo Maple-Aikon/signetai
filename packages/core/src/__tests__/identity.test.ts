@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildAgentMemoryConfig, normalizeAgentRosterEntry } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	readStaticIdentity,
@@ -93,6 +94,35 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Identity");
 		expect(result).toContain("## About Your User");
 		expect(result).toContain("## Working Memory");
+	});
+});
+
+describe("agent roster helpers", () => {
+	test("normalizes canonical nested memory policies", () => {
+		expect(
+			normalizeAgentRosterEntry({
+				name: "writer",
+				memory: { read_policy: { type: "group", group: "writers" } },
+			}),
+		).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("normalizes legacy flat roster policies for backward compatibility", () => {
+		expect(normalizeAgentRosterEntry({ name: "writer", read_policy: "shared", policy_group: "ignored" })).toEqual({
+			name: "writer",
+			readPolicy: "shared",
+			policyGroup: null,
+		});
+	});
+
+	test("builds canonical nested memory config for group policies", () => {
+		expect(buildAgentMemoryConfig("group", "writers")).toEqual({
+			read_policy: { type: "group", group: "writers" },
+		});
 	});
 });
 

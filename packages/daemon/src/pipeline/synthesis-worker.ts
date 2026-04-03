@@ -218,7 +218,10 @@ async function runSynthesisWithDeps(
 		const finalText = synthesisData.prompt.trimEnd();
 
 		// Write MEMORY.md via shared helper (handles backup)
-		const writeResult = deps.writeMemoryMd(finalText, { owner: "synthesis-worker" });
+		const writeResult = deps.writeMemoryMd(finalText, {
+			agentId,
+			owner: "synthesis-worker",
+		});
 		if (!writeResult.ok) {
 			if (writeResult.code === "busy") {
 				deps.logger.warn("synthesis", "MEMORY.md head busy, deferring synthesis write");

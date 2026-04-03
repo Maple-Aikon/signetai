@@ -517,7 +517,7 @@ function getSessionGapSummary(): string | undefined {
 }
 
 /** Check if content overlaps 70%+ with existing memories via FTS */
-export function isDuplicate(db: Database, content: string): boolean {
+export function isDuplicate(db: Database, content: string, agentId = "default"): boolean {
 	const words = content
 		.toLowerCase()
 		.split(/\W+/)
@@ -527,8 +527,16 @@ export function isDuplicate(db: Database, content: string): boolean {
 	try {
 		const ftsQuery = words.slice(0, 10).join(" OR ");
 		const rows = db
-			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ? LIMIT 10")
-			.all(ftsQuery) as Array<{ content: string }>;
+			.prepare(
+				`SELECT m.content
+				 FROM memories_fts
+				 JOIN memories m ON memories_fts.rowid = m.rowid
+				 WHERE memories_fts MATCH ?
+				   AND m.is_deleted = 0
+				   AND m.agent_id = ?
+				 LIMIT 10`,
+			)
+			.all(ftsQuery, agentId) as Array<{ content: string }>;
 
 		const inputWords = new Set(words);
 		for (const row of rows) {
