@@ -5,6 +5,20 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("../../", import.meta.url));
 const dockerfile = readFileSync(join(rootDir, "deploy/docker/Dockerfile"), "utf8");
+const openclawPackageJson = JSON.parse(
+	readFileSync(join(rootDir, "packages/adapters/openclaw/package.json"), "utf8"),
+);
+const openclawBuild =
+	typeof openclawPackageJson === "object" &&
+	openclawPackageJson !== null &&
+	"scripts" in openclawPackageJson &&
+	typeof openclawPackageJson.scripts === "object" &&
+	openclawPackageJson.scripts !== null &&
+	"build" in openclawPackageJson.scripts &&
+	typeof openclawPackageJson.scripts.build === "string"
+		? openclawPackageJson.scripts.build
+		: undefined;
+const openclawEntry = readFileSync(join(rootDir, "packages/adapters/openclaw/src/index.ts"), "utf8");
 
 function getBuildCommands(source: string): string[] {
 	return source
@@ -31,5 +45,10 @@ describe("Docker build pipeline regression guard", () => {
 			"build:dashboard",
 			"build:signetai",
 		]);
+	});
+
+	it("keeps the OpenClaw adapter build Docker-safe when bundling @signet/core", () => {
+		expect(openclawEntry).toContain('from "@signet/core"');
+		expect(openclawBuild).toContain("--external better-sqlite3");
 	});
 });
