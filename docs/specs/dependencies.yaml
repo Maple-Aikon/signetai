@@ -246,7 +246,9 @@ specs:
       - signet-runtime
     soft_depends_on: []
     blocks: []
-    informed_by: []
+    informed_by:
+      - docs/research/technical/notebook-dump-2026-02-25.md
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
     success_criteria:
       - "Legacy-only OpenClaw configs are auto-migrated to the plugin runtime path during `signet sync`"
       - "`signet doctor` flags legacy-only OpenClaw runtime state with a remediation command"
