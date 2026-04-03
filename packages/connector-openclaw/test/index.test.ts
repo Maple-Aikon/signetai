@@ -397,6 +397,53 @@ describe("OpenClawConnector config patching", () => {
 		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
 	});
 
+	it("detects dual runtime state across multiple discovered configs", () => {
+		const openClawConfigPath = join(tmpRoot, "openclaw.json");
+		const clawdbotConfigPath = join(tmpRoot, "clawdbot.json");
+		writeFileSync(
+			openClawConfigPath,
+			JSON.stringify(
+				{
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {
+							"signet-memory-openclaw": {
+								enabled: true,
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+		writeFileSync(
+			clawdbotConfigPath,
+			JSON.stringify(
+				{
+					hooks: {
+						internal: {
+							entries: {
+								"signet-memory": {
+									enabled: true,
+								},
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = openClawConfigPath;
+		process.env.CLAWDBOT_CONFIG_PATH = clawdbotConfigPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("dual");
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
+	});
+
 	it("adds signet memory plugin to plugins.allow during plugin install", async () => {
 		const configPath = join(tmpRoot, "openclaw.json");
 		const basePath = join(tmpRoot, "agents");
@@ -530,11 +577,7 @@ describe("OpenClawConnector config patching", () => {
 describe("OpenClawConnector.install — legacy SIGNET block migration", () => {
 	it("strips legacy block from AGENTS.md and reports path in filesWritten", async () => {
 		const agentsPath = join(tmpRoot, "AGENTS.md");
-		writeFileSync(
-			agentsPath,
-			`before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n`,
-			"utf-8",
-		);
+		writeFileSync(agentsPath, "before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n", "utf-8");
 		const result = await new OpenClawConnector().install(tmpRoot, {
 			configureWorkspace: false,
 			configureHooks: false,

@@ -682,6 +682,7 @@ export class OpenClawConnector extends BaseConnector {
 
 	getRuntimeState(): OpenClawRuntimeState {
 		let sawLegacy = false;
+		let sawPlugin = false;
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
@@ -696,20 +697,18 @@ export class OpenClawConnector extends BaseConnector {
 				const plugin = pluginEntry || pluginSlot;
 				const legacy = config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true;
 
-				if (plugin && legacy) {
+				sawPlugin ||= plugin;
+				sawLegacy ||= legacy;
+				if (sawPlugin && sawLegacy) {
 					return "dual";
-				}
-
-				if (plugin) {
-					return "plugin";
-				}
-
-				if (legacy) {
-					sawLegacy = true;
 				}
 			} catch {
 				// malformed config — skip
 			}
+		}
+
+		if (sawPlugin) {
+			return "plugin";
 		}
 
 		return sawLegacy ? "legacy" : null;
@@ -840,10 +839,26 @@ export class OpenClawConnector extends BaseConnector {
 		}
 
 		// Historical home-dir overrides.
-		push(process.env.OPENCLAW_HOME ? join(expandHome(process.env.OPENCLAW_HOME, this.getHomeDir()), "openclaw.json") : undefined);
-		push(process.env.CLAWDBOT_HOME ? join(expandHome(process.env.CLAWDBOT_HOME, this.getHomeDir()), "clawdbot.json") : undefined);
-		push(process.env.MOLDBOT_HOME ? join(expandHome(process.env.MOLDBOT_HOME, this.getHomeDir()), "moldbot.json") : undefined);
-		push(process.env.MOLTBOT_HOME ? join(expandHome(process.env.MOLTBOT_HOME, this.getHomeDir()), "moltbot.json") : undefined);
+		push(
+			process.env.OPENCLAW_HOME
+				? join(expandHome(process.env.OPENCLAW_HOME, this.getHomeDir()), "openclaw.json")
+				: undefined,
+		);
+		push(
+			process.env.CLAWDBOT_HOME
+				? join(expandHome(process.env.CLAWDBOT_HOME, this.getHomeDir()), "clawdbot.json")
+				: undefined,
+		);
+		push(
+			process.env.MOLDBOT_HOME
+				? join(expandHome(process.env.MOLDBOT_HOME, this.getHomeDir()), "moldbot.json")
+				: undefined,
+		);
+		push(
+			process.env.MOLTBOT_HOME
+				? join(expandHome(process.env.MOLTBOT_HOME, this.getHomeDir()), "moltbot.json")
+				: undefined,
+		);
 
 		for (const pair of namedConfigPairs) {
 			push(join(home, `.${pair.dirName}`, pair.fileName));
