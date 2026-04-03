@@ -532,17 +532,22 @@ export function startGitSyncTimer() {
 	}, intervalMs);
 }
 
-export async function stopGitSyncTimer(): Promise<void> {
-	if (gitSyncTimer) {
-		clearInterval(gitSyncTimer);
-		gitSyncTimer = null;
-	}
+function cancelAutoCommit(): void {
 	if (commitTimer) {
 		clearTimeout(commitTimer);
 		commitTimer = null;
 	}
 	commitPending = false;
 	pendingChanges = [];
+}
+
+export async function stopGitSyncTimer(): Promise<void> {
+	if (gitSyncTimer) {
+		clearInterval(gitSyncTimer);
+		gitSyncTimer = null;
+	}
+	// Drain both periodic sync and the debounced auto-commit timer on shutdown.
+	cancelAutoCommit();
 	if (gitSyncPromise) {
 		try {
 			await gitSyncPromise;

@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAdaptorServer, type serve } from "@hono/node-server";
+import { createAdaptorServer } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
 	type AgentDefinition,
@@ -22,10 +22,9 @@ import {
 	stripSignetBlock,
 } from "@signet/core";
 import { watch } from "chokidar";
-import { type Context, Hono } from "hono";
+import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { resolveAgentId } from "./agent-id";
-import { type AnalyticsCollector, createAnalyticsCollector } from "./analytics";
 import {
 	type AuthConfig,
 	AuthRateLimiter,
@@ -98,8 +97,7 @@ import { startReconciler } from "./pipeline/skill-reconciler";
 import { type PredictorClient, createPredictorClient } from "./predictor-client";
 import { detectDrift } from "./predictor-comparison";
 import { getPredictorState } from "./predictor-state";
-import { type RepairContext, backfillSkippedSessions, structuralBackfill } from "./repair-actions";
-import { shouldEnforceScope } from "./request-scope";
+import { type RepairContext, structuralBackfill } from "./repair-actions";
 import {
 	AGENTS_DIR,
 	ALLOWED_ORIGINS,
@@ -173,7 +171,6 @@ import {
 	stopUpdateTimer,
 } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
-const OPENCLAW_STALE_MS = 10 * 60 * 1000;
 let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
 let authSecret: Buffer | null = null;
 let authForgetLimiter = new AuthRateLimiter(60_000, 30);
