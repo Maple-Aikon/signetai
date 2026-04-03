@@ -8,7 +8,7 @@
  */
 
 import { DECISION_ACTIONS, buildFtsMatchQuery, type DecisionAction, type ExtractedFact } from "@signet/core";
-import { type DbAccessor } from "../db-accessor";
+import { type DbAccessor, isVectorRuntimeUsable } from "../db-accessor";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";
 import type { LlmProvider } from "./provider";
@@ -108,6 +108,7 @@ async function findCandidatesVector(
 	scope: DecisionScope,
 ): Promise<Map<string, number>> {
 	const vectorMap = new Map<string, number>();
+	if (!isVectorRuntimeUsable()) return vectorMap;
 	const vectorLimit =
 		scope.scope !== null || scope.visibility !== "global" ? limit * VECTOR_OVERFETCH_MULTIPLIER : limit;
 	try {

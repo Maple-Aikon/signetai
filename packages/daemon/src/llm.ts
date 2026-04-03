@@ -13,6 +13,13 @@ import { getSecret } from "./secrets.js";
 export const LLM_ROLES = ["extraction", "synthesis"] as const;
 export type LlmRole = (typeof LLM_ROLES)[number];
 
+export class MissingOpenAiApiKeyError extends Error {
+	constructor() {
+		super("OPENAI_API_KEY not found in env or secrets");
+		this.name = "MissingOpenAiApiKeyError";
+	}
+}
+
 export interface OpenAiChatMessage {
 	readonly role: "system" | "user" | "assistant";
 	readonly content: string;
@@ -59,16 +66,19 @@ export function getInteractiveLlmProviderOrNull(): LlmProvider | null {
 
 function closeProvider(role: LlmRole): void {
 	delete providers[role];
+	if (!providers.extraction && !providers.synthesis) {
+		cachedOpenAiApiKey = undefined;
+	}
 }
 
 async function getOpenAiApiKey(): Promise<string> {
 	if (cachedOpenAiApiKey !== undefined) {
 		if (cachedOpenAiApiKey) return cachedOpenAiApiKey;
-		throw new Error("OPENAI_API_KEY not found in env or secrets");
+		throw new MissingOpenAiApiKeyError();
 	}
 	cachedOpenAiApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
 	if (cachedOpenAiApiKey) return cachedOpenAiApiKey;
-	throw new Error("OPENAI_API_KEY not found in env or secrets");
+	throw new MissingOpenAiApiKeyError();
 }
 
 export async function callLegacyOpenAiChat(

@@ -1567,7 +1567,7 @@ export function startWorker(
 						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});
-				consecutiveFailures = job.attempts >= effectiveMaxAttempts ? 0 : consecutiveFailures + 1;
+				consecutiveFailures++;
 				lastAttempt = runtime.now();
 			}
 		} catch (e) {

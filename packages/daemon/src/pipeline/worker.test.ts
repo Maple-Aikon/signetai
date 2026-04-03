@@ -1922,19 +1922,20 @@ describe("Backoff recovery", () => {
 
 		const cfg = {
 			...PIPELINE_CFG,
-			worker: { ...PIPELINE_CFG.worker, pollMs: 10, maxRetries: 1 },
+			worker: { ...PIPELINE_CFG.worker, pollMs: 10, maxRetries: 2 },
 		};
 		const worker = startWorker(accessor, failThenSucceedProvider(1), cfg, DECISION_CFG);
 
-		// If backoff doesn't reset, 1 failure = 2s delay per tick.
-		// 3 jobs at 2s each = 6s minimum. We allow 2s — should be plenty
-		// with reset-to-0 and 10ms polling.
-		await Bun.sleep(2000);
+		// One retry incurs ~2s exponential backoff before the successful run.
+		// Once that retry succeeds, backoff should reset so the remaining jobs
+		// finish promptly instead of waiting multiple extra seconds each.
+		await Bun.sleep(3500);
 		await worker.stop();
 
-		// mem-bf-1 may have hit the throwing call — should be dead or completed
+		// The first job may still be waiting on its retry, but the later jobs
+		// should complete promptly once the successful run resets backoff.
 		const j0 = getJob(db, "mem-bf-1");
-		expect(["completed", "dead"]).toContain(j0?.status);
+		expect(["completed", "dead", "pending"]).toContain(j0?.status);
 		const j1 = getJob(db, "mem-bf-2");
 		const j2 = getJob(db, "mem-bf-3");
 		expect(j1?.status).toBe("completed");
@@ -1953,10 +1954,11 @@ describe("Backoff recovery", () => {
 		};
 		const worker = startWorker(accessor, failThenSucceedProvider(1), cfg, DECISION_CFG);
 
-		// Let first job fail and enter per-job backoff
-		await Bun.sleep(200);
+		// Let the failed job drain and the next idle poll reset backoff before
+		// enqueuing fresh work.
+		await Bun.sleep(2800);
 
-		// Enqueue a fresh job — provider now returns good results
+		// Enqueue a fresh job — provider now returns good results.
 		insertMemory(db, "mem-drain-2", "Will succeed");
 		enqueueExtractionJob(accessor, "mem-drain-2");
 
@@ -1967,6 +1969,30 @@ describe("Backoff recovery", () => {
 
 		const job = getJob(db, "mem-drain-2");
 		expect(job?.status).toBe("completed");
+	});
+
+	it("keeps failure backoff active when dead jobs continue failing", async () => {
+		insertMemory(db, "mem-dead-1", "Dead job one");
+		insertMemory(db, "mem-dead-2", "Dead job two");
+		enqueueExtractionJob(accessor, "mem-dead-1");
+		enqueueExtractionJob(accessor, "mem-dead-2");
+
+		const cfg = {
+			...PIPELINE_CFG,
+			worker: { ...PIPELINE_CFG.worker, pollMs: 10, maxRetries: 1 },
+		};
+		const worker = startWorker(accessor, failThenSucceedProvider(99), cfg, DECISION_CFG);
+
+		await Bun.sleep(150);
+
+		const firstJob = getJob(db, "mem-dead-1");
+		const secondJob = getJob(db, "mem-dead-2");
+		expect(firstJob?.status).toBe("dead");
+		expect(secondJob?.status).toBe("pending");
+		expect(worker.stats.failures).toBeGreaterThan(0);
+		expect(worker.stats.backoffMs).toBeGreaterThan(cfg.worker.pollMs);
+
+		await worker.stop();
 	});
 
 	it("nudge() forces immediate repoll regardless of current delay", async () => {

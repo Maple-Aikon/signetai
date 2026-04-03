@@ -12096,10 +12096,14 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const synthesisRuntime = await resolveAndLogRuntimeStartup(synthesisStartupCfg, runtimeStartupDeps);
 	const effectiveSynthesisProvider = resolveEffectiveRuntimeProvider(synthesisStartupCfg, synthesisRuntime);
 	if (!pipelinePaused && memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider !== "none") {
-		if (!synthesisRuntime.provider) {
-			throw new Error(`Failed to initialise synthesis provider: ${String(effectiveSynthesisProvider)}`);
+		if (synthesisRuntime.provider) {
+			initSynthesisProvider(synthesisRuntime.provider);
+		} else {
+			logger.warn("config", "Synthesis provider unavailable at startup; continuing without synthesis", {
+				provider: effectiveSynthesisProvider,
+				reason: synthesisRuntime.reason,
+			});
 		}
-		initSynthesisProvider(synthesisRuntime.provider);
 	}
 
 	// Start extraction pipeline only when explicitly enabled and an LLM is available.

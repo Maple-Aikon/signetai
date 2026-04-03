@@ -16,7 +16,7 @@
 
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
+import { MissingOpenAiApiKeyError, callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -119,7 +119,7 @@ async function callAgentLlm(messages: Array<{ role: "system" | "user" | "assista
 			temperature: 0.1,
 		});
 	} catch (error) {
-		if (!(error instanceof Error) || error.message !== "OPENAI_API_KEY not found in env or secrets") {
+		if (!(error instanceof MissingOpenAiApiKeyError)) {
 			throw error;
 		}
 		const provider = getInteractiveLlmProviderOrNull();
