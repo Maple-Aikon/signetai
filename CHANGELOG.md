@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.93.2] - 2026-04-03
+
+### Bug Fixes
+
+- **daemon**: ignore generated MEMORY backup markdown files (#452)
+
+
 ## [0.92.0] - 2026-04-03
 
 ### Features
