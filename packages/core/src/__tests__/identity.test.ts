@@ -119,6 +119,14 @@ describe("agent roster helpers", () => {
 		});
 	});
 
+	test("normalizes legacy flat roster group policies for backward compatibility", () => {
+		expect(normalizeAgentRosterEntry({ name: "writer", read_policy: "group", policy_group: "writers" })).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
 	test("builds canonical nested memory config for group policies", () => {
 		expect(buildAgentMemoryConfig("group", "writers")).toEqual({
 			read_policy: { type: "group", group: "writers" },

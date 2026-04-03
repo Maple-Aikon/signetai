@@ -121,20 +121,28 @@ describe("insertSummaryFacts", () => {
 
 	it("scopes duplicate detection to the fact owner's agent", () => {
 		const content = "Agent-scoped duplicate detection keeps this shared fact available to sub-agents.";
-		const now = new Date().toISOString();
-		db.prepare(
-			`INSERT INTO memories
-			 (id, content, type, importance, created_at, updated_at, updated_by, agent_id)
-			 VALUES (?, ?, 'fact', 0.4, ?, ?, 'test', 'default')`,
-		).run("mem-default", content, now, now);
 
-		const saved = insertSummaryFacts(
+		const firstSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-default", agent_id: "default" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(firstSaved).toBe(1);
+
+		const duplicateSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-default-2", agent_id: "default" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(duplicateSaved).toBe(0);
+
+		const crossAgentSaved = insertSummaryFacts(
 			accessor,
 			{ harness: "claude-code", project: null, session_key: "sess-agent-a", agent_id: "agent-a" },
 			[{ content, importance: 0.4, type: "fact" }],
 		);
+		expect(crossAgentSaved).toBe(1);
 
-		expect(saved).toBe(1);
 		const rows = db
 			.prepare("SELECT agent_id FROM memories WHERE content = ? ORDER BY agent_id ASC")
 			.all(content) as Array<{ agent_id: string }>;

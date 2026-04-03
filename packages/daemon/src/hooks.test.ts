@@ -1,10 +1,15 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	buildSignetSystemPrompt,
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript,
 	queryAnchorsMissingFromRecall,
+	writeMemoryMd,
 } from "./hooks";
 
 describe("buildSignetSystemPrompt", () => {
@@ -18,6 +23,64 @@ describe("buildSignetSystemPrompt", () => {
 		expect(prompt).toContain("mcp__signet__memory_store");
 		expect(prompt).toContain("mcp__signet__secret_list");
 		expect(prompt).toContain("mcp__signet__secret_exec");
+	});
+});
+
+describe("writeMemoryMd", () => {
+	let agentsDir = "";
+	let previousSignetPath: string | undefined;
+
+	beforeAll(() => {
+		previousSignetPath = process.env.SIGNET_PATH;
+		agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-write-memory-"));
+		process.env.SIGNET_PATH = agentsDir;
+	});
+
+	beforeEach(() => {
+		closeDbAccessor();
+		rmSync(agentsDir, { recursive: true, force: true });
+		mkdirSync(agentsDir, { recursive: true });
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+	});
+
+	afterEach(() => {
+		closeDbAccessor();
+	});
+
+	afterAll(() => {
+		rmSync(agentsDir, { recursive: true, force: true });
+		if (previousSignetPath === undefined) {
+			process.env.SIGNET_PATH = undefined;
+			return;
+		}
+		process.env.SIGNET_PATH = previousSignetPath;
+	});
+
+	it("forwards agent scope to the shared memory head writer", () => {
+		const result = writeMemoryMd("# MEMORY\n\n## Active\n- synthesized for agent-b\n", {
+			agentId: "agent-b",
+			owner: "hooks-test",
+		});
+		expect(result).toEqual({ ok: true });
+
+		const row = getDbAccessor().withReadDb((db) => {
+			return db.prepare("SELECT agent_id, content, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-b") as
+				| { agent_id: string; content: string; revision: number }
+				| undefined;
+		});
+		expect(row).toEqual({
+			agent_id: "agent-b",
+			content: "# MEMORY\n\n## Active\n- synthesized for agent-b",
+			revision: 1,
+		});
+
+		const defaultCount = getDbAccessor().withReadDb((db) => {
+			const found = db.prepare("SELECT COUNT(*) as n FROM memory_md_heads WHERE agent_id = 'default'").get() as {
+				n: number;
+			};
+			return found.n;
+		});
+		expect(defaultCount).toBe(0);
 	});
 });
 

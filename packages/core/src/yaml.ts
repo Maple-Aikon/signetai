@@ -14,6 +14,9 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 
 /**
  * Format a JavaScript object as YAML.
+ *
+ * `_indent` is retained for internal call-site compatibility, but the
+ * shared YAML library always emits 2-space indentation here.
  */
 export function formatYaml(obj: Record<string, unknown>, _indent = 0): string {
 	return YAML.stringify(obj, {
