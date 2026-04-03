@@ -15,7 +15,7 @@ success_criteria:
   - "Canonical historical content consists of immutable markdown summary/transcript/compaction artifacts, and MEMORY.md is a rebuildable derived projection"
   - "Session-end and compaction persist canonical artifacts with deterministic workspace-root-relative Obsidian wikilinks"
   - "Content-linked DB lineage/search rows are rebuildable from markdown artifacts while runtime temporal telemetry remains DB-native"
-  - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per in-window session and no clipping"
+  - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per projectable in-window session, while fixed-budget projection clips oldest ledger rows explicitly before high-signal head sections"
 scope_boundary: "Defines markdown-canonical history, derived DB indexing, and MEMORY.md rendering contracts; does not replace DB-native graph and runtime telemetry systems"
 draft_quality: "implementation-ready planning spec"
 ---

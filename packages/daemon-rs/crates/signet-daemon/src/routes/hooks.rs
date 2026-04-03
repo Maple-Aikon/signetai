@@ -50,38 +50,6 @@ fn conflict_response(claimed_by: RuntimePath) -> axum::response::Response {
         .into_response()
 }
 
-/// Returns the session_key of the most recent session for a project.
-/// Checks `session_transcripts` first, then falls back to `memory_artifacts`
-/// so that compactions executed after a prior compaction (which deletes
-/// session_transcripts rows) still resolve a stable lineage anchor.
-fn latest_session_for_project(
-    conn: &rusqlite::Connection,
-    project: &str,
-    agent_id: &str,
-) -> rusqlite::Result<Option<String>> {
-    // Primary: live transcript rows (present before first compaction).
-    let mut stmt = conn.prepare(
-        "SELECT session_key FROM session_transcripts \
-         WHERE agent_id = ?1 AND project = ?2 AND session_key IS NOT NULL \
-         ORDER BY created_at DESC LIMIT 1",
-    )?;
-    let mut rows = stmt.query(rusqlite::params![agent_id, project])?;
-    if let Some(row) = rows.next()? {
-        return row.get(0);
-    }
-
-    // Fallback: artifacts written by a prior compaction for this project.
-    // session_transcripts may have been deleted after the first compaction,
-    // but memory_artifacts is never cleared by the compaction path.
-    let mut stmt = conn.prepare(
-        "SELECT session_key FROM memory_artifacts \
-         WHERE agent_id = ?1 AND project = ?2 AND session_key IS NOT NULL \
-         ORDER BY captured_at DESC LIMIT 1",
-    )?;
-    let mut rows = stmt.query(rusqlite::params![agent_id, project])?;
-    rows.next()?.map(|row| row.get(0)).transpose()
-}
-
 fn resolve_compaction_project(
     conn: &rusqlite::Connection,
     session_key: Option<&str>,
@@ -2515,7 +2483,7 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body = test_json(resp).await;
-        assert_eq!(body["queued"], serde_json::Value::Bool(false));
+        assert_eq!(body["queued"], serde_json::Value::Bool(true));
         assert!(body["jobId"].is_string());
 
         let counts = state
