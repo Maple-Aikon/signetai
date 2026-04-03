@@ -245,7 +245,7 @@ export const providerRuntimeResolution: ProviderRuntimeResolution = {
 
 export let telemetryRef: TelemetryCollector | undefined;
 export const embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
-export const predictorClientRef: PredictorClient | null = null;
+export let predictorClientRef: PredictorClient | null = null;
 export const shadowProcess: ChildProcess | null = null;
 export const skillReconcilerHandle: import("../pipeline/skill-reconciler").ReconcilerHandle | null = null;
 export const dreamingWorkerHandle: DreamingWorkerHandle | null = null;
@@ -254,7 +254,7 @@ export let pipelineTransition = false;
 export let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 export let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 export const httpServer: ReturnType<typeof serve> | null = null;
-export const shuttingDown = false;
+export let shuttingDown = false;
 export const bindAbort = new AbortController();
 export let diagnosticsCache: {
 	readonly report: DiagnosticsReport;
@@ -283,13 +283,13 @@ export const PROJECTION_ERROR_TTL_MS = 30_000;
 export const hasMemoriesSessionIdColumnCache: boolean | null = null;
 
 // Auth state
-export const authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
-export const authSecret: Buffer | null = null;
-export const authForgetLimiter = new AuthRateLimiter(60_000, 30);
-export const authModifyLimiter = new AuthRateLimiter(60_000, 60);
-export const authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
-export const authAdminLimiter = new AuthRateLimiter(60_000, 10);
-export const authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
+export let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
+export let authSecret: Buffer | null = null;
+export let authForgetLimiter = new AuthRateLimiter(60_000, 30);
+export let authModifyLimiter = new AuthRateLimiter(60_000, 60);
+export let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
+export let authAdminLimiter = new AuthRateLimiter(60_000, 10);
+export let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
 export const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 
 // Provider tracker and analytics singletons
@@ -407,6 +407,48 @@ export function buildPredictorHealthParams(): PredictorHealthParams {
 
 export function setPipelineTransition(value: boolean): void {
 	pipelineTransition = value;
+}
+
+export function setTelemetryRef(value: TelemetryCollector | undefined): void {
+	telemetryRef = value;
+}
+
+export function setPredictorClientRef(value: PredictorClient | null): void {
+	predictorClientRef = value;
+}
+
+export function setHeartbeatTimer(value: ReturnType<typeof setInterval> | undefined): void {
+	heartbeatTimer = value;
+}
+
+export function setCheckpointPruneTimer(value: ReturnType<typeof setInterval> | undefined): void {
+	checkpointPruneTimer = value;
+}
+
+export function setShuttingDown(value: boolean): void {
+	shuttingDown = value;
+}
+
+export function setAuthConfig(value: AuthConfig): void {
+	authConfig = value;
+}
+
+export function setAuthSecret(value: Buffer | null): void {
+	authSecret = value;
+}
+
+export function setAuthRateLimiters(value: {
+	forget: AuthRateLimiter;
+	modify: AuthRateLimiter;
+	batchForget: AuthRateLimiter;
+	admin: AuthRateLimiter;
+	recallLlm: AuthRateLimiter;
+}): void {
+	authForgetLimiter = value.forget;
+	authModifyLimiter = value.modify;
+	authBatchForgetLimiter = value.batchForget;
+	authAdminLimiter = value.admin;
+	authRecallLlmLimiter = value.recallLlm;
 }
 
 export function setOpenClawHeartbeat(value: { timestamp: string; data: OpenClawHeartbeatData } | null): void {

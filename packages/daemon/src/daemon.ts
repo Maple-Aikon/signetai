@@ -29,8 +29,11 @@ import { type AnalyticsCollector, createAnalyticsCollector } from "./analytics";
 import {
 	type AuthConfig,
 	AuthRateLimiter,
+	type TokenRole,
+	type TokenScope,
 	checkScope,
 	createAuthMiddleware,
+	createToken,
 	loadOrCreateSecret,
 	parseAuthConfig,
 	requirePermission,
@@ -123,6 +126,14 @@ import {
 	readEnvTrimmed,
 	redactUrlForLogs,
 	repairLimiter,
+	setAuthConfig,
+	setAuthRateLimiters,
+	setAuthSecret,
+	setCheckpointPruneTimer,
+	setHeartbeatTimer,
+	setPredictorClientRef,
+	setShuttingDown,
+	setTelemetryRef,
 } from "./routes/state.js";
 import { isHarnessAvailable } from "./scheduler";
 import { startSchedulerWorker } from "./scheduler/index.js";
@@ -182,14 +193,12 @@ let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
-let commitPending = false;
-let commitTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function getPredictorClient(): PredictorClient | null {
 	return predictorClientRef;
 }
 
-export function recordPredictorLatency(operation: string, durationMs: number): void {
+export function recordPredictorLatency(operation: "predictor_score" | "predictor_train", durationMs: number): void {
 	analyticsCollector.recordLatency(operation, durationMs);
 }
 
@@ -328,6 +337,50 @@ app.get("/api/features", (c) => {
 // ============================================================================
 
 mountMcpRoute(app);
+
+app.get("/api/auth/whoami", (c) => {
+	const auth = c.get("auth");
+	return c.json({
+		authenticated: auth?.authenticated ?? false,
+		claims: auth?.claims ?? null,
+		mode: authConfig.mode,
+	});
+});
+
+app.use("/api/auth/token", async (c, next) => {
+	const perm = requirePermission("admin", authConfig);
+	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
+	await perm(c, async () => {
+		await rate(c, next);
+	});
+});
+
+app.post("/api/auth/token", async (c) => {
+	if (!authSecret) {
+		return c.json({ error: "auth secret not available (local mode?)" }, 400);
+	}
+
+	const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+	if (!payload) {
+		return c.json({ error: "invalid request body" }, 400);
+	}
+
+	const role = payload.role as string | undefined;
+	const validRoles: TokenRole[] = ["admin", "operator", "agent", "readonly"];
+	if (!role || !validRoles.includes(role as TokenRole)) {
+		return c.json({ error: `role must be one of: ${validRoles.join(", ")}` }, 400);
+	}
+
+	const scope = (payload.scope ?? {}) as TokenScope;
+	const ttl =
+		typeof payload.ttlSeconds === "number" && payload.ttlSeconds > 0
+			? payload.ttlSeconds
+			: authConfig.defaultTokenTtlSeconds;
+
+	const token = createToken(authSecret, { sub: `token:${role}`, scope, role: role as TokenRole }, ttl);
+	const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+	return c.json({ token, expiresAt });
+});
 
 // ============================================================================
 // Route-level permission guards
@@ -544,8 +597,6 @@ registerSessionRoutes(app, { getGitStatus, gitSync });
 registerPipelineRoutes(app);
 registerTelemetryRoutes(app);
 registerMiscRoutes(app);
-
-startSessionCleanup();
 
 // ============================================================================
 // Dashboard static serving
@@ -1184,6 +1235,7 @@ function startFileWatcher() {
 				if (!cfg.auth) throw new Error("Missing auth section in agent.yaml");
 				if (!cfg.auth.rateLimits) throw new Error("Missing rateLimits in auth config");
 				authConfig = cfg.auth;
+				authSecret = authConfig.mode !== "local" ? loadOrCreateSecret(authConfig.secretPath) : null;
 				const rl = authConfig.rateLimits;
 				authForgetLimiter = rl.forget
 					? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max)
@@ -1200,6 +1252,15 @@ function startFileWatcher() {
 				authRecallLlmLimiter = rl.recallLlm
 					? new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max)
 					: new AuthRateLimiter(60_000, 60);
+				setAuthConfig(authConfig);
+				setAuthSecret(authSecret);
+				setAuthRateLimiters({
+					forget: authForgetLimiter,
+					modify: authModifyLimiter,
+					batchForget: authBatchForgetLimiter,
+					admin: authAdminLimiter,
+					recallLlm: authRecallLlmLimiter,
+				});
 				logger.info("config", "Auth config reloaded from disk");
 			} catch (e) {
 				logger.error("config", "Failed to reload auth config", e as Error);
@@ -1349,6 +1410,7 @@ async function stopPipelineRuntime(): Promise<void> {
 			await predictorClientRef.stop();
 		} catch {}
 		predictorClientRef = null;
+		setPredictorClientRef(null);
 	}
 
 	if (embeddingTrackerHandle) {
@@ -1444,8 +1506,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	authConfig = memoryCfg.auth;
 	if (authConfig.mode !== "local") {
 		authSecret = loadOrCreateSecret(authConfig.secretPath);
+		setAuthSecret(authSecret);
 		logger.info("auth", "Auth initialized", { mode: authConfig.mode });
 	} else {
+		authSecret = null;
+		setAuthSecret(null);
 		logger.info("auth", "Running in local mode (no auth)");
 	}
 
@@ -1454,6 +1519,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (rl.modify) authModifyLimiter = new AuthRateLimiter(rl.modify.windowMs, rl.modify.max);
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
+	if (rl.recallLlm) authRecallLlmLimiter = new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max);
+	setAuthConfig(authConfig);
+	setAuthRateLimiters({
+		forget: authForgetLimiter,
+		modify: authModifyLimiter,
+		batchForget: authBatchForgetLimiter,
+		admin: authAdminLimiter,
+		recallLlm: authRecallLlmLimiter,
+	});
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
 	const validExtractionProviders = new Set([
@@ -2110,6 +2184,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			const client = createPredictorClient(predictorCfg, "default", memoryCfg.embedding.dimensions);
 			await client.start();
 			predictorClientRef = client;
+			setPredictorClientRef(client);
 			logger.info("predictor", "Predictor sidecar started");
 		} catch (err) {
 			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
@@ -2163,6 +2238,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 async function cleanup() {
 	shuttingDown = true;
+	setShuttingDown(true);
 	bindAbort.abort();
 	logger.info("daemon", "Shutting down");
 
@@ -2184,12 +2260,6 @@ async function cleanup() {
 		httpServer = null;
 	}
 
-	if (commitTimer) {
-		clearTimeout(commitTimer);
-		commitTimer = null;
-	}
-	commitPending = false;
-
 	if (syncTimer) {
 		clearTimeout(syncTimer);
 		syncTimer = null;
@@ -2198,16 +2268,19 @@ async function cleanup() {
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
 		heartbeatTimer = undefined;
+		setHeartbeatTimer(undefined);
 	}
 	if (checkpointPruneTimer) {
 		clearInterval(checkpointPruneTimer);
 		checkpointPruneTimer = undefined;
+		setCheckpointPruneTimer(undefined);
 	}
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
 		} catch {}
 		telemetryRef = undefined;
+		setTelemetryRef(undefined);
 	}
 
 	try {
@@ -2271,6 +2344,7 @@ async function main() {
 	mkdirSync(LOG_DIR, { recursive: true });
 
 	initDbAccessor(MEMORY_DB, { agentsDir: AGENTS_DIR });
+	startSessionCleanup();
 
 	syncAgentRoster(AGENTS_DIR);
 
@@ -2310,6 +2384,7 @@ async function main() {
 		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION);
 		telemetryCollector.start();
 		telemetryRef = telemetryCollector;
+		setTelemetryRef(telemetryCollector);
 
 		const daemonStartTime = Date.now();
 		heartbeatTimer = setInterval(
@@ -2336,6 +2411,7 @@ async function main() {
 			},
 			5 * 60 * 1000,
 		);
+		setHeartbeatTimer(heartbeatTimer);
 	}
 
 	await startPipelineRuntime(memoryCfg, telemetryCollector);
@@ -2356,6 +2432,7 @@ async function main() {
 			});
 		}
 	}, 3600_000);
+	setCheckpointPruneTimer(checkpointPruneTimer);
 
 	startGitSyncTimer();
 	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, () => {

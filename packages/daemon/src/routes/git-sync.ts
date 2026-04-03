@@ -232,7 +232,7 @@ function extractGitHubHost(url: string): boolean {
 		const parsed = new URL(url.startsWith("https://") ? url : `https://${url}`);
 		return parsed.hostname === "github.com";
 	} catch {
-		return url.includes("github.com");
+		return false;
 	}
 }
 
@@ -537,6 +537,12 @@ export async function stopGitSyncTimer(): Promise<void> {
 		clearInterval(gitSyncTimer);
 		gitSyncTimer = null;
 	}
+	if (commitTimer) {
+		clearTimeout(commitTimer);
+		commitTimer = null;
+	}
+	commitPending = false;
+	pendingChanges = [];
 	if (gitSyncPromise) {
 		try {
 			await gitSyncPromise;

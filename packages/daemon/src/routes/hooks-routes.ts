@@ -52,7 +52,6 @@ import {
 	normalizeSessionKey,
 	releaseSession,
 	renewSession,
-	startSessionCleanup,
 } from "../session-tracker.js";
 import { upsertThreadHead } from "../thread-heads";
 import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT } from "./state";
@@ -66,9 +65,6 @@ import {
 	toRecord,
 	validateSessionAgentBinding,
 } from "./utils";
-
-// Start session cleanup timer
-startSessionCleanup();
 
 // Harness last-seen registry — in-memory, resets on daemon restart
 export const harnessLastSeen = new Map<string, string>();
