@@ -991,6 +991,16 @@ fn should_purge_projection_noise(root: &Path, agent_id: &str) -> Result<bool, St
     Ok(guard.insert(projection_purge_key(root, agent_id)))
 }
 
+#[cfg(test)]
+fn reset_projection_purge_state() -> Result<(), String> {
+    let seen = PROJECTION_PURGE_SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = seen
+        .lock()
+        .map_err(|_| "projection purge state lock poisoned".to_string())?;
+    guard.clear();
+    Ok(())
+}
+
 pub fn purge_canonical_noise_sessions(
     conn: &Connection,
     root: &Path,
@@ -2224,6 +2234,7 @@ mod tests {
 
     #[test]
     fn projection_uses_artifact_frontmatter_and_wikilinks() {
+        reset_projection_purge_state().unwrap();
         let conn = setup_conn();
         let root = temp_root("projection");
         let now = Utc::now().to_rfc3339();
@@ -2284,6 +2295,7 @@ mod tests {
 
     #[test]
     fn projection_clips_older_ledger_rows_within_budget() {
+        reset_projection_purge_state().unwrap();
         let conn = setup_conn();
         let root = temp_root("projection-ledger-budget");
         let tok = cl100k_base().unwrap();

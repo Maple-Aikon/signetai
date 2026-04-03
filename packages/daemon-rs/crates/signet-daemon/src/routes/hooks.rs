@@ -1927,6 +1927,7 @@ pub async fn compaction_complete(
         )
             .into_response();
     };
+    let harness = harness.to_string();
 
     let Some(summary) = body
         .summary
@@ -1971,7 +1972,7 @@ pub async fn compaction_complete(
     // gate in compaction-complete.
 
     let captured_at = chrono::Utc::now().to_rfc3339();
-    let harness_value = harness.to_string();
+    let harness_value = harness.clone();
     let summary_value = summary.to_string();
     // Validate body.agent_id against the agent encoded in session_key so
     // compaction lineage can't be attributed to an arbitrary caller-supplied id.
@@ -1992,7 +1993,7 @@ pub async fn compaction_complete(
     let sentence = resolve_memory_sentence(
         &summary_value,
         body.project.as_deref(),
-        Some(harness),
+        Some(harness.as_str()),
         ArtifactKind::Compaction,
         None,
         None,
@@ -2001,20 +2002,14 @@ pub async fn compaction_complete(
     let root = state.config.base_path.clone();
     let session_key = body.session_key.clone();
     let fallback_project = body.project.clone();
+    let noise_harness = harness.clone();
 
-    // Step 1: Resolve lineage metadata and write canonical artifacts first.
+    // Step 1: Resolve lineage metadata and write canonical artifacts for
+    // projectable sessions before DB ingest.
     // DB ingest is intentionally deferred until artifacts are on disk so that
     // an artifact-write failure leaves no committed DB state — retries start
-    // clean.  If artifact writes succeed but DB ingest fails (step 2), the
+    // clean. If artifact writes succeed but DB ingest fails (step 2), the
     // artifact is already canonical; ingest is idempotent via session_id key.
-    //
-    // Artifact filename stability on retry: write_compaction_artifact calls
-    // ensure_canonical_manifest, which queries memory_artifacts for an existing
-    // manifest by session_id before creating one.  If step 1 succeeded on a
-    // prior attempt, the manifest row is already committed; retries find it
-    // and read back its original captured_at for the filename — NOT the fresh
-    // Utc::now() from this invocation.  The filename is therefore stable across
-    // retries for the same logical compaction event.
     let artifact_result = state
         .pool
         .write(Priority::High, {
@@ -2024,6 +2019,7 @@ pub async fn compaction_complete(
             let captured_at = captured_at.clone();
             let harness_value = harness_value.clone();
             let summary_value = summary_value.clone();
+            let noise_harness = noise_harness.clone();
             move |conn| {
                 let project = resolve_compaction_project(
                     conn,
@@ -2031,19 +2027,10 @@ pub async fn compaction_complete(
                     &agent_id,
                     fallback_project.as_deref(),
                 )?;
-                // Stable lineage ID for the compaction event.  When session_key
-                // is present it is authoritative.  When absent, derive a
-                // content-hash ID so that retries for the same compaction event
-                // produce the same session_id — making ensure_canonical_manifest
-                // idempotent and preventing duplicate artifacts.
-                //
-                // Hash includes agent_id + project + summary.  Two genuinely
-                // distinct compaction events producing identical summary text for
-                // the same agent/project are an accepted edge case: the trade-off
-                // between retry idempotency (requires stable id) and cross-event
-                // uniqueness (requires session_key from caller) cannot be resolved
-                // without a caller-provided identifier.  Callers should always
-                // send session_key when available.
+                // Stable lineage ID for the compaction event. When session_key
+                // is present it is authoritative. When absent, derive a
+                // content-hash ID so retries for the same compaction event
+                // produce the same session_id.
                 let sid = session_key.clone().unwrap_or_else(|| {
                     let mut h = Sha256::new();
                     h.update(agent_id.as_bytes());
@@ -2058,26 +2045,39 @@ pub async fn compaction_complete(
                         .collect();
                     format!("compaction:{hex}")
                 });
-                write_compaction_artifact(
-                    conn,
-                    &root,
-                    SummaryArtifactInput {
-                        agent_id: agent_id.clone(),
-                        session_id: sid.clone(),
-                        session_key: session_key.clone(),
-                        project: project.clone(),
-                        harness: Some(harness_value),
-                        captured_at: captured_at.clone(),
-                        started_at: None,
-                        ended_at: Some(captured_at),
-                        summary: summary_value,
-                    },
-                    sentence,
-                )
-                .map_err(signet_core::error::CoreError::Migration)?;
+                let noise = is_noise_session(
+                    project.as_deref(),
+                    Some(sid.as_str()),
+                    session_key.as_deref(),
+                    Some(noise_harness.as_str()),
+                );
+                if !noise {
+                    // ensure_canonical_manifest queries memory_artifacts for an
+                    // existing manifest by session_id before creating one. If a
+                    // prior attempt already committed step 1, retries reuse the
+                    // original captured_at and keep filenames stable.
+                    write_compaction_artifact(
+                        conn,
+                        &root,
+                        SummaryArtifactInput {
+                            agent_id: agent_id.clone(),
+                            session_id: sid.clone(),
+                            session_key: session_key.clone(),
+                            project: project.clone(),
+                            harness: Some(harness_value),
+                            captured_at: captured_at.clone(),
+                            started_at: None,
+                            ended_at: Some(captured_at),
+                            summary: summary_value,
+                        },
+                        sentence,
+                    )
+                    .map_err(signet_core::error::CoreError::Migration)?;
+                }
                 // write_memory_projection is deferred to after DB ingest (step 2)
                 // so MEMORY.md reflects the newly ingested session_summary row.
                 Ok(serde_json::json!({
+                    "noise": noise,
                     "project": project,
                     "sessionId": sid,
                 }))
@@ -2098,16 +2098,18 @@ pub async fn compaction_complete(
 
     let session_id = meta["sessionId"].as_str().unwrap_or("").to_string();
     let project: Option<String> = meta["project"].as_str().map(str::to_string);
-    let noise = is_noise_session(
-        project.as_deref(),
-        Some(session_id.as_str()),
-        session_key.as_deref(),
-        Some(harness),
-    );
+    let noise = meta["noise"].as_bool().unwrap_or_else(|| {
+        is_noise_session(
+            project.as_deref(),
+            Some(session_id.as_str()),
+            session_key.as_deref(),
+            Some(harness.as_str()),
+        )
+    });
 
-    // Step 2: DB ingest. Artifact is committed above so this is recoverable
-    // on failure. idempotency_key=session_id ensures retries don't create
-    // duplicate memory rows.
+    // Step 2: DB ingest. Projectable sessions already committed their canonical
+    // artifact above, so this remains recoverable on failure. idempotency_key=
+    // session_id ensures retries don't create duplicate memory rows.
     let ingest_result = state
         .pool
         .write(Priority::Low, {
@@ -2393,6 +2395,7 @@ pub async fn session_checkpoint_extract(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
 
     use axum::Json;
@@ -2421,6 +2424,19 @@ mod tests {
     async fn test_json(resp: axum::response::Response) -> Value {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    fn has_markdown(dir: &Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                return has_markdown(&path);
+            }
+            path.extension().and_then(|ext| ext.to_str()) == Some("md")
+        })
     }
 
     fn test_state(name: &str) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {
@@ -2691,7 +2707,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_complete_skips_noise_session_writes() {
-        let (state, writer, _tmp) = test_state("hooks-compaction-noise");
+        let (state, writer, tmp) = test_state("hooks-compaction-noise");
 
         let resp = compaction_complete(
             State(state.clone()),
@@ -2743,6 +2759,7 @@ mod tests {
         assert_eq!(counts.1, 0);
         assert_eq!(counts.2, 0);
         assert_eq!(counts.3, 0);
+        assert!(!has_markdown(&tmp.path().join("memory")));
 
         drop(state);
         let _ = writer.await;

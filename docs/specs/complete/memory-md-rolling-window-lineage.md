@@ -350,7 +350,7 @@ Required:
 1. render strict rolling 30-day UTC ledger
 2. read per-session sentence from frontmatter
 3. enforce per-session sentence quality floor + fallback flag handling
-4. enforce no clipping/no top-N omission
+4. enforce fixed-budget clipping of oldest ledger rows with explicit notice
 
 ### Phase 3: derived DB indexing and re-index
 
@@ -366,7 +366,7 @@ Required:
 
 ## Validation and regression tests
 
-1. 1,500-session window test (50/day x 30) yields 1,500 ledger rows.
+1. 1,500-session window test (50/day x 30) preserves the newest in-window ledger rows, clips oldest rows when needed, and emits an explicit clipping notice.
 2. sentence floor test rejects low-signal rows.
 3. wikilink format test enforces workspace-root-relative links.
 4. immutable artifact test rejects post-commit mutation.
