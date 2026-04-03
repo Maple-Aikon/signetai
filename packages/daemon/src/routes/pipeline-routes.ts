@@ -483,7 +483,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			if (raw === null) {
 				return c.json({ error: "Malformed JSON body" }, 400);
 			}
-			if (typeof raw === "object" && raw !== null) {
+			if (typeof raw === "object") {
 				const body = raw as { mode?: unknown };
 				if (body.mode === "compact") {
 					mode = "compact";

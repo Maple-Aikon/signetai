@@ -259,54 +259,54 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/telemetry/events", (c) => {
-		if (telemetryRef) {
-			const event = c.req.query("event") as TelemetryEventType | undefined;
-			const since = c.req.query("since");
-			const until = c.req.query("until");
-			const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
-			const events = telemetryRef.query({ event, since, until, limit });
-			return c.json({ events, enabled: true });
+		if (!telemetryRef) {
+			return c.json({ events: [], enabled: false });
 		}
-		return c.json({ events: [], enabled: false });
+		const event = c.req.query("event") as TelemetryEventType | undefined;
+		const since = c.req.query("since");
+		const until = c.req.query("until");
+		const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
+		const events = telemetryRef.query({ event, since, until, limit });
+		return c.json({ events, enabled: true });
 	});
 
 	app.get("/api/telemetry/stats", (c) => {
-		if (telemetryRef) {
-			const since = c.req.query("since");
-			const events = telemetryRef.query({ since, limit: 10000 });
-
-			let totalInputTokens = 0;
-			let totalOutputTokens = 0;
-			let totalCost = 0;
-			let llmCalls = 0;
-			let llmErrors = 0;
-			let pipelineErrors = 0;
-			const latencies: number[] = [];
-
-			for (const e of events) {
-				if (e.event === "llm.generate") {
-					llmCalls++;
-					if (typeof e.properties.inputTokens === "number") totalInputTokens += e.properties.inputTokens;
-					if (typeof e.properties.outputTokens === "number") totalOutputTokens += e.properties.outputTokens;
-					if (typeof e.properties.totalCost === "number") totalCost += e.properties.totalCost;
-					if (e.properties.success === false) llmErrors++;
-					if (typeof e.properties.durationMs === "number") latencies.push(e.properties.durationMs);
-				}
-				if (e.event === "pipeline.error") pipelineErrors++;
-			}
-
-			latencies.sort((a, b) => a - b);
-			const p50 = latencies[Math.floor(latencies.length * 0.5)] ?? 0;
-			const p95 = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
-
-			return c.json({
-				enabled: true,
-				totalEvents: events.length,
-				llm: { calls: llmCalls, errors: llmErrors, totalInputTokens, totalOutputTokens, totalCost, p50, p95 },
-				pipelineErrors,
-			});
+		if (!telemetryRef) {
+			return c.json({ enabled: false });
 		}
-		return c.json({ enabled: false });
+		const since = c.req.query("since");
+		const events = telemetryRef.query({ since, limit: 10000 });
+
+		let totalInputTokens = 0;
+		let totalOutputTokens = 0;
+		let totalCost = 0;
+		let llmCalls = 0;
+		let llmErrors = 0;
+		let pipelineErrors = 0;
+		const latencies: number[] = [];
+
+		for (const e of events) {
+			if (e.event === "llm.generate") {
+				llmCalls++;
+				if (typeof e.properties.inputTokens === "number") totalInputTokens += e.properties.inputTokens;
+				if (typeof e.properties.outputTokens === "number") totalOutputTokens += e.properties.outputTokens;
+				if (typeof e.properties.totalCost === "number") totalCost += e.properties.totalCost;
+				if (e.properties.success === false) llmErrors++;
+				if (typeof e.properties.durationMs === "number") latencies.push(e.properties.durationMs);
+			}
+			if (e.event === "pipeline.error") pipelineErrors++;
+		}
+
+		latencies.sort((a, b) => a - b);
+		const p50 = latencies[Math.floor(latencies.length * 0.5)] ?? 0;
+		const p95 = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
+
+		return c.json({
+			enabled: true,
+			totalEvents: events.length,
+			llm: { calls: llmCalls, errors: llmErrors, totalInputTokens, totalOutputTokens, totalCost, p50, p95 },
+			pipelineErrors,
+		});
 	});
 
 	app.get("/api/telemetry/export", (c) => {
