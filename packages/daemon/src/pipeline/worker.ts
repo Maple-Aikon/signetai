@@ -234,9 +234,17 @@ function completeJob(db: WriteDb, jobId: string, result: string | null): void {
 	).run(result, now, now, jobId);
 }
 
-function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
+function failJob(
+	db: WriteDb,
+	jobId: string,
+	error: string,
+	attempts: number,
+	maxAttempts: number,
+	effectiveMaxAttempts = maxAttempts,
+): void {
 	const now = new Date().toISOString();
-	const status = attempts >= maxAttempts ? "dead" : "failed";
+	const maxAllowedAttempts = Math.max(1, Math.min(maxAttempts, effectiveMaxAttempts));
+	const status = attempts >= maxAllowedAttempts ? "dead" : "failed";
 
 	// Failed jobs go back to pending for retry; dead jobs stay dead
 	const nextStatus = status === "dead" ? "dead" : "pending";
@@ -1552,13 +1560,14 @@ export function startWorker(
 					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
 					durationMs: runtime.now() - jobStart,
 				});
+				const effectiveMaxAttempts = Math.max(1, Math.min(job.max_attempts, pipelineCfg.worker.maxRetries));
 				accessor.withWriteTx((db) => {
-					failJob(db, job.id, msg, job.attempts, job.max_attempts);
-					if (job.attempts >= job.max_attempts) {
+					failJob(db, job.id, msg, job.attempts, job.max_attempts, effectiveMaxAttempts);
+					if (job.attempts >= effectiveMaxAttempts) {
 						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});
-				consecutiveFailures++;
+				consecutiveFailures = job.attempts >= effectiveMaxAttempts ? 0 : consecutiveFailures + 1;
 				lastAttempt = runtime.now();
 			}
 		} catch (e) {

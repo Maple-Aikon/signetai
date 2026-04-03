@@ -8,49 +8,16 @@
 
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { getSynthesisProvider } from "../synthesis-llm.js";
-import { getWidgetProvider } from "../widget-llm.js";
-import { getSecret } from "../secrets.js";
-
-/** Cached API key */
-let cachedApiKey: string | null = null;
-
-/**
- * Call OpenAI API (GPT-4o) for chat routing.
- * Falls back through: OPENAI_API_KEY env → signet secrets.
- */
-async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
-	if (!cachedApiKey) {
-		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
-	}
-	const apiKey = cachedApiKey;
-	if (!apiKey) throw new Error("OPENAI_API_KEY not found in env or secrets");
-
-	const res = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o",
-			max_tokens: maxTokens,
-			messages: [
-				{ role: "system", content: systemPrompt },
-				{ role: "user", content: userMessage },
-			],
-		}),
-	});
-
-	if (!res.ok) {
-		const errText = await res.text();
-		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
-	}
-
-	const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-	return data.choices?.[0]?.message?.content ?? "";
-}
+import { getInteractiveLlmProvider } from "../llm.js";
 import { loadProbeResult } from "../mcp-probe.js";
+
+function buildPrompt(systemPrompt: string, userMessage: string): string {
+	return `${systemPrompt}\n\nUser message:\n${userMessage}`;
+}
+
+async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
+	return getInteractiveLlmProvider().generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
+}
 
 interface ChatRequest {
 	message: string;
@@ -229,7 +196,7 @@ export function mountOsChatRoutes(app: Hono): void {
 				});
 			}
 
-			// Build prompt and call Anthropic API directly
+			// Build prompt and call the shared interactive LLM provider
 			const systemPrompt = buildSystemPrompt(tools);
 
 			logger.info("os-chat", `Processing chat message`, {
@@ -261,10 +228,6 @@ export function mountOsChatRoutes(app: Hono): void {
 			const toolCallResults: ToolCallResult[] = [];
 
 			if (parsed.toolCalls.length > 0) {
-				// Dynamic import to avoid circular deps
-				const marketplaceModule = await import("./marketplace.js");
-				const { readInstalledServersPublic } = await import("./marketplace-helpers.js");
-
 				for (const call of parsed.toolCalls.slice(0, 5)) {
 					// Max 5 tool calls
 					try {

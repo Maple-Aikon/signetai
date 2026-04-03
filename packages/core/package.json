@@ -8,16 +8,19 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
     "./pipeline-providers": {
+      "bun": "./src/pipeline-providers.ts",
       "import": "./dist/pipeline-providers.js",
       "types": "./dist/pipeline-providers.d.ts"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node --external better-sqlite3 && bun build ./src/pipeline-providers.ts --outdir ./dist --target browser && bun run build:types",

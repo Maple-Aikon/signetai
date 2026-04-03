@@ -6,9 +6,6 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
-	Agent,
-	AgentManifest,
-	AgentConfig,
 	MEMORY_TYPES,
 	EXTRACTION_STATUSES,
 	JOB_STATUSES,
@@ -22,6 +19,9 @@ export {
 	TASK_STATUSES,
 } from "./types";
 export type {
+	Agent,
+	AgentManifest,
+	AgentConfig,
 	LlmProvider,
 	LlmUsage,
 	LlmGenerateResult,
@@ -82,10 +82,12 @@ export type {
 export {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_PROVIDER_CHOICES,
+	SYNTHESIS_PROVIDER_CHOICES,
 	defaultPipelineModel,
 	isPipelineProvider,
+	isSynthesisProvider,
 } from "./pipeline-providers";
-export type { PipelineProviderChoice } from "./pipeline-providers";
+export type { PipelineProviderChoice, SynthesisProviderChoice } from "./pipeline-providers";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
@@ -108,7 +110,8 @@ export {
 	type VectorSearchOptions,
 	type HybridSearchOptions,
 } from "./search";
-export { migrate, MigrationSource } from "./migrate";
+export { migrate } from "./migrate";
+export type { MigrationSource } from "./migrate";
 export {
 	detectSchema,
 	ensureUnifiedSchema,

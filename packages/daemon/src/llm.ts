@@ -1,32 +1,77 @@
 /**
- * Daemon-wide LlmProvider singleton.
+ * Daemon-wide LLM provider registry keyed by workload role.
  *
- * Follows the DbAccessor pattern: init once in main(), get from
- * anywhere, close on shutdown. Lower-level functions (extraction,
- * decision, worker) keep their provider parameter so tests can
- * inject mocks without touching global state.
+ * Keeps extraction and synthesis as separate runtime profiles while
+ * sharing one singleton-style manager. Widget generation reads from the
+ * synthesis role instead of maintaining its own duplicate holder.
  */
 
-import type { LlmProvider } from "./pipeline/provider";
-import { logger } from "./logger";
+import type { LlmProvider } from "@signet/core";
+import { logger, type LogCategory } from "./logger";
 
-let provider: LlmProvider | null = null;
+export const LLM_ROLES = ["extraction", "synthesis"] as const;
+export type LlmRole = (typeof LLM_ROLES)[number];
 
-export function initLlmProvider(instance: LlmProvider): void {
-	if (provider) {
-		logger.warn("llm", "Provider already initialised, skipping");
+const ROLE_LABELS: Record<LlmRole, string> = {
+	extraction: "LlmProvider",
+	synthesis: "Synthesis LlmProvider",
+};
+
+const ROLE_LOG_CATEGORIES: Record<LlmRole, LogCategory> = {
+	extraction: "pipeline",
+	synthesis: "synthesis",
+};
+
+const providers: Partial<Record<LlmRole, LlmProvider>> = {};
+
+function initProvider(role: LlmRole, instance: LlmProvider): void {
+	if (providers[role]) {
+		logger.warn(ROLE_LOG_CATEGORIES[role], `${ROLE_LABELS[role]} already initialised, skipping`);
 		return;
 	}
-	provider = instance;
+	providers[role] = instance;
 }
 
-export function getLlmProvider(): LlmProvider {
+export function getProvider(role: LlmRole): LlmProvider {
+	const provider = providers[role];
 	if (!provider) {
-		throw new Error("LlmProvider not initialised — call initLlmProvider() first");
+		throw new Error(`${ROLE_LABELS[role]} not initialised — call initProvider() first`);
 	}
 	return provider;
 }
 
+function closeProvider(role: LlmRole): void {
+	delete providers[role];
+}
+
+export function initLlmProvider(instance: LlmProvider): void {
+	initProvider("extraction", instance);
+}
+
+export function getLlmProvider(): LlmProvider {
+	return getProvider("extraction");
+}
+
 export function closeLlmProvider(): void {
-	provider = null;
+	closeProvider("extraction");
+}
+
+export function initSynthesisProvider(instance: LlmProvider): void {
+	initProvider("synthesis", instance);
+}
+
+export function getSynthesisProvider(): LlmProvider {
+	return getProvider("synthesis");
+}
+
+export function closeSynthesisProvider(): void {
+	closeProvider("synthesis");
+}
+
+export function getWidgetProvider(): LlmProvider {
+	return getProvider("synthesis");
+}
+
+export function getInteractiveLlmProvider(): LlmProvider {
+	return providers.synthesis ?? providers.extraction ?? getProvider("synthesis");
 }

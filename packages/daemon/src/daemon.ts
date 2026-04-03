@@ -128,7 +128,7 @@ import {
 	resolveNamedEntity,
 	unpinEntity,
 } from "./knowledge-graph";
-import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
+import { closeLlmProvider, closeSynthesisProvider, getLlmProvider, initLlmProvider, initSynthesisProvider } from "./llm";
 import { type LogCategory, type LogEntry, logger } from "./logger";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { type RecallParams, hybridRecall } from "./memory-search";
@@ -172,17 +172,24 @@ import {
 } from "./pipeline/model-registry";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MODEL,
-	createAnthropicProvider,
-	createClaudeCodeProvider,
-	createCodexProvider,
-	createOllamaProvider,
-	createOpenCodeProvider,
-	createOpenRouterProvider,
 	ensureOpenCodeServer,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 	stopOpenCodeServer,
 } from "./pipeline/provider";
-import { resolveRuntimeModel } from "./pipeline/provider-resolution";
+import {
+	isSupportedRuntimeProvider,
+	normalizeRuntimeBaseUrl,
+	resolveRuntimeEndpointForLogs,
+	resolveRuntimeEndpoints,
+	resolveRuntimeProviderStartup,
+	type RuntimeEndpoints,
+	type RuntimeProviderName,
+	type RuntimeProviderStatus,
+	type RuntimeRole,
+	type RuntimeStartupOptions,
+	type RuntimeSynthesisProviderName,
+	type RuntimeStartupResult,
+} from "./pipeline/provider-resolution";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
@@ -241,7 +248,6 @@ import {
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
 import { createSingleFlightRunner } from "./single-flight-runner";
-import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { readScopedTask, readTaskAgentId } from "./task-scope";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { expandTemporalNode } from "./temporal-expand";
@@ -271,7 +277,6 @@ import {
 	stopUpdateTimer,
 } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
-import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -365,19 +370,6 @@ function parsePort(raw: string | undefined, fallback: number): number {
 	return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback;
 }
 
-function normalizeRuntimeBaseUrl(url: string | undefined, fallback: string): string {
-	const base = normalizeBaseUrl(url) ?? fallback;
-	try {
-		const parsed = new URL(base);
-		if (parsed.hostname === "localhost" || parsed.hostname === "::1") {
-			parsed.hostname = "127.0.0.1";
-		}
-		return normalizeBaseUrl(parsed.toString()) ?? fallback;
-	} catch {
-		return base;
-	}
-}
-
 /**
  * Resolve the Ollama base URL for the model registry, returning undefined
  * when the current provider is not Ollama.
@@ -390,20 +382,6 @@ function resolveRegistryOllamaBaseUrl(provider: string, endpoint: string | undef
 function resolveRegistryOpenRouterBaseUrl(provider: string, endpoint: string | undefined): string | undefined {
 	if (provider !== "openrouter") return undefined;
 	return normalizeRuntimeBaseUrl(endpoint, "https://openrouter.ai/api/v1");
-}
-
-function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
-	try {
-		const parsed = new URL(baseUrl);
-		const isLoopbackHost =
-			parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1";
-		if (!isLoopbackHost) return false;
-		if (parsed.protocol !== "http:") return false;
-		const port = parsed.port.length > 0 ? Number.parseInt(parsed.port, 10) : 80;
-		return port === 4096;
-	} catch {
-		return false;
-	}
 }
 
 function redactUrlForLogs(url: string | undefined): string | undefined {
@@ -427,42 +405,24 @@ const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? NET.bin
 const NETWORK_MODE = networkModeFromBindHost(BIND_HOST);
 const INTERNAL_SELF_HOST = BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
 
-type RuntimeProviderName =
-	| "none"
-	| "ollama"
-	| "claude-code"
-	| "opencode"
-	| "codex"
-	| "anthropic"
-	| "openrouter"
-	| "command";
+type RuntimeResolutionProvider = RuntimeProviderName | RuntimeSynthesisProviderName | null;
+type RuntimeFallbackProvider = "ollama" | "none" | null;
 
-type RuntimeSynthesisProviderName =
-	| "none"
-	| "ollama"
-	| "claude-code"
-	| "codex"
-	| "opencode"
-	| "anthropic"
-	| "openrouter";
+interface RuntimeResolutionState<TProvider extends RuntimeResolutionProvider> {
+	configured: string | null;
+	resolved: TProvider;
+	effective: TProvider;
+	fallbackProvider: RuntimeFallbackProvider;
+	status: RuntimeProviderStatus;
+	degraded: boolean;
+	fallbackApplied: boolean;
+	reason: string | null;
+	since: string | null;
+}
 
 interface ProviderRuntimeResolution {
-	extraction: {
-		configured: string | null;
-		resolved: RuntimeProviderName;
-		effective: RuntimeProviderName;
-		fallbackProvider: "ollama" | "none";
-		status: "active" | "degraded" | "blocked" | "disabled" | "paused";
-		degraded: boolean;
-		fallbackApplied: boolean;
-		reason: string | null;
-		since: string | null;
-	};
-	synthesis: {
-		configured: string | null;
-		resolved: RuntimeSynthesisProviderName | null;
-		effective: RuntimeSynthesisProviderName | null;
-	};
+	extraction: RuntimeResolutionState<RuntimeProviderName>;
+	synthesis: RuntimeResolutionState<RuntimeSynthesisProviderName | null>;
 }
 
 const providerRuntimeResolution: ProviderRuntimeResolution = {
@@ -481,8 +441,297 @@ const providerRuntimeResolution: ProviderRuntimeResolution = {
 		configured: null,
 		resolved: null,
 		effective: null,
+		fallbackProvider: null,
+		status: "disabled",
+		degraded: false,
+		fallbackApplied: false,
+		reason: null,
+		since: null,
 	},
 };
+
+interface RuntimeStartupLogOptions<TProvider extends RuntimeResolutionProvider> {
+	readonly role: RuntimeRole;
+	readonly configuredHint: string | null;
+	readonly resolvedProvider: TProvider;
+	readonly effectiveProvider: TProvider;
+	readonly fallbackProvider: RuntimeFallbackProvider;
+	readonly runtime: RuntimeStartupResult;
+	readonly endpoints: RuntimeEndpoints;
+	readonly disabledMessage: string;
+	readonly commandMessage?: string;
+}
+
+interface SharedRuntimeStartupDeps {
+	readonly paused: boolean;
+	readonly ollamaFallbackMaxContextTokens: number;
+	readonly anthropicApiKey?: string;
+	readonly openRouterApiKey?: string;
+	readonly openRouterReferer?: string;
+	readonly openRouterTitle?: string;
+	readonly ensureOpenCodeServer: (port: number) => Promise<boolean>;
+}
+
+interface ExtractionRuntimeStartupConfig {
+	readonly role: "extraction";
+	readonly configuredHint: string | null;
+	readonly configuredProvider: RuntimeProviderName;
+	readonly configuredModel?: string;
+	readonly enabled: true;
+	readonly timeoutMs: number;
+	readonly fallbackProvider: Exclude<RuntimeFallbackProvider, null>;
+	readonly endpoints: RuntimeEndpoints;
+	readonly disabledMessage: string;
+	readonly commandMessage?: string;
+	readonly checkProviderAvailability?: RuntimeStartupOptions["checkProviderAvailability"];
+}
+
+interface SynthesisRuntimeStartupConfig {
+	readonly role: "synthesis";
+	readonly configuredHint: string | null;
+	readonly configuredProvider: RuntimeSynthesisProviderName;
+	readonly configuredModel?: string;
+	readonly enabled: boolean;
+	readonly timeoutMs: number;
+	readonly fallbackProvider: Exclude<RuntimeFallbackProvider, null>;
+	readonly endpoints: RuntimeEndpoints;
+	readonly disabledMessage: string;
+	readonly commandMessage?: string;
+	readonly checkProviderAvailability?: RuntimeStartupOptions["checkProviderAvailability"];
+}
+
+type RuntimeStartupConfig = ExtractionRuntimeStartupConfig | SynthesisRuntimeStartupConfig;
+
+function createInitialRuntimeResolutionState(
+	cfg: ExtractionRuntimeStartupConfig,
+): RuntimeResolutionState<RuntimeProviderName>;
+function createInitialRuntimeResolutionState(
+	cfg: SynthesisRuntimeStartupConfig,
+): RuntimeResolutionState<RuntimeSynthesisProviderName | null>;
+function createInitialRuntimeResolutionState(
+	cfg: RuntimeStartupConfig,
+): RuntimeResolutionState<RuntimeResolutionProvider> {
+	const enabled = cfg.role === "extraction" ? true : cfg.enabled;
+	const configuredProvider = enabled ? cfg.configuredProvider : null;
+	const runtimeStatus: RuntimeProviderStatus = enabled ? "active" : "disabled";
+	return createRuntimeResolutionState({
+		configured: cfg.configuredHint,
+		resolved: configuredProvider,
+		effective: configuredProvider,
+		fallbackProvider: enabled ? cfg.fallbackProvider : null,
+		runtime: {
+			status: runtimeStatus,
+			degraded: false,
+			fallbackApplied: false,
+			reason: null,
+			since: null,
+		},
+	});
+}
+
+function warnUnsupportedRuntimeHint(cfg: RuntimeStartupConfig): void {
+	if (!cfg.configuredHint) return;
+	if (cfg.role === "synthesis" && !cfg.enabled) return;
+	if (isSupportedRuntimeProvider(cfg.role, cfg.configuredHint)) return;
+	logger.warn("config", `Unsupported ${cfg.role} provider configured, using resolved fallback`, {
+		configured: cfg.configuredHint,
+		resolved: cfg.configuredProvider,
+	});
+}
+
+function runtimeUsesProvider(
+	configs: readonly RuntimeStartupConfig[],
+	provider: "anthropic" | "openrouter" | "opencode",
+): boolean {
+	return configs.some((cfg) => cfg.enabled && cfg.configuredProvider === provider);
+}
+
+function logRuntimeOpenCodeEndpoints(paused: boolean, configs: readonly RuntimeStartupConfig[]): void {
+	for (const cfg of configs) {
+		logExternalOpenCodeEndpoint(
+			cfg.role,
+			!paused && cfg.enabled && cfg.configuredProvider === "opencode",
+			cfg.endpoints,
+		);
+	}
+}
+
+function resolveEffectiveRuntimeProvider(
+	cfg: ExtractionRuntimeStartupConfig,
+	runtime: RuntimeStartupResult,
+): RuntimeProviderName;
+function resolveEffectiveRuntimeProvider(
+	cfg: SynthesisRuntimeStartupConfig,
+	runtime: RuntimeStartupResult,
+): RuntimeSynthesisProviderName | null;
+function resolveEffectiveRuntimeProvider(
+	cfg: RuntimeStartupConfig,
+	runtime: RuntimeStartupResult,
+): RuntimeResolutionProvider {
+	if (cfg.role === "extraction") {
+		return runtime.effectiveProvider;
+	}
+	if (runtime.status === "paused" || !cfg.enabled) {
+		return null;
+	}
+	return runtime.effectiveProvider === "command" ? "none" : runtime.effectiveProvider;
+}
+
+function createRuntimeResolutionState<TProvider extends RuntimeResolutionProvider>(opts: {
+	readonly configured: string | null;
+	readonly resolved: TProvider;
+	readonly effective: TProvider;
+	readonly fallbackProvider: RuntimeFallbackProvider;
+	readonly runtime: Pick<
+		RuntimeStartupResult,
+		"status" | "degraded" | "fallbackApplied" | "reason" | "since"
+	>;
+}): RuntimeResolutionState<TProvider> {
+	return {
+		configured: opts.configured,
+		resolved: opts.resolved,
+		effective: opts.effective,
+		fallbackProvider: opts.fallbackProvider,
+		status: opts.runtime.status,
+		degraded: opts.runtime.degraded,
+		fallbackApplied: opts.runtime.fallbackApplied,
+		reason: opts.runtime.reason,
+		since: opts.runtime.since,
+	};
+}
+
+function logExternalOpenCodeEndpoint(role: RuntimeRole, enabled: boolean, endpoints: RuntimeEndpoints): void {
+	if (!enabled || endpoints.openCodeShouldManage) return;
+	logger.info("config", `Using external OpenCode endpoint for ${role}`, {
+		baseUrl: redactUrlForLogs(endpoints.openCodeBaseUrl),
+	});
+}
+
+function logRuntimeStartup(
+	opts:
+		| (RuntimeStartupLogOptions<RuntimeProviderName> & { readonly role: "extraction" })
+		| (RuntimeStartupLogOptions<RuntimeSynthesisProviderName | null> & { readonly role: "synthesis" }),
+): void {
+	const roleLabel = opts.role === "extraction" ? "Extraction" : "Synthesis";
+	if (opts.role === "extraction") {
+		providerRuntimeResolution.extraction = createRuntimeResolutionState({
+			configured: opts.configuredHint,
+			resolved: opts.resolvedProvider,
+			effective: opts.effectiveProvider,
+			fallbackProvider: opts.fallbackProvider,
+			runtime: opts.runtime,
+		});
+	} else {
+		providerRuntimeResolution.synthesis = createRuntimeResolutionState({
+			configured: opts.configuredHint,
+			resolved: opts.resolvedProvider,
+			effective: opts.effectiveProvider,
+			fallbackProvider: opts.fallbackProvider,
+			runtime: opts.runtime,
+		});
+	}
+	if (opts.runtime.status === "paused") {
+		logger.info("config", `Pipeline paused; ${opts.role} provider startup deferred`);
+		return;
+	}
+	if (opts.runtime.status === "disabled") {
+		logger.info("config", opts.disabledMessage);
+		return;
+	}
+	if (opts.resolvedProvider === "command") {
+		if (opts.commandMessage) {
+			logger.info("config", opts.commandMessage);
+		}
+		return;
+	}
+	if (opts.configuredHint && opts.effectiveProvider && opts.configuredHint !== opts.effectiveProvider) {
+		logger.warn("config", `${roleLabel} provider resolved differently than configured`, {
+			configured: opts.configuredHint,
+			resolved: opts.resolvedProvider,
+			effective: opts.effectiveProvider,
+			fallbackProvider: opts.fallbackProvider,
+			status: opts.runtime.status,
+			reason: opts.runtime.reason,
+		});
+	}
+	logger.info("config", `${roleLabel} provider`, {
+		configured: opts.configuredHint,
+		resolved: opts.resolvedProvider,
+		effective: opts.effectiveProvider,
+		fallbackProvider: opts.fallbackProvider,
+		status: opts.runtime.status,
+		degraded: opts.runtime.degraded,
+		reason: opts.runtime.reason,
+		endpoint: redactUrlForLogs(
+			opts.effectiveProvider ? resolveRuntimeEndpointForLogs(opts.effectiveProvider, opts.endpoints) : undefined,
+		),
+	});
+}
+
+async function resolveAndLogRuntimeStartup(
+	cfg: ExtractionRuntimeStartupConfig,
+	deps: SharedRuntimeStartupDeps,
+): Promise<RuntimeStartupResult>;
+async function resolveAndLogRuntimeStartup(
+	cfg: SynthesisRuntimeStartupConfig,
+	deps: SharedRuntimeStartupDeps,
+): Promise<RuntimeStartupResult>;
+async function resolveAndLogRuntimeStartup(
+	cfg: ExtractionRuntimeStartupConfig | SynthesisRuntimeStartupConfig,
+	deps: SharedRuntimeStartupDeps,
+): Promise<RuntimeStartupResult> {
+	const runtime = await resolveRuntimeProviderStartup({
+		role: cfg.role,
+		enabled: cfg.enabled,
+		paused: deps.paused,
+		configuredProvider: cfg.configuredProvider,
+		configuredModel: cfg.configuredModel,
+		timeoutMs: cfg.timeoutMs,
+		fallbackProvider: cfg.fallbackProvider,
+		endpoints: cfg.endpoints,
+		ollamaFallbackMaxContextTokens: deps.ollamaFallbackMaxContextTokens,
+		anthropicApiKey: deps.anthropicApiKey,
+		openRouterApiKey: deps.openRouterApiKey,
+		openRouterReferer: deps.openRouterReferer,
+		openRouterTitle: deps.openRouterTitle,
+		ensureOpenCodeServer: deps.ensureOpenCodeServer,
+		checkProviderAvailability: cfg.checkProviderAvailability,
+	});
+	if (cfg.role === "extraction") {
+		logRuntimeStartup({
+			role: "extraction",
+			configuredHint: cfg.configuredHint,
+			resolvedProvider: cfg.configuredProvider,
+			effectiveProvider: runtime.effectiveProvider,
+			fallbackProvider: cfg.fallbackProvider,
+			runtime,
+			endpoints: cfg.endpoints,
+			disabledMessage: cfg.disabledMessage,
+			commandMessage: cfg.commandMessage,
+		});
+		return runtime;
+	}
+	const effectiveProvider: RuntimeSynthesisProviderName | null =
+		runtime.status === "paused"
+			? null
+			: cfg.enabled
+				? runtime.effectiveProvider === "command"
+					? "none"
+					: runtime.effectiveProvider
+				: null;
+	logRuntimeStartup({
+		role: "synthesis",
+		configuredHint: cfg.configuredHint,
+		resolvedProvider: cfg.enabled ? cfg.configuredProvider : null,
+		effectiveProvider,
+		fallbackProvider: cfg.enabled ? cfg.fallbackProvider : null,
+		runtime,
+		endpoints: cfg.endpoints,
+		disabledMessage: cfg.disabledMessage,
+		commandMessage: cfg.commandMessage,
+	});
+	return runtime;
+}
 
 // Autonomous maintenance singletons
 const providerTracker = createProviderTracker();
@@ -11639,7 +11888,6 @@ async function stopPipelineRuntime(): Promise<void> {
 
 	closeLlmProvider();
 	closeSynthesisProvider();
-	closeWidgetProvider();
 	stopOpenCodeServer();
 	stopModelRegistry();
 	invalidateDiagnosticsCache();
@@ -11676,167 +11924,49 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
-	const validExtractionProviders = new Set([
-		"none",
-		"ollama",
-		"claude-code",
-		"opencode",
-		"codex",
-		"anthropic",
-		"openrouter",
-		"command",
-	]);
-	const validSynthesisProviders = new Set([
-		"none",
-		"ollama",
-		"claude-code",
-		"codex",
-		"opencode",
-		"anthropic",
-		"openrouter",
-	]);
-
-	providerRuntimeResolution.extraction = {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: memoryCfg.pipelineV2.extraction.provider,
-		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
-		status: "active",
-		degraded: false,
-		fallbackApplied: false,
-		reason: null,
-		since: null,
-	};
-	providerRuntimeResolution.synthesis = {
-		configured: providerHints.synthesis,
-		resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-		effective: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-	};
-	if (providerHints.extraction && !validExtractionProviders.has(providerHints.extraction)) {
-		logger.warn("config", "Unsupported extraction provider configured, using resolved fallback", {
-			configured: providerHints.extraction,
-			resolved: memoryCfg.pipelineV2.extraction.provider,
-		});
-	}
-	if (
-		providerHints.synthesis &&
-		memoryCfg.pipelineV2.synthesis.enabled &&
-		!validSynthesisProviders.has(providerHints.synthesis)
-	) {
-		logger.warn("config", "Unsupported synthesis provider configured, using resolved fallback", {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.provider,
-		});
-	}
-
 	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
-	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
-	let extractionStatus: "active" | "degraded" | "blocked" | "disabled" | "paused" = "active";
-	let extractionDegraded = false;
-	let extractionFallbackApplied = false;
-	let extractionReason: string | null = null;
-	let extractionSince: string | null = null;
-	const extractionOllamaBaseUrl = normalizeRuntimeBaseUrl(
+	const extractionEndpoints = resolveRuntimeEndpoints(
+		memoryCfg.pipelineV2.extraction.provider,
 		memoryCfg.pipelineV2.extraction.endpoint,
-		"http://127.0.0.1:11434",
 	);
-	const extractionOllamaFallbackBaseUrl =
-		memoryCfg.pipelineV2.extraction.provider === "opencode" ? "http://127.0.0.1:11434" : extractionOllamaBaseUrl;
-	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
-		memoryCfg.pipelineV2.extraction.endpoint,
-		"http://127.0.0.1:4096",
+	const synthesisEndpoints = resolveRuntimeEndpoints(
+		memoryCfg.pipelineV2.synthesis.provider,
+		memoryCfg.pipelineV2.synthesis.endpoint,
 	);
-	const extractionOpenRouterBaseUrl = normalizeRuntimeBaseUrl(
-		memoryCfg.pipelineV2.extraction.endpoint,
-		"https://openrouter.ai/api/v1",
-	);
-	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
-
-	const markExtractionUnavailable = (reason: string): void => {
-		extractionReason = reason;
-		extractionSince = new Date().toISOString();
-		extractionDegraded = true;
-		if (extractionFallbackProvider === "ollama" && effectiveExtractionProvider !== "ollama") {
-			effectiveExtractionProvider = "ollama";
-			extractionStatus = "degraded";
-			extractionFallbackApplied = true;
-			return;
-		}
-		effectiveExtractionProvider = "none";
-		extractionStatus = "blocked";
-		extractionFallbackApplied = false;
-	};
-
-	if (pipelinePaused) {
-		logger.info("config", "Pipeline paused; extraction provider startup deferred");
-		effectiveExtractionProvider = "none";
-		extractionStatus = "paused";
-	} else if (effectiveExtractionProvider === "none") {
-		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
-		extractionStatus = "disabled";
-	} else if (effectiveExtractionProvider === "command") {
-		logger.info(
-			"config",
+	const extractionStartupCfg: ExtractionRuntimeStartupConfig = {
+		role: "extraction",
+		configuredHint: providerHints.extraction,
+		configuredProvider: memoryCfg.pipelineV2.extraction.provider,
+		configuredModel: memoryCfg.pipelineV2.extraction.model,
+		enabled: true,
+		timeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+		fallbackProvider: extractionFallbackProvider,
+		endpoints: extractionEndpoints,
+		disabledMessage: "Extraction provider set to 'none', pipeline LLM disabled",
+		commandMessage:
 			"Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command",
-		);
-	} else if (effectiveExtractionProvider === "opencode") {
-		if (extractionOpenCodeShouldManage) {
-			const serverReady = await ensureOpenCodeServer(4096);
-			if (!serverReady) {
-				markExtractionUnavailable("OpenCode server not available for extraction startup preflight");
-			}
-		} else {
-			logger.info("config", "Using external OpenCode endpoint for extraction", {
-				baseUrl: redactUrlForLogs(extractionOpenCodeBaseUrl),
-			});
-		}
-	} else if (effectiveExtractionProvider === "claude-code") {
-		// Resolve full path so .cmd wrappers on Windows are found correctly.
-		const resolvedClaude = Bun.which("claude");
-		if (resolvedClaude === null) {
-			markExtractionUnavailable("Claude Code CLI not found during extraction startup preflight");
-		} else {
-			try {
-				const exitCode = await new Promise<number>((resolve) => {
-					const proc = spawn(resolvedClaude, ["--version"], {
-						stdio: "pipe",
-						windowsHide: true,
-						env: { ...process.env, SIGNET_NO_HOOKS: "1" },
-					});
-					proc.on("close", (code) => resolve(code ?? 1));
-					proc.on("error", () => resolve(1));
-				});
-				if (exitCode !== 0) throw new Error("non-zero exit");
-			} catch {
-				markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
-			}
-		}
-	} else if (effectiveExtractionProvider === "codex") {
-		const resolvedCodex = Bun.which("codex");
-		if (resolvedCodex === null) {
-			markExtractionUnavailable("Codex CLI not found during extraction startup preflight");
-		} else {
-			try {
-				const exitCode = await new Promise<number>((resolve) => {
-					const proc = spawn(resolvedCodex, ["--version"], {
-						stdio: "pipe",
-						windowsHide: true,
-						env: {
-							...process.env,
-							SIGNET_NO_HOOKS: "1",
-							SIGNET_CODEX_BYPASS_WRAPPER: "1",
-						},
-					});
-					proc.on("close", (code) => resolve(code ?? 1));
-					proc.on("error", () => resolve(1));
-				});
-				if (exitCode !== 0) throw new Error("non-zero exit");
-			} catch {
-				markExtractionUnavailable("Codex CLI failed extraction startup preflight");
-			}
-		}
-	}
+	};
+	const synthesisStartupCfg: SynthesisRuntimeStartupConfig = {
+		role: "synthesis",
+		configuredHint: providerHints.synthesis,
+		configuredProvider: memoryCfg.pipelineV2.synthesis.provider,
+		configuredModel: memoryCfg.pipelineV2.synthesis.model,
+		enabled: memoryCfg.pipelineV2.synthesis.enabled,
+		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+		fallbackProvider: "ollama",
+		endpoints: synthesisEndpoints,
+		disabledMessage: "Synthesis disabled",
+		checkProviderAvailability: async () => true,
+	};
+	const runtimeStartupConfigs = [extractionStartupCfg, synthesisStartupCfg] as const;
+
+	providerRuntimeResolution.extraction = createInitialRuntimeResolutionState(extractionStartupCfg);
+	providerRuntimeResolution.synthesis = createInitialRuntimeResolutionState(synthesisStartupCfg);
+	warnUnsupportedRuntimeHint(extractionStartupCfg);
+	warnUnsupportedRuntimeHint(synthesisStartupCfg);
+
+	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
+
 	const keyCache = new Map<"ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY", string | undefined>();
 	const getKey = async (name: "ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY"): Promise<string | undefined> => {
 		if (keyCache.has(name)) return keyCache.get(name);
@@ -11851,180 +11981,51 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		keyCache.set(name, key);
 		return key;
 	};
-
-	// Resolve Anthropic API key once — shared by extraction and synthesis
-	let anthropicApiKey: string | undefined;
-	const needsAnthropicForSynthesis =
-		memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider === "anthropic";
-	if (effectiveExtractionProvider === "anthropic" || needsAnthropicForSynthesis) {
-		anthropicApiKey = await getKey("ANTHROPIC_API_KEY");
-		if (!anthropicApiKey) {
-			logger.error(
-				"config",
-				"ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
-			);
-			if (effectiveExtractionProvider === "anthropic") {
-				markExtractionUnavailable("ANTHROPIC_API_KEY not found for extraction startup preflight");
-			}
+	const needsRuntimeProvider = (provider: "anthropic" | "openrouter"): boolean =>
+		!pipelinePaused && runtimeUsesProvider(runtimeStartupConfigs, provider);
+	const loadStartupKey = async (
+		provider: "anthropic" | "openrouter",
+		name: "ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY",
+		message: string,
+	): Promise<string | undefined> => {
+		if (!needsRuntimeProvider(provider)) return undefined;
+		const key = await getKey(name);
+		if (!key) {
+			logger.error("config", message);
 		}
-	}
-
-	// Resolve OpenRouter API key once — shared by extraction and synthesis
-	let openRouterApiKey: string | undefined;
-	const needsOpenRouterForSynthesis =
-		memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider === "openrouter";
-	if (effectiveExtractionProvider === "openrouter" || needsOpenRouterForSynthesis) {
-		openRouterApiKey = await getKey("OPENROUTER_API_KEY");
-		if (!openRouterApiKey) {
-			logger.error(
-				"config",
-				"OPENROUTER_API_KEY not found — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
-			);
-			if (effectiveExtractionProvider === "openrouter") {
-				markExtractionUnavailable("OPENROUTER_API_KEY not found for extraction startup preflight");
-			}
-		}
-	}
-
-	const createExtractionProvider = (provider: RuntimeProviderName) => {
-		const model = resolveRuntimeModel(
-			provider,
-			memoryCfg.pipelineV2.extraction.provider,
-			memoryCfg.pipelineV2.extraction.model,
-		);
-		const usingExtractionOllamaFallback =
-			provider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama";
-		if (provider === "none") return null;
-		if (provider === "anthropic") {
-			if (!anthropicApiKey) return null;
-			return createAnthropicProvider({
-				model: model || "haiku",
-				apiKey: anthropicApiKey,
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "openrouter") {
-			if (!openRouterApiKey) return null;
-			return createOpenRouterProvider({
-				model: model || "openai/gpt-4o-mini",
-				apiKey: openRouterApiKey,
-				baseUrl: extractionOpenRouterBaseUrl,
-				referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
-				title: readEnvTrimmed("OPENROUTER_TITLE"),
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "opencode") {
-			return createOpenCodeProvider({
-				model: model || "anthropic/claude-haiku-4-5-20251001",
-				baseUrl: extractionOpenCodeBaseUrl,
-				ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
-				ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "claude-code") {
-			return createClaudeCodeProvider({
-				model: model || "haiku",
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "codex") {
-			return createCodexProvider({
-				model: model || "gpt-5-codex-mini",
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		return createOllamaProvider({
-			...(model ? { model } : {}),
-			baseUrl: extractionOllamaFallbackBaseUrl,
-			defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			...(usingExtractionOllamaFallback
-				? {
-						maxContextTokens: ollamaFallbackMaxContextTokens,
-					}
-				: {}),
-		});
+		return key;
 	};
-
-	let llmProvider = createExtractionProvider(effectiveExtractionProvider);
-	if (llmProvider) {
-		const preflightOk = await llmProvider.available();
-		if (!preflightOk) {
-			const failedProvider = effectiveExtractionProvider;
-			const failedReason = extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
-			if (failedProvider !== "ollama" && extractionFallbackProvider === "ollama") {
-				extractionReason = failedReason;
-				extractionSince = extractionSince ?? new Date().toISOString();
-				extractionDegraded = true;
-				extractionFallbackApplied = true;
-				extractionStatus = "degraded";
-				effectiveExtractionProvider = "ollama";
-				llmProvider = createExtractionProvider("ollama");
-				if (!llmProvider || !(await llmProvider.available())) {
-					effectiveExtractionProvider = "none";
-					extractionStatus = "blocked";
-					extractionFallbackApplied = false;
-					extractionReason = `${failedReason}; ollama fallback startup preflight failed`;
-					llmProvider = null;
-				}
-			} else {
-				effectiveExtractionProvider = "none";
-				extractionStatus = "blocked";
-				extractionDegraded = true;
-				extractionFallbackApplied = false;
-				extractionReason =
-					extractionFallbackProvider === "none" ? `${failedReason}; fallbackProvider is none` : failedReason;
-				extractionSince = extractionSince ?? new Date().toISOString();
-				llmProvider = null;
-			}
-		}
-	}
-
-	const effectiveExtractionModel = resolveRuntimeModel(
-		effectiveExtractionProvider,
-		memoryCfg.pipelineV2.extraction.provider,
-		memoryCfg.pipelineV2.extraction.model,
+	const openRouterReferer = readEnvTrimmed("OPENROUTER_HTTP_REFERER");
+	const openRouterTitle = readEnvTrimmed("OPENROUTER_TITLE");
+	const anthropicApiKey = await loadStartupKey(
+		"anthropic",
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
 	);
-	providerRuntimeResolution.extraction = {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: effectiveExtractionProvider,
-		fallbackProvider: extractionFallbackProvider,
-		status: extractionStatus,
-		degraded: extractionDegraded,
-		fallbackApplied: extractionFallbackApplied,
-		reason: extractionReason,
-		since: extractionSince,
+	const openRouterApiKey = await loadStartupKey(
+		"openrouter",
+		"OPENROUTER_API_KEY",
+		"OPENROUTER_API_KEY not found — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
+	);
+
+	logRuntimeOpenCodeEndpoints(pipelinePaused, runtimeStartupConfigs);
+
+	const runtimeStartupDeps: SharedRuntimeStartupDeps = {
+		paused: pipelinePaused,
+		ollamaFallbackMaxContextTokens,
+		anthropicApiKey,
+		openRouterApiKey,
+		openRouterReferer,
+		openRouterTitle,
+		ensureOpenCodeServer,
 	};
-	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
-		logger.warn("config", "Extraction provider resolved differently than configured", {
-			configured: providerHints.extraction,
-			resolved: memoryCfg.pipelineV2.extraction.provider,
-			effective: effectiveExtractionProvider,
-			fallbackProvider: extractionFallbackProvider,
-			status: extractionStatus,
-			reason: extractionReason,
-		});
-	}
-	logger.info("config", "Extraction provider", {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: effectiveExtractionProvider,
-		fallbackProvider: extractionFallbackProvider,
-		status: extractionStatus,
-		degraded: extractionDegraded,
-		reason: extractionReason,
-		endpoint: redactUrlForLogs(
-			effectiveExtractionProvider === "ollama"
-				? extractionOllamaFallbackBaseUrl
-				: effectiveExtractionProvider === "opencode"
-					? extractionOpenCodeBaseUrl
-					: effectiveExtractionProvider === "openrouter"
-						? extractionOpenRouterBaseUrl
-						: undefined,
-		),
-	});
+
+	const extractionRuntime = await resolveAndLogRuntimeStartup(extractionStartupCfg, runtimeStartupDeps);
+	const effectiveExtractionProvider = resolveEffectiveRuntimeProvider(extractionStartupCfg, extractionRuntime);
+	const extractionStatus = extractionRuntime.status;
+	const extractionReason = extractionRuntime.reason;
+	const effectiveExtractionModel = extractionRuntime.effectiveModel;
+	const llmProvider = extractionRuntime.provider;
 	const extractionModelName = effectiveExtractionModel ?? memoryCfg.pipelineV2.extraction.model;
 	if (
 		effectiveExtractionProvider === "anthropic" ||
@@ -12086,203 +12087,20 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		const registryOpenRouterApiKey = openRouterApiKey ?? (await getKey("OPENROUTER_API_KEY"));
 		initModelRegistry(
 			memoryCfg.pipelineV2.modelRegistry,
-			effectiveExtractionProvider === "ollama" ? extractionOllamaBaseUrl : undefined,
+			effectiveExtractionProvider === "ollama" ? extractionEndpoints.ollamaBaseUrl : undefined,
 			registryAnthropicApiKey,
 			registryOpenRouterApiKey,
-			effectiveExtractionProvider === "openrouter" ? extractionOpenRouterBaseUrl : undefined,
+			effectiveExtractionProvider === "openrouter" ? extractionEndpoints.openRouterBaseUrl : undefined,
 		);
 	}
 
-	// Create synthesis provider — separate from extraction because synthesis
-	// needs a smarter model that can reason across long context
-	if (pipelinePaused) {
-		providerRuntimeResolution.synthesis = {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-			effective: null,
-		};
-		logger.info("config", "Pipeline paused; synthesis provider startup deferred");
-	} else if (memoryCfg.pipelineV2.synthesis.provider === "none") {
-		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
-	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
-		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
-		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"http://127.0.0.1:11434",
-		);
-		const synthesisOllamaFallbackBaseUrl =
-			memoryCfg.pipelineV2.synthesis.provider === "opencode" ? "http://127.0.0.1:11434" : synthesisOllamaBaseUrl;
-		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"http://127.0.0.1:4096",
-		);
-		const synthesisOpenRouterBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"https://openrouter.ai/api/v1",
-		);
-		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(synthesisOpenCodeBaseUrl);
-		if (effectiveSynthesisProvider === "opencode") {
-			if (synthesisOpenCodeShouldManage) {
-				const serverReady = await ensureOpenCodeServer(4096);
-				if (!serverReady) {
-					logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
-					effectiveSynthesisProvider = "ollama";
-				}
-			} else {
-				logger.info("config", "Using external OpenCode endpoint for synthesis", {
-					baseUrl: redactUrlForLogs(synthesisOpenCodeBaseUrl),
-				});
-			}
-		} else if (effectiveSynthesisProvider === "anthropic") {
-			if (!anthropicApiKey) {
-				logger.warn("config", "ANTHROPIC_API_KEY not found for synthesis, falling back to ollama");
-				effectiveSynthesisProvider = "ollama";
-			}
-		} else if (effectiveSynthesisProvider === "openrouter") {
-			if (!openRouterApiKey) {
-				logger.warn("config", "OPENROUTER_API_KEY not found for synthesis, falling back to ollama");
-				effectiveSynthesisProvider = "ollama";
-			}
-		} else if (effectiveSynthesisProvider === "claude-code") {
-			// Re-resolve here; extraction and synthesis may use different providers.
-			const resolvedClaude = Bun.which("claude");
-			if (resolvedClaude === null) {
-				logger.warn("config", "Claude Code CLI not found, falling back to ollama for synthesis");
-				effectiveSynthesisProvider = "ollama";
-			} else {
-				try {
-					const exitCode = await new Promise<number>((resolve) => {
-						const proc = spawn(resolvedClaude, ["--version"], {
-							stdio: "pipe",
-							windowsHide: true,
-							env: { ...process.env, SIGNET_NO_HOOKS: "1" },
-						});
-						proc.on("close", (code) => resolve(code ?? 1));
-						proc.on("error", () => resolve(1));
-					});
-					if (exitCode !== 0) throw new Error("non-zero exit");
-				} catch {
-					logger.warn("config", "Claude Code CLI not found, falling back to ollama for synthesis");
-					effectiveSynthesisProvider = "ollama";
-				}
-			}
-		} else if (effectiveSynthesisProvider === "codex") {
-			const resolvedCodex = Bun.which("codex");
-			if (resolvedCodex === null) {
-				logger.warn("config", "Codex CLI not found, falling back to ollama for synthesis");
-				effectiveSynthesisProvider = "ollama";
-			} else {
-				try {
-					const exitCode = await new Promise<number>((resolve) => {
-						const proc = spawn(resolvedCodex, ["--version"], {
-							stdio: "pipe",
-							windowsHide: true,
-							env: {
-								...process.env,
-								SIGNET_NO_HOOKS: "1",
-								SIGNET_CODEX_BYPASS_WRAPPER: "1",
-							},
-						});
-						proc.on("close", (code) => resolve(code ?? 1));
-						proc.on("error", () => resolve(1));
-					});
-					if (exitCode !== 0) throw new Error("non-zero exit");
-				} catch {
-					logger.warn("config", "Codex CLI not found, falling back to ollama for synthesis");
-					effectiveSynthesisProvider = "ollama";
-				}
-			}
+	const synthesisRuntime = await resolveAndLogRuntimeStartup(synthesisStartupCfg, runtimeStartupDeps);
+	const effectiveSynthesisProvider = resolveEffectiveRuntimeProvider(synthesisStartupCfg, synthesisRuntime);
+	if (!pipelinePaused && memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider !== "none") {
+		if (!synthesisRuntime.provider) {
+			throw new Error(`Failed to initialise synthesis provider: ${String(effectiveSynthesisProvider)}`);
 		}
-		providerRuntimeResolution.synthesis = {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.provider,
-			effective: effectiveSynthesisProvider,
-		};
-		if (providerHints.synthesis && providerHints.synthesis !== effectiveSynthesisProvider) {
-			logger.warn("config", "Synthesis provider resolved differently than configured", {
-				configured: providerHints.synthesis,
-				resolved: memoryCfg.pipelineV2.synthesis.provider,
-				effective: effectiveSynthesisProvider,
-			});
-		}
-		logger.info("config", "Synthesis provider", {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.provider,
-			effective: effectiveSynthesisProvider,
-			endpoint: redactUrlForLogs(
-				effectiveSynthesisProvider === "ollama"
-					? synthesisOllamaFallbackBaseUrl
-					: effectiveSynthesisProvider === "opencode"
-						? synthesisOpenCodeBaseUrl
-						: effectiveSynthesisProvider === "openrouter"
-							? synthesisOpenRouterBaseUrl
-							: undefined,
-			),
-		});
-
-		// When falling back to ollama, reset model so ollama uses its own default
-		const effectiveSynthesisModel = resolveRuntimeModel(
-			effectiveSynthesisProvider,
-			memoryCfg.pipelineV2.synthesis.provider,
-			memoryCfg.pipelineV2.synthesis.model,
-		);
-		const usingSynthesisOllamaFallback =
-			effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama";
-
-		const synthesisProvider =
-			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
-				? createAnthropicProvider({
-						model: effectiveSynthesisModel || "haiku",
-						apiKey: anthropicApiKey,
-						defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-					})
-				: effectiveSynthesisProvider === "openrouter" && openRouterApiKey
-					? createOpenRouterProvider({
-							model: effectiveSynthesisModel || "openai/gpt-4o-mini",
-							apiKey: openRouterApiKey,
-							baseUrl: synthesisOpenRouterBaseUrl,
-							referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
-							title: readEnvTrimmed("OPENROUTER_TITLE"),
-							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-						})
-					: effectiveSynthesisProvider === "opencode"
-						? createOpenCodeProvider({
-								model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
-								baseUrl: synthesisOpenCodeBaseUrl,
-								ollamaFallbackBaseUrl: synthesisOllamaFallbackBaseUrl,
-								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
-								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-							})
-						: effectiveSynthesisProvider === "codex"
-							? createCodexProvider({
-									model: effectiveSynthesisModel || "gpt-5-codex-mini",
-									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-								})
-							: effectiveSynthesisProvider === "claude-code"
-								? createClaudeCodeProvider({
-										model: effectiveSynthesisModel || "haiku",
-										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-									})
-								: createOllamaProvider({
-										...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
-										baseUrl: synthesisOllamaFallbackBaseUrl,
-										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-										...(usingSynthesisOllamaFallback
-											? {
-													maxContextTokens: ollamaFallbackMaxContextTokens,
-												}
-											: {}),
-									});
-		initSynthesisProvider(synthesisProvider);
-		// Widget provider defaults to synthesis provider (needs smart model for HTML gen)
-		initWidgetProvider(synthesisProvider);
-	} else {
-		providerRuntimeResolution.synthesis = {
-			configured: providerHints.synthesis,
-			resolved: null,
-			effective: null,
-		};
-		logger.info("config", "Synthesis disabled");
+		initSynthesisProvider(synthesisRuntime.provider);
 	}
 
 	// Start extraction pipeline only when explicitly enabled and an LLM is available.
