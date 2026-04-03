@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
@@ -24,6 +24,7 @@ const MEMORY_MD_MAX_TOKENS: usize = MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM
 const LOW_SIGNAL_SENTENCES: &[&str] = &["Investigated issue.", "Worked on task.", "Reviewed code."];
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 const NOISE_PURGE_REASON: &str = "automatic projection cleanup for temp/test sessions";
+static PROJECTION_PURGE_SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
@@ -978,6 +979,18 @@ pub fn reindex_memory_artifacts(
     Ok(())
 }
 
+fn projection_purge_key(root: &Path, agent_id: &str) -> String {
+    format!("{}\u{0}{agent_id}", root.display())
+}
+
+fn should_purge_projection_noise(root: &Path, agent_id: &str) -> Result<bool, String> {
+    let seen = PROJECTION_PURGE_SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = seen
+        .lock()
+        .map_err(|_| "projection purge state lock poisoned".to_string())?;
+    Ok(guard.insert(projection_purge_key(root, agent_id)))
+}
+
 pub fn purge_canonical_noise_sessions(
     conn: &Connection,
     root: &Path,
@@ -1007,7 +1020,11 @@ pub fn purge_canonical_noise_sessions(
         .collect::<Vec<_>>();
 
     let mut removed = 0usize;
+    let mut seen = HashSet::new();
     for (session_token, session_id, session_key, project, harness) in rows {
+        if !seen.insert(session_token.clone()) {
+            continue;
+        }
         if !is_noise_session(
             project.as_deref(),
             Some(session_id.as_str()),
@@ -1767,7 +1784,9 @@ pub fn write_memory_projection(
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
-    purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
+    if should_purge_projection_noise(root, agent_id)? {
+        purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
+    }
     let rendered = render_memory_projection(conn, root, agent_id)?;
     let content = truncate_memory_projection(&rendered.content)?;
     write_atomic(&root.join("MEMORY.md"), &format!("{}\n", content))?;
@@ -2330,6 +2349,86 @@ mod tests {
         assert!(rendered.content.contains("older ledger rows clipped:"));
         assert!(!rendered.content.contains("/tmp/signetai"));
         assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn purge_noise_sessions_deduplicates_session_tokens() {
+        let conn = setup_conn();
+        let root = temp_root("purge-noise-dedup");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'summary', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/one.md",
+                "sha-one",
+                "tmp-dup",
+                Option::<String>::None,
+                "tok-dup",
+                "/tmp/signetai",
+                "codex",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "noise sentence",
+                "noise content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'transcript', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/two.md",
+                "sha-two",
+                "tmp-dup",
+                "tmp-dup",
+                "tok-dup",
+                Option::<String>::None,
+                "codex",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "noise sentence",
+                "noise content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+
+        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        assert_eq!(removed, 1);
+
+        let tombstones: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifact_tombstones WHERE agent_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let artifacts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifacts WHERE agent_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 1);
+        assert_eq!(artifacts, 0);
         fs::remove_dir_all(root).ok();
     }
 

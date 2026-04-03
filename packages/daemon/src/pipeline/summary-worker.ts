@@ -74,6 +74,11 @@ interface SummaryJobRow {
 	readonly created_at: string;
 }
 
+type SummaryFactJob = Pick<SummaryJobRow, "harness" | "project" | "session_key" | "agent_id"> & {
+	readonly session_id?: string | null;
+	readonly id?: string | null;
+};
+
 interface LlmSummaryResult {
 	readonly summary: string;
 	readonly facts: ReadonlyArray<{
@@ -1146,14 +1151,14 @@ async function scoreContinuity(
 
 export function insertSummaryFacts(
 	accessor: DbAccessor,
-	job: Pick<SummaryJobRow, "harness" | "project" | "session_key" | "session_id" | "id" | "agent_id">,
+	job: SummaryFactJob,
 	facts: ReadonlyArray<LlmSummaryResult["facts"][number]>,
 ): number {
 	if (
 		isNoiseSession({
 			project: job.project,
 			sessionKey: job.session_key,
-			sessionId: job.session_id ?? job.id,
+			sessionId: job.session_id ?? job.id ?? null,
 			harness: job.harness,
 		})
 	) {

@@ -29,7 +29,7 @@ import {
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
 import { getPredictorClient, recordPredictorLatency } from "./daemon";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
@@ -38,7 +38,7 @@ import { writeMemoryHead } from "./memory-head";
 import {
 	appendSynthesisIndexBlock as appendRenderedIndexBlock,
 	NOISE_PURGE_REASON,
-	purgeCanonicalNoiseSessions,
+	purgeCanonicalNoiseSessionsOnce,
 	renderMemoryProjection,
 	writeTranscriptArtifact,
 } from "./memory-lineage";
@@ -3399,7 +3399,9 @@ export function handleSynthesisRequest(
 	void _maxTokens;
 
 	const agentId = opts?.agentId ?? "default";
-	purgeCanonicalNoiseSessions(agentId, NOISE_PURGE_REASON);
+	if (hasDbAccessor()) {
+		purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
+	}
 	const rendered = renderMemoryProjection(agentId);
 	return {
 		harness: "daemon",

@@ -29,7 +29,14 @@ export const MEMORY_PROJECTION_MAX_TOKENS = Math.max(512, MEMORY_HEAD_MAX_TOKENS
 export const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test sessions";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-const projTok = new Tiktoken(cl100k_base);
+let projTok: Tiktoken | null = null;
+const purgeSeen = new Set<string>();
+
+function getProjectionTokenizer(): Tiktoken {
+	if (projTok) return projTok;
+	projTok = new Tiktoken(cl100k_base);
+	return projTok;
+}
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
 type SentenceQuality = "ok" | "fallback";
@@ -276,7 +283,7 @@ function pickAnchor(body: string, project: string | null, harness: string | null
 }
 
 function tokenCount(text: string): number {
-	return projTok.encode(text).length;
+	return getProjectionTokenizer().encode(text).length;
 }
 
 function joinParts(parts: ReadonlyArray<string>): string {
@@ -1388,12 +1395,12 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 				   AND source_kind IN ('summary', 'transcript', 'compaction')`,
 				)
 				.all(agentId) as Array<{
-				session_token: string;
-				session_id: string;
-				session_key: string | null;
-				project: string | null;
-				harness: string | null;
-			}>,
+					session_token: string;
+					session_id: string;
+					session_key: string | null;
+					project: string | null;
+					harness: string | null;
+				}>,
 	);
 	const seen = new Set<string>();
 	let count = 0;
@@ -1415,3 +1422,20 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 	}
 	return count;
 }
+
+function purgeScope(agentId: string): string {
+	return `${getAgentsDir()}\u0000${agentId}`;
+}
+
+export function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string): number {
+	const key = purgeScope(agentId);
+	if (purgeSeen.has(key)) return 0;
+	const count = purgeCanonicalNoiseSessions(agentId, reason);
+	purgeSeen.add(key);
+	return count;
+}
+
+export function resetProjectionPurgeState(): void {
+	purgeSeen.clear();
+}
+

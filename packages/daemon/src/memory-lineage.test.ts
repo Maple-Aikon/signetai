@@ -8,7 +8,9 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
 	purgeCanonicalNoiseSessions,
+	purgeCanonicalNoiseSessionsOnce,
 	renderMemoryProjection,
+	resetProjectionPurgeState,
 	writeSummaryArtifact,
 } from "./memory-lineage";
 
@@ -19,6 +21,7 @@ let prev: string | undefined;
 
 function resetWorkspace(): void {
 	closeDbAccessor();
+	resetProjectionPurgeState();
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
 	initDbAccessor(join(dir, "memory", "memories.db"));
@@ -94,6 +97,17 @@ describe("memory-lineage", () => {
 		expect(rendered).toContain("older ledger rows clipped:");
 		expect(rendered).not.toContain("/tmp/signetai");
 		expect(tok.encode(rendered).length).toBeLessThanOrEqual(MEMORY_PROJECTION_MAX_TOKENS);
+	});
+
+	it("runs projection purge at most once per workspace state", async () => {
+		await addSummary({
+			sessionId: "drop-once",
+			project: "/tmp/signetai",
+			minutesAgo: 1,
+		});
+
+		expect(purgeCanonicalNoiseSessionsOnce("default", "test cleanup")).toBe(1);
+		expect(purgeCanonicalNoiseSessionsOnce("default", "test cleanup")).toBe(0);
 	});
 
 	it("tombstones existing temp-session artifacts without touching real sessions", async () => {

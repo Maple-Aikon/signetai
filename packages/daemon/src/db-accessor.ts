@@ -661,6 +661,10 @@ export function getDbAccessor(): DbAccessor {
 	return accessor;
 }
 
+export function hasDbAccessor(): boolean {
+	return accessor !== null;
+}
+
 /** Tear down the singleton. Safe to call even if never initialised. */
 export function closeDbAccessor(): void {
 	if (accessor) {
