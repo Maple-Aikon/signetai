@@ -6,15 +6,20 @@ import { join } from "node:path";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
+import { IMMUTABLE_ARTIFACT_ERROR_PREFIX } from "../memory-lineage";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
+	type SummaryWorkerHandle,
 	clearCommandStageRunning,
 	getCommandStageStatus,
 	hasCommandStageCompleted,
 	insertSummaryFacts,
+	isTerminalSummaryJobError,
 	markCommandStageCompleted,
 	markCommandStageRunning,
 	recoverSummaryJobs,
+	resolveFailedSummaryJobStatus,
+	resolveSummaryHeadingDate,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
 	shouldRunSignificanceGateForJob,
@@ -250,6 +255,51 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+});
+
+describe("summary job helpers", () => {
+	it("derives the summary heading date from persisted session timing instead of wall clock", () => {
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: "2026-04-03T17:07:08.000Z",
+				captured_at: "2026-04-03T17:06:55.000Z",
+				created_at: "2026-04-03T17:06:55.000Z",
+			}),
+		).toBe("2026-04-03");
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: null,
+				captured_at: "2026-04-02T23:59:59.000Z",
+				created_at: "2026-04-03T00:00:01.000Z",
+			}),
+		).toBe("2026-04-02");
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: null,
+				captured_at: null,
+				created_at: "2026-04-01T12:00:00.000Z",
+			}),
+		).toBe("2026-04-01");
+	});
+
+	it("classifies immutable artifact conflicts as terminal failures", () => {
+		expect(
+			isTerminalSummaryJobError(
+				`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md`,
+			),
+		).toBe(true);
+		expect(isTerminalSummaryJobError("summary command timed out after 5000ms")).toBe(false);
+	});
+
+	it("marks terminal errors dead immediately even with remaining attempts", () => {
+		// terminal=true -> dead regardless of attempt count (one attempt is
+		// still consumed by the worker tick before the error is classified)
+		expect(resolveFailedSummaryJobStatus(true, 1, 3)).toBe("dead");
+		// terminal=false, attempts < maxAttempts -> pending (retryable)
+		expect(resolveFailedSummaryJobStatus(false, 1, 3)).toBe("pending");
+		// terminal=false, attempts >= maxAttempts -> dead (exhausted)
+		expect(resolveFailedSummaryJobStatus(false, 3, 3)).toBe("dead");
 	});
 });
 

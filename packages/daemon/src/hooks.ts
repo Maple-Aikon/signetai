@@ -11,6 +11,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -2478,10 +2479,45 @@ export async function handleUserPromptSubmit(
 // Session End
 // ============================================================================
 
+// Session keys can be shared across distinct harness runs (for example
+// recurring heartbeat sessions), so artifact lineage needs a more specific
+// fallback identifier when the harness does not supply sessionId.
+export function deriveSessionEndFallbackId(
+	sessionKey: string | undefined,
+	transcriptPath: string | undefined,
+	transcript: string,
+): string {
+	const scopedKey = sessionKey?.trim() || "anonymous";
+	const path = transcriptPath?.trim();
+	const body = transcript.trim();
+	if (path) {
+		// Include a content digest so rotating log files that reuse the same
+		// path across distinct sessions produce different IDs.
+		// Note: sessions with identical path AND identical content will
+		// intentionally deduplicate — writeImmutableArtifact returns the
+		// existing artifact path when the content hash matches, so this is
+		// a graceful no-op rather than an error.
+		if (body.length > 0) {
+			const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+			return `session-end:path:${path}:${digest}`;
+		}
+		// Intentionally non-idempotent: without transcript content there is no
+		// stable material to hash, so each call produces a unique ID.  This
+		// prevents two empty-body session-end calls from colliding but means
+		// retries will create distinct artifacts rather than deduplicating.
+		return `session-end:path:${path}:${randomUUID()}`;
+	}
+	if (body.length > 0) {
+		const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+		return `session-end:${scopedKey}:${digest}`;
+	}
+	// See comment above: non-idempotent for the same reason.
+	return `session-end:${scopedKey}:${randomUUID()}`;
+}
+
 export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
-	const sessionId = req.sessionId ?? sessionKey ?? `session-end:${new Date().toISOString()}`;
 	const endedAt = new Date().toISOString();
 
 	// Clear hook dedup state for this session
@@ -2561,6 +2597,16 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	} else if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	}
+	// Derive a stable session identity for artifact paths.  When the
+	// transcript is empty and no explicit sessionId was provided,
+	// deriveSessionEndFallbackId returns a random UUID — making this call
+	// non-idempotent.  This is acceptable because: (a) empty-transcript
+	// sessions skip the transcript artifact write (guard below) and the
+	// summary job (< 500 char guard), so no ghost artifacts accumulate;
+	// (b) very short (1–499 char) transcripts do write a transcript
+	// artifact with a non-deterministic path, but the summary job is
+	// still skipped, limiting blast radius.
+	const sessionId = req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript);
 
 	// Lossless retention: write transcript immediately regardless of length
 	// or whether the summary worker succeeds later.
@@ -2887,6 +2933,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		harness: req.harness,
 		transcript: capped,
 		sessionKey: req.sessionKey,
+		// Intentionally sessionKey: checkpoint extracts reuse the same
+		// session identity so all checkpoint artifacts share a single
+		// canonical manifest.  findExistingManifest looks up by session_id,
+		// which matches because session_id is persisted as sessionKey.
 		sessionId: req.sessionKey,
 		project: req.project,
 		agentId,

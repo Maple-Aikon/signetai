@@ -17,6 +17,7 @@ function getMemoryDir(): string {
 const HASH_SCOPE = "body-normalized-v1";
 const SANITIZER_VERSION = "sanitize_transcript_v1";
 const SENTENCE_VERSION = "memory_sentence_v1";
+export const IMMUTABLE_ARTIFACT_ERROR_PREFIX = "Refusing to mutate immutable artifact";
 const LEDGER_HEADING = "Session Ledger (Last 30 Days)";
 const LOW_SIGNAL_SENTENCES = new Set(["Investigated issue.", "Worked on task.", "Reviewed code."]);
 
@@ -210,9 +211,14 @@ function base32Sha256(input: string): string {
 	return out;
 }
 
-export function deriveSessionToken(agentId: string, sessionKey: string | null, sessionId: string): string {
-	const identity = sessionKey && sessionKey.trim().length > 0 ? sessionKey.trim() : sessionId.trim();
-	const seed = `${agentId}:${identity}`;
+// Derive a deterministic, agent-scoped token used in artifact file names.
+// Uses sessionId as the identity source so each session-end run (which has
+// a unique derived sessionId) produces a distinct token and artifact path,
+// even when multiple runs share the same sessionKey. For checkpoint-extract
+// where sessionId === sessionKey, the result is unchanged from the old
+// behavior.
+export function deriveSessionToken(agentId: string, sessionId: string): string {
+	const seed = `${agentId}:${sessionId.trim()}`;
 	return base32Sha256(seed).slice(0, 16);
 }
 
@@ -408,7 +414,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 		const existingHash = existing.frontmatter.content_sha256;
 		const nextHash = frontmatter.content_sha256;
 		if (existingHash === nextHash) return path;
-		throw new Error(`Refusing to mutate immutable artifact ${path}`);
+		throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path}`);
 	}
 
 	writeAtomic(path, content);
@@ -421,8 +427,7 @@ function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, b
 	const sourceKind = typeof frontmatter.kind === "string" ? frontmatter.kind : "manifest";
 	const sessionId = typeof frontmatter.session_id === "string" ? frontmatter.session_id : sourcePath;
 	const sessionKey = typeof frontmatter.session_key === "string" ? frontmatter.session_key : null;
-	const sessionToken =
-		sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionKey, sessionId);
+	const sessionToken = sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionId);
 	const project = typeof frontmatter.project === "string" ? frontmatter.project : null;
 	const harness = typeof frontmatter.harness === "string" ? frontmatter.harness : null;
 	const capturedAt = typeof frontmatter.captured_at === "string" ? frontmatter.captured_at : new Date().toISOString();
@@ -625,30 +630,26 @@ function saveManifest(path: string, frontmatter: Record<string, unknown>, body: 
 	return manifest;
 }
 
-function findExistingManifest(agentId: string, sessionKey: string | null, sessionId: string): ManifestState | null {
+function findExistingManifest(agentId: string, sessionId: string): ManifestState | null {
 	try {
-		const row = getDbAccessor().withReadDb((db) => {
-			if (sessionKey) {
-				return db
+		// Pre-fix rows stored session_id verbatim from the caller (equal to
+		// session_key). New rows use a derived session_id (e.g. "session-end:
+		// path:…"). Both cases are covered by this single session_id lookup —
+		// a separate session_key fallback is unnecessary because pre-fix rows
+		// match on session_id directly (it was persisted as the session_key
+		// value) and new rows have a unique derived session_id.
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
 					.prepare(
 						`SELECT source_path
-						 FROM memory_artifacts
-						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_key = ?
-						 ORDER BY captured_at ASC
-						 LIMIT 1`,
-					)
-					.get(agentId, sessionKey) as { source_path: string } | undefined;
-			}
-			return db
-				.prepare(
-					`SELECT source_path
 					 FROM memory_artifacts
 					 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?
 					 ORDER BY captured_at ASC
 					 LIMIT 1`,
-				)
-				.get(agentId, sessionId) as { source_path: string } | undefined;
-		});
+					)
+					.get(agentId, sessionId) as { source_path: string } | undefined,
+		);
 		if (!row) return null;
 		return loadManifest(join(getAgentsDir(), row.source_path));
 	} catch {
@@ -671,11 +672,11 @@ export function ensureCanonicalManifest(seed: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 }): ManifestState {
-	const existing = findExistingManifest(seed.agentId, seed.sessionKey, seed.sessionId);
+	const existing = findExistingManifest(seed.agentId, seed.sessionId);
 	if (existing) return existing;
 	return ensureManifestRecord({
 		...seed,
-		sessionToken: deriveSessionToken(seed.agentId, seed.sessionKey, seed.sessionId),
+		sessionToken: deriveSessionToken(seed.agentId, seed.sessionId),
 	});
 }
 
@@ -716,7 +717,7 @@ export function writeTranscriptArtifact(params: {
 	readonly transcript: string;
 }): { readonly manifestPath: string; readonly transcriptPath: string } {
 	const manifest = ensureCanonicalManifest(params);
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionKey, params.sessionId);
+	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = sanitizeTranscriptV1(params.transcript);
 	const sentence = {
 		text: fallbackSentence(body, params.project, params.harness, "transcript"),
@@ -761,7 +762,7 @@ export async function writeSummaryArtifact(params: {
 }): Promise<{ readonly manifestPath: string; readonly summaryPath: string }> {
 	const manifest = ensureCanonicalManifest(params);
 	const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionKey, params.sessionId);
+	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
 	const sentence = await resolveMemorySentence(body, params.project, params.harness, "summary", params.provider);
 	const fullPath = writeImmutableArtifact({
@@ -802,7 +803,7 @@ export async function writeCompactionArtifact(params: {
 }): Promise<{ readonly manifestPath: string; readonly compactionPath: string }> {
 	const manifest = ensureCanonicalManifest(params);
 	const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionKey, params.sessionId);
+	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
 	const sentence = await resolveMemorySentence(body, params.project, params.harness, "compaction", params.provider);
 	const fullPath = writeImmutableArtifact({

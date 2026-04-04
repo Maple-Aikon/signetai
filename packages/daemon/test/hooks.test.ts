@@ -26,6 +26,7 @@ const {
 	handleRecall,
 	handleSessionEnd,
 	handleCheckpointExtract,
+	deriveSessionEndFallbackId,
 	effectiveScore,
 	selectWithBudget,
 	isDuplicate,
@@ -35,6 +36,7 @@ const {
 } = hooks;
 const {
 	deriveSessionToken,
+	ensureCanonicalManifest,
 	hashNormalizedBody,
 	normalizeMarkdownBody,
 	reindexMemoryArtifacts,
@@ -1749,6 +1751,75 @@ describe("handleSessionEnd", () => {
 		expect(manifest).toContain('summary_path: "memory/');
 		expect(manifest).toContain('transcript_path: "memory/');
 	});
+
+	test.serial(
+		"creates fresh canonical artifacts when distinct session-end events reuse the same sessionKey",
+		async () => {
+			createMemoryDb([]);
+			const transcriptAPath = join(TEST_DIR, "transcript-a.txt");
+			const transcriptBPath = join(TEST_DIR, "transcript-b.txt");
+			writeFileSync(
+				transcriptAPath,
+				"User: keep the periodic heartbeat summary separate from prior runs.\nAssistant: confirmed the first heartbeat transcript should get its own immutable artifact set.\n".repeat(
+					8,
+				),
+			);
+			writeFileSync(
+				transcriptBPath,
+				"User: make sure the second heartbeat session does not overwrite the first one.\nAssistant: confirmed the second heartbeat transcript should produce fresh artifacts even with the same shared session key.\n".repeat(
+					8,
+				),
+			);
+
+			const first = await handleSessionEnd({
+				harness: "test",
+				transcriptPath: transcriptAPath,
+				sessionKey: "agent:main:main",
+				cwd: "/tmp/signetai",
+			});
+			const second = await handleSessionEnd({
+				harness: "test",
+				transcriptPath: transcriptBPath,
+				sessionKey: "agent:main:main",
+				cwd: "/tmp/signetai",
+			});
+
+			expect(first.queued).toBe(true);
+			expect(second.queued).toBe(true);
+
+			const files = readdirSync(join(TEST_DIR, "memory")).sort();
+			expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
+			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
+
+			const db = openTestDb();
+			try {
+				const sessionIds = db.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC").all() as Array<{
+					session_id: string | null;
+				}>;
+				expect(sessionIds).toHaveLength(2);
+				// Path-based fallback IDs include a content digest suffix so
+				// rotating log files that reuse the same path produce distinct IDs.
+				expect(sessionIds[0]?.session_id).toMatch(
+					new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+				);
+				expect(sessionIds[1]?.session_id).toMatch(
+					new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+				);
+				expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
+			} finally {
+				db.close();
+			}
+		},
+	);
+
+	test("adds a random suffix when transcript context is unavailable", () => {
+		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");
+		const second = deriveSessionEndFallbackId("agent:main:main", undefined, "");
+
+		expect(first).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
+		expect(second).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
+		expect(first).not.toBe(second);
+	});
 });
 
 // ============================================================================
@@ -1975,13 +2046,103 @@ describe("memory-lineage", () => {
 	});
 
 	test("deriveSessionToken is deterministic and agent-scoped", () => {
-		const a = deriveSessionToken("default", "sess-1", "sess-1");
-		const b = deriveSessionToken("default", "sess-1", "sess-1");
-		const c = deriveSessionToken("agent-b", "sess-1", "sess-1");
+		const a = deriveSessionToken("default", "sess-1");
+		const b = deriveSessionToken("default", "sess-1");
+		const c = deriveSessionToken("agent-b", "sess-1");
 
 		expect(a).toBe(b);
 		expect(a).not.toBe(c);
 		expect(a).toMatch(/^[a-z2-7]{16}$/);
+	});
+
+	test("deriveSessionToken produces distinct tokens for different sessionIds with same sessionKey", () => {
+		const a = deriveSessionToken("default", "shared-key");
+		const b = deriveSessionToken("default", "session-end:path:/tmp/t1:abc123");
+		const c = deriveSessionToken("default", "session-end:path:/tmp/t2:def456");
+
+		expect(a).not.toBe(b);
+		expect(b).not.toBe(c);
+	});
+
+	test.serial(
+		"ensureCanonicalManifest returns existing manifest for pre-fix rows where session_id equals session_key",
+		() => {
+			createMemoryDb([]);
+			const capturedAt = "2026-04-03T10:00:00.000Z";
+			const sharedKey = "agent:main:main";
+
+			// Create a manifest via the normal path — this simulates a pre-fix
+			// row where session_id was persisted verbatim from the shared key.
+			const manifest = ensureCanonicalManifest({
+				agentId: "default",
+				sessionId: sharedKey,
+				sessionKey: sharedKey,
+				project: null,
+				harness: "test",
+				capturedAt,
+				startedAt: null,
+				endedAt: null,
+			});
+			expect(manifest).toBeDefined();
+			expect(manifest.path).toBeTruthy();
+
+			// Calling again with the same session_id should return the
+			// existing manifest via the session_id lookup.
+			const found = ensureCanonicalManifest({
+				agentId: "default",
+				sessionId: sharedKey,
+				sessionKey: sharedKey,
+				project: null,
+				harness: "test",
+				capturedAt: "2026-04-03T10:01:00.000Z",
+				startedAt: null,
+				endedAt: null,
+			});
+			expect(found.path).toBe(manifest.path);
+		},
+	);
+
+	test.serial("ensureCanonicalManifest creates fresh manifest when sessionId differs from sessionKey", () => {
+		createMemoryDb([]);
+		const capturedAt = "2026-04-03T11:00:00.000Z";
+		const sharedKey = "agent:main:main";
+
+		// Pre-fix row: session_id === session_key
+		const legacy = ensureCanonicalManifest({
+			agentId: "default",
+			sessionId: sharedKey,
+			sessionKey: sharedKey,
+			project: null,
+			harness: "test",
+			capturedAt,
+			startedAt: null,
+			endedAt: null,
+		});
+
+		// New-style call with a derived session_id should NOT match
+		// the legacy row and should create a fresh manifest.
+		const fresh = ensureCanonicalManifest({
+			agentId: "default",
+			sessionId: "session-end:path:/tmp/transcript:abc123",
+			sessionKey: sharedKey,
+			project: null,
+			harness: "test",
+			capturedAt: "2026-04-03T11:01:00.000Z",
+			startedAt: null,
+			endedAt: null,
+		});
+
+		expect(fresh.path).not.toBe(legacy.path);
+
+		const db = openTestDb();
+		try {
+			const count = db.prepare("SELECT COUNT(*) as n FROM memory_artifacts WHERE source_kind = 'manifest'").get() as {
+				n: number;
+			};
+			expect(count.n).toBe(2);
+		} finally {
+			db.close();
+		}
 	});
 
 	test.serial("resolveMemorySentence falls back when provider emits low-signal output", async () => {

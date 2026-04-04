@@ -22,7 +22,7 @@ import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import { writeSummaryArtifact } from "../memory-lineage";
+import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
@@ -89,12 +89,52 @@ const COMMAND_STAGE_RUNNING_RESULT = "command-stage-running";
 const COMMAND_STAGE_COMPLETED_RESULT = "command-stage-complete";
 type CommandStageStatus = "none" | "running" | "complete";
 
+export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | "captured_at" | "created_at">): string {
+	const basis = job.ended_at ?? job.captured_at ?? job.created_at;
+	return basis.slice(0, 10);
+}
+
+export function isTerminalSummaryJobError(errorMessage: string): boolean {
+	return errorMessage.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX);
+}
+
+export function resolveFailedSummaryJobStatus(
+	terminal: boolean,
+	attempts: number,
+	maxAttempts: number,
+): "dead" | "pending" {
+	return terminal || attempts >= maxAttempts ? "dead" : "pending";
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const POLL_INTERVAL_MS = 5_000;
+
+// Cached schema probe: true when summary_jobs has the new-schema columns
+// (session_id, agent_id, trigger, etc.).  Resolved lazily on the first
+// enqueueSummaryJob call so the DB is guaranteed to be open.
+let hasNewSchemaColumns: boolean | null = null;
+
+function probeNewSchemaColumns(accessor: DbAccessor): boolean {
+	if (hasNewSchemaColumns !== null) return hasNewSchemaColumns;
+	try {
+		hasNewSchemaColumns = accessor.withReadDb((db) => {
+			const cols = db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>;
+			return cols.some((col) => col.name === "session_id");
+		});
+	} catch {
+		hasNewSchemaColumns = false;
+	}
+	return hasNewSchemaColumns;
+}
+
+/** @internal Test-only: reset the cached schema probe so the next call re-checks. */
+export function _resetSummarySchemaCache(): void {
+	hasNewSchemaColumns = null;
+}
 // Timeout is now configured per-provider via resolveProvider() and config.
 
 // Transcripts longer than this are split into chunks, each summarized
@@ -525,7 +565,7 @@ async function processJob(
 	}
 
 	if (provider) {
-		const today = new Date().toISOString().slice(0, 10);
+		const today = resolveSummaryHeadingDate(job);
 		const genOpts = {
 			timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 			maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
@@ -1555,6 +1595,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			scheduleTick(500);
 		} catch (e) {
 			const errorMessage = e instanceof Error ? e.message : String(e);
+			const terminal = isTerminalSummaryJobError(errorMessage);
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry
@@ -1567,7 +1608,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 
 						if (!row) return;
 
-						const status = row.attempts >= row.max_attempts ? "dead" : "pending";
+						const status = resolveFailedSummaryJobStatus(terminal, row.attempts, row.max_attempts);
 
 						db.prepare(
 							`UPDATE summary_jobs
@@ -1580,8 +1621,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				// DB error during error handling — just log and move on
 			}
 
-			// Back off after failure
-			scheduleTick(POLL_INTERVAL_MS * 3);
+			scheduleTick(terminal ? 500 : POLL_INTERVAL_MS * 3);
 		}
 	}
 
@@ -1657,7 +1697,7 @@ export function enqueueSummaryJob(
 	const now = new Date().toISOString();
 
 	accessor.withWriteTx((db) => {
-		try {
+		if (probeNewSchemaColumns(accessor)) {
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
@@ -1677,7 +1717,15 @@ export function enqueueSummaryJob(
 				params.endedAt || null,
 				now,
 			);
-		} catch {
+		} else {
+			// Legacy schema: databases that have not yet run the migration
+			// adding session_id/agent_id/trigger/etc columns.  The derived
+			// sessionId is dropped, so processJob falls back to session_key —
+			// the per-session-end uniqueness guarantee (distinct sessionId →
+			// distinct token → distinct artifact path) is bypassed.  Recurring
+			// sessions on an old schema may still hit immutable-artifact
+			// conflicts, which are classified as terminal by
+			// isTerminalSummaryJobError.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, harness, project, transcript, status, created_at)
