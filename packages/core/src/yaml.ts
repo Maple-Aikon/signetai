@@ -6,10 +6,17 @@ import YAML from "yaml";
 
 /**
  * Parse a YAML string into a JavaScript object.
+ *
+ * Malformed user-owned YAML should degrade to an empty object instead of
+ * propagating parser exceptions into daemon or CLI startup.
  */
 export function parseSimpleYaml(text: string): Record<string, unknown> {
-	const parsed = YAML.parse(text);
-	return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+	try {
+		const parsed = YAML.parse(text);
+		return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+	} catch {
+		return {};
+	}
 }
 
 /**

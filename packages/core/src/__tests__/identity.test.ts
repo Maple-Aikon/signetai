@@ -9,6 +9,7 @@ import {
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 } from "../identity";
+import { parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
 
@@ -94,6 +95,12 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Identity");
 		expect(result).toContain("## About Your User");
 		expect(result).toContain("## Working Memory");
+	});
+});
+
+describe("parseSimpleYaml", () => {
+	test("degrades malformed YAML to an empty object", () => {
+		expect(parseSimpleYaml("agent:\n  name: [unterminated")).toEqual({});
 	});
 });
 
