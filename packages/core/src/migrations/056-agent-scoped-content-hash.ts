@@ -1,10 +1,10 @@
 import type { MigrationDb } from "./index";
 
-function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
-	// Internal migration helper: callers must pass trusted SQL identifier/type literals.
-	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
-	if (cols.some((col) => col.name === column)) return;
-	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+function ensureMemoriesScopeColumns(db: MigrationDb): void {
+	const cols = db.prepare("PRAGMA table_info(memories)").all() as ReadonlyArray<Record<string, unknown>>;
+	const names = new Set(cols.map((col) => col.name).filter((name): name is string => typeof name === "string"));
+	if (!names.has("agent_id")) db.exec("ALTER TABLE memories ADD COLUMN agent_id TEXT DEFAULT 'default'");
+	if (!names.has("scope")) db.exec("ALTER TABLE memories ADD COLUMN scope TEXT");
 }
 
 /**
@@ -17,8 +17,7 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
  */
 export function up(db: MigrationDb): void {
 	// Defensive repair for stamped-but-partial databases.
-	addColumnIfMissing(db, "memories", "agent_id", "TEXT DEFAULT 'default'");
-	addColumnIfMissing(db, "memories", "scope", "TEXT");
+	ensureMemoriesScopeColumns(db);
 
 	db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
 	db.exec(`

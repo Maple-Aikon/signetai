@@ -111,7 +111,10 @@ export function normalizeAgentRosterEntry(entry: unknown): NormalizedAgentRoster
 	if (typeof record.name !== "string" || record.name.length === 0) return null;
 	const memory =
 		typeof record.memory === "object" && record.memory !== null ? (record.memory as Record<string, unknown>) : null;
-	const policy = normalizeReadPolicy(memory?.read_policy ?? record.read_policy, record.policy_group);
+	const policy = normalizeReadPolicy(
+		memory?.read_policy ?? record.read_policy,
+		memory?.policy_group ?? record.policy_group,
+	);
 	return {
 		name: record.name,
 		readPolicy: policy.readPolicy,

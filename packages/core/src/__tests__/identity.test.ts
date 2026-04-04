@@ -127,6 +127,16 @@ describe("agent roster helpers", () => {
 		});
 	});
 
+	test("preserves legacy flat group policy inside a memory block", () => {
+		expect(
+			normalizeAgentRosterEntry({ name: "writer", memory: { read_policy: "group", policy_group: "writers" } }),
+		).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
 	test("builds canonical nested memory config for group policies", () => {
 		expect(buildAgentMemoryConfig("group", "writers")).toEqual({
 			read_policy: { type: "group", group: "writers" },
