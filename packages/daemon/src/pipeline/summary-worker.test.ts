@@ -122,6 +122,32 @@ describe("insertSummaryFacts", () => {
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
 	});
 
+	it("fails closed to the default agent scope when runtime rows contain null agent ids", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: "/tmp/project",
+				session_key: "session-null-agent",
+				agent_id: null,
+			} as unknown as Parameters<typeof insertSummaryFacts>[1],
+			[
+				{
+					content: "Null agent ids still persist summary facts under the default scope.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(1);
+
+		const row = db.prepare("SELECT agent_id FROM memories WHERE source_id = ?").get("session-null-agent") as
+			| { agent_id: string }
+			| undefined;
+		expect(row?.agent_id).toBe("default");
+	});
+
 	it("scopes duplicate detection to the fact owner's agent", () => {
 		const content = "Agent-scoped duplicate detection keeps this shared fact available to sub-agents.";
 

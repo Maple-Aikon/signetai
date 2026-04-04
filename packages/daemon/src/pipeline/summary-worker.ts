@@ -1140,7 +1140,7 @@ export function insertSummaryFacts(
 	facts: ReadonlyArray<LlmSummaryResult["facts"][number]>,
 ): number {
 	const now = new Date().toISOString();
-	const agentId = job.agent_id.length > 0 ? job.agent_id : "default";
+	const agentId = typeof job.agent_id === "string" && job.agent_id.length > 0 ? job.agent_id : "default";
 
 	return accessor.withWriteTx((db) => {
 		let count = 0;
