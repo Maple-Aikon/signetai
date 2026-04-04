@@ -81,13 +81,14 @@ describe("insertSummaryFacts", () => {
 		db.close();
 	});
 
-	it("writes summary facts with updated_by metadata", () => {
+	it("writes summary facts with updated_by metadata and default agent scope", () => {
 		const saved = insertSummaryFacts(
 			accessor,
 			{
 				harness: "codex",
 				project: "/tmp/project",
 				session_key: "session-1",
+				agent_id: "",
 			},
 			[
 				{
@@ -101,12 +102,13 @@ describe("insertSummaryFacts", () => {
 
 		expect(saved).toBe(1);
 
-		const row = db.prepare("SELECT who, source_id, source_type, project, updated_by FROM memories").get() as
+		const row = db.prepare("SELECT who, source_id, source_type, project, agent_id, updated_by FROM memories").get() as
 			| {
 					who: string;
 					source_id: string | null;
 					source_type: string;
 					project: string | null;
+					agent_id: string;
 					updated_by: string;
 			  }
 			| undefined;
@@ -116,6 +118,7 @@ describe("insertSummaryFacts", () => {
 		expect(row?.source_id).toBe("session-1");
 		expect(row?.source_type).toBe("session_end");
 		expect(row?.project).toBe("/tmp/project");
+		expect(row?.agent_id).toBe("default");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
 	});
 

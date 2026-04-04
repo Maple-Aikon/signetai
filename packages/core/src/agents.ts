@@ -130,6 +130,9 @@ export function buildAgentMemoryConfig(
 	if (readPolicy === "group" && typeof policyGroup === "string" && policyGroup.length > 0) {
 		return { read_policy: { type: "group", group: policyGroup } };
 	}
+	// CLI validation already rejects `group` without a concrete group name.
+	// Keep the fallback isolated here so malformed callers fail closed instead
+	// of widening access implicitly.
 	return { read_policy: "isolated" };
 }
 
