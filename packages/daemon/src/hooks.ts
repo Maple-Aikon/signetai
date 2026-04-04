@@ -517,7 +517,7 @@ function getSessionGapSummary(): string | undefined {
 }
 
 /** Check if content overlaps 70%+ with existing memories via FTS */
-export function isDuplicate(db: Database, content: string, agentId = "default"): boolean {
+export function isDuplicate(db: Database, content: string, agentId: string): boolean {
 	const words = content
 		.toLowerCase()
 		.split(/\W+/)
