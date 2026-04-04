@@ -124,6 +124,7 @@ describe("synthesis-worker", () => {
 			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
 				"# MEMORY\n\nprojection for default",
 				expect.objectContaining({
+					agentId: "default",
 					owner: "synthesis-worker",
 				}),
 			);
@@ -210,6 +211,7 @@ describe("synthesis-worker", () => {
 			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
 				"# MEMORY\n\nprojection for default",
 				expect.objectContaining({
+					agentId: "default",
 					owner: "synthesis-worker",
 				}),
 			);

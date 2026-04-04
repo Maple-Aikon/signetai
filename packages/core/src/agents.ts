@@ -79,7 +79,10 @@ export function getAgentIdentityFiles(name: string, agentsDir: string): Record<s
 	return result;
 }
 
-function normalizeReadPolicy(readPolicy: unknown, policyGroup: unknown): {
+function normalizeReadPolicy(
+	readPolicy: unknown,
+	policyGroup: unknown,
+): {
 	readonly readPolicy: AgentRosterReadPolicy;
 	readonly policyGroup: string | null;
 } {
@@ -119,7 +122,7 @@ export function normalizeAgentRosterEntry(entry: unknown): NormalizedAgentRoster
 export function buildAgentMemoryConfig(
 	readPolicy: AgentRosterReadPolicy,
 	policyGroup: string | null,
-): { readonly read_policy?: ReadPolicy } {
+): { readonly read_policy: ReadPolicy } {
 	if (readPolicy === "shared") return { read_policy: "shared" };
 	if (readPolicy === "group" && typeof policyGroup === "string" && policyGroup.length > 0) {
 		return { read_policy: { type: "group", group: policyGroup } };

@@ -1,6 +1,7 @@
 import type { MigrationDb } from "./index";
 
 function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
+	// Internal migration helper: callers must pass trusted SQL identifier/type literals.
 	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	if (cols.some((col) => col.name === column)) return;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
