@@ -88,12 +88,9 @@ describe("insertSummaryFacts", () => {
 				harness: "codex",
 				project: "/mnt/work/dev/project",
 				session_key: "session-1",
-<<<<<<< HEAD
-				agent_id: "",
-=======
 				session_id: "session-1",
 				id: "job-1",
->>>>>>> 8b083eeb (fix(daemon): keep projection renders read-safe)
+				agent_id: "",
 			},
 			[
 				{
@@ -132,7 +129,7 @@ describe("insertSummaryFacts", () => {
 			accessor,
 			{
 				harness: "codex",
-				project: "/tmp/project",
+				project: "/mnt/work/dev/project",
 				session_key: "session-null-agent",
 				agent_id: null,
 			} as unknown as Parameters<typeof insertSummaryFacts>[1],
