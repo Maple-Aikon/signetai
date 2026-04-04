@@ -50,7 +50,7 @@ describe("writeMemoryMd", () => {
 	afterAll(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (previousSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;
 		}
 		process.env.SIGNET_PATH = previousSignetPath;

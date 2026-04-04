@@ -36,7 +36,7 @@ describe("writeMemoryHead", () => {
 	afterAll(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (prevSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;
 		}
 		process.env.SIGNET_PATH = prevSignetPath;
