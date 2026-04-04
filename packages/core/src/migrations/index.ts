@@ -61,6 +61,7 @@ import { up as mcpInvocations } from "./052-mcp-invocations";
 import { up as skillInvocations } from "./053-skill-invocations";
 import { up as taskAgentScope } from "./054-task-agent-scope";
 import { up as dreamingState } from "./055-dreaming-state";
+import { up as agentScopedContentHash } from "./056-agent-scoped-content-hash";
 
 // -- Public interface consumed by Database.init() --
 
@@ -533,6 +534,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			tables: ["dreaming_state", "dreaming_passes"],
 		},
+	},
+	{
+		version: 56,
+		name: "agent-scoped-content-hash",
+		up: agentScopedContentHash,
 	},
 ];
 

@@ -35,6 +35,7 @@ import {
 	keywordSearch,
 	mergeSignetGitignoreEntries,
 	networkModeFromBindHost,
+	normalizeAgentRosterEntry,
 	parseSimpleYaml,
 	readNetworkMode,
 	readPipelinePauseState,
@@ -11554,18 +11555,16 @@ function syncAgentRoster(agentsDir: string): void {
 			   updated_at = excluded.updated_at`,
 		);
 		for (const entry of roster) {
-			const policy = entry.memory?.read_policy;
-			let readPolicy: string;
-			let group: string | null = null;
-			if (typeof policy === "string") {
-				readPolicy = policy;
-			} else if (policy && typeof policy === "object" && policy.type === "group") {
-				readPolicy = "group";
-				group = typeof policy.group === "string" ? policy.group : null;
-			} else {
-				readPolicy = "isolated";
-			}
-			stmt.run(entry.name, entry.name, readPolicy, group, now, now);
+			const normalized = normalizeAgentRosterEntry(entry);
+			if (!normalized) continue;
+			stmt.run(
+				normalized.name,
+				normalized.name,
+				normalized.readPolicy,
+				normalized.policyGroup,
+				now,
+				now,
+			);
 		}
 	});
 	logger.info("daemon", "Agent roster synced", { count: roster.length });

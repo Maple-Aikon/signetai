@@ -191,10 +191,11 @@ async function runSynthesisWithDeps(
 	config: PipelineSynthesisConfig,
 	agentId?: string,
 ): Promise<SynthesisResult> {
+	const scopeAgentId = normalizeAgentId(agentId);
 	deps.logger.info("synthesis", "Starting scheduled synthesis", {
 		provider: config.provider,
 		model: config.model,
-		agentId: agentId ?? "default",
+		agentId: scopeAgentId,
 	});
 
 	try {
@@ -202,7 +203,7 @@ async function runSynthesisWithDeps(
 			{ trigger: "scheduled" },
 			{
 				maxTokens: config.maxTokens,
-				agentId,
+				agentId: scopeAgentId,
 			},
 		);
 
@@ -218,7 +219,10 @@ async function runSynthesisWithDeps(
 		const finalText = synthesisData.prompt.trimEnd();
 
 		// Write MEMORY.md via shared helper (handles backup)
-		const writeResult = deps.writeMemoryMd(finalText, { owner: "synthesis-worker" });
+		const writeResult = deps.writeMemoryMd(finalText, {
+			agentId: scopeAgentId,
+			owner: "synthesis-worker",
+		});
 		if (!writeResult.ok) {
 			if (writeResult.code === "busy") {
 				deps.logger.warn("synthesis", "MEMORY.md head busy, deferring synthesis write");

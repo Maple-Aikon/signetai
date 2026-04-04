@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildAgentMemoryConfig, normalizeAgentRosterEntry } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 } from "../identity";
+import { parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
 
@@ -93,6 +95,65 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Identity");
 		expect(result).toContain("## About Your User");
 		expect(result).toContain("## Working Memory");
+	});
+});
+
+describe("parseSimpleYaml", () => {
+	test("degrades malformed YAML to an empty object", () => {
+		expect(parseSimpleYaml("agent:\n  name: [unterminated")).toEqual({});
+	});
+});
+
+describe("agent roster helpers", () => {
+	test("normalizes canonical nested memory policies", () => {
+		expect(
+			normalizeAgentRosterEntry({
+				name: "writer",
+				memory: { read_policy: { type: "group", group: "writers" } },
+			}),
+		).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("normalizes legacy flat roster policies for backward compatibility", () => {
+		expect(normalizeAgentRosterEntry({ name: "writer", read_policy: "shared", policy_group: "ignored" })).toEqual({
+			name: "writer",
+			readPolicy: "shared",
+			policyGroup: null,
+		});
+	});
+
+	test("normalizes legacy flat roster group policies for backward compatibility", () => {
+		expect(normalizeAgentRosterEntry({ name: "writer", read_policy: "group", policy_group: "writers" })).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("preserves legacy flat group policy inside a memory block", () => {
+		expect(
+			normalizeAgentRosterEntry({ name: "writer", memory: { read_policy: "group", policy_group: "writers" } }),
+		).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("builds canonical nested memory config for group policies", () => {
+		expect(buildAgentMemoryConfig("group", "writers")).toEqual({
+			read_policy: { type: "group", group: "writers" },
+		});
+	});
+
+	test("fails closed to isolated when group policy is missing its group", () => {
+		expect(buildAgentMemoryConfig("group", null)).toEqual({
+			read_policy: "isolated",
+		});
 	});
 });
 

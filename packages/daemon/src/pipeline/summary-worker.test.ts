@@ -81,13 +81,14 @@ describe("insertSummaryFacts", () => {
 		db.close();
 	});
 
-	it("writes summary facts with updated_by metadata", () => {
+	it("writes summary facts with updated_by metadata and default agent scope", () => {
 		const saved = insertSummaryFacts(
 			accessor,
 			{
 				harness: "codex",
 				project: "/tmp/project",
 				session_key: "session-1",
+				agent_id: "",
 			},
 			[
 				{
@@ -101,12 +102,13 @@ describe("insertSummaryFacts", () => {
 
 		expect(saved).toBe(1);
 
-		const row = db.prepare("SELECT who, source_id, source_type, project, updated_by FROM memories").get() as
+		const row = db.prepare("SELECT who, source_id, source_type, project, agent_id, updated_by FROM memories").get() as
 			| {
 					who: string;
 					source_id: string | null;
 					source_type: string;
 					project: string | null;
+					agent_id: string;
 					updated_by: string;
 			  }
 			| undefined;
@@ -116,7 +118,64 @@ describe("insertSummaryFacts", () => {
 		expect(row?.source_id).toBe("session-1");
 		expect(row?.source_type).toBe("session_end");
 		expect(row?.project).toBe("/tmp/project");
+		expect(row?.agent_id).toBe("default");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
+	});
+
+	it("fails closed to the default agent scope when runtime rows contain null agent ids", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: "/tmp/project",
+				session_key: "session-null-agent",
+				agent_id: null,
+			} as unknown as Parameters<typeof insertSummaryFacts>[1],
+			[
+				{
+					content: "Null agent ids still persist summary facts under the default scope.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(1);
+
+		const row = db.prepare("SELECT agent_id FROM memories WHERE source_id = ?").get("session-null-agent") as
+			| { agent_id: string }
+			| undefined;
+		expect(row?.agent_id).toBe("default");
+	});
+
+	it("scopes duplicate detection to the fact owner's agent", () => {
+		const content = "Agent-scoped duplicate detection keeps this shared fact available to sub-agents.";
+
+		const firstSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-default", agent_id: "default" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(firstSaved).toBe(1);
+
+		const duplicateSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-default-2", agent_id: "default" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(duplicateSaved).toBe(0);
+
+		const crossAgentSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-agent-a", agent_id: "agent-a" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(crossAgentSaved).toBe(1);
+
+		const rows = db
+			.prepare("SELECT agent_id FROM memories WHERE content = ? ORDER BY agent_id ASC")
+			.all(content) as Array<{ agent_id: string }>;
+		expect(rows).toEqual([{ agent_id: "agent-a" }, { agent_id: "default" }]);
 	});
 
 	it("populates content_hash so the embedding tracker can index summary facts", () => {

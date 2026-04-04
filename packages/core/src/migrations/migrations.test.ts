@@ -564,37 +564,49 @@ describe("migration framework", () => {
 		expect(colNames).toContain("pinned_at");
 	});
 
-	test("unique partial index on content_hash rejects duplicates", () => {
+	test("unique partial index on content_hash is agent- and scope-aware", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
 		const now = new Date().toISOString();
 		db.prepare(
-			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run("a", "hello", "hash1", "fact", now, now, "test");
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("a", "hello", "hash1", "fact", "default", null, now, now, "test");
 
-		// Same content_hash on a non-deleted row should fail
+		// Same content_hash in the same agent/scope tuple should fail.
 		expect(() =>
 			db
 				.prepare(
-					`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
-				.run("b", "hello again", "hash1", "fact", now, now, "test"),
+				.run("b", "hello again", "hash1", "fact", "default", null, now, now, "test"),
 		).toThrow();
 
-		// NULL content_hash should not conflict
+		// A different agent may persist the same content hash.
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("c", "hello from agent a", "hash1", "fact", "agent-a", null, now, now, "test");
+
+		// A different benchmark scope may also persist the same content hash.
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("d", "hello from bench scope", "hash1", "fact", "default", "bench:run-1", now, now, "test");
+
+		// NULL content_hash should not conflict.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, NULL, ?, ?, ?, ?)`,
-		).run("c", "no hash", "fact", now, now, "test");
+		).run("e", "no hash", "fact", now, now, "test");
 
-		// Soft-deleted row with same hash should not conflict
+		// Soft-deleted row with the same hash should not conflict.
 		db.prepare(
-			`INSERT INTO memories (id, content, content_hash, is_deleted, type, created_at, updated_at, updated_by)
-			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
-		).run("d", "deleted", "hash1", "fact", now, now, "test");
+			`INSERT INTO memories (id, content, content_hash, is_deleted, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+		).run("f", "deleted", "hash1", "fact", "default", null, now, now, "test");
 	});
 
 	test("migration 003 deduplicates existing content hashes", () => {

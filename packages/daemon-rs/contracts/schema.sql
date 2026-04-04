@@ -67,7 +67,7 @@ CREATE TABLE "memories" (
   last_accessed   TEXT,
   access_count    INTEGER DEFAULT 0,
   pinned          INTEGER DEFAULT 0
-, content_hash TEXT, normalized_content TEXT, is_deleted INTEGER DEFAULT 0, deleted_at TEXT, extraction_status TEXT DEFAULT 'none', embedding_model TEXT, extraction_model TEXT, update_count INTEGER DEFAULT 0, idempotency_key TEXT, runtime_path TEXT, source_path TEXT, source_section TEXT, agent_id TEXT DEFAULT 'default', visibility TEXT DEFAULT 'global');
+, content_hash TEXT, normalized_content TEXT, is_deleted INTEGER DEFAULT 0, deleted_at TEXT, extraction_status TEXT DEFAULT 'none', embedding_model TEXT, extraction_model TEXT, update_count INTEGER DEFAULT 0, idempotency_key TEXT, runtime_path TEXT, source_path TEXT, source_section TEXT, scope TEXT, agent_id TEXT DEFAULT 'default', visibility TEXT DEFAULT 'global');
 CREATE INDEX idx_memories_type ON memories(type);
 CREATE INDEX idx_memories_category ON memories(category);
 CREATE INDEX idx_memories_source ON memories(source_type, source_id);
@@ -163,7 +163,7 @@ CREATE INDEX idx_relations_target
 CREATE INDEX idx_memory_entity_mentions_entity
 			ON memory_entity_mentions(entity_id);
 CREATE UNIQUE INDEX idx_memories_content_hash_unique
-			ON memories(content_hash)
+			ON memories(content_hash, COALESCE(NULLIF(agent_id, ''), 'default'), COALESCE(scope, '__NULL__'))
 			WHERE content_hash IS NOT NULL AND is_deleted = 0
 	;
 CREATE INDEX idx_memories_deleted_at
