@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.93.5] - 2026-04-04
+
+### Bug Fixes
+
+- scope sub-agent memory dedupe and synthesis (#455)
+
+
 ## [0.93.4] - 2026-04-04
 
 ### Bug Fixes
