@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.93.4] - 2026-04-04
+
+### Bug Fixes
+
+- **daemon**: prevent summary-worker retries on shared session-end keys (#459)
+
+
 ## [0.93.3] - 2026-04-03
 
 ### Bug Fixes
