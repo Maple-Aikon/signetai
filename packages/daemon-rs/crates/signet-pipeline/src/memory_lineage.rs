@@ -991,14 +991,36 @@ fn should_purge_projection_noise(root: &Path, agent_id: &str) -> Result<bool, St
     Ok(guard.insert(projection_purge_key(root, agent_id)))
 }
 
-#[cfg(test)]
-fn reset_projection_purge_state() -> Result<(), String> {
-    let seen = PROJECTION_PURGE_SEEN.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut guard = seen
-        .lock()
-        .map_err(|_| "projection purge state lock poisoned".to_string())?;
-    guard.clear();
-    Ok(())
+#[derive(Debug, Clone)]
+struct NoiseArtifactRow {
+    session_token: String,
+    session_id: String,
+    session_key: Option<String>,
+    project: Option<String>,
+    harness: Option<String>,
+}
+
+fn is_noise_artifact_group(rows: &[NoiseArtifactRow]) -> bool {
+    let mut has_project = false;
+    for row in rows {
+        if is_temp_project(row.project.as_deref()) {
+            return true;
+        }
+        if row.project.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+            has_project = true;
+        }
+    }
+    if has_project {
+        return false;
+    }
+    rows.iter().any(|row| {
+        is_noise_session(
+            None,
+            Some(row.session_id.as_str()),
+            row.session_key.as_deref(),
+            row.harness.as_deref(),
+        )
+    })
 }
 
 pub fn purge_canonical_noise_sessions(
@@ -1009,38 +1031,38 @@ pub fn purge_canonical_noise_sessions(
 ) -> Result<usize, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT DISTINCT session_token, session_id, session_key, project, harness
+            "SELECT session_token, session_id, session_key, project, harness
              FROM memory_artifacts
              WHERE agent_id = ?1
-               AND source_kind IN ('summary', 'transcript', 'compaction')",
+               AND source_kind IN ('summary', 'transcript', 'compaction')
+             ORDER BY session_token",
         )
         .map_err(|err| err.to_string())?;
     let rows = stmt
         .query_map(params![agent_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-            ))
+            Ok(NoiseArtifactRow {
+                session_token: row.get::<_, String>(0)?,
+                session_id: row.get::<_, String>(1)?,
+                session_key: row.get::<_, Option<String>>(2)?,
+                project: row.get::<_, Option<String>>(3)?,
+                harness: row.get::<_, Option<String>>(4)?,
+            })
         })
         .map_err(|err| err.to_string())?
         .filter_map(Result::ok)
         .collect::<Vec<_>>();
 
+    let mut groups = BTreeMap::<String, Vec<NoiseArtifactRow>>::new();
+    for row in rows {
+        groups
+            .entry(row.session_token.clone())
+            .or_default()
+            .push(row);
+    }
+
     let mut removed = 0usize;
-    let mut seen = HashSet::new();
-    for (session_token, session_id, session_key, project, harness) in rows {
-        if !seen.insert(session_token.clone()) {
-            continue;
-        }
-        if !is_noise_session(
-            project.as_deref(),
-            Some(session_id.as_str()),
-            session_key.as_deref(),
-            harness.as_deref(),
-        ) {
+    for (session_token, group) in groups {
+        if !is_noise_artifact_group(&group) {
             continue;
         }
         let mut path_stmt = conn
@@ -2234,7 +2256,6 @@ mod tests {
 
     #[test]
     fn projection_uses_artifact_frontmatter_and_wikilinks() {
-        reset_projection_purge_state().unwrap();
         let conn = setup_conn();
         let root = temp_root("projection");
         let now = Utc::now().to_rfc3339();
@@ -2295,7 +2316,6 @@ mod tests {
 
     #[test]
     fn projection_clips_older_ledger_rows_within_budget() {
-        reset_projection_purge_state().unwrap();
         let conn = setup_conn();
         let root = temp_root("projection-ledger-budget");
         let tok = cl100k_base().unwrap();
@@ -2441,6 +2461,78 @@ mod tests {
             .unwrap();
         assert_eq!(tombstones, 1);
         assert_eq!(artifacts, 0);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn purge_noise_sessions_keeps_tokens_with_real_project_rows() {
+        let conn = setup_conn();
+        let root = temp_root("purge-noise-real-project");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'summary', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/mixed-one.md",
+                "sha-mixed-one",
+                "tmp-mixed",
+                Option::<String>::None,
+                "tok-mixed",
+                Option::<String>::None,
+                "test",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "noise sentence",
+                "noise content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'transcript', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/mixed-two.md",
+                "sha-mixed-two",
+                "real-mixed",
+                "real-mixed",
+                "tok-mixed",
+                "/home/nicholai/signet/signetai",
+                "codex",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "real sentence",
+                "real content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+
+        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        assert_eq!(removed, 0);
+
+        let artifacts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifacts WHERE agent_id = 'default' AND session_token = 'tok-mixed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(artifacts, 2);
         fs::remove_dir_all(root).ok();
     }
 

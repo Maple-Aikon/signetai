@@ -148,4 +148,68 @@ describe("memory-lineage", () => {
 		);
 		expect(tombstones).toEqual([{ reason: "test cleanup" }]);
 	});
+
+	it("keeps canonical sessions when any artifact row carries a real project", () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id,
+					session_key, session_token, project, harness, captured_at,
+					started_at, ended_at, manifest_path, source_node_id,
+					memory_sentence, memory_sentence_quality, content, updated_at
+				) VALUES (?, ?, ?, 'summary', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'ok', ?, ?)`,
+			).run(
+				"default",
+				"memory/mixed-one.md",
+				"sha-mixed-one",
+				"tmp-mixed",
+				null,
+				"tok-mixed",
+				null,
+				"test",
+				now,
+				null,
+				null,
+				null,
+				"noise sentence",
+				"noise content",
+				now,
+			);
+			db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id,
+					session_key, session_token, project, harness, captured_at,
+					started_at, ended_at, manifest_path, source_node_id,
+					memory_sentence, memory_sentence_quality, content, updated_at
+				) VALUES (?, ?, ?, 'transcript', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'ok', ?, ?)`,
+			).run(
+				"default",
+				"memory/mixed-two.md",
+				"sha-mixed-two",
+				"real-mixed",
+				"real-mixed",
+				"tok-mixed",
+				"/home/nicholai/signet/signetai",
+				"codex",
+				now,
+				null,
+				null,
+				null,
+				"real sentence",
+				"real content",
+				now,
+			);
+		});
+
+		expect(purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(0);
+
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(`SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_token = ?`)
+					.get("tok-mixed") as { count: number },
+		);
+		expect(count.count).toBe(2);
+	});
 });

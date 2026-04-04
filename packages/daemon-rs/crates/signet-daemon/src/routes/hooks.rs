@@ -364,6 +364,21 @@ fn upsert_session_transcript(
     Ok(())
 }
 
+fn delete_session_transcript(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    agent_id: &str,
+) -> rusqlite::Result<()> {
+    if session_key.trim().is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
+        rusqlite::params![session_key, agent_id],
+    )?;
+    Ok(())
+}
+
 fn enqueue_summary_job(
     conn: &rusqlite::Connection,
     harness: &str,
@@ -1308,6 +1323,21 @@ pub async fn session_end(
 
     // Gate before any writes — no-op sessions don't need artifact/job work.
     if transcript.trim().is_empty() {
+        if !session_key.trim().is_empty() {
+            let session_key_value = session_key.clone();
+            let agent_value = agent_id.clone();
+            if let Err(e) = state
+                .pool
+                .write(Priority::Low, move |conn| {
+                    delete_session_transcript(conn, &session_key_value, &agent_value)
+                        .map(|_| serde_json::Value::Null)
+                        .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+                })
+                .await
+            {
+                warn!(error = %e, "session-end: transcript DB cleanup failed, continuing");
+            }
+        }
         state.sessions.release(&session_key);
         state.continuity.clear(&session_key);
         state.dedup.clear_session_start(&session_key);
@@ -1443,6 +1473,21 @@ pub async fn session_end(
     let transcript_value = summary_transcript;
     let ended_value = ended_at.clone();
     if noise {
+        if !session_key.trim().is_empty() {
+            let session_key_value = session_key.clone();
+            let agent_value = agent_id.clone();
+            if let Err(e) = state
+                .pool
+                .write(Priority::Low, move |conn| {
+                    delete_session_transcript(conn, &session_key_value, &agent_value)
+                        .map(|_| serde_json::Value::Null)
+                        .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+                })
+                .await
+            {
+                warn!(error = %e, "session-end: transcript DB cleanup failed, continuing");
+            }
+        }
         state.sessions.release(&session_key);
         if !snapshot_retained {
             state.continuity.clear(&session_key);
@@ -2406,7 +2451,7 @@ mod tests {
     use signet_core::config::{
         AgentManifest, DaemonConfig, MemoryManifestConfig, PipelineV2Config,
     };
-    use signet_core::db::DbPool;
+    use signet_core::db::{DbPool, Priority};
     use tempfile::TempDir;
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
@@ -2417,7 +2462,7 @@ mod tests {
         CHECKPOINT_MIN_DELTA, CompactionCompleteBody, SessionEndBody, compaction_complete,
         extract_delta, parse_visibility, require_session_scope_for_write,
         resolve_compaction_project, resolve_remember_agent, session_agent_id, session_end,
-        strip_untrusted_metadata,
+        strip_untrusted_metadata, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -2644,6 +2689,21 @@ mod tests {
     #[tokio::test]
     async fn session_end_skips_transcript_artifact_for_noise_session() {
         let (state, writer, _tmp) = test_state("hooks-session-end-noise");
+        state
+            .pool
+            .write(Priority::Low, |conn| {
+                upsert_session_transcript(
+                    conn,
+                    "agent:agent-a:sess-noise",
+                    "checkpoint transcript",
+                    "codex",
+                    Some("/tmp/signetai"),
+                    "agent-a",
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
         let transcript = [
             "User: this is a temp-session smoke test.",
             "Assistant: skip canonical transcript artifacts for /tmp projects.",
@@ -2678,6 +2738,11 @@ mod tests {
                 let jobs: i64 = conn
                     .query_row("SELECT COUNT(*) FROM summary_jobs", [], |row| row.get(0))
                     .unwrap_or(0);
+                let transcripts: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM session_transcripts", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap_or(0);
                 let artifacts: i64 = conn
                     .query_row(
                         "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'transcript'",
@@ -2692,7 +2757,7 @@ mod tests {
                         |row| row.get(0),
                     )
                     .unwrap_or(0);
-                Ok((jobs, artifacts, manifests))
+                Ok((jobs, transcripts, artifacts, manifests))
             })
             .await
             .unwrap();
@@ -2700,6 +2765,7 @@ mod tests {
         assert_eq!(counts.0, 0);
         assert_eq!(counts.1, 0);
         assert_eq!(counts.2, 0);
+        assert_eq!(counts.3, 0);
 
         drop(state);
         let _ = writer.await;

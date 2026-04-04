@@ -9,7 +9,7 @@ import { getAgentScope } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
-import { isNoiseSession } from "./session-noise";
+import { isNoiseSession, isTempProject } from "./session-noise";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -1384,6 +1384,32 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 	});
 }
 
+function isNoiseArtifactGroup(
+	rows: ReadonlyArray<{
+		session_id: string;
+		session_key: string | null;
+		project: string | null;
+		harness: string | null;
+	}>,
+): boolean {
+	let hasProject = false;
+	for (const row of rows) {
+		if (isTempProject(row.project)) return true;
+		if (typeof row.project === "string" && row.project.trim().length > 0) {
+			hasProject = true;
+		}
+	}
+	if (hasProject) return false;
+	return rows.some((row) =>
+		isNoiseSession({
+			project: null,
+			sessionKey: row.session_key,
+			sessionId: row.session_id,
+			harness: row.harness,
+		}),
+	);
+}
+
 export function purgeCanonicalNoiseSessions(agentId: string, reason: string): number {
 	const rows = getDbAccessor().withReadDb(
 		(db) =>
@@ -1392,7 +1418,8 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 					`SELECT session_token, session_id, session_key, project, harness
 				 FROM memory_artifacts
 				 WHERE agent_id = ?
-				   AND source_kind IN ('summary', 'transcript', 'compaction')`,
+				   AND source_kind IN ('summary', 'transcript', 'compaction')
+				 ORDER BY session_token`,
 				)
 				.all(agentId) as Array<{
 					session_token: string;
@@ -1402,22 +1429,27 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 					harness: string | null;
 				}>,
 	);
-	const seen = new Set<string>();
-	let count = 0;
+	const groups = new Map<
+		string,
+		Array<{
+			session_id: string;
+			session_key: string | null;
+			project: string | null;
+			harness: string | null;
+		}>
+	>();
 	for (const row of rows) {
-		if (seen.has(row.session_token)) continue;
-		if (
-			!isNoiseSession({
-				project: row.project,
-				sessionKey: row.session_key,
-				sessionId: row.session_id,
-				harness: row.harness,
-			})
-		) {
+		const group = groups.get(row.session_token);
+		if (group) {
+			group.push(row);
 			continue;
 		}
-		removeCanonicalSession(agentId, row.session_token, reason);
-		seen.add(row.session_token);
+		groups.set(row.session_token, [row]);
+	}
+	let count = 0;
+	for (const [sessionToken, group] of groups) {
+		if (!isNoiseArtifactGroup(group)) continue;
+		removeCanonicalSession(agentId, sessionToken, reason);
 		count++;
 	}
 	return count;
