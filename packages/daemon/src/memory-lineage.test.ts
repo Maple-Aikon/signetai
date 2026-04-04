@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
@@ -147,6 +147,29 @@ describe("memory-lineage", () => {
 					.all() as Array<{ reason: string }>,
 		);
 		expect(tombstones).toEqual([{ reason: "test cleanup" }]);
+	});
+
+	it("removes canonical noise artifact files after tombstoning them", async () => {
+		await addSummary({
+			sessionId: "drop-file",
+			project: "/tmp/signetai",
+			minutesAgo: 1,
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path
+						 FROM memory_artifacts
+						 WHERE session_id = ? AND source_kind = 'summary'`,
+					)
+					.get("drop-file") as { source_path: string },
+		);
+		expect(existsSync(join(dir, row.source_path))).toBe(true);
+
+		expect(purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(1);
+		expect(existsSync(join(dir, row.source_path))).toBe(false);
 	});
 
 	it("keeps canonical sessions when any artifact row carries a real project", () => {

@@ -991,6 +991,18 @@ fn should_purge_projection_noise(root: &Path, agent_id: &str) -> Result<bool, St
     Ok(guard.insert(projection_purge_key(root, agent_id)))
 }
 
+#[cfg(test)]
+fn reset_projection_purge_state(root: &Path, agent_id: &str) -> Result<(), String> {
+    let Some(seen) = PROJECTION_PURGE_SEEN.get() else {
+        return Ok(());
+    };
+    let mut guard = seen
+        .lock()
+        .map_err(|_| "projection purge state lock poisoned".to_string())?;
+    guard.remove(&projection_purge_key(root, agent_id));
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct NoiseArtifactRow {
     session_token: String,
@@ -1076,9 +1088,6 @@ pub fn purge_canonical_noise_sessions(
             .map_err(|err| err.to_string())?
             .filter_map(Result::ok)
             .collect::<Vec<_>>();
-        for path in &paths {
-            let _ = fs::remove_file(root.join(path));
-        }
         conn.execute(
             "INSERT INTO memory_artifact_tombstones (
                 agent_id, session_token, removed_at, reason, removed_paths
@@ -1101,6 +1110,9 @@ pub fn purge_canonical_noise_sessions(
             params![agent_id, session_token],
         )
         .map_err(|err| err.to_string())?;
+        for path in &paths {
+            let _ = fs::remove_file(root.join(path));
+        }
         removed += 1;
     }
     Ok(removed)
@@ -2311,6 +2323,7 @@ mod tests {
                 .content
                 .contains("packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs")
         );
+        reset_projection_purge_state(&root, "default").unwrap();
         fs::remove_dir_all(root).ok();
     }
 
@@ -2381,6 +2394,52 @@ mod tests {
         assert!(rendered.content.contains("older ledger rows clipped:"));
         assert!(!rendered.content.contains("/tmp/signetai"));
         assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
+        reset_projection_purge_state(&root, "default").unwrap();
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn purge_noise_sessions_removes_artifact_files_after_tombstones() {
+        let conn = setup_conn();
+        let root = temp_root("purge-noise-files");
+        let now = Utc::now().to_rfc3339();
+        let write = write_summary_artifact(
+            &conn,
+            &root,
+            SummaryArtifactInput {
+                agent_id: "default".to_string(),
+                session_id: "tmp-file".to_string(),
+                session_key: Some("tmp-file".to_string()),
+                project: Some("/tmp/signetai".to_string()),
+                harness: Some("codex".to_string()),
+                captured_at: now.clone(),
+                started_at: Some(now.clone()),
+                ended_at: Some(now.clone()),
+                summary: "This temp-session artifact should be purged from disk after tombstoning."
+                    .to_string(),
+            },
+            MemorySentence {
+                text: "This temp-session artifact should be purged from disk after tombstoning."
+                    .to_string(),
+                quality: "ok".to_string(),
+                generated_at: now,
+            },
+        )
+        .unwrap();
+        assert!(root.join(&write.artifact_path).exists());
+
+        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        assert_eq!(removed, 1);
+        assert!(!root.join(&write.artifact_path).exists());
+
+        let tombstones: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifact_tombstones WHERE agent_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 1);
         fs::remove_dir_all(root).ok();
     }
 

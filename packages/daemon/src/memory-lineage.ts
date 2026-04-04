@@ -1367,9 +1367,6 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 				.all(agentId, sessionToken) as Array<{ source_path: string }>,
 	);
 	const paths = rows.map((row) => row.source_path);
-	for (const path of paths) {
-		rmSync(join(getAgentsDir(), path), { force: true });
-	}
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO memory_artifact_tombstones (
@@ -1382,6 +1379,9 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 		).run(agentId, sessionToken, new Date().toISOString(), reason, JSON.stringify(paths));
 		db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ? AND session_token = ?").run(agentId, sessionToken);
 	});
+	for (const path of paths) {
+		rmSync(join(getAgentsDir(), path), { force: true });
+	}
 }
 
 function isNoiseArtifactGroup(
