@@ -142,6 +142,12 @@ describe("agent roster helpers", () => {
 			read_policy: { type: "group", group: "writers" },
 		});
 	});
+
+	test("fails closed to isolated when group policy is missing its group", () => {
+		expect(buildAgentMemoryConfig("group", null)).toEqual({
+			read_policy: "isolated",
+		});
+	});
 });
 
 describe("resolveSessionStartTimeoutMs", () => {

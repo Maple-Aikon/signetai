@@ -568,7 +568,7 @@ describe("isDuplicate", () => {
 		]);
 
 		const db = openTestDb();
-		const result = isDuplicate(db, "The user prefers dark mode and vim keybindings");
+		const result = isDuplicate(db, "The user prefers dark mode and vim keybindings", "default");
 		db.close();
 
 		expect(result).toBe(true);
@@ -578,7 +578,7 @@ describe("isDuplicate", () => {
 		createMemoryDb([{ content: "Project uses TypeScript and Bun" }]);
 
 		const db = openTestDb();
-		const result = isDuplicate(db, "The weather is sunny and warm today");
+		const result = isDuplicate(db, "The weather is sunny and warm today", "default");
 		db.close();
 
 		expect(result).toBe(false);
@@ -588,7 +588,7 @@ describe("isDuplicate", () => {
 		createMemoryDb([]);
 
 		const db = openTestDb();
-		const result = isDuplicate(db, "Some new content here");
+		const result = isDuplicate(db, "Some new content here", "default");
 		db.close();
 
 		expect(result).toBe(false);
@@ -599,7 +599,7 @@ describe("isDuplicate", () => {
 
 		const db = openTestDb();
 		// All words < 3 chars, should return false (no words to match)
-		const result = isDuplicate(db, "is an a to or");
+		const result = isDuplicate(db, "is an a to or", "default");
 		db.close();
 
 		expect(result).toBe(false);
