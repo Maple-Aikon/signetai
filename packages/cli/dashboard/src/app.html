@@ -17,7 +17,7 @@
 			// Set theme before first paint to prevent flash
 			(function() {
 				var t = localStorage.getItem('signet-theme');
-				if (!t) {
+				if (!t || t === 'auto') {
 					t = window.matchMedia('(prefers-color-scheme: light)').matches
 						? 'light' : 'dark';
 				}

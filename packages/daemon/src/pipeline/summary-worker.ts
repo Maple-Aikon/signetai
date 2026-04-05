@@ -29,6 +29,7 @@ import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
 import {
+	RateLimitExceededError,
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -101,7 +102,7 @@ export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | 
 }
 
 export function isTerminalSummaryJobError(errorMessage: string): boolean {
-	return errorMessage.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX);
+	return errorMessage.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX) || errorMessage.startsWith("Rate limit exceeded");
 }
 
 export function resolveFailedSummaryJobStatus(
@@ -1631,7 +1632,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			scheduleTick(500);
 		} catch (e) {
 			const errorMessage = e instanceof Error ? e.message : String(e);
-			const terminal = isTerminalSummaryJobError(errorMessage);
+			const terminal = isTerminalSummaryJobError(errorMessage) || e instanceof RateLimitExceededError;
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry

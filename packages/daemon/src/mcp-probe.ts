@@ -2,7 +2,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -76,6 +76,44 @@ async function resolveSecretReferences(values: Readonly<Record<string, string>>)
 	return resolved;
 }
 
+const EXTRA_PATH_DIRS = [
+	"/opt/homebrew/bin",
+	"/usr/local/bin",
+	"/usr/bin",
+	"/bin",
+	join(homedir(), ".bun", "bin"),
+	join(homedir(), ".local", "bin"),
+	"/Applications/Docker.app/Contents/Resources/bin",
+	"/Applications/Docker.app/Contents/MacOS",
+] as const;
+
+function buildRuntimePath(pathValue: string | undefined): string {
+	const merged = new Set<string>();
+	for (const part of (pathValue ?? "").split(delimiter)) {
+		const normalized = part.trim();
+		if (normalized.length > 0) merged.add(normalized);
+	}
+	for (const extra of EXTRA_PATH_DIRS) {
+		merged.add(extra);
+	}
+	return Array.from(merged).join(delimiter);
+}
+
+function resolveCommandPath(command: string, runtimePath: string): string {
+	if (command.includes("/") || command.includes("\\")) return command;
+	const fromPath = Bun.which(command);
+	if (typeof fromPath === "string" && fromPath.length > 0) return fromPath;
+
+	for (const dir of runtimePath.split(delimiter)) {
+		const trimmed = dir.trim();
+		if (trimmed.length === 0) continue;
+		const candidate = join(trimmed, command);
+		if (existsSync(candidate)) return candidate;
+	}
+
+	return command;
+}
+
 // ---------------------------------------------------------------------------
 // MCP Client connection (follows marketplace.ts pattern exactly)
 // ---------------------------------------------------------------------------
@@ -99,10 +137,12 @@ async function withProbeClient<T>(
 			}
 			const resolvedEnv = await resolveSecretReferences((server.config as MarketplaceMcpConfigStdio).env);
 			const stdioConfig = server.config as MarketplaceMcpConfigStdio;
+			const pathValue = buildRuntimePath(resolvedEnv.PATH ?? runtimeEnv.PATH);
+			const command = resolveCommandPath(stdioConfig.command, pathValue);
 			const transport = new StdioClientTransport({
-				command: stdioConfig.command,
+				command,
 				args: [...stdioConfig.args],
-				env: { ...runtimeEnv, ...resolvedEnv },
+				env: { ...runtimeEnv, ...resolvedEnv, PATH: pathValue },
 				cwd: stdioConfig.cwd,
 			});
 
@@ -287,6 +327,48 @@ export function generateAutoCard(
 	};
 }
 
+function isUnresolvedTemplateValue(value: string): boolean {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return false;
+	return /^<[^>]+>$/.test(trimmed) || /^\$\{input:[^}]+\}$/.test(trimmed);
+}
+
+function parseInlineEnvArg(arg: string): { key: string; value: string } | null {
+	const separator = arg.indexOf("=");
+	if (separator <= 0) return null;
+	const key = arg.slice(0, separator).trim();
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return null;
+	return {
+		key,
+		value: arg.slice(separator + 1).trim(),
+	};
+}
+
+function getProbeConfigIssue(server: InstalledMarketplaceMcpServer): string | null {
+	if (server.config.transport !== "stdio") return null;
+	const config = server.config as MarketplaceMcpConfigStdio;
+	const unresolved: string[] = [];
+
+	for (const [key, value] of Object.entries(config.env)) {
+		if (isUnresolvedTemplateValue(value)) {
+			unresolved.push(`${key}=${value}`);
+		}
+	}
+
+	for (let i = 0; i < config.args.length - 1; i++) {
+		const arg = config.args[i];
+		if (arg !== "-e" && arg !== "--env") continue;
+		const parsed = parseInlineEnvArg(config.args[i + 1]);
+		if (!parsed) continue;
+		if (isUnresolvedTemplateValue(parsed.value)) {
+			unresolved.push(`${parsed.key}=${parsed.value}`);
+		}
+	}
+
+	if (unresolved.length === 0) return null;
+	return `Server ${server.id} has unresolved environment placeholders: ${unresolved.join(", ")}. Update MCP server settings with real values and retry.`;
+}
+
 // ---------------------------------------------------------------------------
 // Server probing
 // ---------------------------------------------------------------------------
@@ -301,6 +383,20 @@ export function generateAutoCard(
  */
 export async function probeServer(server: InstalledMarketplaceMcpServer): Promise<McpProbeResult> {
 	const now = new Date().toISOString();
+	const configIssue = getProbeConfigIssue(server);
+	if (configIssue) {
+		logger.warn("probe", configIssue);
+		return {
+			serverId: server.id,
+			ok: false,
+			error: configIssue,
+			autoCard: generateAutoCard([], [], server.name),
+			toolCount: 0,
+			resourceCount: 0,
+			hasAppResources: false,
+			probedAt: now,
+		};
+	}
 
 	try {
 		const probeData = await withProbeClient(server, async (client) => {
