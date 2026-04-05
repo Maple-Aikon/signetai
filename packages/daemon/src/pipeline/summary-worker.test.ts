@@ -86,8 +86,10 @@ describe("insertSummaryFacts", () => {
 			accessor,
 			{
 				harness: "codex",
-				project: "/tmp/project",
+				project: "/mnt/work/dev/project",
 				session_key: "session-1",
+				session_id: "session-1",
+				id: "job-1",
 				agent_id: "",
 			},
 			[
@@ -117,7 +119,7 @@ describe("insertSummaryFacts", () => {
 		expect(row?.who).toBe("codex");
 		expect(row?.source_id).toBe("session-1");
 		expect(row?.source_type).toBe("session_end");
-		expect(row?.project).toBe("/tmp/project");
+		expect(row?.project).toBe("/mnt/work/dev/project");
 		expect(row?.agent_id).toBe("default");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
 	});
@@ -127,7 +129,7 @@ describe("insertSummaryFacts", () => {
 			accessor,
 			{
 				harness: "codex",
-				project: "/tmp/project",
+				project: "/mnt/work/dev/project",
 				session_key: "session-null-agent",
 				agent_id: null,
 			} as unknown as Parameters<typeof insertSummaryFacts>[1],
@@ -184,7 +186,14 @@ describe("insertSummaryFacts", () => {
 		// and causing the embed backfill to cycle indefinitely on duplicate content.
 		insertSummaryFacts(
 			accessor,
-			{ harness: "claude-code", project: null, session_key: "sess-hash-test", agent_id: "test-agent" },
+			{
+				harness: "claude-code",
+				project: null,
+				session_key: "sess-hash-test",
+				session_id: "sess-hash-test",
+				id: "job-hash",
+				agent_id: "test-agent",
+			},
 			[{ content: "Summary fact that needs a hash for embedding.", importance: 0.4, type: "fact" }],
 		);
 
@@ -195,6 +204,58 @@ describe("insertSummaryFacts", () => {
 		expect(row).toBeDefined();
 		expect(typeof row?.content_hash).toBe("string");
 		expect((row?.content_hash ?? "").length).toBeGreaterThan(0);
+	});
+
+	it("skips summary facts for temp sessions", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: "/tmp/signetai",
+				session_key: "sess-temp",
+				session_id: "sess-temp",
+				id: "job-temp",
+				agent_id: "default",
+			},
+			[
+				{
+					content: "This temp-session fact should never hit durable memory.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(0);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number };
+		expect(row.n).toBe(0);
+	});
+
+	it("skips summary facts for synthetic session ids when project is absent", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: null,
+				session_key: "stable-session",
+				session_id: "fixture-42",
+				id: "job-synth",
+				agent_id: "default",
+			},
+			[
+				{
+					content: "This synthetic-session fact should never hit durable memory.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(0);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number };
+		expect(row.n).toBe(0);
 	});
 });
 

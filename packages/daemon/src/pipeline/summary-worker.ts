@@ -24,6 +24,7 @@ import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
+import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
@@ -72,6 +73,11 @@ interface SummaryJobRow {
 	readonly max_attempts: number;
 	readonly created_at: string;
 }
+
+type SummaryFactJob = Pick<SummaryJobRow, "harness" | "project" | "session_key" | "agent_id"> & {
+	readonly session_id?: string | null;
+	readonly id?: string | null;
+};
 
 interface LlmSummaryResult {
 	readonly summary: string;
@@ -582,25 +588,34 @@ async function processJob(
 
 		if (!commandMode) {
 			if (job.trigger === "session_end") {
-				const summaryWrite = await writeSummaryArtifact({
-					agentId: job.agent_id,
-					sessionId: job.session_id ?? job.session_key ?? job.id,
-					sessionKey: job.session_key,
-					project: job.project,
-					harness: job.harness,
-					capturedAt: job.captured_at ?? job.created_at,
-					startedAt: job.started_at,
-					endedAt: job.ended_at,
-					summary: result.summary,
-					provider,
-				});
+				if (
+					!isNoiseSession({
+						project: job.project,
+						sessionKey: job.session_key,
+						sessionId: job.session_id ?? job.id,
+						harness: job.harness,
+					})
+				) {
+					const summaryWrite = await writeSummaryArtifact({
+						agentId: job.agent_id,
+						sessionId: job.session_id ?? job.session_key ?? job.id,
+						sessionKey: job.session_key,
+						project: job.project,
+						harness: job.harness,
+						capturedAt: job.captured_at ?? job.created_at,
+						startedAt: job.started_at,
+						endedAt: job.ended_at,
+						summary: result.summary,
+						provider,
+					});
 
-				logger.info("summary-worker", "Wrote session summary artifact", {
-					path: summaryWrite.summaryPath,
-					sessionKey: job.session_key,
-					project: job.project,
-					summaryChars: result.summary.length,
-				});
+					logger.info("summary-worker", "Wrote session summary artifact", {
+						path: summaryWrite.summaryPath,
+						sessionKey: job.session_key,
+						project: job.project,
+						summaryChars: result.summary.length,
+					});
+				}
 			}
 
 			const saved = insertSummaryFacts(accessor, job, result.facts);
@@ -1136,9 +1151,19 @@ async function scoreContinuity(
 
 export function insertSummaryFacts(
 	accessor: DbAccessor,
-	job: Pick<SummaryJobRow, "harness" | "project" | "session_key" | "agent_id">,
+	job: SummaryFactJob,
 	facts: ReadonlyArray<LlmSummaryResult["facts"][number]>,
 ): number {
+	if (
+		isNoiseSession({
+			project: job.project,
+			sessionKey: job.session_key,
+			sessionId: job.session_id ?? job.id ?? null,
+			harness: job.harness,
+		})
+	) {
+		return 0;
+	}
 	const now = new Date().toISOString();
 	const agentId = typeof job.agent_id === "string" && job.agent_id.length > 0 ? job.agent_id : "default";
 
@@ -1193,6 +1218,16 @@ export function insertSummaryFacts(
 // ---------------------------------------------------------------------------
 
 function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: LlmSummaryResult, agentId: string): void {
+	if (
+		isNoiseSession({
+			project: job.project,
+			sessionKey: job.session_key,
+			sessionId: job.session_id ?? job.id,
+			harness: job.harness,
+		})
+	) {
+		return;
+	}
 	accessor.withWriteTx((db) => {
 		// Check if table exists (migration may not have run)
 		const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();

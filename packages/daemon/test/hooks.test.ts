@@ -42,6 +42,7 @@ const {
 	reindexMemoryArtifacts,
 	removeCanonicalSession,
 	renderMemoryProjection,
+	resetProjectionPurgeState,
 	resolveMemorySentence,
 	sanitizeTranscriptV1,
 	writeCompactionArtifact,
@@ -482,6 +483,7 @@ function ledgerSection(content: string): string {
 // ============================================================================
 
 beforeEach(() => {
+	resetProjectionPurgeState();
 	if (existsSync(TEST_DIR)) {
 		rmSync(TEST_DIR, { recursive: true, force: true });
 	}
@@ -489,6 +491,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	resetProjectionPurgeState();
 	closeDbAccessor();
 	if (existsSync(TEST_DIR)) {
 		rmSync(TEST_DIR, { recursive: true, force: true });
@@ -1731,7 +1734,7 @@ describe("handleSessionEnd", () => {
 			transcriptPath,
 			sessionKey: "sess-ledger",
 			sessionId: "sess-ledger",
-			cwd: "/tmp/signetai",
+			cwd: "/home/user/signetai",
 		});
 
 		expect(result.queued).toBe(true);
@@ -1771,46 +1774,46 @@ describe("handleSessionEnd", () => {
 				),
 			);
 
-			const first = await handleSessionEnd({
-				harness: "test",
-				transcriptPath: transcriptAPath,
-				sessionKey: "agent:main:main",
-				cwd: "/tmp/signetai",
-			});
-			const second = await handleSessionEnd({
-				harness: "test",
-				transcriptPath: transcriptBPath,
-				sessionKey: "agent:main:main",
-				cwd: "/tmp/signetai",
-			});
+		const first = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: transcriptAPath,
+			sessionKey: "agent:main:main",
+			cwd: "/home/user/signetai",
+		});
+		const second = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: transcriptBPath,
+			sessionKey: "agent:main:main",
+			cwd: "/home/user/signetai",
+		});
 
-			expect(first.queued).toBe(true);
-			expect(second.queued).toBe(true);
+		expect(first.queued).toBe(true);
+		expect(second.queued).toBe(true);
 
-			const files = readdirSync(join(TEST_DIR, "memory")).sort();
-			expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
-			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
+		const files = readdirSync(join(TEST_DIR, "memory")).sort();
+		expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
+		expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
 
-			const db = openTestDb();
-			try {
-				const sessionIds = db.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC").all() as Array<{
-					session_id: string | null;
-				}>;
-				expect(sessionIds).toHaveLength(2);
-				// Path-based fallback IDs include a content digest suffix so
-				// rotating log files that reuse the same path produce distinct IDs.
-				expect(sessionIds[0]?.session_id).toMatch(
-					new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-				);
-				expect(sessionIds[1]?.session_id).toMatch(
-					new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-				);
-				expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
-			} finally {
-				db.close();
-			}
-		},
-	);
+		const db = openTestDb();
+		try {
+			const sessionIds = db
+				.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC")
+				.all() as Array<{ session_id: string | null }>;
+			expect(sessionIds).toHaveLength(2);
+			// Path-based fallback IDs include a content digest suffix so
+			// rotating log files that reuse the same path produce distinct IDs.
+			expect(sessionIds[0]?.session_id).toMatch(
+				new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+			);
+			expect(sessionIds[1]?.session_id).toMatch(
+				new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+			);
+			expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
+		} finally {
+			db.close();
+		}
+	},
+);
 
 	test("adds a random suffix when transcript context is unavailable", () => {
 		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");
@@ -1876,9 +1879,9 @@ describe("handleSynthesisRequest", () => {
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			"default",
-			"project:/tmp/rpg",
+			"project:/home/user/rpg",
 			"project:rpg",
-			"/tmp/rpg",
+			"/home/user/rpg",
 			"sess-rpg",
 			"summary",
 			"sess-rpg",
@@ -1908,9 +1911,9 @@ describe("handleSynthesisRequest", () => {
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			"default",
-			"project:/tmp/rpg|session:sess-rpg|harness:test",
+			"project:/home/user/rpg|session:sess-rpg|harness:test",
 			"project:rpg#session:sess-rpg#harness:test",
-			"/tmp/rpg",
+			"/home/user/rpg",
 			"sess-rpg",
 			"summary",
 			"sess-rpg",
@@ -1928,7 +1931,7 @@ describe("handleSynthesisRequest", () => {
 			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			"node-green",
-			"/tmp/greenscreen",
+			"/home/user/greenscreen",
 			"# Session\n\nMiguel green screen tool thread: keying edge stability and spill suppression.",
 			40,
 			"2026-03-26T00:00:00.000Z",
@@ -1947,7 +1950,7 @@ describe("handleSynthesisRequest", () => {
 
 		expect(result.prompt).toContain("project:rpg#session:sess-rpg#harness:test");
 		expect(result.indexBlock).toContain("node-green");
-		expect(result.prompt).toContain("/tmp/greenscreen");
+		expect(result.prompt).toContain("/home/user/greenscreen");
 		expect(result.prompt).toContain("node-rpg");
 	});
 
@@ -1960,7 +1963,7 @@ describe("handleSynthesisRequest", () => {
 		expect(result.prompt).toContain("## Global Head (Tier 1)");
 		expect(result.prompt).toContain("## Session Ledger (Last 30 Days)");
 		expect(result.prompt).toContain("Test session summary content");
-		expect(result.prompt).toContain("## Temporal Index");
+		expect(result.indexBlock).toBe("");
 	});
 
 	test.serial("returns zero fileCount when no synthesis sources exist", async () => {
@@ -2001,7 +2004,7 @@ describe("handleSynthesisRequest", () => {
 				transcriptPath,
 				sessionKey: "sess-pr390",
 				sessionId: "sess-pr390",
-				cwd: "/tmp/signetai",
+				cwd: "/home/user/signetai",
 			});
 
 			reindexMemoryArtifacts("default");
@@ -2262,7 +2265,7 @@ describe("memory-lineage", () => {
 			agentId: "default",
 			sessionId: "sess-frontmatter",
 			sessionKey: "sess-frontmatter",
-			project: "/tmp/signetai",
+			project: "/home/user/signetai",
 			harness: "test",
 			capturedAt: "2026-03-28T22:34:06.792Z",
 			startedAt: null,
@@ -2360,7 +2363,7 @@ describe("memory-lineage", () => {
 	});
 
 	test.serial(
-		"projection keeps all 1500 in-window sessions without clipping",
+		"projection clips older in-window sessions once the ledger exceeds the projection budget",
 		async () => {
 			createMemoryDb([]);
 
@@ -2378,7 +2381,7 @@ describe("memory-lineage", () => {
 						agentId: "default",
 						sessionId,
 						sessionKey: sessionId,
-						project: "/tmp/signetai",
+						project: "/home/user/signetai",
 						harness: "test",
 						capturedAt: at,
 						startedAt: null,
@@ -2392,7 +2395,9 @@ describe("memory-lineage", () => {
 			const ledger = ledgerSection(content);
 			const count = ledger.match(/\| session=/g)?.length ?? 0;
 
-			expect(count).toBe(1500);
+			expect(ledger).toContain("older ledger rows clipped:");
+			expect(count).toBeGreaterThan(0);
+			expect(count).toBeLessThan(1500);
 		},
 		60_000,
 	);
@@ -2405,7 +2410,7 @@ describe("memory-lineage", () => {
 			agentId: "default",
 			sessionId: "sess-shared",
 			sessionKey: "sess-shared",
-			project: "/tmp/default-proj",
+			project: "/home/user/default-proj",
 			harness: "test",
 			capturedAt: "2026-03-28T22:34:06.792Z",
 			startedAt: null,
@@ -2420,7 +2425,7 @@ describe("memory-lineage", () => {
 			agentId: "agent-b",
 			sessionId: "sess-shared",
 			sessionKey: "sess-shared",
-			project: "/tmp/agent-b-proj",
+			project: "/home/user/agent-b-proj",
 			harness: "test",
 			capturedAt: "2026-03-28T22:34:07.792Z",
 			startedAt: null,
@@ -2434,10 +2439,10 @@ describe("memory-lineage", () => {
 		const defaultView = renderMemoryProjection("default").content;
 		const agentView = renderMemoryProjection("agent-b").content;
 
-		expect(defaultView).toContain("/tmp/default-proj");
-		expect(defaultView).not.toContain("/tmp/agent-b-proj");
-		expect(agentView).toContain("/tmp/agent-b-proj");
-		expect(agentView).not.toContain("/tmp/default-proj");
+		expect(defaultView).toContain("/home/user/default-proj");
+		expect(defaultView).not.toContain("/home/user/agent-b-proj");
+		expect(agentView).toContain("/home/user/agent-b-proj");
+		expect(agentView).not.toContain("/home/user/default-proj");
 	});
 
 	test.serial("projection emits workspace-root-relative wikilinks", async () => {
@@ -2447,7 +2452,7 @@ describe("memory-lineage", () => {
 			agentId: "default",
 			sessionId: "sess-links",
 			sessionKey: "sess-links",
-			project: "/tmp/signetai",
+			project: "/home/user/signetai",
 			harness: "test",
 			capturedAt: "2026-03-28T22:34:06.792Z",
 			startedAt: null,

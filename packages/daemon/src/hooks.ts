@@ -29,7 +29,7 @@ import {
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
 import { getPredictorClient, recordPredictorLatency } from "./daemon";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
@@ -37,10 +37,13 @@ import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
 import {
 	appendSynthesisIndexBlock as appendRenderedIndexBlock,
+	NOISE_PURGE_REASON,
+	purgeCanonicalNoiseSessionsOnce,
 	renderMemoryProjection,
 	writeTranscriptArtifact,
 } from "./memory-lineage";
 import { buildAgentScopeClause, hybridRecall } from "./memory-search";
+import { isNoiseSession } from "./session-noise";
 import {
 	applyFtsOverlapFeedback,
 	decayAspectWeights,
@@ -2630,17 +2633,26 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 
 	if (transcript.trim().length > 0) {
 		try {
-			writeTranscriptArtifact({
-				agentId,
-				sessionId,
-				sessionKey: sessionKey ?? null,
-				project: req.cwd ?? null,
-				harness: req.harness,
-				capturedAt: endedAt,
-				startedAt: null,
-				endedAt,
-				transcript,
-			});
+			if (
+				!isNoiseSession({
+					project: req.cwd ?? null,
+					sessionKey: sessionKey ?? null,
+					sessionId,
+					harness: req.harness,
+				})
+			) {
+				writeTranscriptArtifact({
+					agentId,
+					sessionId,
+					sessionKey: sessionKey ?? null,
+					project: req.cwd ?? null,
+					harness: req.harness,
+					capturedAt: endedAt,
+					startedAt: null,
+					endedAt,
+					transcript,
+				});
+			}
 		} catch (e) {
 			logger.warn("hooks", "Transcript artifact write failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
@@ -2711,6 +2723,23 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	// Queue for async processing by the summary worker instead of
 	// blocking on LLM inference. The worker produces both a dated
 	// markdown summary and atomic fact rows.
+	if (
+		isNoiseSession({
+			project: req.cwd ?? null,
+			sessionKey: sessionKey ?? null,
+			sessionId,
+			harness: req.harness,
+		})
+	) {
+		logger.debug("hooks", "Session end summary skipped for noise session", {
+			harness: req.harness,
+			project: req.cwd,
+			sessionKey,
+			sessionId,
+		});
+		return { memoriesSaved: 0, queued: false };
+	}
+
 	const jobId = enqueueSummaryJob(getDbAccessor(), {
 		harness: req.harness,
 		transcript,
@@ -3369,7 +3398,11 @@ export function handleSynthesisRequest(
 	void _sinceTimestamp;
 	void _maxTokens;
 
-	const rendered = renderMemoryProjection(opts?.agentId ?? "default");
+	const agentId = opts?.agentId ?? "default";
+	if (hasDbAccessor()) {
+		purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
+	}
+	const rendered = renderMemoryProjection(agentId);
 	return {
 		harness: "daemon",
 		model: "projection",

@@ -246,6 +246,7 @@ import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { readScopedTask, readTaskAgentId } from "./task-scope";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { expandTemporalNode } from "./temporal-expand";
+import { isNoiseSession } from "./session-noise";
 import { upsertThreadHead } from "./thread-heads";
 import { type TimelineSources, buildTimeline } from "./timeline";
 import {
@@ -6222,36 +6223,44 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			return c.json({ error: scopedProject.error }, 403);
 		}
 		const project = scopedProject.project ?? null;
-
-		const summaryId = crypto.randomUUID();
 		const sessionId = body.sessionKey ?? `compaction:${now}`;
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				`INSERT INTO memories (
-					id, content, type, importance, source_id, source_type,
-					who, tags, project, agent_id, created_at, updated_at, updated_by
-				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				summaryId,
-				body.summary,
-				"session_summary",
-				0.8,
-				body.sessionKey ?? null,
-				body.harness,
-				"system",
-				`session,summary,${body.harness}`,
-				project,
-				agentId,
-				now,
-				now,
-				"system",
-			);
+		const noise = isNoiseSession({
+			project,
+			sessionKey: body.sessionKey ?? null,
+			sessionId,
+			harness: body.harness,
+		});
+		const summaryId = noise ? null : crypto.randomUUID();
+		if (!noise) {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, type, importance, source_id, source_type,
+						who, tags, project, agent_id, created_at, updated_at, updated_by
+					)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				).run(
+					summaryId,
+					body.summary,
+					"session_summary",
+					0.8,
+					body.sessionKey ?? null,
+					body.harness,
+					"system",
+					`session,summary,${body.harness}`,
+					project,
+					agentId,
+					now,
+					now,
+					"system",
+				);
 
-			const table = db
-				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
-				.get();
-			if (table) {
+				const table = db
+					.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
+					.get();
+				if (!table) {
+					return;
+				}
 				const nodeId = body.sessionKey ? `${body.sessionKey}:compaction:${Date.parse(now)}` : crypto.randomUUID();
 				db.prepare(
 					`INSERT OR REPLACE INTO session_summaries (
@@ -6284,31 +6293,31 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 					sourceRef: body.sessionKey ?? null,
 					harness: body.harness,
 				});
-			}
-		});
+			});
 
-		try {
-			await writeCompactionArtifact({
-				agentId,
-				sessionId,
-				sessionKey: body.sessionKey ?? null,
-				project,
-				harness: body.harness,
-				capturedAt: now,
-				startedAt: null,
-				endedAt: null,
-				summary: body.summary,
-			});
-		} catch (err) {
-			logger.warn("hooks", "Compaction artifact write failed (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-				sessionKey: body.sessionKey,
-			});
+			try {
+				await writeCompactionArtifact({
+					agentId,
+					sessionId,
+					sessionKey: body.sessionKey ?? null,
+					project,
+					harness: body.harness,
+					capturedAt: now,
+					startedAt: null,
+					endedAt: null,
+					summary: body.summary,
+				});
+			} catch (err) {
+				logger.warn("hooks", "Compaction artifact write failed (non-fatal)", {
+					error: err instanceof Error ? err.message : String(err),
+					sessionKey: body.sessionKey,
+				});
+			}
 		}
 
-		logger.info("hooks", "Compaction summary saved", {
+		logger.info("hooks", noise ? "Compaction summary skipped (noise session)" : "Compaction summary saved", {
 			harness: body.harness,
-			memoryId: summaryId,
+			memoryId: summaryId ?? "skipped-temp-session",
 		});
 
 		// Compaction wipes conversation context — reset prompt-submit dedup

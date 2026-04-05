@@ -19,8 +19,9 @@ use signet_core::db::{DbPool, Priority};
 use signet_services::transactions;
 
 use crate::memory_lineage::{
-    ArtifactKind, MemorySentence, SummaryArtifactInput, SummaryFact, resolve_memory_sentence,
-    write_memory_projection, write_summary_artifact, write_summary_to_dag,
+    ArtifactKind, MemorySentence, SummaryArtifactInput, SummaryFact, is_noise_session,
+    resolve_memory_sentence, write_memory_projection, write_summary_artifact,
+    write_summary_to_dag,
 };
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 
@@ -295,9 +296,15 @@ async fn process_summary(
         .unwrap_or_else(|| created_at.clone());
     let started_at = job.started_at.clone();
     let ended_at = job.ended_at.clone();
+    let noise = is_noise_session(
+        project.as_deref(),
+        Some(session_id.as_str()),
+        session_key.as_deref(),
+        Some(harness.as_str()),
+    );
 
     pool.write(Priority::High, move |conn| {
-        if trigger == "session_end" {
+        if trigger == "session_end" && !noise {
             let _ = write_summary_artifact(
                 conn,
                 &root,
@@ -317,57 +324,61 @@ async fn process_summary(
             .map_err(signet_core::error::CoreError::Migration)?;
         }
 
-        for fact in &facts {
-            if fact.content.trim().is_empty() {
-                continue;
+        if !noise {
+            for fact in &facts {
+                if fact.content.trim().is_empty() {
+                    continue;
+                }
+                let _ = transactions::ingest(
+                    conn,
+                    &transactions::IngestInput {
+                        content: &fact.content,
+                        memory_type: fact.kind.as_deref().unwrap_or("fact"),
+                        tags: fact
+                            .tags
+                            .as_deref()
+                            .map(|value| {
+                                value
+                                    .split(',')
+                                    .map(str::trim)
+                                    .filter(|item| !item.is_empty())
+                                    .map(ToOwned::to_owned)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default(),
+                        who: None,
+                        why: None,
+                        project: project.as_deref(),
+                        importance: fact.importance.unwrap_or(0.3).clamp(0.0, 0.5),
+                        pinned: false,
+                        source_type: Some("session_end"),
+                        source_id: session_key.as_deref(),
+                        idempotency_key: None,
+                        runtime_path: None,
+                        actor: WORKER_ACTOR,
+                        agent_id: &agent_id,
+                        visibility: "global",
+                        scope: None,
+                    },
+                );
             }
-            let _ = transactions::ingest(
-                conn,
-                &transactions::IngestInput {
-                    content: &fact.content,
-                    memory_type: fact.kind.as_deref().unwrap_or("fact"),
-                    tags: fact
-                        .tags
-                        .as_deref()
-                        .map(|value| {
-                            value
-                                .split(',')
-                                .map(str::trim)
-                                .filter(|item| !item.is_empty())
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                    who: None,
-                    why: None,
-                    project: project.as_deref(),
-                    importance: fact.importance.unwrap_or(0.3).clamp(0.0, 0.5),
-                    pinned: false,
-                    source_type: Some("session_end"),
-                    source_id: session_key.as_deref(),
-                    idempotency_key: None,
-                    runtime_path: None,
-                    actor: WORKER_ACTOR,
-                    agent_id: &agent_id,
-                    visibility: "global",
-                    scope: None,
-                },
-            );
         }
 
-        let _ = write_summary_to_dag(
-            conn,
-            &agent_id,
-            session_key.as_deref(),
-            project.as_deref(),
-            Some(harness.as_str()),
-            &created_at,
-            &latest_at,
-            &trigger,
-            &summary,
-            &leaves,
-        )
-        .map_err(signet_core::error::CoreError::Migration)?;
+        if !noise {
+            let _ = write_summary_to_dag(
+                conn,
+                &agent_id,
+                session_key.as_deref(),
+                project.as_deref(),
+                Some(harness.as_str()),
+                &created_at,
+                &latest_at,
+                &trigger,
+                &summary,
+                &leaves,
+            )
+            .map_err(signet_core::error::CoreError::Migration)?;
+        }
 
         let _ = write_memory_projection(conn, &root, &agent_id)
             .map_err(signet_core::error::CoreError::Migration)?;
@@ -816,5 +827,77 @@ mod tests {
         drop(pool);
         handle.await.expect("writer task join failed");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn process_summary_skips_noise_session_writes() {
+        let path = test_db("noise");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+        let root = std::env::temp_dir().join(format!(
+            "signet-summary-root-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).expect("failed to create temp summary dir");
+        let config = SummaryConfig {
+            agents_dir: root.clone(),
+            ..SummaryConfig::default()
+        };
+        let provider: Arc<dyn LlmProvider> = Arc::new(crate::provider::OllamaLlmProvider::new(
+            "http://127.0.0.1:11434",
+            "unused",
+            1000,
+        ));
+        let semaphore = Arc::new(LlmSemaphore::new(1));
+        let now = Utc::now().to_rfc3339();
+        let job = SummaryJob {
+            id: "job-noise".to_string(),
+            session_key: Some("tmp-session".to_string()),
+            session_id: "tmp-session".to_string(),
+            harness: "codex".to_string(),
+            project: Some("/tmp/signetai".to_string()),
+            agent_id: "default".to_string(),
+            transcript: "short temp session".to_string(),
+            trigger: "session_end".to_string(),
+            captured_at: Some(now.clone()),
+            started_at: Some(now.clone()),
+            ended_at: Some(now),
+            attempts: 0,
+            created_at: Utc::now().to_rfc3339(),
+        };
+
+        let result = process_summary(&pool, &provider, &semaphore, &config, &job)
+            .await
+            .expect("noise summary should still complete");
+        assert_eq!(result.facts_extracted, 0);
+
+        let counts = pool
+            .read(|conn| {
+                let artifacts: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'summary'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let memories: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let dag: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| row.get(0))
+                    .unwrap_or(0);
+                Ok((artifacts, memories, dag))
+            })
+            .await
+            .expect("failed to read summary counts");
+
+        assert_eq!(counts.0, 0);
+        assert_eq!(counts.1, 0);
+        assert_eq!(counts.2, 0);
+
+        drop(pool);
+        handle.await.expect("writer task join failed");
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
