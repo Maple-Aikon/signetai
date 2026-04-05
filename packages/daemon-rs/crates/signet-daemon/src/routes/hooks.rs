@@ -401,7 +401,32 @@ fn transcript_audit_dir(root: &Path) -> PathBuf {
 }
 
 fn audit_fs_timestamp(iso: &str) -> String {
-    iso.replace(':', "-")
+    iso.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn is_safe_audit_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+        })
+}
+
+fn build_audit_path(root: &Path, file_name: &str) -> std::io::Result<PathBuf> {
+    if !is_safe_audit_name(file_name) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid transcript audit file name",
+        ));
+    }
+    Ok(transcript_audit_dir(root).join(file_name))
 }
 
 fn resolve_audit_token(
@@ -448,14 +473,17 @@ fn write_transcript_audit(
     let dir = transcript_audit_dir(root);
     fs::create_dir_all(&dir)?;
     let token = resolve_audit_token(agent_id, session_id, session_key, raw_transcript);
-    let latest = dir.join(format!("{token}--latest.log"));
+    let latest = build_audit_path(root, &format!("{token}--latest.log"))?;
     fs::write(latest, raw_transcript)?;
     if let Some(captured_at) = captured_at {
-        let final_path = dir.join(format!(
+        let final_path = build_audit_path(
+            root,
+            &format!(
             "{}--{}--raw-transcript.log",
             audit_fs_timestamp(captured_at),
             token
-        ));
+        ),
+        )?;
         fs::write(final_path, raw_transcript)?;
     }
     Ok(())
