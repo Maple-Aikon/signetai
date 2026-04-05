@@ -77,7 +77,7 @@ const allApps = $derived([...dockApps, ...trayApps]);
 			{#each trayApps as app (app.id)}
 				<div
 					class="dock-item"
-					title="{app.name} — drag to grid or render window"
+					title="{app.name} — drag to grid to place"
 					draggable="true"
 					ondragstart={(e) => handleDragStart(e, app.id)}
 					role="listitem"

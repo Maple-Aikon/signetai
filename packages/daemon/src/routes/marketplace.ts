@@ -6,7 +6,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, delimiter } from "node:path";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -377,44 +377,6 @@ async function resolveSecretReferences(values: Readonly<Record<string, string>>)
 		resolved[key] = await getSecret(secretName);
 	}
 	return resolved;
-}
-
-const EXTRA_PATH_DIRS = [
-	"/opt/homebrew/bin",
-	"/usr/local/bin",
-	"/usr/bin",
-	"/bin",
-	join(homedir(), ".bun", "bin"),
-	join(homedir(), ".local", "bin"),
-	"/Applications/Docker.app/Contents/Resources/bin",
-	"/Applications/Docker.app/Contents/MacOS",
-] as const;
-
-function buildRuntimePath(pathValue: string | undefined): string {
-	const merged = new Set<string>();
-	for (const part of (pathValue ?? "").split(delimiter)) {
-		const normalized = part.trim();
-		if (normalized.length > 0) merged.add(normalized);
-	}
-	for (const extra of EXTRA_PATH_DIRS) {
-		merged.add(extra);
-	}
-	return Array.from(merged).join(delimiter);
-}
-
-function resolveCommandPath(command: string, runtimePath: string): string {
-	if (command.includes("/") || command.includes("\\")) return command;
-	const fromPath = Bun.which(command);
-	if (typeof fromPath === "string" && fromPath.length > 0) return fromPath;
-
-	for (const dir of runtimePath.split(delimiter)) {
-		const trimmed = dir.trim();
-		if (trimmed.length === 0) continue;
-		const candidate = join(trimmed, command);
-		if (existsSync(candidate)) return candidate;
-	}
-
-	return command;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -977,12 +939,10 @@ async function withConnectedClient<T>(
 				if (typeof v === "string") runtimeEnv[k] = v;
 			}
 			const resolvedEnv = await resolveSecretReferences(server.config.env);
-			const pathValue = buildRuntimePath(resolvedEnv.PATH ?? runtimeEnv.PATH);
-			const command = resolveCommandPath(server.config.command, pathValue);
 			const transport = new StdioClientTransport({
-				command,
+				command: server.config.command,
 				args: [...server.config.args],
-				env: { ...runtimeEnv, ...resolvedEnv, PATH: pathValue },
+				env: { ...runtimeEnv, ...resolvedEnv },
 				cwd: server.config.cwd,
 			});
 

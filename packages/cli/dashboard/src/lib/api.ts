@@ -532,39 +532,6 @@ export async function recallMemories(
 	}
 }
 
-export interface RememberMemoryRequest {
-	content: string;
-	who?: string;
-	project?: string;
-	importance?: number;
-	tags?: string;
-	pinned?: boolean;
-	type?: string;
-	sourceType?: string;
-	sourceId?: string;
-	agentId?: string;
-}
-
-export async function rememberMemory(request: RememberMemoryRequest): Promise<{ success: boolean; id?: string; error?: string }> {
-	try {
-		const response = await fetch(`${API_BASE}/api/memory/remember`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(request),
-		});
-		if (!response.ok) {
-			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-			const error = typeof body.error === "string" ? body.error : `Request failed (${response.status})`;
-			return { success: false, error };
-		}
-		const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-		const id = typeof data.id === "string" ? data.id : undefined;
-		return { success: true, id };
-	} catch (error) {
-		return { success: false, error: String(error) };
-	}
-}
-
 export async function getDistinctWho(): Promise<string[]> {
 	try {
 		const response = await fetch(`${API_BASE}/memory/search?distinct=who`);

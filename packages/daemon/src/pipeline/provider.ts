@@ -204,17 +204,21 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 	let lastWarnMs = 0;
 	const WARN_INTERVAL_MS = 300_000;
 
+	function warnIfThrottled(): void {
+		const now = Date.now();
+		if (now - lastWarnMs > WARN_INTERVAL_MS) {
+			lastWarnMs = now;
+			const stats = bucket.currentStats();
+			logger.warn("pipeline", `Rate limit throttled ${provider.name} (${stats.totalThrottled} total)`, stats);
+		}
+	}
+
 	return {
 		name: provider.name,
 
 		async generate(prompt, opts): Promise<string> {
 			if (!(await bucket.acquire(cfg.waitTimeoutMs))) {
-				const now = Date.now();
-				if (now - lastWarnMs > WARN_INTERVAL_MS) {
-					const stats = bucket.currentStats();
-					logger.warn("pipeline", `Rate limit throttled ${provider.name} (${stats.totalThrottled} total)`, stats);
-					lastWarnMs = now;
-				}
+				warnIfThrottled();
 				throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
 			}
 			return provider.generate(prompt, opts);
@@ -224,12 +228,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 			? {
 					async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
 						if (!(await bucket.acquire(cfg.waitTimeoutMs))) {
-							const now = Date.now();
-							if (now - lastWarnMs > WARN_INTERVAL_MS) {
-								const stats = bucket.currentStats();
-								logger.warn("pipeline", `Rate limit throttled ${provider.name} (${stats.totalThrottled} total)`, stats);
-								lastWarnMs = now;
-							}
+							warnIfThrottled();
 							throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
 						}
 						const fn = provider.generateWithUsage;

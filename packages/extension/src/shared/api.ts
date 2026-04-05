@@ -5,8 +5,6 @@
 
 import { getConfig } from "./config.js";
 import type {
-	BrowserToolRequest,
-	BrowserToolResult,
 	DaemonStatus,
 	HealthResponse,
 	Identity,
@@ -33,24 +31,18 @@ async function getHeaders(): Promise<Record<string, string>> {
 	return headers;
 }
 
-async function fetchApi<T>(path: string, options?: RequestInit, timeoutMs = 10_000): Promise<T | null> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
+async function fetchApi<T>(path: string, options?: RequestInit): Promise<T | null> {
 	try {
 		const base = await getBaseUrl();
 		const headers = await getHeaders();
 		const response = await fetch(`${base}${path}`, {
 			...options,
 			headers: { ...headers, ...options?.headers },
-			signal: options?.signal ?? controller.signal,
 		});
 		if (!response.ok) return null;
 		return (await response.json()) as T;
 	} catch {
 		return null;
-	} finally {
-		clearTimeout(timeout);
 	}
 }
 
@@ -85,23 +77,11 @@ export async function getMemories(
 }
 
 export async function recallMemories(query: string, limit = 10): Promise<RecallResult> {
-	const result = await fetchApi<{ memories?: Memory[]; results?: Memory[]; query?: string; count?: number }>(
-		"/api/memory/recall",
-		{
-			method: "POST",
-			body: JSON.stringify({ query, limit }),
-		},
-	);
-	const memories = Array.isArray(result?.memories)
-		? result.memories
-		: Array.isArray(result?.results)
-			? result.results
-			: [];
-	return {
-		memories,
-		query: result?.query ?? query,
-		count: typeof result?.count === "number" ? result.count : memories.length,
-	};
+	const result = await fetchApi<RecallResult>("/api/memory/recall", {
+		method: "POST",
+		body: JSON.stringify({ query, limit }),
+	});
+	return result ?? { memories: [], query, count: 0 };
 }
 
 export async function rememberMemory(request: RememberRequest): Promise<{ success: boolean; id?: string }> {
@@ -110,20 +90,4 @@ export async function rememberMemory(request: RememberRequest): Promise<{ succes
 		body: JSON.stringify(request),
 	});
 	return result ?? { success: false };
-}
-
-export async function dispatchBrowserTool(request: BrowserToolRequest): Promise<BrowserToolResult> {
-	const result = await fetchApi<BrowserToolResult>("/api/os/browser-tool", {
-		method: "POST",
-		body: JSON.stringify(request),
-	}, 20_000);
-
-	return (
-		result ?? {
-			success: false,
-			memoryStored: false,
-			dispatched: false,
-			error: "Browser tool dispatch failed",
-		}
-	);
 }
