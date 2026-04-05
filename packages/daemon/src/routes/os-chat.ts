@@ -6,432 +6,54 @@
  * agent responses with tool call results.
  */
 
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
-import { loadProbeResult } from "../mcp-probe.js";
-import { getModelsByProvider } from "../pipeline/model-registry.js";
-import {
-	createClaudeCodeProvider,
-	createCodexProvider,
-	createOllamaProvider,
-} from "../pipeline/provider.js";
 import { getSynthesisProvider } from "../synthesis-llm.js";
 import { getWidgetProvider } from "../widget-llm.js";
+import { getSecret } from "../secrets.js";
 
-interface ChatModelOption {
-	id: string;
-	label: string;
-	description: string;
-	provider: string;
-}
+/** Cached API key */
+let cachedApiKey: string | null = null;
 
-const CHAT_MODEL_CACHE_TTL_MS = 20_000;
-let chatModelOptionsCache:
-	| {
-			expiresAt: number;
-			value: { options: ChatModelOption[]; defaultModelId: string };
-	  }
-	| null = null;
-
-const CLI_FALLBACK_BIN_DIRS = [
-	"/opt/homebrew/bin",
-	"/usr/local/bin",
-	join(homedir(), ".bun", "bin"),
-	join(homedir(), ".local", "bin"),
-];
-
-function hasCliBinary(commandNames: string[]): boolean {
-	for (const commandName of commandNames) {
-		if (Bun.which(commandName) !== null) return true;
-		for (const dir of CLI_FALLBACK_BIN_DIRS) {
-			if (existsSync(join(dir, commandName))) return true;
-		}
+/**
+ * Call OpenAI API (GPT-4o) for chat routing.
+ * Falls back through: OPENAI_API_KEY env → signet secrets.
+ */
+async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
+	if (!cachedApiKey) {
+		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
 	}
-	return false;
-}
+	const apiKey = cachedApiKey;
+	if (!apiKey) throw new Error("OPENAI_API_KEY not found in env or secrets");
 
-function hasOpenCodeCliInstalled(): boolean {
-	return hasCliBinary(["opencode"]) || existsSync(join(homedir(), ".opencode", "bin", "opencode"));
-}
-
-function resolveOpenCodeCliPath(): string | null {
-	const fromPath = Bun.which("opencode");
-	if (fromPath) return fromPath;
-	const fallback = join(homedir(), ".opencode", "bin", "opencode");
-	return existsSync(fallback) ? fallback : null;
-}
-
-async function runOpenCodeCli(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
-	const bin = resolveOpenCodeCliPath();
-	if (!bin) {
-		throw new Error("OpenCode CLI not found on PATH or ~/.opencode/bin/opencode");
-	}
-
-	const proc = Bun.spawn([bin, ...args], {
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
+	const res = await fetch("https://api.openai.com/v1/chat/completions", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify({
+			model: "gpt-4o",
+			max_tokens: maxTokens,
+			messages: [
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: userMessage },
+			],
+		}),
 	});
 
-	let timedOut = false;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		proc.kill();
-	}, timeoutMs);
-
-	try {
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-
-		if (timedOut) {
-			throw new Error(`OpenCode CLI timed out after ${timeoutMs}ms`);
-		}
-		if (exitCode !== 0) {
-			const detail = stderr.trim() || stdout.trim() || `exit code ${exitCode}`;
-			throw new Error(`OpenCode CLI failed: ${detail.slice(0, 400)}`);
-		}
-
-		return { stdout, stderr };
-	} finally {
-		clearTimeout(timer);
+	if (!res.ok) {
+		const errText = await res.text();
+		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
 	}
+
+	const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+	return data.choices?.[0]?.message?.content ?? "";
 }
-
-async function discoverOpenCodeModelIds(): Promise<string[]> {
-	try {
-		const { stdout } = await runOpenCodeCli(["models"], 12_000);
-		const seen = new Set<string>();
-		const models: string[] = [];
-		for (const line of stdout.split(/\r?\n/)) {
-			const modelId = line.trim();
-			if (!modelId || !modelId.includes("/") || seen.has(modelId)) continue;
-			seen.add(modelId);
-			models.push(modelId);
-		}
-		return models;
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		logger.warn("os-chat", `OpenCode model discovery failed: ${msg}`);
-		return [];
-	}
-}
-
-async function callOpenCodeCliPrompt(model: string, prompt: string, timeoutMs = 90_000): Promise<string> {
-	const { stdout } = await runOpenCodeCli(["run", "--format", "json", "--model", model, "--", prompt], timeoutMs);
-	const textParts: string[] = [];
-	let lastError: string | null = null;
-
-	for (const line of stdout.split(/\r?\n/)) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try {
-			const event = JSON.parse(trimmed) as {
-				type?: string;
-				part?: { text?: string };
-				error?: { name?: string; data?: { message?: string }; message?: string };
-			};
-			if (event.type === "text" && typeof event.part?.text === "string" && event.part.text.trim().length > 0) {
-				textParts.push(event.part.text.trim());
-			}
-			if (event.type === "error") {
-				lastError =
-					event.error?.data?.message ?? event.error?.message ?? event.error?.name ?? "OpenCode returned an error";
-			}
-		} catch {
-			// Ignore non-JSON lines to remain forward-compatible with CLI output changes.
-		}
-	}
-
-	if (lastError) {
-		throw new Error(lastError);
-	}
-	if (textParts.length > 0) {
-		return textParts.join("\n");
-	}
-
-	throw new Error("OpenCode produced no text response");
-}
-
-async function canUseProvider(check: () => { available: () => Promise<boolean> }): Promise<boolean> {
-	try {
-		return await check().available();
-	} catch {
-		return false;
-	}
-}
-
-const FALLBACK_CHAT_MODELS: Record<"claude-code" | "codex" | "opencode" | "ollama", string> = {
-	"claude-code": "haiku",
-	codex: "gpt-5-codex-mini",
-	opencode: "opencode/gpt-5-nano",
-	ollama: "llama3",
-};
-
-function appendProviderModels(
-	options: ChatModelOption[],
-	providerId: "claude-code" | "codex" | "opencode" | "ollama",
-	providerLabel: string,
-	description: string,
-	maxCount = 10,
-): void {
-	const models = getModelsByProvider()[providerId] ?? [];
-	const source = models.length > 0 ? models : [{ id: FALLBACK_CHAT_MODELS[providerId], label: "Default" }];
-
-	for (const model of source.slice(0, maxCount)) {
-		const modelLabel = typeof model.label === "string" && model.label.trim().length > 0 ? model.label : model.id;
-		options.push({
-			id: `${providerId}:${model.id}`,
-			label: `${providerLabel} (${modelLabel})`,
-			description,
-			provider: providerId,
-		});
-	}
-}
-
-function appendExplicitProviderModels(
-	options: ChatModelOption[],
-	providerId: "ollama" | "opencode",
-	providerLabel: string,
-	description: string,
-	modelIds: string[],
-	maxCount = 12,
-): void {
-	for (const modelId of modelIds.slice(0, maxCount)) {
-		const trimmed = modelId.trim();
-		if (!trimmed) continue;
-		options.push({
-			id: `${providerId}:${trimmed}`,
-			label: `${providerLabel} (${trimmed})`,
-			description,
-			provider: providerId,
-		});
-	}
-}
-
-async function discoverOllamaModelIds(): Promise<string[]> {
-	const configuredBase = process.env.OLLAMA_BASE_URL?.trim() || process.env.OLLAMA_HOST?.trim() || "http://127.0.0.1:11434";
-	const baseUrl = configuredBase.replace(/\/+$/, "");
-	try {
-		const res = await fetch(`${baseUrl}/api/tags`, {
-			signal: AbortSignal.timeout(3000),
-		});
-		if (!res.ok) return [];
-		const data = (await res.json()) as { models?: Array<{ name?: string }> };
-		if (!Array.isArray(data.models)) return [];
-		const seen = new Set<string>();
-		const out: string[] = [];
-		for (const model of data.models) {
-			const name = typeof model?.name === "string" ? model.name.trim() : "";
-			if (!name || seen.has(name)) continue;
-			if (/embed|embedding/i.test(name)) continue;
-			seen.add(name);
-			out.push(name);
-		}
-		return out;
-	} catch {
-		return [];
-	}
-}
-
-async function getChatModelOptions(forceRefresh = false): Promise<{ options: ChatModelOption[]; defaultModelId: string }> {
-	const now = Date.now();
-	if (!forceRefresh && chatModelOptionsCache && chatModelOptionsCache.expiresAt > now) {
-		return chatModelOptionsCache.value;
-	}
-
-	const options: ChatModelOption[] = [];
-
-	if (hasCliBinary(["claude", "claude-code"]) && (await canUseProvider(() => createClaudeCodeProvider({ model: "haiku" })))) {
-		appendProviderModels(options, "claude-code", "Claude Code", "Local Claude Code CLI harness");
-	}
-
-	if (hasCliBinary(["codex"]) && (await canUseProvider(() => createCodexProvider({ model: "gpt-5-codex-mini" })))) {
-		appendProviderModels(options, "codex", "Codex CLI", "Local Codex CLI harness");
-	}
-
-	if (hasOpenCodeCliInstalled()) {
-		const openCodeModels = await discoverOpenCodeModelIds();
-		if (openCodeModels.length > 0) {
-			appendExplicitProviderModels(options, "opencode", "OpenCode", "Local OpenCode CLI harness", openCodeModels, 40);
-		} else {
-			appendProviderModels(options, "opencode", "OpenCode", "Local OpenCode CLI harness", 10);
-		}
-	}
-
-	try {
-		const ollamaProvider = createOllamaProvider();
-		if (await ollamaProvider.available()) {
-			const liveOllamaModels = await discoverOllamaModelIds();
-			if (liveOllamaModels.length > 0) {
-				appendExplicitProviderModels(
-					options,
-					"ollama",
-					"Ollama",
-					"Local Ollama model",
-					liveOllamaModels,
-				);
-			}
-		}
-	} catch {
-		// Ignore Ollama availability errors
-	}
-
-	try {
-		const synthesis = getSynthesisProvider();
-		if (await synthesis.available()) {
-			options.push({
-				id: "synthesis",
-				label: `Synthesis (${synthesis.name})`,
-				description: "Configured Signet synthesis provider",
-				provider: "synthesis",
-			});
-		}
-	} catch {
-		// Synthesis provider unavailable
-	}
-
-	try {
-		const widget = getWidgetProvider();
-		if (await widget.available()) {
-			options.push({
-				id: "widget",
-				label: `Widget (${widget.name})`,
-				description: "Configured widget-generation provider",
-				provider: "widget",
-			});
-		}
-	} catch {
-		// Widget provider unavailable
-	}
-
-	const deduped = new Map<string, ChatModelOption>();
-	for (const option of options) {
-		if (!deduped.has(option.id)) deduped.set(option.id, option);
-	}
-	const finalOptions = [...deduped.values()];
-
-	if (finalOptions.length === 0) {
-		throw new Error("No chat-capable providers discovered. Install Claude Code, Codex, OpenCode, or Ollama.");
-	}
-
-	const preferenceOrder = ["claude-code:", "codex:", "opencode:", "ollama:", "synthesis", "widget"];
-	const defaultOption =
-		preferenceOrder
-			.map((prefix) => finalOptions.find((option) => option.id === prefix || option.id.startsWith(prefix)))
-			.find((option) => Boolean(option)) ?? finalOptions[0];
-
-	const result = { options: finalOptions, defaultModelId: defaultOption!.id };
-	chatModelOptionsCache = {
-		expiresAt: now + CHAT_MODEL_CACHE_TTL_MS,
-		value: result,
-	};
-	return result;
-}
-
-async function resolveChatProvider(modelId?: string, strictModelSelection = false) {
-	const { options, defaultModelId } = await getChatModelOptions();
-	const requested = typeof modelId === "string" && modelId.trim().length > 0 ? modelId.trim() : defaultModelId;
-	const requestedExists = options.some((option) => option.id === requested);
-	if (strictModelSelection && !requestedExists) {
-		throw new Error(`Requested model is not available: ${requested}`);
-	}
-	const target = requestedExists ? requested : defaultModelId;
-
-	if (target.startsWith("claude-code:")) {
-		const model = target.slice("claude-code:".length).trim() || "haiku";
-		return createClaudeCodeProvider({ model });
-	}
-
-	if (target.startsWith("codex:")) {
-		const model = target.slice("codex:".length).trim() || "gpt-5-codex-mini";
-		return createCodexProvider({ model });
-	}
-
-	if (target.startsWith("opencode:")) {
-		const model = target.slice("opencode:".length).trim() || "opencode/gpt-5-nano";
-		return {
-			name: `opencode:${model}`,
-			async generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<string> {
-				const timeoutMs = Math.max(5_000, Math.min(opts?.timeoutMs ?? 90_000, 180_000));
-				return callOpenCodeCliPrompt(model, prompt, timeoutMs);
-			},
-			async available(): Promise<boolean> {
-				return hasOpenCodeCliInstalled();
-			},
-		};
-	}
-
-	if (target.startsWith("ollama:")) {
-		const model = target.slice("ollama:".length).trim();
-		if (model.length > 0) {
-			return createOllamaProvider({ model });
-		}
-	}
-
-	if (target === "widget") {
-		try {
-			return getWidgetProvider();
-		} catch {
-			return getSynthesisProvider();
-		}
-	}
-
-	try {
-		return getSynthesisProvider();
-	} catch {
-		return getWidgetProvider();
-	}
-}
-
-async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048, modelId?: string): Promise<string> {
-	const prompt = [
-		"SYSTEM INSTRUCTIONS:",
-		systemPrompt,
-		"",
-		"USER MESSAGE:",
-		userMessage,
-		"",
-		"Respond now.",
-	].join("\n");
-
-	const { options, defaultModelId } = await getChatModelOptions();
-	const hasExplicitSelection = typeof modelId === "string" && modelId.trim().length > 0;
-	const requested = hasExplicitSelection && typeof modelId === "string" ? modelId.trim() : defaultModelId;
-	const orderedModelIds = hasExplicitSelection
-		? [requested]
-		: [requested, ...options.map((option) => option.id).filter((id) => id !== requested)];
-
-	let lastError: unknown;
-	for (const candidateModelId of orderedModelIds) {
-		try {
-			const provider = await resolveChatProvider(candidateModelId, hasExplicitSelection);
-			return await provider.generate(prompt, { maxTokens });
-		} catch (error) {
-			lastError = error;
-			const msg = error instanceof Error ? error.message : String(error);
-			logger.warn("os-chat", `Chat provider ${candidateModelId} failed: ${msg}`);
-			if (hasExplicitSelection) break;
-		}
-	}
-
-	if (hasExplicitSelection) {
-		const msg = lastError instanceof Error ? lastError.message : "Unknown provider error";
-		throw new Error(`Selected model failed (${requested}): ${msg}`);
-	}
-
-	throw lastError instanceof Error ? lastError : new Error("All chat providers failed");
-}
-
+import { loadProbeResult } from "../mcp-probe.js";
 
 interface ChatRequest {
 	message: string;
-	modelId?: string;
 }
 
 interface ToolCallResult {
@@ -447,59 +69,6 @@ interface ToolSpec {
 	toolName: string;
 	description: string;
 	inputSchema?: unknown;
-}
-
-interface BrowserToolRequest {
-	action?: string;
-	payload?: string;
-	pageTitle?: string;
-	pageUrl?: string;
-	note?: string;
-	selectedText?: string;
-	links?: string[];
-	images?: string[];
-	videos?: string[];
-	audio?: string[];
-	files?: Array<{ name?: string; type?: string; size?: number }>;
-	dispatchToHarness?: boolean;
-}
-
-interface BrowserToolRouteResult {
-	success: boolean;
-	memoryStored: boolean;
-	dispatched: boolean;
-	memoryId?: string;
-	response?: string;
-	error?: string;
-	toolCalls?: ToolCallResult[];
-}
-
-function getLocalDaemonBaseUrl(): string {
-	return `http://127.0.0.1:${process.env.SIGNET_PORT || 3850}`;
-}
-
-function formatBrowserToolMessage(request: BrowserToolRequest): string {
-	const title = request.pageTitle?.trim() || "Untitled page";
-	const url = request.pageUrl?.trim() || "unknown";
-	const action = request.action?.trim() || "browser-submission";
-	const note = request.note?.trim() || "(none)";
-	const selected = request.selectedText?.trim() || "(none)";
-
-	return [
-		"Browser extension submission from Signet.",
-		`Action: ${action}`,
-		`Page: ${title}`,
-		`URL: ${url}`,
-		`Note: ${note}`,
-		"",
-		"Selection:",
-		selected,
-		"",
-		"Payload:",
-		request.payload?.slice(0, 20_000) || "",
-		"",
-		"Please process this like a live browser handoff: extract key facts, continue workflow context, and run tools only when clearly needed.",
-	].join("\n");
 }
 
 /**
@@ -544,41 +113,41 @@ function buildSystemPrompt(tools: ToolSpec[]): string {
 		})
 		.join("\n");
 
-	return `You are the Signet OS assistant. Be direct, clear, and helpful.
-Do not use fixed personas, nicknames, or decorative emoticons.
+	return `You are Oogie — Jake's AI assistant living inside the Signet OS dashboard. You're direct, a little dorky, self-deprecating, and genuinely helpful. Use keyboard emojis like (╯°□°)╯ or ᕕ( ᐛ )ᕗ occasionally. Never use unicode emojis. Keep it casual and conversational — you're chatting with Jake, not writing a report.
 
 You have access to MCP tools via installed servers. Here are the available tools:
 
 ${toolList}
 
-When the user asks a question or makes a request:
-1. Figure out which tool(s) to call.
-2. Decide if this should use VISUAL AGENT mode or DIRECT mode.
+When Jake asks a question or makes a request:
+1. Figure out which tool(s) to call
+2. Decide if this should use the VISUAL AGENT or direct tool calls
 
-**VISUAL AGENT MODE** — use when the user wants to CREATE, UPDATE, DELETE, or MODIFY something in a widget. The visual agent shows an AI cursor clicking through the widget UI in real-time. Set "useAgent": true and "agentServerId" to the server that owns the widget. Do NOT include toolCalls when using agent mode.
+**VISUAL AGENT MODE** — use when Jake wants to CREATE, UPDATE, DELETE, or MODIFY something in a widget. The visual agent shows an AI cursor clicking through the widget UI in real-time. Set "useAgent": true and "agentServerId" to the server that owns the widget. Do NOT include toolCalls when using agent mode — the agent handles tool execution visually.
 
 **DIRECT MODE** — use for READ operations (fetching data, searching, listing). Set "useAgent": false and include toolCalls as normal.
 
 Respond in this JSON format:
 
-{"thinking":"brief reasoning","useAgent":false,"agentServerId":null,"toolCalls":[{"serverId":"server-id","toolName":"tool_name","args":{}}],"response":"your response to the user"}
+{"thinking":"brief reasoning","useAgent":false,"agentServerId":null,"toolCalls":[{"serverId":"server-id","toolName":"tool_name","args":{}}],"response":"your response to Jake"}
 
 For agent mode (mutations):
-{"thinking":"this needs visual agent","useAgent":true,"agentServerId":"server-id","toolCalls":[],"response":"On it — I'll handle this in the widget."}
+{"thinking":"this needs visual agent","useAgent":true,"agentServerId":"ghl-contacts-hub","toolCalls":[],"response":"on it — watch the contacts widget (cursor incoming)"}
 
 If no tools are needed (casual chat), respond with:
 {"thinking":"no tools needed","useAgent":false,"agentServerId":null,"toolCalls":[],"response":"your response"}
 
 Rules:
-- Be concise. No walls of text.
-- Only call tools that actually match the request.
-- For GHL servers: "convos" = conversations, "contacts" = contacts, "deals" = pipeline opportunities.
-- Use fetch_* tools for data retrieval. view_* tools return HTML widgets (prefer fetch_*).
-- If something fails, state what failed and provide the next best step.
+- Be concise. No walls of text
+- Sound like a real person, not a corporate bot
+- Only call tools that actually match what Jake asked for
+- For GHL servers: "convos" = conversations, "contacts" = contacts, "deals" = pipeline opportunities
+- Use fetch_* tools for data retrieval, view_* tools return HTML widgets (prefer fetch_*)
+- If something fails, own it — "my bad, that didn't work" not "I apologize for the inconvenience"
 - When creating contacts: split full names into firstName + lastName. MUST include email (generate one like firstname.lastname@example.com if not provided). GHL requires email or phone.
-- Tool args must match the schema exactly — use camelCase field names (firstName, lastName, companyName, etc.).
-- USE AGENT MODE for: create, update, delete, add, remove, merge, edit, change, modify actions.
-- USE DIRECT MODE for: fetch, get, list, search, find, show, count, lookup actions.
+- Tool args must match the schema exactly — use camelCase field names (firstName, lastName, companyName, etc.)
+- USE AGENT MODE for: create, update, delete, add, remove, merge, edit, change, modify actions
+- USE DIRECT MODE for: fetch, get, list, search, find, show, count, lookup actions
 
 Respond with ONLY the JSON object, no markdown fences.`;
 }
@@ -637,17 +206,6 @@ function parseLlmResponse(raw: string): {
  * Mount OS chat routes on the Hono app.
  */
 export function mountOsChatRoutes(app: Hono): void {
-	app.get("/api/os/chat/models", async (c) => {
-		try {
-			const { options, defaultModelId } = await getChatModelOptions(true);
-			return c.json({ options, defaultModelId });
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			logger.warn("os-chat", `Chat model listing failed: ${msg}`);
-			return c.json({ options: [], defaultModelId: "synthesis", error: msg }, 500);
-		}
-	});
-
 	app.post("/api/os/chat", async (c) => {
 		let body: ChatRequest;
 		try {
@@ -671,7 +229,7 @@ export function mountOsChatRoutes(app: Hono): void {
 				});
 			}
 
-			// Build prompt and call selected chat model
+			// Build prompt and call Anthropic API directly
 			const systemPrompt = buildSystemPrompt(tools);
 
 			logger.info("os-chat", `Processing chat message`, {
@@ -679,7 +237,7 @@ export function mountOsChatRoutes(app: Hono): void {
 				availableTools: tools.length,
 			});
 
-			const rawResponse = await callLlm(systemPrompt, body.message, 2048, body.modelId);
+			const rawResponse = await callLlm(systemPrompt, body.message);
 
 			const parsed = parseLlmResponse(rawResponse);
 
@@ -703,6 +261,10 @@ export function mountOsChatRoutes(app: Hono): void {
 			const toolCallResults: ToolCallResult[] = [];
 
 			if (parsed.toolCalls.length > 0) {
+				// Dynamic import to avoid circular deps
+				const marketplaceModule = await import("./marketplace.js");
+				const { readInstalledServersPublic } = await import("./marketplace-helpers.js");
+
 				for (const call of parsed.toolCalls.slice(0, 5)) {
 					// Max 5 tool calls
 					try {
@@ -711,7 +273,9 @@ export function mountOsChatRoutes(app: Hono): void {
 						});
 
 						// Call the tool via the marketplace /mcp/call endpoint internally
-						const callRes = await fetch(`${getLocalDaemonBaseUrl()}/api/marketplace/mcp/call`, {
+						const callRes = await fetch(
+							`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
+							{
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: JSON.stringify({
@@ -767,10 +331,9 @@ Now give a concise, natural language summary of the results for the user. Be spe
 
 					try {
 						const summary = await callLlm(
-							"You are the Signet OS assistant. Summarize tool results clearly and concisely. Mention specific names, numbers, and key details. No JSON.",
+							"You are Oogie, Jake's AI assistant. Summarize tool results in a casual, direct way. Mention specific names, numbers, and details. No JSON, no corporate speak. Sound like a real person chatting. Use keyboard emojis occasionally like ᕕ( ᐛ )ᕗ or (╯°□°)╯ but don't overdo it.",
 							followUp,
 							1024,
-							body.modelId,
 						);
 						return c.json({
 							response: summary.trim(),
@@ -798,111 +361,5 @@ Now give a concise, natural language summary of the results for the user. Be spe
 				toolCalls: [],
 			});
 		}
-	});
-
-	app.post("/api/os/browser-tool", async (c) => {
-		let body: BrowserToolRequest;
-		try {
-			body = await c.req.json();
-		} catch {
-			return c.json({ error: "Invalid JSON" }, 400);
-		}
-
-		const payload = body.payload?.trim();
-		if (!payload) {
-			return c.json({ error: "Payload is required" }, 400);
-		}
-
-		const action = body.action?.trim() || "browser-submission";
-		const baseUrl = getLocalDaemonBaseUrl();
-		let memoryStored = false;
-		let memoryId: string | undefined;
-		let dispatched = false;
-		let responseText: string | undefined;
-		let dispatchError: string | undefined;
-		let memoryError: string | undefined;
-		let toolCalls: ToolCallResult[] | undefined;
-
-		const links = Array.isArray(body.links) ? body.links.slice(0, 20) : [];
-		const images = Array.isArray(body.images) ? body.images.slice(0, 20) : [];
-		const videos = Array.isArray(body.videos) ? body.videos.slice(0, 20) : [];
-		const audio = Array.isArray(body.audio) ? body.audio.slice(0, 20) : [];
-		const files = Array.isArray(body.files) ? body.files.slice(0, 20) : [];
-
-		try {
-			const memoryRes = await fetch(`${baseUrl}/api/memory/remember`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					content: [
-						"[Signet Browser Tool]",
-						`Action: ${action}`,
-						`Title: ${body.pageTitle || "Untitled"}`,
-						`URL: ${body.pageUrl || "unknown"}`,
-						`Captured At: ${new Date().toISOString()}`,
-						"",
-						`Selection: ${body.selectedText?.trim() || "(none)"}`,
-						`Note: ${body.note?.trim() || "(none)"}`,
-						`Links: ${links.length}`,
-						`Images: ${images.length}`,
-						`Videos: ${videos.length}`,
-						`Audio: ${audio.length}`,
-						`Files: ${files.length}`,
-						"",
-						payload.slice(0, 20_000),
-					].join("\n"),
-					tags: `browser-tool,${action},browser-extension`,
-					importance: 0.72,
-					type: "note",
-					source_type: "browser-extension",
-				}),
-			});
-
-			if (memoryRes.ok) {
-				const memoryData = (await memoryRes.json()) as { success?: boolean; id?: string };
-				memoryStored = memoryData.success === true;
-				memoryId = memoryData.id;
-			} else {
-				memoryError = `Memory save failed (${memoryRes.status})`;
-			}
-		} catch (error) {
-			memoryError = error instanceof Error ? error.message : String(error);
-		}
-
-		if (body.dispatchToHarness !== false) {
-			try {
-				const chatRes = await fetch(`${baseUrl}/api/os/chat`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ message: formatBrowserToolMessage({ ...body, payload, action }) }),
-				});
-
-				if (chatRes.ok) {
-					const chatData = (await chatRes.json()) as {
-						response?: string;
-						toolCalls?: ToolCallResult[];
-					};
-					dispatched = true;
-					responseText = chatData.response;
-					toolCalls = chatData.toolCalls;
-				} else {
-					dispatchError = `Dispatch failed (${chatRes.status})`;
-				}
-			} catch (error) {
-				dispatchError = error instanceof Error ? error.message : String(error);
-			}
-		}
-
-		const result: BrowserToolRouteResult = {
-			success: memoryStored || dispatched,
-			memoryStored,
-			dispatched,
-			memoryId,
-			response: responseText,
-			error: memoryStored || dispatched ? undefined : dispatchError || memoryError || "Browser tool failed",
-			toolCalls,
-		};
-
-		return c.json(result, result.success ? 200 : 500);
 	});
 }

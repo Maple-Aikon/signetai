@@ -396,11 +396,6 @@ export function onWidgetGenerated(serverId: string, html: string): void {
 	os.widgetCacheVersion++;
 }
 
-export function onWidgetGenerationFailed(serverId: string): void {
-	widgetGenerating.delete(serverId);
-	os.widgetCacheVersion++;
-}
-
 // ============================================================================
 // Widget Sandbox Registry — allows AgentChat to find and control widget iframes
 // ============================================================================

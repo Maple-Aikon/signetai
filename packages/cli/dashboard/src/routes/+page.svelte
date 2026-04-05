@@ -51,33 +51,14 @@ let timelineGeneratedFor = $state("");
 
 // --- Theme ---
 let theme = $state<"dark" | "light">("dark");
-let followsSystemTheme = $state(true);
-let stopSystemThemeWatch: (() => void) | null = null;
-
-function resolveSystemTheme(): "dark" | "light" {
-	if (typeof window === "undefined") return "dark";
-	return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-}
-
-function readStoredThemePreference(): "dark" | "light" | "auto" {
-	if (typeof window === "undefined") return "auto";
-	const stored = localStorage.getItem("signet-theme");
-	if (stored === "light" || stored === "dark") return stored;
-	if (stored === "auto") return "auto";
-	return "auto";
-}
 
 if (browser) {
-	const preferredTheme = readStoredThemePreference();
-	const initialTheme = preferredTheme === "auto" ? resolveSystemTheme() : preferredTheme;
-	theme = initialTheme;
-	followsSystemTheme = preferredTheme === "auto";
-	document.documentElement.dataset.theme = initialTheme;
+	const stored = document.documentElement.dataset.theme;
+	theme = stored === "light" || stored === "dark" ? stored : "dark";
 }
 
 function toggleTheme() {
 	theme = theme === "dark" ? "light" : "dark";
-	followsSystemTheme = false;
 	document.documentElement.dataset.theme = theme;
 	localStorage.setItem("signet-theme", theme);
 }
@@ -164,18 +145,6 @@ onMount(() => {
 	const cleanupNav = initNavFromHash();
 	const cleanupTabGroups = initTabGroupEffects();
 
-	stopSystemThemeWatch?.();
-	stopSystemThemeWatch = null;
-	if (followsSystemTheme) {
-		const media = window.matchMedia("(prefers-color-scheme: light)");
-		const handleSystemThemeChange = (event: MediaQueryListEvent): void => {
-			theme = event.matches ? "light" : "dark";
-			document.documentElement.dataset.theme = theme;
-		};
-		media.addEventListener("change", handleSystemThemeChange);
-		stopSystemThemeWatch = () => media.removeEventListener("change", handleSystemThemeChange);
-	}
-
 	getStatus().then((s) => {
 		daemonStatus = s;
 	});
@@ -205,8 +174,6 @@ onMount(() => {
 	return () => {
 		cleanupNav();
 		cleanupTabGroups();
-		stopSystemThemeWatch?.();
-		stopSystemThemeWatch = null;
 		window.removeEventListener("beforeunload", handleBeforeUnload);
 		if (isTauri) {
 			window.removeEventListener("wheel", handleWheel);
