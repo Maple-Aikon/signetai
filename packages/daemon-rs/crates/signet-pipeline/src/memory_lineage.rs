@@ -1088,28 +1088,51 @@ pub fn purge_canonical_noise_sessions(
             .map_err(|err| err.to_string())?
             .filter_map(Result::ok)
             .collect::<Vec<_>>();
-        conn.execute(
-            "INSERT INTO memory_artifact_tombstones (
-                agent_id, session_token, removed_at, reason, removed_paths
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(agent_id, session_token) DO UPDATE SET
-                removed_at = excluded.removed_at,
-                reason = excluded.reason,
-                removed_paths = excluded.removed_paths",
-            params![
-                agent_id,
-                session_token,
-                Utc::now().to_rfc3339(),
-                reason,
-                serde_json::to_string(&paths).map_err(|err| err.to_string())?,
-            ],
-        )
-        .map_err(|err| err.to_string())?;
-        conn.execute(
-            "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND session_token = ?2",
-            params![agent_id, session_token],
-        )
-        .map_err(|err| err.to_string())?;
+        // Tombstone insert and artifact row deletion are atomic: if the process
+        // crashes between them the DB would be inconsistent (tombstone present
+        // but artifacts row still live, or vice versa). Wrap both in a savepoint
+        // so they commit or roll back together, matching the TS withWriteTx.
+        conn.execute("SAVEPOINT purge_noise", [])
+            .map_err(|err| err.to_string())?;
+        let db_result = (|| {
+            conn.execute(
+                "INSERT INTO memory_artifact_tombstones (
+                    agent_id, session_token, removed_at, reason, removed_paths
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(agent_id, session_token) DO UPDATE SET
+                    removed_at = excluded.removed_at,
+                    reason = excluded.reason,
+                    removed_paths = excluded.removed_paths",
+                params![
+                    agent_id,
+                    session_token,
+                    Utc::now().to_rfc3339(),
+                    reason,
+                    serde_json::to_string(&paths).map_err(|err| err.to_string())?,
+                ],
+            )
+            .map_err(|err| err.to_string())?;
+            conn.execute(
+                "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND session_token = ?2",
+                params![agent_id, session_token],
+            )
+            .map_err(|err| err.to_string())?;
+            Ok::<(), String>(())
+        })();
+        match db_result {
+            Ok(()) => {
+                conn.execute("RELEASE purge_noise", [])
+                    .map_err(|err| err.to_string())?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK TO purge_noise", []);
+                let _ = conn.execute("RELEASE purge_noise", []);
+                return Err(e);
+            }
+        }
+        // File removal happens after the DB transaction commits. An orphaned
+        // file is benign (reindex skips missing paths); a missing file with a
+        // live DB row is the dangerous case, which the savepoint prevents.
         for path in &paths {
             let _ = fs::remove_file(root.join(path));
         }

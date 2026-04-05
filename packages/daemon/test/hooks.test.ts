@@ -1774,46 +1774,46 @@ describe("handleSessionEnd", () => {
 				),
 			);
 
-			const first = await handleSessionEnd({
-				harness: "test",
-				transcriptPath: transcriptAPath,
-				sessionKey: "agent:main:main",
-				cwd: "/tmp/signetai",
-			});
-			const second = await handleSessionEnd({
-				harness: "test",
-				transcriptPath: transcriptBPath,
-				sessionKey: "agent:main:main",
-				cwd: "/tmp/signetai",
-			});
+		const first = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: transcriptAPath,
+			sessionKey: "agent:main:main",
+			cwd: "/home/user/signetai",
+		});
+		const second = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: transcriptBPath,
+			sessionKey: "agent:main:main",
+			cwd: "/home/user/signetai",
+		});
 
-			expect(first.queued).toBe(true);
-			expect(second.queued).toBe(true);
+		expect(first.queued).toBe(true);
+		expect(second.queued).toBe(true);
 
-			const files = readdirSync(join(TEST_DIR, "memory")).sort();
-			expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
-			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
+		const files = readdirSync(join(TEST_DIR, "memory")).sort();
+		expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
+		expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
 
-			const db = openTestDb();
-			try {
-				const sessionIds = db.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC").all() as Array<{
-					session_id: string | null;
-				}>;
-				expect(sessionIds).toHaveLength(2);
-				// Path-based fallback IDs include a content digest suffix so
-				// rotating log files that reuse the same path produce distinct IDs.
-				expect(sessionIds[0]?.session_id).toMatch(
-					new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-				);
-				expect(sessionIds[1]?.session_id).toMatch(
-					new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-				);
-				expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
-			} finally {
-				db.close();
-			}
-		},
-	);
+		const db = openTestDb();
+		try {
+			const sessionIds = db
+				.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC")
+				.all() as Array<{ session_id: string | null }>;
+			expect(sessionIds).toHaveLength(2);
+			// Path-based fallback IDs include a content digest suffix so
+			// rotating log files that reuse the same path produce distinct IDs.
+			expect(sessionIds[0]?.session_id).toMatch(
+				new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+			);
+			expect(sessionIds[1]?.session_id).toMatch(
+				new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+			);
+			expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
+		} finally {
+			db.close();
+		}
+	},
+);
 
 	test("adds a random suffix when transcript context is unavailable", () => {
 		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");
