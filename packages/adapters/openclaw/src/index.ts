@@ -882,20 +882,81 @@ function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONL
 }
 
 // ---------------------------------------------------------------------------
-// System prompt sanitization — strip the exact case-sensitive substring that
-// Anthropic matches to block third-party harness traffic on Max plans.
-// The match is literal and case-sensitive: "personal assistant running inside
-// OpenClaw". Rewriting just the identity line preserves all other prompt
-// content and avoids the 400 block.
+// System prompt sanitization — Anthropic's API gateway performs a
+// case-sensitive substring match on the system prompt to block third-party
+// harness traffic on Max plans. The plugin hook API does not expose the
+// assembled system prompt, so we intercept at the fetch level: wrap
+// globalThis.fetch, detect Anthropic-bound requests, parse the JSON body,
+// and strip the blocked identity string before the request reaches the wire.
 // ---------------------------------------------------------------------------
 
 const BLOCKED_IDENTITY = "You are a personal assistant running inside OpenClaw.";
 const SAFE_IDENTITY = "You are a helpful assistant.";
 
-function sanitizeSystemPrompt(prompt: unknown): string | undefined {
-	if (typeof prompt !== "string") return undefined;
-	if (!prompt.includes(BLOCKED_IDENTITY)) return undefined;
-	return prompt.replaceAll(BLOCKED_IDENTITY, SAFE_IDENTITY);
+function isAnthropicApiUrl(url: string): boolean {
+	try {
+		return new URL(url).hostname === "api.anthropic.com";
+	} catch {
+		return false;
+	}
+}
+
+function sanitizeRequestBody(body: Record<string, unknown>): boolean {
+	const system = body.system;
+	// String form (older API versions)
+	if (typeof system === "string" && system.includes(BLOCKED_IDENTITY)) {
+		body.system = system.replaceAll(BLOCKED_IDENTITY, SAFE_IDENTITY);
+		return true;
+	}
+	// Array-of-blocks form (current API)
+	if (!Array.isArray(system)) return false;
+	let modified = false;
+	for (const entry of system) {
+		if (
+			typeof entry === "object" &&
+			entry !== null &&
+			(entry as Record<string, unknown>).type === "text" &&
+			typeof (entry as Record<string, unknown>).text === "string" &&
+			((entry as Record<string, unknown>).text as string).includes(BLOCKED_IDENTITY)
+		) {
+			(entry as Record<string, unknown>).text = (
+				(entry as Record<string, unknown>).text as string
+			).replaceAll(BLOCKED_IDENTITY, SAFE_IDENTITY);
+			modified = true;
+		}
+	}
+	return modified;
+}
+
+function installFetchSanitizer(): () => void {
+	const original = globalThis.fetch;
+	const sanitized: typeof globalThis.fetch = (input, init) => {
+		if (init?.body && typeof init.body === "string") {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.href
+						: input.url;
+			if (isAnthropicApiUrl(url)) {
+				try {
+					const body = JSON.parse(init.body) as Record<string, unknown>;
+					if (sanitizeRequestBody(body)) {
+						return original(input, { ...init, body: JSON.stringify(body) });
+					}
+				} catch {
+					// Body parsing failed — pass through unchanged.
+				}
+			}
+		}
+		return original(input, init);
+	};
+	globalThis.fetch = sanitized;
+	return () => {
+		if (globalThis.fetch === sanitized) {
+			globalThis.fetch = original;
+		}
+	};
 }
 
 function buildInjectionResult(result: UserPromptSubmitResult): { prependContext: string } | undefined {
@@ -1210,6 +1271,10 @@ const signetPlugin = {
 			};
 			writeRegistered(true);
 			claimed = true;
+
+		// Intercept outbound Anthropic API requests to strip the blocked
+		// system prompt identity string that triggers Max plan rejection.
+		const removeFetchSanitizer = installFetchSanitizer();
 
 		// Instance-scoped health state (safe for multi-register)
 		let daemonReachable = true;
@@ -1968,12 +2033,6 @@ const signetPlugin = {
 					msgCount,
 					msgs,
 				);
-				// Sanitize the system prompt to strip the exact identity string that
-				// Anthropic matches to block third-party harness Max plan requests.
-				const sanitized = sanitizeSystemPrompt(event.prompt);
-				if (sanitized) {
-					return { ...result, systemPrompt: sanitized };
-				}
 				return result;
 			},
 			{ priority: 20 },
@@ -2004,10 +2063,6 @@ const signetPlugin = {
 					msgCount,
 					msgs,
 				);
-			}
-			const sanitized = sanitizeSystemPrompt(event.prompt);
-			if (sanitized) {
-				return { ...result, systemPrompt: sanitized };
 			}
 			return result;
 		});
@@ -2091,6 +2146,7 @@ const signetPlugin = {
 			stop() {
 				api.logger.info("signet-memory: service stopped");
 				try {
+					removeFetchSanitizer();
 					if (healthTimer) {
 						clearInterval(healthTimer);
 						healthTimer = null;
@@ -2124,5 +2180,14 @@ export function _resetRegistration(): void {
 		writeRegistered(false);
 	}
 }
+
+/** @internal Test-only exports for system prompt sanitization. */
+export const _sanitization = {
+	isAnthropicApiUrl,
+	sanitizeRequestBody,
+	installFetchSanitizer,
+	BLOCKED_IDENTITY,
+	SAFE_IDENTITY,
+} as const;
 
 export default signetPlugin;

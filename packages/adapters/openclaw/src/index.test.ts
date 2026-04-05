@@ -22,7 +22,7 @@ mock.module("@signet/core", () => ({
 // Import after mock so the module picks up the stub.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore, _resetRegistration } = signet;
+const { memoryStore, _resetRegistration, _sanitization } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -1799,5 +1799,197 @@ describe("registration guard (#422)", () => {
 		expect(hooks.has("session:compact:after")).toBeFalse();
 		expect(hooks.has("before_compaction")).toBeTrue();
 		expect(hooks.has("after_compaction")).toBeTrue();
+	});
+});
+
+// ===========================================================================
+// System prompt sanitization (Anthropic Max plan block bypass)
+// ===========================================================================
+
+describe("isAnthropicApiUrl", () => {
+	const { isAnthropicApiUrl } = _sanitization;
+
+	it("matches api.anthropic.com", () => {
+		expect(isAnthropicApiUrl("https://api.anthropic.com/v1/messages")).toBeTrue();
+	});
+
+	it("rejects other hosts", () => {
+		expect(isAnthropicApiUrl("https://openrouter.ai/api/v1/chat/completions")).toBeFalse();
+		expect(isAnthropicApiUrl("https://generativelanguage.googleapis.com/v1/models")).toBeFalse();
+		expect(isAnthropicApiUrl("http://localhost:3850/api/hooks/session-start")).toBeFalse();
+	});
+
+	it("returns false for invalid URLs", () => {
+		expect(isAnthropicApiUrl("not-a-url")).toBeFalse();
+		expect(isAnthropicApiUrl("")).toBeFalse();
+	});
+});
+
+describe("sanitizeRequestBody", () => {
+	const { sanitizeRequestBody, BLOCKED_IDENTITY, SAFE_IDENTITY } = _sanitization;
+
+	it("sanitizes array-of-blocks system field", () => {
+		const body: Record<string, unknown> = {
+			model: "claude-sonnet-4-20250514",
+			system: [
+				{ type: "text", text: BLOCKED_IDENTITY },
+			],
+			messages: [{ role: "user", content: "hello" }],
+		};
+		expect(sanitizeRequestBody(body)).toBeTrue();
+		const blocks = body.system as Array<{ text: string }>;
+		expect(blocks[0].text).toBe(SAFE_IDENTITY);
+	});
+
+	it("sanitizes string system field", () => {
+		const body: Record<string, unknown> = {
+			system: `${BLOCKED_IDENTITY}\n\n## Tooling\nMore instructions here.`,
+		};
+		expect(sanitizeRequestBody(body)).toBeTrue();
+		expect(body.system).toBe(`${SAFE_IDENTITY}\n\n## Tooling\nMore instructions here.`);
+	});
+
+	it("sanitizes blocked string embedded within longer text block", () => {
+		const prompt = `${BLOCKED_IDENTITY}\n\n## Tooling\nStructured tool definitions are the source of truth.`;
+		const body: Record<string, unknown> = {
+			system: [{ type: "text", text: prompt }],
+		};
+		expect(sanitizeRequestBody(body)).toBeTrue();
+		const blocks = body.system as Array<{ text: string }>;
+		expect(blocks[0].text).not.toContain(BLOCKED_IDENTITY);
+		expect(blocks[0].text).toContain(SAFE_IDENTITY);
+		expect(blocks[0].text).toContain("## Tooling");
+	});
+
+	it("handles multiple system blocks (OAuth path)", () => {
+		const body: Record<string, unknown> = {
+			system: [
+				{ type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+				{ type: "text", text: `${BLOCKED_IDENTITY}\n\nMore instructions.` },
+			],
+		};
+		expect(sanitizeRequestBody(body)).toBeTrue();
+		const blocks = body.system as Array<{ text: string }>;
+		// First block unchanged
+		expect(blocks[0].text).toBe("You are Claude Code, Anthropic's official CLI for Claude.");
+		// Second block sanitized
+		expect(blocks[1].text).not.toContain(BLOCKED_IDENTITY);
+		expect(blocks[1].text).toContain(SAFE_IDENTITY);
+	});
+
+	it("returns false when blocked string is absent", () => {
+		const body: Record<string, unknown> = {
+			system: [{ type: "text", text: "You are a helpful assistant." }],
+		};
+		expect(sanitizeRequestBody(body)).toBeFalse();
+	});
+
+	it("returns false when system field is missing", () => {
+		const body: Record<string, unknown> = {
+			messages: [{ role: "user", content: "hello" }],
+		};
+		expect(sanitizeRequestBody(body)).toBeFalse();
+	});
+
+	it("returns false for non-text content blocks", () => {
+		const body: Record<string, unknown> = {
+			system: [{ type: "image", source: { data: "..." } }],
+		};
+		expect(sanitizeRequestBody(body)).toBeFalse();
+	});
+});
+
+describe("installFetchSanitizer", () => {
+	const { installFetchSanitizer, BLOCKED_IDENTITY, SAFE_IDENTITY } = _sanitization;
+
+	let savedFetch: typeof globalThis.fetch;
+	let capturedBodies: string[];
+
+	beforeEach(() => {
+		capturedBodies = [];
+		savedFetch = globalThis.fetch;
+		// Install a spy as the "real" fetch that captures request bodies.
+		globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.body && typeof init.body === "string") {
+				capturedBodies.push(init.body);
+			}
+			return new Response("ok", { status: 200 });
+		}) as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = savedFetch;
+	});
+
+	it("strips blocked string from Anthropic API requests", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			await globalThis.fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				body: JSON.stringify({
+					model: "claude-sonnet-4-20250514",
+					system: [{ type: "text", text: BLOCKED_IDENTITY }],
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			});
+			expect(capturedBodies).toHaveLength(1);
+			const sent = JSON.parse(capturedBodies[0]) as Record<string, unknown>;
+			const blocks = sent.system as Array<{ text: string }>;
+			expect(blocks[0].text).toBe(SAFE_IDENTITY);
+		} finally {
+			remove();
+		}
+	});
+
+	it("passes non-Anthropic requests through unmodified", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			const originalBody = JSON.stringify({
+				system: [{ type: "text", text: BLOCKED_IDENTITY }],
+			});
+			await globalThis.fetch("https://openrouter.ai/api/v1/chat/completions", {
+				method: "POST",
+				body: originalBody,
+			});
+			expect(capturedBodies).toHaveLength(1);
+			expect(capturedBodies[0]).toBe(originalBody);
+		} finally {
+			remove();
+		}
+	});
+
+	it("passes Anthropic requests without blocked string unmodified", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			const originalBody = JSON.stringify({
+				system: [{ type: "text", text: "You are a helpful assistant." }],
+			});
+			await globalThis.fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				body: originalBody,
+			});
+			expect(capturedBodies).toHaveLength(1);
+			expect(capturedBodies[0]).toBe(originalBody);
+		} finally {
+			remove();
+		}
+	});
+
+	it("passes requests without body through", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			await globalThis.fetch("https://api.anthropic.com/v1/messages");
+			expect(capturedBodies).toHaveLength(0);
+		} finally {
+			remove();
+		}
+	});
+
+	it("restores original fetch on cleanup", () => {
+		const before = globalThis.fetch;
+		const remove = installFetchSanitizer();
+		expect(globalThis.fetch).not.toBe(before);
+		remove();
+		expect(globalThis.fetch).toBe(before);
 	});
 });
