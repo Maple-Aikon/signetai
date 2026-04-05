@@ -185,6 +185,12 @@ function shouldRateLimit(providerName: string): boolean {
 export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRateLimitConfig>): LlmProvider {
 	if (config === undefined) return provider;
 	if (Object.keys(config).length === 0) return provider;
+	// Spread means explicit `undefined` values in config override the defaults (e.g.
+	// `{ maxCallsPerHour: 100, burstSize: undefined }` → cfg.burstSize is undefined).
+	// The nullish-coalesce guards below treat undefined as 0, disabling rate limiting.
+	// This is intentional: the YAML path (parseRateLimitConfig) always fills all fields,
+	// so only direct/programmatic callers can hit this — and passing undefined for a field
+	// signals "don't use it".
 	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...config };
 	if ((cfg.maxCallsPerHour ?? 0) <= 0 || (cfg.burstSize ?? 0) <= 0) return provider;
 
