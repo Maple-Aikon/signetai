@@ -8,7 +8,18 @@ function getTranscriptAuditDir(): string {
 }
 
 function fsTimestamp(iso: string): string {
-	return iso.replace(/:/g, "-");
+	return Array.from(iso, (char) => (/^[A-Za-z0-9._-]$/.test(char) ? char : "-")).join("");
+}
+
+function isSafeAuditName(value: string): boolean {
+	return value.length > 0 && /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+function buildAuditPath(dir: string, fileName: string): string {
+	if (!isSafeAuditName(fileName)) {
+		throw new Error("invalid transcript audit file name");
+	}
+	return join(dir, fileName);
 }
 
 function resolveAuditToken(agentId: string, sessionId: string, sessionKey: string | null, raw: string): string {
@@ -36,14 +47,14 @@ export function writeTranscriptAudit(params: {
 	}
 
 	const token = resolveAuditToken(params.agentId, params.sessionId, params.sessionKey, params.rawTranscript);
-	const latestPath = join(dir, `${token}--latest.log`);
+	const latestPath = buildAuditPath(dir, `${token}--latest.log`);
 	writeFileSync(latestPath, params.rawTranscript, "utf8");
 
 	if (!params.capturedAt) {
 		return { latestPath };
 	}
 
-	const finalPath = join(dir, `${fsTimestamp(params.capturedAt)}--${token}--raw-transcript.log`);
+	const finalPath = buildAuditPath(dir, `${fsTimestamp(params.capturedAt)}--${token}--raw-transcript.log`);
 	writeFileSync(finalPath, params.rawTranscript, "utf8");
 	return { latestPath, finalPath };
 }

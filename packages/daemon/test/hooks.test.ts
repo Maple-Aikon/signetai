@@ -17,6 +17,7 @@ process.env.SIGNET_PATH = TEST_DIR;
 const { initDbAccessor, closeDbAccessor } = await import("../src/db-accessor");
 const hooks = await import("../src/hooks");
 const lineage = await import("../src/memory-lineage");
+const transcriptAudit = await import("../src/transcript-audit");
 const {
 	handleSessionStart,
 	handlePreCompaction,
@@ -49,6 +50,7 @@ const {
 	writeSummaryArtifact,
 	writeTranscriptArtifact,
 } = lineage;
+const { writeTranscriptAudit } = transcriptAudit;
 
 // ============================================================================
 // Helpers
@@ -1839,6 +1841,25 @@ describe("handleSessionEnd", () => {
 		const audit = readFileSync(join(auditDir, finalAudit ?? ""), "utf-8");
 		expect(audit).toContain('"type":"function_call"');
 		expect(audit).toContain("README.md");
+	});
+
+	test.serial("sanitizes transcript audit filenames to stay within the audit directory", () => {
+		const result = writeTranscriptAudit({
+			agentId: "default",
+			sessionId: "sess-audit-safe",
+			sessionKey: "sess-audit-safe",
+			rawTranscript: "raw transcript",
+			capturedAt: "../../../../tmp/evil",
+		});
+
+		expect(result).not.toBeNull();
+		const finalPath = result?.finalPath;
+		expect(finalPath).toBeDefined();
+		const auditDir = join(TEST_DIR, ".daemon", "logs", "transcripts");
+		const auditName = finalPath ? finalPath.slice(auditDir.length + 1) : "";
+		expect(finalPath?.startsWith(auditDir)).toBe(true);
+		expect(auditName).toMatch(/^[A-Za-z0-9._-]+$/);
+		expect(finalPath).not.toContain("/tmp/evil");
 	});
 
 	test.serial(
