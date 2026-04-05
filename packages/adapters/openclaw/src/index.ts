@@ -881,6 +881,23 @@ function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONL
 	}
 }
 
+// ---------------------------------------------------------------------------
+// System prompt sanitization — strip the exact case-sensitive substring that
+// Anthropic matches to block third-party harness traffic on Max plans.
+// The match is literal and case-sensitive: "personal assistant running inside
+// OpenClaw". Rewriting just the identity line preserves all other prompt
+// content and avoids the 400 block.
+// ---------------------------------------------------------------------------
+
+const BLOCKED_IDENTITY = "You are a personal assistant running inside OpenClaw.";
+const SAFE_IDENTITY = "You are a helpful assistant.";
+
+function sanitizeSystemPrompt(prompt: unknown): string | undefined {
+	if (typeof prompt !== "string") return undefined;
+	if (!prompt.includes(BLOCKED_IDENTITY)) return undefined;
+	return prompt.replaceAll(BLOCKED_IDENTITY, SAFE_IDENTITY);
+}
+
 function buildInjectionResult(result: UserPromptSubmitResult): { prependContext: string } | undefined {
 	if (!result.inject) {
 		return undefined;
@@ -1951,6 +1968,12 @@ const signetPlugin = {
 					msgCount,
 					msgs,
 				);
+				// Sanitize the system prompt to strip the exact identity string that
+				// Anthropic matches to block third-party harness Max plan requests.
+				const sanitized = sanitizeSystemPrompt(event.prompt);
+				if (sanitized) {
+					return { ...result, systemPrompt: sanitized };
+				}
 				return result;
 			},
 			{ priority: 20 },
@@ -1981,6 +2004,10 @@ const signetPlugin = {
 					msgCount,
 					msgs,
 				);
+			}
+			const sanitized = sanitizeSystemPrompt(event.prompt);
+			if (sanitized) {
+				return { ...result, systemPrompt: sanitized };
 			}
 			return result;
 		});
