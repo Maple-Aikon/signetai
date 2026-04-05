@@ -12,7 +12,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createEvent, eventBus } from "./event-bus";
 import { logger } from "./logger";
-import { loadProbeResult } from "./mcp-probe";
+import { loadProbeResult, reprobeServer } from "./mcp-probe";
+import { readInstalledServersPublic } from "./routes/marketplace-helpers";
 import { getWidgetProvider } from "./widget-llm";
 
 // ---------------------------------------------------------------------------
@@ -58,12 +59,12 @@ const WIDGET_SYSTEM_PROMPT = `Generate an interactive HTML widget for an MCP ser
 --sig-highlight       Highlight background
 --sig-highlight-text  Highlight text color
 --sig-electric        Electric accent (glow effects)
---sig-font-mono       Monospace font family
---sig-font-display    Display font family
---sig-space-xs        Extra-small spacing (4px)
---sig-space-sm        Small spacing (8px)
---sig-space-md        Medium spacing (16px)
---sig-space-lg        Large spacing (24px)
+--font-mono           Monospace font family
+--font-display        Display font family
+--space-xs            Extra-small spacing (4px)
+--space-sm            Small spacing (8px)
+--space-md            Medium spacing (16px)
+--space-lg            Large spacing (24px)
 
 ## Available Utility Classes
 
@@ -105,35 +106,39 @@ To make your widget work well with the agent cursor:
 - No external URLs or fetch calls — all data comes through the bridge API
 - No iframes
 - Responsive to container width
+- Keep the layout compact and dense for an embedded pane (avoid oversized paddings/headings and giant controls)
+- Prefer 1-column or simple 2-column layouts that fit within narrow panes
+- Keep form controls visually consistent: target 28-34px control heights and moderate spacing
 - Use the provided CSS variables for ALL styling (colors, spacing, fonts)
 - Generate ONLY the body content (no DOCTYPE, html, head, or body tags — those are added by the host)
-- Use inline <style> tags for custom CSS; reference var(--sig-*) tokens
+- Use inline <style> tags for custom CSS; reference var(--sig-*), var(--space-*), and var(--font-*) tokens
 - Use <script> tags for interactivity
 
 ## Example
 
 <style>
-  .tool-grid { display: grid; gap: var(--sig-space-sm); padding: var(--sig-space-md); }
+  .tool-grid { display: grid; gap: var(--space-sm); padding: var(--space-md); }
   .tool-btn {
     background: var(--sig-surface);
     border: 1px solid var(--sig-border);
     color: var(--sig-text-bright);
-    padding: var(--sig-space-sm) var(--sig-space-md);
+    padding: 6px 10px;
     border-radius: 6px;
     cursor: pointer;
-    font-family: var(--sig-font-mono);
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
   .tool-btn:hover { border-color: var(--sig-accent); }
   .result-area {
     background: var(--sig-surface);
     border: 1px solid var(--sig-border);
     border-radius: 6px;
-    padding: var(--sig-space-md);
-    font-family: var(--sig-font-mono);
+    padding: var(--space-sm);
+    font-family: var(--font-mono);
     color: var(--sig-text);
     white-space: pre-wrap;
-    min-height: 80px;
-    margin-top: var(--sig-space-sm);
+    min-height: 72px;
+    margin-top: var(--space-sm);
   }
 </style>
 <div class="tool-grid">
@@ -156,6 +161,55 @@ To make your widget work well with the agent cursor:
     }
   }
 </script>`;
+
+const WIDGET_OUTPUT_HARDENING_STYLE = `<style data-signet-widget-hardening>
+:where(.widget-shell, .sig-panel, .panel) {
+  max-width: 100%;
+}
+
+:where(.widget-shell) {
+  padding: var(--space-sm) !important;
+  gap: var(--space-sm) !important;
+}
+
+:where(.panel, .sig-panel, .tool-card, .result-area) {
+  padding: var(--space-sm) !important;
+  border-radius: 10px !important;
+}
+
+:where(input[type="text"], input[type="number"], input[type="email"], input[type="search"], input[type="url"], input[type="password"], select, button) {
+  min-height: 30px !important;
+  height: 30px !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+  padding: 4px 8px !important;
+}
+
+:where(textarea) {
+  min-height: 72px !important;
+  max-height: 220px !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  padding: 6px 8px !important;
+}
+
+:where(label, .sig-label, .sig-eyebrow) {
+  font-size: 10px !important;
+  margin-bottom: 4px !important;
+}
+
+:where(pre, code, .result-area) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>`;
+
+function hardenGeneratedHtml(html: string): string {
+	if (html.includes("data-signet-widget-hardening")) {
+		return html;
+	}
+	return `${WIDGET_OUTPUT_HARDENING_STYLE}\n${html}`;
+}
 
 // ---------------------------------------------------------------------------
 // User prompt builder
@@ -250,18 +304,46 @@ export function deleteCachedWidget(serverId: string): boolean {
 	}
 }
 
+function formatMissingExecutableError(message: string): string {
+	const match = message.match(/Executable not found in \$PATH:\s*"([^"]+)"/);
+	if (!match) return message;
+	const executable = match[1];
+	if (executable === "docker") {
+		return "Docker CLI is required for this MCP app but was not found in PATH. Install Docker Desktop (with CLI), then restart Signet daemon and retry.";
+	}
+	return `Required executable \"${executable}\" was not found in PATH. Install it, restart Signet daemon, and retry.`;
+}
+
+async function resolveProbeForGeneration(serverId: string) {
+	const cached = loadProbeResult(serverId);
+	if (cached?.ok) return cached;
+
+	const server = readInstalledServersPublic().find((entry) => entry.id === serverId && entry.enabled);
+	if (!server) return cached;
+
+	try {
+		const refreshed = await reprobeServer(server);
+		return refreshed;
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		logger.warn("widget", `Re-probe failed for ${serverId} during widget generation`, { error: msg });
+		return cached;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Main generation
 // ---------------------------------------------------------------------------
 
 export async function generateWidgetHtml(serverId: string): Promise<string> {
-	const probe = loadProbeResult(serverId);
+	const probe = await resolveProbeForGeneration(serverId);
 	if (!probe) {
 		throw new Error(`No probe result found for server: ${serverId}`);
 	}
 
 	if (!probe.ok) {
-		throw new Error(`Server probe failed for ${serverId}: ${probe.error ?? "unknown error"}`);
+		const probeMessage = formatMissingExecutableError(probe.error ?? "unknown error");
+		throw new Error(`Server probe failed for ${serverId}: ${probeMessage}`);
 	}
 
 	const tools = probe.autoCard.tools.map((t: { name: string; description: string; inputSchema: unknown }) => ({
@@ -302,13 +384,14 @@ export async function generateWidgetHtml(serverId: string): Promise<string> {
 	if (!html) {
 		throw new Error("LLM response did not contain valid HTML");
 	}
+	const hardenedHtml = hardenGeneratedHtml(html);
 
 	// Write to disk
 	ensureWidgetDir();
-	await Bun.write(widgetPath(serverId), html);
+	await Bun.write(widgetPath(serverId), hardenedHtml);
 
 	logger.info("widget", `Widget generated for ${serverId}`, {
-		size: html.length,
+		size: hardenedHtml.length,
 	});
 
 	// Emit success event
@@ -319,5 +402,5 @@ export async function generateWidgetHtml(serverId: string): Promise<string> {
 		}),
 	);
 
-	return html;
+	return hardenedHtml;
 }

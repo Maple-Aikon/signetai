@@ -115,6 +115,12 @@ export function renderLoading(container: HTMLElement): void {
 	container.replaceChildren(createStateMessage("Loading", "Connecting to daemon...", true));
 }
 
+export function renderSearchPrompt(container: HTMLElement): void {
+	container.replaceChildren(
+		createStateMessage("Search memories", "Type 2+ characters to find relevant memories"),
+	);
+}
+
 export function renderSearchEmpty(container: HTMLElement, query: string): void {
 	container.replaceChildren(createStateMessage("No results", `No memories match "${query}"`));
 }
