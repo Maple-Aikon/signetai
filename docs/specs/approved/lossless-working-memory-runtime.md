@@ -121,10 +121,11 @@ Throughout the session lifecycle:
   distillation pipeline
 - prompt-submit retrieval should prefer the structured memory body when
   available
-- transcripts are the fallback source until structural state catches up
+- cleaned conversation transcripts are the fallback source until
+  structural state catches up
 
 This keeps prompt-time retrieval focused on the most relevant context
-without making raw transcripts the default source of truth.
+without making raw tool traces the default source of truth.
 
 ## Harness Realization
 

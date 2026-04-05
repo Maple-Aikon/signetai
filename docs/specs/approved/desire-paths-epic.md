@@ -106,7 +106,8 @@ regardless of content significance.
 3. Call from `worker.ts` after session transcript is received, before
    extraction. If all three checks indicate low significance, emit
    `session_skipped` telemetry event and return.
-4. Raw transcript still persisted (lossless retention applies).
+4. A cleaned conversation transcript still persists in memory surfaces,
+   and raw auditable traces may persist separately in daemon logs.
 
 **Config additions** (in `PipelineV2Config`):
 - `pipeline.minTurns` (default 5)

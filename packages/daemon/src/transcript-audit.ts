@@ -1,0 +1,53 @@
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function getTranscriptAuditDir(): string {
+	return join(getAgentsDir(), ".daemon", "logs", "transcripts");
+}
+
+function fsTimestamp(iso: string): string {
+	return iso.replace(/:/g, "-");
+}
+
+function resolveAuditToken(agentId: string, sessionId: string, sessionKey: string | null, raw: string): string {
+	const scoped = sessionId.trim() || sessionKey?.trim() || createHash("sha256").update(raw, "utf8").digest("hex");
+	return createHash("sha256").update(`${agentId}:${scoped}`, "utf8").digest("hex").slice(0, 16);
+}
+
+export interface TranscriptAuditWrite {
+	readonly latestPath: string;
+	readonly finalPath?: string;
+}
+
+export function writeTranscriptAudit(params: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly rawTranscript: string;
+	readonly capturedAt?: string;
+}): TranscriptAuditWrite | null {
+	if (params.rawTranscript.trim().length === 0) return null;
+
+	const dir = getTranscriptAuditDir();
+	if (!existsSync(dir)) {
+		mkdirSync(dir, { recursive: true });
+	}
+
+	const token = resolveAuditToken(params.agentId, params.sessionId, params.sessionKey, params.rawTranscript);
+	const latestPath = join(dir, `${token}--latest.log`);
+	writeFileSync(latestPath, params.rawTranscript, "utf8");
+
+	if (!params.capturedAt) {
+		return { latestPath };
+	}
+
+	const finalPath = join(dir, `${fsTimestamp(params.capturedAt)}--${token}--raw-transcript.log`);
+	writeFileSync(finalPath, params.rawTranscript, "utf8");
+	return { latestPath, finalPath };
+}

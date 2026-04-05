@@ -498,13 +498,13 @@ fn parse_llm_response(raw: &str) -> Result<LlmSummaryEnvelope, String> {
 
 fn build_prompt(transcript: &str, date: &str) -> String {
     format!(
-        "You are a session librarian. Summarize this coding session as a dated markdown note and extract key durable facts.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {date} Session Notes\\n\\n## Topic Name\\n\\nProse summary...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary guidelines:\n- Start with \"# {date} Session Notes\"\n- Use ## headings for distinct topics\n- Include what was worked on, key decisions, and open threads\n- Be concise but complete\n\nFact guidelines:\n- durable, self-contained knowledge only\n- include concrete subject names in every fact\n- max 15 facts\n\nConversation:\n{transcript}"
+        "You are reviewing a cleaned transcript from one coding session. The transcript already contains only the human/agent conversation turns, with tool calls, tool outputs, and thinking removed.\n\nUse judgment. Focus on what actually mattered.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {date} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary:\n- Start with \"# {date} Session Notes\"\n- Use ## headings for distinct topics\n- Cover what was worked on, key decisions, unresolved threads, and anything likely to matter later\n- Prefer concrete names, files, systems, or people when they matter\n- Write in past tense, third person\n\nFacts:\n- each fact must be self-contained and understandable without this conversation\n- include the specific subject in every fact\n- keep only durable knowledge, preferences, rules, or decisions\n- types: fact, preference, decision, learning, rule, issue\n- importance: 0.3 (routine) to 0.5 (significant)\n- max 15 facts\n\nConversation:\n{transcript}"
     )
 }
 
 fn build_chunk_prompt(chunk: &str, idx: usize, total: usize, date: &str) -> String {
     format!(
-        "You are a session librarian. This is chunk {} of {} from a long coding session on {}. Summarize this segment and extract key durable facts.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"Prose summary of this segment...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nConversation segment:\n{}",
+        "You are reviewing chunk {} of {} from one cleaned coding-session transcript on {}. Tool calls, tool outputs, and thinking have already been removed.\n\nUse judgment. Focus on what mattered in this segment.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"Free-form summary of this segment...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary:\n- summarize what was discussed or worked on in this segment\n- capture decisions, important context, and unresolved threads\n- write in past tense, third person\n\nFacts:\n- each fact must be self-contained and understandable without this conversation\n- include the specific subject in every fact\n- keep only durable knowledge worth carrying forward\n- types: fact, preference, decision, learning, rule, issue\n- importance: 0.3 (routine) to 0.5 (significant)\n- max 10 facts\n\nConversation segment:\n{}",
         idx + 1,
         total,
         date,
@@ -526,8 +526,13 @@ fn build_combine_prompt(leaves: &[String], facts: &[SummaryFact], date: &str) ->
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You are a session librarian. Combine the segment summaries below into one session summary for {} and deduplicate the durable facts.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {} Session Notes\\n\\n## Topic Name\\n\\nProse summary...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSegment summaries:\n{}\n\nFacts:\n{}",
-        date, date, summary_blocks, fact_lines
+        "You are combining {} segment summaries from one cleaned coding-session transcript on {}. Produce one coherent session note and one deduplicated durable fact list.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary:\n- Start with \"# {} Session Notes\"\n- Use ## headings for each distinct topic discussed\n- merge overlapping content from segments without repeating yourself\n- keep the note coherent, concrete, and useful for future continuity\n- write in past tense, third person\n\nFacts:\n- deduplicate facts that say the same thing in different words\n- keep the most specific version of each fact\n- max 15 facts total\n\nSegment summaries:\n{}\n\nFacts:\n{}",
+        leaves.len(),
+        date,
+        date,
+        date,
+        summary_blocks,
+        fact_lines
     )
 }
 

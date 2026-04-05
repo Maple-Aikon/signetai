@@ -36,14 +36,13 @@ import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
 import {
-	appendSynthesisIndexBlock as appendRenderedIndexBlock,
 	NOISE_PURGE_REASON,
+	appendSynthesisIndexBlock as appendRenderedIndexBlock,
 	purgeCanonicalNoiseSessionsOnce,
 	renderMemoryProjection,
 	writeTranscriptArtifact,
 } from "./memory-lineage";
 import { buildAgentScopeClause, hybridRecall } from "./memory-search";
-import { isNoiseSession } from "./session-noise";
 import {
 	applyFtsOverlapFeedback,
 	decayAspectWeights,
@@ -83,10 +82,12 @@ import {
 	writeCheckpoint,
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { isNoiseSession } from "./session-noise";
 import { getExpiryWarning } from "./session-tracker";
 import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { searchTemporalFallback } from "./temporal-fallback";
+import { writeTranscriptAudit } from "./transcript-audit";
 import { getUpdateSummary } from "./update-system";
 
 function getAgentsDir(): string {
@@ -166,6 +167,10 @@ Memory tools:
 - mcp__signet__knowledge_expand: expand a known entity into its aspects, attributes, and dependencies
 - mcp__signet__knowledge_expand_session: find sessions linked to a known entity
 - mcp__signet__memory_store: save something to memory explicitly
+
+Cross-session history:
+- linked summary and transcript artifacts in your Signet workspace are inspectable across sessions
+- use transcript and summary artifacts when you need deeper history than MEMORY.md or recall snippets provide
 
 Identity files in your Signet workspace:
 - AGENTS.md: how you operate (maintain this)
@@ -2241,26 +2246,47 @@ export async function handleUserPromptSubmit(
 	}
 
 	if (req.sessionKey) {
+		let rawTranscript = "";
 		let transcript = "";
 		if (req.transcriptPath && existsSync(req.transcriptPath)) {
 			try {
-				const raw = readFileSync(req.transcriptPath, "utf-8");
-				transcript = normalizeSessionTranscript(req.harness, raw);
+				rawTranscript = readFileSync(req.transcriptPath, "utf-8");
+				transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 			} catch {
 				deps.logger.warn("hooks", "Could not read prompt transcript", {
 					path: req.transcriptPath,
 				});
 			}
 		} else if (req.transcript) {
-			transcript = normalizeSessionTranscript(req.harness, req.transcript);
+			rawTranscript = req.transcript;
+			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 		}
 
 		if (transcript) {
 			try {
-				deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+				if (!prev || transcript.length >= prev.length) {
+					deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				}
 			} catch (error) {
 				deps.logger.warn("hooks", "Prompt transcript write failed", {
 					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		if (rawTranscript) {
+			try {
+				writeTranscriptAudit({
+					agentId,
+					sessionId: req.sessionKey,
+					sessionKey: req.sessionKey,
+					rawTranscript,
+				});
+			} catch (error) {
+				deps.logger.warn("hooks", "Prompt transcript audit write failed", {
+					error: error instanceof Error ? error.message : String(error),
+					sessionKey: req.sessionKey,
 				});
 			}
 		}
@@ -2595,10 +2621,11 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	}
 
 	// Read transcript: prefer file path, fall back to inline body
+	let rawTranscript = "";
 	let transcript = "";
 	if (req.transcriptPath && existsSync(req.transcriptPath)) {
 		try {
-			const rawTranscript = readFileSync(req.transcriptPath, "utf-8");
+			rawTranscript = readFileSync(req.transcriptPath, "utf-8");
 			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 		} catch {
 			logger.warn("hooks", "Could not read transcript", {
@@ -2606,7 +2633,35 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 			});
 		}
 	} else if (req.transcript) {
-		transcript = normalizeSessionTranscript(req.harness, req.transcript);
+		rawTranscript = req.transcript;
+		transcript = normalizeSessionTranscript(req.harness, rawTranscript);
+	}
+
+	const storedTranscript = sessionKey ? (getSessionTranscriptContent(sessionKey, agentId) ?? "") : "";
+	if (storedTranscript.length > 0 && (transcript.length === 0 || storedTranscript.length > transcript.length)) {
+		logger.info("hooks", "Session end using stored transcript snapshot", {
+			sessionKey,
+			liveChars: storedTranscript.length,
+			finalChars: transcript.length,
+		});
+		transcript = storedTranscript;
+	}
+
+	if (rawTranscript) {
+		try {
+			writeTranscriptAudit({
+				agentId,
+				sessionId: req.sessionId?.trim() || sessionKey || "",
+				sessionKey: sessionKey ?? null,
+				rawTranscript,
+				capturedAt: endedAt,
+			});
+		} catch (error) {
+			logger.warn("hooks", "Session end transcript audit write failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+		}
 	}
 	// Derive a stable session identity for artifact paths.  When the
 	// transcript is empty and no explicit sessionId was provided,

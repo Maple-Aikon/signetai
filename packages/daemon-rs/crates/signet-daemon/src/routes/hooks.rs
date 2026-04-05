@@ -5,7 +5,7 @@
 //! remember, recall, pre-compaction, and compaction-complete.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
@@ -15,7 +15,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{info, warn};
 
 use signet_core::db::Priority;
 use signet_pipeline::memory_lineage::{
@@ -116,6 +116,10 @@ Memory tools:\n\
 - mcp__signet__knowledge_expand: expand a known entity into its aspects, attributes, and dependencies\n\
 - mcp__signet__knowledge_expand_session: find sessions linked to a known entity\n\
 - mcp__signet__memory_store: save something to memory explicitly\n\
+\n\
+Cross-session history:\n\
+- linked summary and transcript artifacts in your Signet workspace are inspectable across sessions\n\
+- use transcript and summary artifacts when you need deeper history than MEMORY.md or recall snippets provide\n\
 \n\
 Identity files in your Signet workspace:\n\
 - AGENTS.md: how you operate (maintain this)\n\
@@ -263,10 +267,6 @@ fn normalize_project(raw: Option<&str>) -> Option<String> {
 }
 
 fn normalize_session_transcript(harness: &str, raw: &str) -> String {
-    if harness.trim().eq_ignore_ascii_case("codex") {
-        return raw.to_string();
-    }
-
     let lines = raw
         .lines()
         .map(str::trim)
@@ -288,11 +288,12 @@ fn normalize_session_transcript(harness: &str, raw: &str) -> String {
         }
     }
 
-    // Fall back to raw if fewer than 60% of lines parsed as JSON, OR if we
-    // parsed enough JSON but extracted zero messages (valid-but-unrecognized
-    // JSONL format).  An empty normalized string would silently discard all
-    // input content; raw is always preferable to silence.
-    if parsed * 10 < lines.len() * 6 || normalized.is_empty() {
+    let _ = harness;
+
+    // Fall back to raw only when the input does not look like JSONL
+    // conversation data. If it is JSONL and we extracted zero turns, return
+    // the empty normalized view so tool-only logs do not pollute summaries.
+    if parsed * 10 < lines.len() * 6 {
         raw.to_string()
     } else {
         normalized.join("\n")
@@ -315,29 +316,149 @@ fn normalize_json_transcript_line(value: &serde_json::Value) -> Option<String> {
     if value.get("type").and_then(serde_json::Value::as_str) == Some("event_msg") {
         let payload = value.get("payload")?;
         if payload.get("type").and_then(serde_json::Value::as_str) == Some("user_message") {
-            let text = payload
-                .get("message")
-                .or_else(|| payload.get("text"))
-                .or_else(|| payload.get("content"))
-                .and_then(serde_json::Value::as_str)?;
+            let text = extract_json_string(payload, &["message", "text", "content"])?;
             return Some(format!("User: {text}"));
         }
     }
 
-    let role = value
-        .get("role")
-        .or_else(|| value.get("speaker"))
-        .and_then(serde_json::Value::as_str);
-    let text = value
-        .get("content")
-        .or_else(|| value.get("text"))
-        .or_else(|| value.get("message"))
-        .and_then(serde_json::Value::as_str);
-    match (role, text) {
+    if let Some(message) = value.get("message").and_then(serde_json::Value::as_object) {
+        let role = extract_json_string_from_map(message, &["role", "speaker"]);
+        let text = extract_json_message_text(&serde_json::Value::Object(message.clone()));
+        match (role.as_deref(), text) {
+            (Some("user"), Some(text)) => return Some(format!("User: {text}")),
+            (Some("assistant"), Some(text)) => return Some(format!("Assistant: {text}")),
+            _ => {}
+        }
+    }
+
+    let role = extract_json_string(value, &["role", "speaker"]);
+    let text = extract_json_message_text(value);
+    match (role.as_deref(), text) {
         (Some("user"), Some(text)) => Some(format!("User: {text}")),
         (Some("assistant"), Some(text)) => Some(format!("Assistant: {text}")),
         _ => None,
     }
+}
+
+fn extract_json_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let obj = value.as_object()?;
+    extract_json_string_from_map(obj, keys)
+}
+
+fn extract_json_string_from_map(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        obj.get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| text.replace(['\r', '\n'], " "))
+    })
+}
+
+fn extract_json_message_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = extract_json_string(value, &["content", "text", "message"]) {
+        return Some(text);
+    }
+
+    let content = value.get("content")?.as_array()?;
+    let parts = content
+        .iter()
+        .filter_map(|item| {
+            let obj = item.as_object()?;
+            if obj.get("type").and_then(serde_json::Value::as_str) != Some("text") {
+                return None;
+            }
+            extract_json_string_from_map(obj, &["text", "content"])
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn session_transcript_content(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    agent_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT content FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2 LIMIT 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![session_key, agent_id])?;
+    if let Some(row) = rows.next()? {
+        return row.get(0).map(Some);
+    }
+    Ok(None)
+}
+
+fn transcript_audit_dir(root: &Path) -> PathBuf {
+    root.join(".daemon").join("logs").join("transcripts")
+}
+
+fn audit_fs_timestamp(iso: &str) -> String {
+    iso.replace(':', "-")
+}
+
+fn resolve_audit_token(
+    agent_id: &str,
+    session_id: &str,
+    session_key: Option<&str>,
+    raw: &str,
+) -> String {
+    let scoped = if !session_id.trim().is_empty() {
+        session_id.trim().to_string()
+    } else if let Some(key) = session_key.map(str::trim).filter(|key| !key.is_empty()) {
+        key.to_string()
+    } else {
+        let mut digest = Sha256::new();
+        digest.update(raw.as_bytes());
+        let bytes = digest.finalize();
+        bytes[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    let mut digest = Sha256::new();
+    digest.update(agent_id.as_bytes());
+    digest.update(b":");
+    digest.update(scoped.as_bytes());
+    let bytes = digest.finalize();
+    bytes[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
+}
+
+fn write_transcript_audit(
+    root: &Path,
+    agent_id: &str,
+    session_id: &str,
+    session_key: Option<&str>,
+    raw_transcript: &str,
+    captured_at: Option<&str>,
+) -> std::io::Result<()> {
+    if raw_transcript.trim().is_empty() {
+        return Ok(());
+    }
+    let dir = transcript_audit_dir(root);
+    fs::create_dir_all(&dir)?;
+    let token = resolve_audit_token(agent_id, session_id, session_key, raw_transcript);
+    let latest = dir.join(format!("{token}--latest.log"));
+    fs::write(latest, raw_transcript)?;
+    if let Some(captured_at) = captured_at {
+        let final_path = dir.join(format!(
+            "{}--{}--raw-transcript.log",
+            audit_fs_timestamp(captured_at),
+            token
+        ));
+        fs::write(final_path, raw_transcript)?;
+    }
+    Ok(())
 }
 
 fn upsert_session_transcript(
@@ -1285,7 +1406,29 @@ pub async fn session_end(
 
     // Normalized view used for LLM inputs (summary job) and the legacy DB
     // upsert.  The canonical artifact above gets the raw original.
-    let normalized = normalize_session_transcript(harness, &transcript);
+    let mut normalized = normalize_session_transcript(harness, &transcript);
+    if !session_key.trim().is_empty() {
+        let session_key_value = session_key.clone();
+        let agent_value = agent_id.clone();
+        if let Ok(Some(stored)) = state
+            .pool
+            .read(move |conn| {
+                session_transcript_content(conn, &session_key_value, &agent_value)
+                    .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+            })
+            .await
+            && !stored.trim().is_empty()
+            && (normalized.trim().is_empty() || stored.len() > normalized.len())
+        {
+            info!(
+                session_key,
+                live_chars = stored.len(),
+                final_chars = normalized.len(),
+                "session-end: using stored transcript snapshot"
+            );
+            normalized = stored;
+        }
+    }
 
     // Resolve session_id now that transcript is available for the content-hash
     // fallback.  Priority: explicit body.session_id → session_key → content hash.
@@ -1322,7 +1465,7 @@ pub async fn session_end(
         });
 
     // Gate before any writes — no-op sessions don't need artifact/job work.
-    if transcript.trim().is_empty() {
+    if normalized.trim().is_empty() {
         if !session_key.trim().is_empty() {
             let session_key_value = session_key.clone();
             let agent_value = agent_id.clone();
@@ -1356,12 +1499,27 @@ pub async fn session_end(
         Some(harness),
     );
 
+    if let Err(e) = write_transcript_audit(
+        &state.config.base_path,
+        &agent_id,
+        &session_id,
+        if session_key.trim().is_empty() {
+            None
+        } else {
+            Some(session_key.as_str())
+        },
+        &transcript,
+        Some(&ended_at),
+    ) {
+        warn!(error = %e, "session-end: transcript audit write failed");
+    }
+
     // Canonical artifact always written before pipeline gates — it is the
     // lineage source of truth regardless of pipeline_enabled or shadow_mode.
     // This matches compaction_complete, which also writes artifacts unconditionally
     // so manifests and backlinks never reference transcripts that don't exist.
     if !noise {
-        let transcript_value = transcript.clone();
+        let transcript_value = normalized.clone();
         let root = state.config.base_path.clone();
         let session_key_value = if session_key.trim().is_empty() {
             None
@@ -2459,9 +2617,11 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        CHECKPOINT_MIN_DELTA, CompactionCompleteBody, SessionEndBody, compaction_complete,
-        extract_delta, parse_visibility, require_session_scope_for_write,
-        resolve_compaction_project, resolve_remember_agent, session_agent_id, session_end,
+        CHECKPOINT_MIN_DELTA, CompactionCompleteBody, SessionEndBody,
+        build_signet_system_prompt, compaction_complete, extract_delta,
+        normalize_session_transcript, parse_visibility,
+        require_session_scope_for_write, resolve_compaction_project,
+        resolve_remember_agent, session_agent_id, session_end,
         strip_untrusted_metadata, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
@@ -2772,6 +2932,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_end_falls_back_to_stored_live_transcript_when_final_input_missing() {
+        let (state, writer, tmp) = test_state("hooks-session-end-live-fallback");
+        let now = chrono::Utc::now().to_rfc3339();
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        "agent:agent-a:sess-live-fallback",
+                        "User: keep the live transcript if session-end falls over.\nAssistant: using the stored live transcript avoids losing the session.\n"
+                            .repeat(8),
+                        "test",
+                        "packages/daemon-rs",
+                        "agent-a",
+                        now
+                    ],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = session_end(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionEndBody {
+                harness: Some("test".to_string()),
+                transcript: None,
+                transcript_path: None,
+                session_id: Some("sess-live-fallback".to_string()),
+                session_key: Some("agent:agent-a:sess-live-fallback".to_string()),
+                cwd: Some("packages/daemon-rs".to_string()),
+                reason: None,
+                runtime_path: None,
+                agent_id: Some("agent-a".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+
+        let transcript = std::fs::read_dir(tmp.path().join("memory"))
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|value| value.path()))
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with("--transcript.md"))
+            })
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap();
+        assert!(transcript.contains("keep the live transcript if session-end falls over"));
+        assert!(transcript.contains("using the stored live transcript avoids losing the session"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn session_end_writes_raw_audit_logs_but_keeps_canonical_transcript_clean() {
+        let (state, writer, tmp) = test_state("hooks-session-end-audit");
+        let transcript = [
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"Run diagnostics"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}"#,
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Diagnostics complete"}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let transcript = transcript.repeat(20);
+
+        let resp = session_end(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionEndBody {
+                harness: Some("codex".to_string()),
+                transcript: Some(transcript),
+                transcript_path: None,
+                session_id: Some("sess-audit".to_string()),
+                session_key: Some("agent:agent-a:sess-audit".to_string()),
+                cwd: Some("packages/daemon-rs".to_string()),
+                reason: None,
+                runtime_path: None,
+                agent_id: Some("agent-a".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+
+        let canonical = std::fs::read_dir(tmp.path().join("memory"))
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|value| value.path()))
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with("--transcript.md"))
+            })
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap();
+        assert!(canonical.contains("User: Run diagnostics"));
+        assert!(canonical.contains("Assistant: Diagnostics complete"));
+        assert!(!canonical.contains("function_call"));
+        assert!(!canonical.contains("README.md"));
+
+        let audit_dir = tmp.path().join(".daemon").join("logs").join("transcripts");
+        let audit = std::fs::read_dir(audit_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|value| value.path()))
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with("--raw-transcript.log"))
+            })
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap();
+        assert!(audit.contains("\"type\":\"function_call\""));
+        assert!(audit.contains("README.md"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
     async fn compaction_complete_skips_noise_session_writes() {
         let (state, writer, tmp) = test_state("hooks-compaction-noise");
 
@@ -2838,6 +3128,36 @@ mod tests {
             Some("alpha")
         );
         assert_eq!(session_agent_id(Some("session:sess-1")), None);
+    }
+
+    #[test]
+    fn build_signet_system_prompt_mentions_transcript_artifacts() {
+        assert!(build_signet_system_prompt().contains("linked summary and transcript artifacts"));
+    }
+
+    #[test]
+    fn normalize_session_transcript_strips_codex_tool_turns() {
+        let raw = [
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"Hello"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}"#,
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Hi"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            normalize_session_transcript("codex", &raw),
+            "User: Hello\nAssistant: Hi"
+        );
+    }
+
+    #[test]
+    fn normalize_session_transcript_returns_empty_for_tool_only_jsonl() {
+        let raw = [
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(normalize_session_transcript("opencode", &raw), "");
     }
 
     #[test]

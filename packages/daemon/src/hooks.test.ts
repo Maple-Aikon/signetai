@@ -23,6 +23,7 @@ describe("buildSignetSystemPrompt", () => {
 		expect(prompt).toContain("mcp__signet__memory_store");
 		expect(prompt).toContain("mcp__signet__secret_list");
 		expect(prompt).toContain("mcp__signet__secret_exec");
+		expect(prompt).toContain("linked summary and transcript artifacts");
 	});
 });
 

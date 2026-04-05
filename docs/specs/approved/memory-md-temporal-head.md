@@ -37,7 +37,8 @@ higher-order condensed nodes, and drill-down lineage.
 `MEMORY.md` is the rendered temporal head of Signet's lossless working
 memory system.
 
-- transcript context is retained losslessly in `session_transcripts`
+- transcript context is retained in `session_transcripts` as a cleaned
+  conversation-only view for retrieval and continuity
 - temporal abstractions are stored in `session_summaries`
 - `MEMORY.md` is a materialized working document rendered from scored
   database state, not assembled from markdown files
