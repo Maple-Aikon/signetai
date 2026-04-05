@@ -323,7 +323,7 @@ fn normalize_json_transcript_line(value: &serde_json::Value) -> Option<String> {
 
     if let Some(message) = value.get("message").and_then(serde_json::Value::as_object) {
         let role = extract_json_string_from_map(message, &["role", "speaker"]);
-        let text = extract_json_message_text(&serde_json::Value::Object(message.clone()));
+        let text = extract_json_message_text_from_map(message);
         match (role.as_deref(), text) {
             (Some("user"), Some(text)) => return Some(format!("User: {text}")),
             (Some("assistant"), Some(text)) => return Some(format!("Assistant: {text}")),
@@ -364,6 +364,21 @@ fn extract_json_message_text(value: &serde_json::Value) -> Option<String> {
     }
 
     let content = value.get("content")?.as_array()?;
+    extract_json_text_parts(content)
+}
+
+fn extract_json_message_text_from_map(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    if let Some(text) = extract_json_string_from_map(obj, &["content", "text", "message"]) {
+        return Some(text);
+    }
+
+    let content = obj.get("content")?.as_array()?;
+    extract_json_text_parts(content)
+}
+
+fn extract_json_text_parts(content: &[serde_json::Value]) -> Option<String> {
     let parts = content
         .iter()
         .filter_map(|item| {
@@ -1492,7 +1507,24 @@ pub async fn session_end(
             format!("session-end:{hex}")
         });
 
-    // Gate before any writes — no-op sessions don't need artifact/job work.
+    if let Err(e) = write_transcript_audit(
+        &state.config.base_path,
+        &agent_id,
+        &session_id,
+        if session_key.trim().is_empty() {
+            None
+        } else {
+            Some(session_key.as_str())
+        },
+        &transcript,
+        Some(&ended_at),
+    ) {
+        warn!(error = %e, "session-end: transcript audit write failed");
+    }
+
+    // Gate before canonical artifact/job work — raw audit traces are still
+    // preserved for non-empty transcripts even when normalization produces no
+    // conversation turns.
     if normalized.trim().is_empty() {
         if !session_key.trim().is_empty() {
             let session_key_value = session_key.clone();
@@ -1526,21 +1558,6 @@ pub async fn session_end(
         Some(session_key.as_str()),
         Some(harness),
     );
-
-    if let Err(e) = write_transcript_audit(
-        &state.config.base_path,
-        &agent_id,
-        &session_id,
-        if session_key.trim().is_empty() {
-            None
-        } else {
-            Some(session_key.as_str())
-        },
-        &transcript,
-        Some(&ended_at),
-    ) {
-        warn!(error = %e, "session-end: transcript audit write failed");
-    }
 
     // Canonical artifact always written before pipeline gates — it is the
     // lineage source of truth regardless of pipeline_enabled or shadow_mode.

@@ -2637,7 +2637,17 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 	}
 
-	const storedTranscript = sessionKey ? (getSessionTranscriptContent(sessionKey, agentId) ?? "") : "";
+	let storedTranscript = "";
+	if (sessionKey) {
+		try {
+			storedTranscript = getSessionTranscriptContent(sessionKey, agentId) ?? "";
+		} catch (error) {
+			logger.warn("hooks", "Failed to read stored transcript for fallback", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+		}
+	}
 	if (storedTranscript.length > 0 && (transcript.length === 0 || storedTranscript.length > transcript.length)) {
 		logger.info("hooks", "Session end using stored transcript snapshot", {
 			sessionKey,

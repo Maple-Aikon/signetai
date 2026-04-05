@@ -1,14 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-
-function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
-}
+import { resolveDefaultBasePath } from "@signet/core";
 
 function getTranscriptAuditDir(): string {
-	return join(getAgentsDir(), ".daemon", "logs", "transcripts");
+	return join(resolveDefaultBasePath(), ".daemon", "logs", "transcripts");
 }
 
 function fsTimestamp(iso: string): string {
