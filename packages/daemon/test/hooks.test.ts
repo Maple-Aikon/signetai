@@ -7,6 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1861,6 +1862,27 @@ describe("handleSessionEnd", () => {
 		expect(finalPath?.startsWith(auditDir)).toBe(true);
 		expect(auditName).toMatch(/^[A-Za-z0-9._-]+$/);
 		expect(finalPath).not.toContain("/tmp/evil");
+	});
+
+	test.serial("uses the full raw transcript hash when audit ids are missing", () => {
+		const rawTranscript = "User: audit me\nAssistant: on it";
+		const result = writeTranscriptAudit({
+			basePath: TEST_DIR,
+			agentId: "agent-a",
+			sessionId: "",
+			sessionKey: null,
+			rawTranscript,
+		});
+
+		expect(result).not.toBeNull();
+		const latestPath = result?.latestPath ?? "";
+		const latestName = latestPath.split("/").pop() ?? "";
+		const scoped = createHash("sha256").update(rawTranscript, "utf8").digest("hex");
+		const expectedToken = createHash("sha256")
+			.update(`agent-a:${scoped}`, "utf8")
+			.digest("hex")
+			.slice(0, 16);
+		expect(latestName).toBe(`${expectedToken}--latest.log`);
 	});
 
 	test.serial(

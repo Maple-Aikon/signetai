@@ -288,7 +288,6 @@ fn normalize_session_transcript(raw: &str) -> String {
         }
     }
 
-
     // Fall back to raw only when the input does not look like JSONL
     // conversation data. If it is JSONL and we extracted zero turns, return
     // the empty normalized view so tool-only logs do not pollute summaries.
@@ -303,11 +302,7 @@ fn normalize_json_transcript_line(value: &serde_json::Value) -> Option<String> {
     if value.get("type").and_then(serde_json::Value::as_str) == Some("item.completed") {
         let item = value.get("item")?;
         if item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message") {
-            let text = item
-                .get("text")
-                .or_else(|| item.get("message"))
-                .or_else(|| item.get("content"))
-                .and_then(serde_json::Value::as_str)?;
+            let text = extract_json_message_text(item)?;
             return Some(format!("Assistant: {text}"));
         }
     }
@@ -456,8 +451,8 @@ fn resolve_audit_token(
     } else {
         let mut digest = Sha256::new();
         digest.update(raw.as_bytes());
-        let bytes = digest.finalize();
-        bytes[..16]
+        digest
+            .finalize()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>()
@@ -906,7 +901,9 @@ pub async fn prompt_submit(
             }
             match fs::read_to_string(&canonical) {
                 Ok(content) => raw_transcript = content,
-                Err(e) => warn!(path = %canonical.display(), error = %e, "prompt-submit: transcript read failed"),
+                Err(e) => {
+                    warn!(path = %canonical.display(), error = %e, "prompt-submit: transcript read failed")
+                }
             }
         }
 
@@ -915,45 +912,32 @@ pub async fn prompt_submit(
             let harness_value = harness.to_string();
             let project_value = body.project.clone();
             let agent_value = agent_id.clone();
-            let session_key_for_read = session_key_value.clone();
-            let agent_for_read = agent_id.clone();
-            let normalized_len = normalized.len();
-            let should_write = match state
+            let session_key_for_write = session_key_value.clone();
+            let normalized_for_write = normalized.clone();
+            let normalized_len = normalized_for_write.len();
+            if let Err(e) = state
                 .pool
-                .read(move |conn| {
-                    session_transcript_content(conn, &session_key_for_read, &agent_for_read)
-                        .map(|prev| prev.is_none_or(|value| normalized_len >= value.len()))
-                        .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+                .write(Priority::Low, move |conn| {
+                    let should_write =
+                        session_transcript_content(conn, &session_key_for_write, &agent_value)?
+                            .is_none_or(|value| normalized_len >= value.len());
+                    if !should_write {
+                        return Ok(serde_json::Value::Bool(false));
+                    }
+                    upsert_session_transcript(
+                        conn,
+                        &session_key_for_write,
+                        &normalized_for_write,
+                        &harness_value,
+                        project_value.as_deref(),
+                        &agent_value,
+                    )
+                    .map(|_| serde_json::Value::Bool(true))
+                    .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
                 })
                 .await
             {
-                Ok(value) => value,
-                Err(e) => {
-                    warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript length check failed");
-                    false
-                }
-            };
-            if should_write {
-                let session_key_for_write = session_key_value.clone();
-                let normalized_for_write = normalized.clone();
-                if let Err(e) = state
-                    .pool
-                    .write(Priority::Low, move |conn| {
-                        upsert_session_transcript(
-                            conn,
-                            &session_key_for_write,
-                            &normalized_for_write,
-                            &harness_value,
-                            project_value.as_deref(),
-                            &agent_value,
-                        )
-                        .map(|_| serde_json::Value::Null)
-                        .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
-                    })
-                    .await
-                {
-                    warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript upsert failed");
-                }
+                warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript upsert failed");
             }
         }
 
@@ -2752,6 +2736,7 @@ mod tests {
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
     use serde_json::Value;
+    use sha2::{Digest, Sha256};
     use signet_core::config::{
         AgentManifest, DaemonConfig, MemoryManifestConfig, PipelineV2Config,
     };
@@ -2766,9 +2751,9 @@ mod tests {
         CHECKPOINT_MIN_DELTA, CompactionCompleteBody, PromptSubmitBody, SessionEndBody,
         build_signet_system_prompt, compaction_complete, extract_delta,
         normalize_session_transcript, parse_visibility, prompt_submit,
-        require_session_scope_for_write, resolve_compaction_project, resolve_remember_agent,
-        session_agent_id, session_end, session_transcript_content, strip_untrusted_metadata,
-        upsert_session_transcript,
+        require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
+        resolve_remember_agent, session_agent_id, session_end, session_transcript_content,
+        strip_untrusted_metadata, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -3020,7 +3005,9 @@ mod tests {
         let body = test_json(resp).await;
         assert_eq!(
             body["error"],
-            serde_json::Value::String("transcript_path outside allowed workspace roots".to_string())
+            serde_json::Value::String(
+                "transcript_path outside allowed workspace roots".to_string()
+            )
         );
 
         drop(state);
@@ -3079,6 +3066,48 @@ mod tests {
 
         drop(state);
         let _ = writer.await;
+    }
+
+    #[test]
+    fn normalize_session_transcript_normalizes_item_completed_text() {
+        let raw = [
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"line one\r\nline two"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"done"}}"#,
+        ]
+        .join("\n");
+
+        let normalized = normalize_session_transcript(&raw);
+
+        assert!(normalized.contains("Assistant: line one  line two"));
+        assert!(normalized.contains("User: done"));
+    }
+
+    #[test]
+    fn resolve_audit_token_uses_full_raw_hash_when_session_identity_missing() {
+        let raw = "User: audit me\nAssistant: on it";
+        let raw_hash = {
+            let mut digest = Sha256::new();
+            digest.update(raw.as_bytes());
+            digest
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let expected = {
+            let mut digest = Sha256::new();
+            digest.update(b"agent-a");
+            digest.update(b":");
+            digest.update(raw_hash.as_bytes());
+            digest
+                .finalize()
+                .iter()
+                .take(8)
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+
+        assert_eq!(resolve_audit_token("agent-a", "", None, raw), expected);
     }
 
     #[tokio::test]
