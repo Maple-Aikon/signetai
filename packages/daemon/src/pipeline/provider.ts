@@ -182,10 +182,9 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 	// so only direct/programmatic callers can hit this — and passing undefined for a field
 	// signals "don't use it".
 	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...config };
-	if ((cfg.maxCallsPerHour ?? 0) <= 0 || (cfg.burstSize ?? 0) <= 0) return provider;
-	// Guard waitTimeoutMs: undefined would propagate to acquire() where
-	// Date.now() + undefined = NaN, silently breaking the polling loop.
-	// Treat missing/undefined as 0 (no wait — fail immediately when burst exhausted).
+	const maxCallsPerHour = cfg.maxCallsPerHour ?? 0;
+	const burstSize = cfg.burstSize ?? 0;
+	if (maxCallsPerHour <= 0 || burstSize <= 0) return provider;
 	const waitTimeoutMs = cfg.waitTimeoutMs ?? 0;
 
 	if (!shouldRateLimit(provider.name)) {
@@ -200,7 +199,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 		return provider;
 	}
 
-	const bucket = new TokenBucketRateLimiter(cfg.maxCallsPerHour, cfg.burstSize);
+	const bucket = new TokenBucketRateLimiter(maxCallsPerHour, burstSize);
 	let lastWarnMs = 0;
 	const WARN_INTERVAL_MS = 300_000;
 
@@ -219,7 +218,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 		async generate(prompt, opts): Promise<string> {
 			if (!(await bucket.acquire(waitTimeoutMs))) {
 				warnIfThrottled();
-				throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
+				throw new RateLimitExceededError(provider.name, maxCallsPerHour);
 			}
 			return provider.generate(prompt, opts);
 		},
@@ -229,7 +228,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 					async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
 						if (!(await bucket.acquire(waitTimeoutMs))) {
 							warnIfThrottled();
-							throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
+							throw new RateLimitExceededError(provider.name, maxCallsPerHour);
 						}
 						const fn = provider.generateWithUsage;
 						return fn.call(provider, prompt, opts);

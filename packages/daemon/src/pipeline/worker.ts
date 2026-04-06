@@ -247,6 +247,10 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 	).run(nextStatus, error, now, now, jobId);
 }
 
+function deadLetterJob(db: WriteDb, jobId: string, error: string): void {
+	failJob(db, jobId, error, Number.MAX_SAFE_INTEGER, 1);
+}
+
 function updateExtractionStatus(db: WriteDb, memoryId: string, status: string, extractionModel?: string): void {
 	if (extractionModel === undefined) {
 		db.prepare("UPDATE memories SET extraction_status = ? WHERE id = ?").run(status, memoryId);
@@ -1562,11 +1566,11 @@ export function startWorker(
 					durationMs: runtime.now() - jobStart,
 				});
 				accessor.withWriteTx((db) => {
-					// failJob() uses the attempts argument *only* for dead-vs-retryable
-					// classification — it does NOT persist it to the `attempts` column
-					// (see failJob implementation: only status/error/failed_at are written).
-					// Passing max_attempts for non-retryable errors forces dead-letter.
-					failJob(db, job.id, msg, nonRetryable ? job.max_attempts : job.attempts, job.max_attempts);
+					if (nonRetryable) {
+						deadLetterJob(db, job.id, msg);
+					} else {
+						failJob(db, job.id, msg, job.attempts, job.max_attempts);
+					}
 					if (nonRetryable || job.attempts >= job.max_attempts) {
 						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
