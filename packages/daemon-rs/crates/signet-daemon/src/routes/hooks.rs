@@ -266,7 +266,7 @@ fn normalize_project(raw: Option<&str>) -> Option<String> {
     Some(s.replace('\\', "/").trim_end_matches('/').to_string())
 }
 
-fn normalize_session_transcript(harness: &str, raw: &str) -> String {
+fn normalize_session_transcript(raw: &str) -> String {
     let lines = raw
         .lines()
         .map(str::trim)
@@ -288,7 +288,6 @@ fn normalize_session_transcript(harness: &str, raw: &str) -> String {
         }
     }
 
-    let _ = harness;
 
     // Fall back to raw only when the input does not look like JSONL
     // conversation data. If it is JSONL and we extracted zero turns, return
@@ -884,38 +883,77 @@ pub async fn prompt_submit(
         let mut raw_transcript = body.transcript.clone().unwrap_or_default();
         if raw_transcript.is_empty()
             && let Some(path) = body.transcript_path.as_deref()
-            && std::path::Path::new(path).exists()
+            && !path.trim().is_empty()
         {
-            match fs::read_to_string(path) {
+            let canonical = match fs::canonicalize(path) {
+                Ok(value) => value,
+                Err(e) => {
+                    warn!(path, error = %e, "prompt-submit: transcript_path unresolvable");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": format!("transcript_path unresolvable: {e}")})),
+                    )
+                        .into_response();
+                }
+            };
+            if !transcript_path_allowed(&canonical) {
+                warn!(path = %canonical.display(), "prompt-submit: transcript_path outside allowed roots");
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "transcript_path outside allowed workspace roots"})),
+                )
+                    .into_response();
+            }
+            match fs::read_to_string(&canonical) {
                 Ok(content) => raw_transcript = content,
-                Err(e) => warn!(path, error = %e, "prompt-submit: transcript read failed"),
+                Err(e) => warn!(path = %canonical.display(), error = %e, "prompt-submit: transcript read failed"),
             }
         }
 
-        let normalized = normalize_session_transcript(harness, &raw_transcript);
+        let normalized = normalize_session_transcript(&raw_transcript);
         if !normalized.trim().is_empty() {
             let harness_value = harness.to_string();
             let project_value = body.project.clone();
             let agent_value = agent_id.clone();
-            let session_key_for_write = session_key_value.clone();
-            let normalized_for_write = normalized.clone();
-            if let Err(e) = state
+            let session_key_for_read = session_key_value.clone();
+            let agent_for_read = agent_id.clone();
+            let normalized_len = normalized.len();
+            let should_write = match state
                 .pool
-                .write(Priority::Low, move |conn| {
-                    upsert_session_transcript(
-                        conn,
-                        &session_key_for_write,
-                        &normalized_for_write,
-                        &harness_value,
-                        project_value.as_deref(),
-                        &agent_value,
-                    )
-                    .map(|_| serde_json::Value::Null)
-                    .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+                .read(move |conn| {
+                    session_transcript_content(conn, &session_key_for_read, &agent_for_read)
+                        .map(|prev| prev.is_none_or(|value| normalized_len >= value.len()))
+                        .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
                 })
                 .await
             {
-                warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript upsert failed");
+                Ok(value) => value,
+                Err(e) => {
+                    warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript length check failed");
+                    false
+                }
+            };
+            if should_write {
+                let session_key_for_write = session_key_value.clone();
+                let normalized_for_write = normalized.clone();
+                if let Err(e) = state
+                    .pool
+                    .write(Priority::Low, move |conn| {
+                        upsert_session_transcript(
+                            conn,
+                            &session_key_for_write,
+                            &normalized_for_write,
+                            &harness_value,
+                            project_value.as_deref(),
+                            &agent_value,
+                        )
+                        .map(|_| serde_json::Value::Null)
+                        .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+                    })
+                    .await
+                {
+                    warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript upsert failed");
+                }
             }
         }
 
@@ -1514,7 +1552,7 @@ pub async fn session_end(
 
     // Normalized view used for LLM inputs (summary job) and the legacy DB
     // upsert.  The canonical artifact above gets the raw original.
-    let mut normalized = normalize_session_transcript(harness, &transcript);
+    let mut normalized = normalize_session_transcript(&transcript);
     if !session_key.trim().is_empty() {
         let session_key_value = session_key.clone();
         let agent_value = agent_id.clone();
@@ -2955,9 +2993,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prompt_submit_rejects_transcript_path_outside_allowed_roots() {
+        let (state, writer, tmp) = test_state("hooks-prompt-submit-path-guard");
+        let transcript_path = tmp.path().join("prompt-transcript.txt");
+        std::fs::write(&transcript_path, "User: hi\nAssistant: hello").unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("packages/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("review the release checklist".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-denied".to_string()),
+                transcript: None,
+                transcript_path: Some(transcript_path.display().to_string()),
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = test_json(resp).await;
+        assert_eq!(
+            body["error"],
+            serde_json::Value::String("transcript_path outside allowed workspace roots".to_string())
+        );
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_keeps_longer_stored_transcript_snapshot() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-length-guard");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                upsert_session_transcript(
+                    conn,
+                    "sess-prompt-guard",
+                    &"User: longer transcript\nAssistant: still longer\n".repeat(6),
+                    "test",
+                    Some("packages/daemon-rs"),
+                    "agent-a",
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("packages/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("review the release checklist".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-guard".to_string()),
+                transcript: Some("User: short\nAssistant: short".to_string()),
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let stored = state
+            .pool
+            .read(|conn| {
+                session_transcript_content(conn, "sess-prompt-guard", "agent-a")
+                    .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+            })
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert!(stored.contains("longer transcript"));
+        assert!(!stored.contains("User: short\nAssistant: short"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
     async fn prompt_submit_writes_transcript_audit_and_live_snapshot() {
         let (state, writer, tmp) = test_state("hooks-prompt-submit-audit");
-        let transcript_path = tmp.path().join("prompt-transcript.txt");
+        let stage_dir = std::path::Path::new("/tmp/signet");
+        std::fs::create_dir_all(stage_dir).unwrap();
+        let transcript_path = stage_dir.join(format!(
+            "prompt-transcript-{}.txt",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
         std::fs::write(
             &transcript_path,
             "User: review the release checklist
@@ -3009,6 +3141,7 @@ Assistant: here's the checklist",
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.ends_with("--latest.log"))
         }));
+        let _ = std::fs::remove_file(&transcript_path);
 
         drop(state);
         let _ = writer.await;
@@ -3317,7 +3450,7 @@ Assistant: here's the checklist",
         ]
         .join("\n");
         assert_eq!(
-            normalize_session_transcript("codex", &raw),
+            normalize_session_transcript(&raw),
             "User: Hello\nAssistant: Hi"
         );
     }
@@ -3329,7 +3462,7 @@ Assistant: here's the checklist",
             r#"{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}"#,
         ]
         .join("\n");
-        assert_eq!(normalize_session_transcript("opencode", &raw), "");
+        assert_eq!(normalize_session_transcript(&raw), "");
     }
 
     #[test]
