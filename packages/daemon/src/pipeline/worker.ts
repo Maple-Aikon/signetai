@@ -248,7 +248,12 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 }
 
 function deadLetterJob(db: WriteDb, jobId: string, error: string): void {
-	failJob(db, jobId, error, Number.MAX_SAFE_INTEGER, 1);
+	const now = new Date().toISOString();
+	db.prepare(
+		`UPDATE memory_jobs
+		 SET status = 'dead', error = ?, failed_at = ?, updated_at = ?
+		 WHERE id = ?`,
+	).run(error, now, now, jobId);
 }
 
 function updateExtractionStatus(db: WriteDb, memoryId: string, status: string, extractionModel?: string): void {
