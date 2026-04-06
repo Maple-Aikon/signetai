@@ -45,10 +45,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 			optin?: boolean;
 		};
 
-		const firstName = body.firstName?.trim() ?? "";
-		const lastName = body.lastName?.trim() ?? "";
-		const phone = body.phone?.trim() ?? "";
-		const email = body.email?.trim().toLowerCase() ?? "";
+		const firstName = (body.firstName?.trim() ?? "").slice(0, 50);
+		const lastName = (body.lastName?.trim() ?? "").slice(0, 50);
+		const phone = (body.phone?.trim() ?? "").slice(0, 20);
+		const email = (body.email?.trim().toLowerCase() ?? "").slice(0, 254);
 		const optin = body.optin === true;
 
 		if (!firstName || !lastName) {
