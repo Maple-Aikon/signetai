@@ -1,6 +1,8 @@
 interface Env {
 	RESEND_API_KEY: string;
+	RESEND_AUDIENCE_ID: string;
 	GHL_API_KEY: string;
+	RATE_LIMITER: RateLimit;
 	// Email address to receive applicant notifications (e.g. team@signetai.sh)
 	NOTIFY_EMAIL?: string;
 	// Verified sending address in Resend (e.g. noreply@signetai.sh)
@@ -8,10 +10,19 @@ interface Env {
 }
 
 const ALLOWED_ORIGINS = ["https://signetai.sh", "https://www.signetai.sh"];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function corsHeaders(origin: string): Record<string, string> {
 	if (!origin || !ALLOWED_ORIGINS.includes(origin)) return {};
 	return { "Access-Control-Allow-Origin": origin };
+}
+
+function escapeHtml(s: string): string {
+	return s
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
@@ -20,6 +31,16 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 		...corsHeaders(origin),
 		"Content-Type": "application/json",
 	};
+
+	// Rate limit by IP — 10 submissions per 60 seconds
+	const ip = context.request.headers.get("CF-Connecting-IP") ?? "unknown";
+	const { success } = await context.env.RATE_LIMITER.limit({ key: ip });
+	if (!success) {
+		return new Response(JSON.stringify({ error: "Too many requests" }), {
+			status: 429,
+			headers,
+		});
+	}
 
 	try {
 		const body = (await context.request.json()) as {
@@ -43,8 +64,16 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 			});
 		}
 
-		if (email && !email.includes("@")) {
+		if (email && !EMAIL_RE.test(email)) {
 			return new Response(JSON.stringify({ error: "Invalid email address" }), {
+				status: 400,
+				headers,
+			});
+		}
+
+		const phoneDigits = phone.replace(/\D/g, "");
+		if (phoneDigits && phoneDigits.length !== 10) {
+			return new Response(JSON.stringify({ error: "Phone must be a 10-digit US number" }), {
 				status: 400,
 				headers,
 			});
@@ -52,19 +81,22 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
 		// Add to Resend contacts audience only when email is provided
 		if (email) {
-			const contactRes = await fetch("https://api.resend.com/contacts", {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${context.env.RESEND_API_KEY}`,
-					"Content-Type": "application/json",
+			const contactRes = await fetch(
+				`https://api.resend.com/audiences/${context.env.RESEND_AUDIENCE_ID}/contacts`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${context.env.RESEND_API_KEY}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						email,
+						first_name: firstName,
+						last_name: lastName,
+						unsubscribed: !optin,
+					}),
 				},
-				body: JSON.stringify({
-					email,
-					first_name: firstName,
-					last_name: lastName,
-					unsubscribed: !optin,
-				}),
-			});
+			);
 
 			if (!contactRes.ok) {
 				const err = await contactRes.text();
@@ -78,8 +110,6 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
 		// Create/update contact in GoHighLevel
 		if (context.env.GHL_API_KEY) {
-			// Phone digits only — prepend +1 for US numbers (form enforces 10-digit US format)
-			const ghlPhone = phone.replace(/\D/g, '');
 			const ghlRes = await fetch("https://rest.gohighlevel.com/v1/contacts/", {
 				method: "POST",
 				headers: {
@@ -90,7 +120,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 					firstName,
 					lastName,
 					...(email ? { email } : {}),
-					...(ghlPhone ? { phone: `+1${ghlPhone}` } : {}),
+					// Phone digits only, prepend +1 for US (form enforces 10-digit US format)
+					...(phoneDigits ? { phone: `+1${phoneDigits}` } : {}),
 					tags: ["community-optin"],
 					source: "signetai.sh",
 					// Requires a custom field named "newsletter_optin" in your GHL account
@@ -113,6 +144,11 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 		const fromEmail = context.env.FROM_EMAIL ?? "noreply@signetai.sh";
 
 		if (notifyEmail) {
+			// Escape all user values before HTML interpolation
+			const safeName = `${escapeHtml(firstName)} ${escapeHtml(lastName)}`;
+			const safeEmail = escapeHtml(email);
+			const safePhone = escapeHtml(phone);
+
 			const emailRes = await fetch("https://api.resend.com/emails", {
 				method: "POST",
 				headers: {
@@ -122,11 +158,11 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 				body: JSON.stringify({
 					from: `Signet Community <${fromEmail}>`,
 					to: [notifyEmail],
-					subject: `New community applicant: ${firstName} ${lastName}`,
+					subject: `New community applicant: ${safeName}`,
 					html: `
-						<p><strong>Name:</strong> ${firstName} ${lastName}</p>
-						<p><strong>Email:</strong> ${email || "—"}</p>
-						<p><strong>Phone:</strong> ${phone || "—"}</p>
+						<p><strong>Name:</strong> ${safeName}</p>
+						<p><strong>Email:</strong> ${safeEmail || "—"}</p>
+						<p><strong>Phone:</strong> ${safePhone || "—"}</p>
 						<p><strong>Newsletter opt-in:</strong> ${optin ? "Yes" : "No"}</p>
 					`.trim(),
 				}),
