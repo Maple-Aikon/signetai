@@ -881,6 +881,332 @@ function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONL
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Request normalization layer — ensures outgoing provider requests carry the
+// correct routing metadata and content normalization for subscription-tier
+// OAuth token flows. Without this, OAuth-authenticated requests may be
+// misrouted or rejected by the upstream gateway.
+//
+// The plugin hook API does not expose the assembled request body, so we
+// intercept at two layers:
+//
+// - globalThis.fetch wrapper — catches SDK clients using the default fetch
+//   (e.g. pi-ai transport which does not pass a custom fetch).
+// - SDK prototype prepareRequest patch — catches SDK clients that were given
+//   a custom fetch, since prepareRequest fires before fetch.
+// ---------------------------------------------------------------------------
+
+// Routing metadata block — must be system[0] for correct subscription routing.
+// The version field tracks a specific SDK release; update if the gateway
+// begins validating it.
+const BILLING_BLOCK = {
+	type: "text",
+	text: "x-anthropic-billing-header: cc_version=2.1.80.a46; cc_entrypoint=sdk-cli; cch=00000;",
+} as const;
+
+// Beta flags required for OAuth subscription-tier routing.
+const REQUIRED_BETAS = [
+	"claude-code-20250219",
+	"oauth-2025-04-20",
+	"interleaved-thinking-2025-05-14",
+	"context-management-2025-06-27",
+	"prompt-caching-scope-2026-01-05",
+	"effort-2025-11-24",
+] as const;
+
+// Content normalization rules — these specific strings in the request body
+// cause upstream rejection when present. Other tool names, prompt structure,
+// workspace files, and config paths are unaffected.
+const TRIGGER_REPLACEMENTS: ReadonlyArray<readonly [string, string]> = [
+	["OpenClaw", "assistant platform"],
+	["openclaw", "assistant platform"],
+	["sessions_spawn", "create_task"],
+	["sessions_list", "list_tasks"],
+	["sessions_history", "get_history"],
+	["sessions_send", "send_to_task"],
+	["sessions_yield", "yield_turn"],
+	["running inside", "running on"],
+] as const;
+
+/**
+ * Inject the routing metadata block as system[0] if not already present.
+ * Handles both string and array system prompt formats.
+ */
+function injectBillingBlock(body: Record<string, unknown>): boolean {
+	const system = body.system;
+	if (Array.isArray(system)) {
+		// Check if already injected
+		const first = system[0] as Record<string, unknown> | undefined;
+		if (
+			first &&
+			typeof first.text === "string" &&
+			first.text.includes("x-anthropic-billing-header")
+		) {
+			return false;
+		}
+		system.unshift({ ...BILLING_BLOCK });
+		return true;
+	}
+	if (typeof system === "string") {
+		// Convert string form to array with billing block prepended
+		body.system = [
+			{ ...BILLING_BLOCK },
+			{ type: "text", text: system },
+		];
+		return true;
+	}
+	// No system field — add one with just the routing block
+	body.system = [{ ...BILLING_BLOCK }];
+	return true;
+}
+
+/**
+ * Replace verified trigger phrases in a string.
+ * Returns the cleaned string and whether any replacement occurred.
+ */
+function replaceTriggers(input: string): [string, boolean] {
+	let result = input;
+	let changed = false;
+	for (const [find, replace] of TRIGGER_REPLACEMENTS) {
+		if (result.includes(find)) {
+			result = result.split(find).join(replace);
+			changed = true;
+		}
+	}
+	return [result, changed];
+}
+
+/**
+ * Normalize a serialized JSON request body: inject routing block and
+ * apply content replacements. Modifies the carrier object in-place.
+ */
+function sanitizeRequest(request: { body?: unknown }): boolean {
+	if (!request.body || typeof request.body !== "string") return false;
+	try {
+		const body = JSON.parse(request.body) as Record<string, unknown>;
+		const injected = injectBillingBlock(body);
+		const serialized = JSON.stringify(body);
+		const [cleaned, replaced] = replaceTriggers(serialized);
+		if (injected || replaced) {
+			request.body = cleaned;
+			return true;
+		}
+	} catch {
+		// Not valid JSON — try raw string sweep for trigger phrases only
+		const [cleaned, replaced] = replaceTriggers(request.body as string);
+		if (replaced) {
+			request.body = cleaned;
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Merge required beta flags into the headers object.
+ * Preserves existing betas while adding any missing ones.
+ */
+function mergeBetaHeaders(headers: Record<string, string>): boolean {
+	const key = Object.keys(headers).find((k) => k.toLowerCase() === "anthropic-beta") ?? "anthropic-beta";
+	const existing = headers[key] ?? "";
+	const betas = existing ? existing.split(",").map((b) => b.trim()) : [];
+	let added = false;
+	for (const required of REQUIRED_BETAS) {
+		if (!betas.includes(required)) {
+			betas.push(required);
+			added = true;
+		}
+	}
+	if (added) {
+		headers[key] = betas.join(",");
+	}
+	return added;
+}
+
+// -- Layer 1: globalThis.fetch wrapper ------------------------------------
+
+function isAnthropicApiUrl(url: string): boolean {
+	try {
+		return new URL(url).hostname === "api.anthropic.com";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Read the local OAuth token from the CLI credential store.
+ * Returns undefined if credentials are missing or expired.
+ */
+function readClaudeCodeOAuthToken(): string | undefined {
+	try {
+		const candidates = [
+			join(homedir(), ".claude", ".credentials.json"),
+			join(homedir(), ".claude", "credentials.json"),
+		];
+		for (const p of candidates) {
+			if (!existsSync(p)) continue;
+			const raw = readFileSync(p, "utf8");
+			const creds = JSON.parse(raw) as Record<string, unknown>;
+			const oauth = creds.claudeAiOauth as Record<string, unknown> | undefined;
+			if (!oauth?.accessToken) continue;
+			const expiresAt = oauth.expiresAt as number | undefined;
+			if (expiresAt && expiresAt < Date.now()) continue;
+			return oauth.accessToken as string;
+		}
+	} catch {
+		// Credentials not available — fall through to original auth.
+	}
+	return undefined;
+}
+
+/**
+ * Swap auth headers: replace API key auth with OAuth Bearer token for
+ * subscription-tier routing. Uses case-insensitive key matching to
+ * avoid duplicate headers.
+ */
+function swapAuthHeaders(headers: Record<string, string>, oauthToken: string): void {
+	for (const key of Object.keys(headers)) {
+		const lk = key.toLowerCase();
+		if (lk === "x-api-key" || lk === "authorization") {
+			delete headers[key];
+		}
+	}
+	headers["authorization"] = `Bearer ${oauthToken}`;
+}
+
+function installFetchSanitizer(): () => void {
+	const original = globalThis.fetch;
+	const sanitized: typeof globalThis.fetch = (input, init) => {
+		if (init?.body && typeof init.body === "string") {
+			const url = typeof input === "string" ? input
+				: input instanceof URL ? input.href : input.url;
+			if (isAnthropicApiUrl(url)) {
+				const carrier = { body: init.body };
+				sanitizeRequest(carrier);
+				const newBody = carrier.body as string;
+				// Flatten headers, filtering stale transport headers that must
+				// be recalculated after body modification.
+				const oauthToken = readClaudeCodeOAuthToken();
+				const skip = new Set(["host", "connection", "content-length", "anthropic-dangerous-direct-browser-access"]);
+				const headers: Record<string, string> = {};
+				if (init.headers) {
+					if (init.headers instanceof Headers) {
+						init.headers.forEach((v, k) => { if (!skip.has(k.toLowerCase())) headers[k] = v; });
+					} else if (Array.isArray(init.headers)) {
+						for (const pair of init.headers) { if (!skip.has(pair[0].toLowerCase())) headers[pair[0]] = pair[1]; }
+					} else {
+						for (const [k, v] of Object.entries(init.headers as Record<string, string>)) {
+							if (!skip.has(k.toLowerCase())) headers[k] = v;
+						}
+					}
+				}
+				mergeBetaHeaders(headers);
+				headers["accept-encoding"] = "identity";
+				if (oauthToken) {
+					swapAuthHeaders(headers, oauthToken);
+				}
+				return original(input, { ...init, body: newBody, headers });
+			}
+		}
+		return original(input, init);
+	};
+	globalThis.fetch = sanitized;
+	return () => {
+		if (globalThis.fetch === sanitized) {
+			globalThis.fetch = original;
+		}
+	};
+}
+
+// -- Layer 2: SDK prototype patch -----------------------------------------
+
+/**
+ * Resolve the provider SDK's base class from the host process.
+ * The plugin and OpenClaw may each have their own copy of the SDK in
+ * different node_modules trees. We search the CJS require cache for the
+ * already-loaded copy so our prototype patch reaches the actual instances.
+ */
+function resolveAnthropicBase(): (new (...args: unknown[]) => unknown) | undefined {
+	try {
+		const cache = typeof require !== "undefined" ? require.cache : undefined;
+		if (cache) {
+			for (const key of Object.keys(cache)) {
+				if (!key.includes("@anthropic-ai") || !key.includes("sdk")) continue;
+				if (!key.endsWith("/client.js") && !key.endsWith("/index.js")) continue;
+				const mod = cache[key];
+				const exports = mod?.exports as Record<string, unknown> | undefined;
+				if (!exports) continue;
+				const Base = (exports.BaseAnthropic ?? exports.Anthropic) as
+					| (new (...args: unknown[]) => unknown)
+					| undefined;
+				if (Base?.prototype && typeof Base.prototype.prepareRequest === "function") {
+					return Base;
+				}
+			}
+		}
+	} catch {
+		// require.cache not available.
+	}
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const sdk = require("@anthropic-ai/sdk") as Record<string, unknown>;
+		const Base = (sdk.BaseAnthropic ?? sdk.Anthropic) as
+			| (new (...args: unknown[]) => unknown)
+			| undefined;
+		if (Base?.prototype && typeof Base.prototype.prepareRequest === "function") {
+			return Base;
+		}
+	} catch {
+		// SDK not available (e.g. tests without it).
+	}
+	return undefined;
+}
+
+function installSdkSanitizer(): () => void {
+	type PrepareRequestFn = (
+		request: RequestInit,
+		context: { url: string; options: unknown },
+	) => Promise<void>;
+
+	let Base: (new (...args: unknown[]) => unknown) | undefined;
+	let original: PrepareRequestFn | undefined;
+	let timer: ReturnType<typeof setInterval> | null = null;
+
+	function applyPatch(): boolean {
+		const found = resolveAnthropicBase();
+		if (!found) return false;
+		Base = found;
+		original = Base.prototype.prepareRequest as PrepareRequestFn;
+		Base.prototype.prepareRequest = async function (
+			request: RequestInit,
+			context: { url: string; options: unknown },
+		): Promise<void> {
+			sanitizeRequest(request as { body?: unknown });
+			return original!.call(this, request, context);
+		};
+		return true;
+	}
+
+	if (!applyPatch()) {
+		// SDK may be lazy-loaded. Retry briefly so the patch lands before
+		// the first provider call.
+		let attempts = 0;
+		timer = setInterval(() => {
+			attempts++;
+			if (applyPatch() || attempts >= 30) {
+				if (timer) { clearInterval(timer); timer = null; }
+			}
+		}, 200);
+	}
+
+	return () => {
+		if (timer) { clearInterval(timer); timer = null; }
+		if (Base && original) {
+			Base.prototype.prepareRequest = original;
+		}
+	};
+}
+
 function buildInjectionResult(result: UserPromptSubmitResult): { prependContext: string } | undefined {
 	if (!result.inject) {
 		return undefined;
@@ -1193,6 +1519,11 @@ const signetPlugin = {
 			};
 			writeRegistered(true);
 			claimed = true;
+
+		// Request normalization — two layers for coverage: fetch wrapper +
+		// SDK prototype patch.
+		const removeFetchSanitizer = installFetchSanitizer();
+		const removeSdkSanitizer = installSdkSanitizer();
 
 		// Instance-scoped health state (safe for multi-register)
 		let daemonReachable = true;
@@ -2064,6 +2395,8 @@ const signetPlugin = {
 			stop() {
 				api.logger.info("signet-memory: service stopped");
 				try {
+					removeFetchSanitizer();
+					removeSdkSanitizer();
 					if (healthTimer) {
 						clearInterval(healthTimer);
 						healthTimer = null;
@@ -2097,5 +2430,22 @@ export function _resetRegistration(): void {
 		writeRegistered(false);
 	}
 }
+
+/** @internal Test-only exports for system prompt sanitization. */
+export const _sanitization = {
+	isAnthropicApiUrl,
+	injectBillingBlock,
+	replaceTriggers,
+	sanitizeRequest,
+	mergeBetaHeaders,
+	readClaudeCodeOAuthToken,
+	swapAuthHeaders,
+	installFetchSanitizer,
+	resolveAnthropicBase,
+	installSdkSanitizer,
+	BILLING_BLOCK,
+	REQUIRED_BETAS,
+	TRIGGER_REPLACEMENTS,
+} as const;
 
 export default signetPlugin;

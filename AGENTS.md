@@ -165,6 +165,7 @@ bun test packages/daemon/src/pipeline/worker.test.ts
 | `@signet/connector-openclaw` | OpenClaw install-time integration | node |
 | `@signet/connector-codex` | Codex CLI install-time integration | node |
 | `@signet/connector-oh-my-pi` | Oh My Pi install-time integration | node |
+| `@signet/connector-hermes-agent` | Hermes Agent install-time integration + Python plugin | node |
 | `@signet/opencode-plugin` | OpenCode runtime plugin | node |
 | `@signet/oh-my-pi-extension` | Oh My Pi extension/runtime bundle | browser |
 | `@signetai/signet-memory-openclaw` | OpenClaw runtime adapter | node |
