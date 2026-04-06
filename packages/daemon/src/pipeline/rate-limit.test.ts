@@ -65,8 +65,8 @@ describe("TokenBucketRateLimiter", () => {
 
 			now += 1;
 			expect(await bucket.acquire(0)).toBe(true);
-			expect(bucket.stats.totalConsumed).toBe(2);
-			expect(bucket.stats.totalThrottled).toBe(1);
+			expect(bucket.currentStats().totalConsumed).toBe(2);
+			expect(bucket.currentStats().totalThrottled).toBe(1);
 		} finally {
 			Date.now = realNow;
 		}
@@ -80,8 +80,8 @@ describe("TokenBucketRateLimiter", () => {
 		}
 		// 11th should fail immediately
 		expect(await bucket.acquire(0)).toBe(false);
-		expect(bucket.stats.totalConsumed).toBe(10);
-		expect(bucket.stats.totalThrottled).toBe(1);
+		expect(bucket.currentStats().totalConsumed).toBe(10);
+		expect(bucket.currentStats().totalThrottled).toBe(1);
 	});
 
 	it("respects waitTimeoutMs", async () => {
@@ -90,7 +90,7 @@ describe("TokenBucketRateLimiter", () => {
 		// 1 token/hr = 1 token per 3600s. Even with wait, shouldn't get one in 10ms.
 		const result = await bucket.acquire(10);
 		expect(result).toBe(false);
-		expect(bucket.stats.totalThrottled).toBe(1);
+		expect(bucket.currentStats().totalThrottled).toBe(1);
 	});
 });
 

@@ -101,8 +101,9 @@ export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | 
 	return basis.slice(0, 10);
 }
 
-export function isTerminalSummaryJobError(errorMessage: string, error?: unknown): boolean {
-	return errorMessage.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX) || error instanceof RateLimitExceededError;
+export function isTerminalSummaryJobError(input: string | Error, error?: unknown): boolean {
+	const message = typeof input === "string" ? input : input.message;
+	return message.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX) || error instanceof RateLimitExceededError;
 }
 
 export function resolveFailedSummaryJobStatus(
@@ -1631,8 +1632,8 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			// Check for more jobs immediately
 			scheduleTick(500);
 		} catch (e) {
+			const terminal = isTerminalSummaryJobError(e instanceof Error ? e : String(e), e);
 			const errorMessage = e instanceof Error ? e.message : String(e);
-			const terminal = isTerminalSummaryJobError(errorMessage, e);
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry

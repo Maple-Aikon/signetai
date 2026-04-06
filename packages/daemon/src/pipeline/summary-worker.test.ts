@@ -415,7 +415,7 @@ describe("summary job helpers", () => {
 
 	it("classifies RateLimitExceededError as terminal via error instance", () => {
 		const err = new RateLimitExceededError("claude-code:haiku", 200);
-		expect(isTerminalSummaryJobError(err.message, err)).toBe(true);
+		expect(isTerminalSummaryJobError(err, err)).toBe(true);
 		// String alone (without error instance) is not terminal — classification uses instanceof
 		expect(isTerminalSummaryJobError(err.message)).toBe(false);
 	});

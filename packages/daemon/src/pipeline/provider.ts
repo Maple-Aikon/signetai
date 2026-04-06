@@ -135,7 +135,7 @@ export class TokenBucketRateLimiter {
 			return false;
 		}
 		const deadline = Date.now() + waitMs;
-		const pollIntervalMs = Math.max(1, Math.floor(Math.min(100, waitMs / 4)));
+		const pollIntervalMs = Math.max(waitMs, Math.floor(Math.min(100, waitMs / 4)));
 		while (Date.now() < deadline) {
 			await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
 			this.refill();
@@ -149,16 +149,6 @@ export class TokenBucketRateLimiter {
 		return false;
 	}
 
-	get stats(): { readonly remaining: number; readonly totalConsumed: number; readonly totalThrottled: number } {
-		return {
-			remaining: Math.floor(this.tokens),
-			totalConsumed: this.totalConsumed,
-			totalThrottled: this.totalThrottled,
-		};
-	}
-
-	// Stats used for observability should reflect the current wall clock, so callers
-	// that need a fresh view should opt into a refill before reading the snapshot.
 	currentStats(): { readonly remaining: number; readonly totalConsumed: number; readonly totalThrottled: number } {
 		this.refill();
 		return {
