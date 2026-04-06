@@ -80,7 +80,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 					...(email ? { email } : {}),
 					// Phone digits only, prepend +1 for US (form enforces 10-digit US format)
 					...(phoneDigits ? { phone: `+1${phoneDigits}` } : {}),
-					tags: ["community-optin"],
+					tags: ["signet new lead"],
 					source: "signetai.sh",
 					// Requires a custom field named "newsletter_optin" in your GHL account
 					customField: [{ id: "newsletter_optin", value: optin ? "yes" : "no" }],
