@@ -7,9 +7,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { listOhMyPiAgentDirCandidates } from "./oh-my-pi";
 
 const FORGE_BINARY_NAME = "forge";
@@ -188,6 +188,7 @@ export interface SetupDetection {
 		codex: boolean;
 		ohMyPi: boolean;
 		forge: boolean;
+		hermesAgent: boolean;
 	};
 }
 
@@ -332,6 +333,66 @@ function isForgeInstalled(agentsDir: string, home: string): boolean {
 }
 
 /**
+ * Canonical list of common Hermes Agent repo install paths.
+ *
+ * Exported so `connector-hermes-agent` can import it instead of duplicating
+ * the list, eliminating parity drift between install and detection logic.
+ */
+export function hermesAgentCandidateDirs(): readonly string[] {
+	const home = homedir();
+	return [
+		join(home, "hermes-agent"),
+		join(home, ".local", "share", "hermes-agent"),
+		join(home, "src", "hermes-agent"),
+		"/opt/hermes-agent",
+	] as const;
+}
+
+/**
+ * Resolve the path to the Signet plugin file inside the Hermes Agent repo.
+ *
+ * Checks (in order): `HERMES_REPO` env var, four common install paths, then
+ * falls back to resolving the `hermes` CLI via `which(1)` + `realpathSync`.
+ *
+ * Returns the full path to `plugins/memory/signet/__init__.py` when found,
+ * or `null` if Hermes is not installed or the Signet plugin is absent.
+ *
+ * Exported so connector-hermes-agent can import this instead of duplicating
+ * the same logic, keeping the two detection paths in sync.
+ */
+export function resolveHermesRepoPluginPath(): string | null {
+	const pluginFile = join("plugins", "memory", "signet", "__init__.py");
+
+	const hermesRepo = process.env.HERMES_REPO?.trim();
+	if (hermesRepo) {
+		const candidate = join(hermesRepo, pluginFile);
+		if (existsSync(candidate)) return candidate;
+	}
+
+	for (const base of hermesAgentCandidateDirs()) {
+		const candidate = join(base, pluginFile);
+		if (existsSync(candidate)) return candidate;
+	}
+
+	// Last resort: resolve hermes CLI → repo root via which(1)
+	try {
+		const hermesPath = execFileSync("which", ["hermes"], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 3000,
+		}).trim();
+		if (hermesPath) {
+			const candidate = join(dirname(realpathSync(hermesPath)), pluginFile);
+			if (existsSync(candidate)) return candidate;
+		}
+	} catch {
+		// hermes not in PATH
+	}
+
+	return null;
+}
+
+/**
  * Detect existing identity setup at a given path
  */
 export function detectExistingSetup(basePath: string): SetupDetection {
@@ -350,7 +411,6 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 	let memoryLogCount = 0;
 	if (existsSync(memoryDir)) {
 		try {
-			const { readdirSync } = require("node:fs");
 			const files = readdirSync(memoryDir);
 			memoryLogCount = files.filter((f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE")).length;
 		} catch {
@@ -382,6 +442,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
 			ohMyPi: isSignetManagedOhMyPiInstall(),
 			forge: isForgeInstalled(basePath, home),
+			hermesAgent: resolveHermesRepoPluginPath() !== null,
 		},
 	};
 }
