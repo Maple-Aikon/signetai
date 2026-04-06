@@ -204,4 +204,17 @@ describe("withRateLimit", () => {
 		const wrapped = withRateLimit(provider, { burstSize: undefined, maxCallsPerHour: 100 });
 		expect(wrapped).toBe(provider);
 	});
+
+	it("treats waitTimeoutMs: undefined as 0 (immediate fail, no NaN polling)", async () => {
+		const provider = mockProvider("claude-code:haiku");
+		const wrapped = withRateLimit(provider, {
+			maxCallsPerHour: 100,
+			burstSize: 1,
+			waitTimeoutMs: undefined,
+		});
+		// First call succeeds (burst)
+		await wrapped.generate("a");
+		// Second call should throw immediately, not hang on NaN deadline
+		await expect(wrapped.generate("b")).rejects.toThrow(RateLimitExceededError);
+	});
 });

@@ -193,6 +193,10 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 	// signals "don't use it".
 	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...config };
 	if ((cfg.maxCallsPerHour ?? 0) <= 0 || (cfg.burstSize ?? 0) <= 0) return provider;
+	// Guard waitTimeoutMs: undefined would propagate to acquire() where
+	// Date.now() + undefined = NaN, silently breaking the polling loop.
+	// Treat missing/undefined as 0 (no wait — fail immediately when burst exhausted).
+	const waitTimeoutMs = cfg.waitTimeoutMs ?? 0;
 
 	if (!shouldRateLimit(provider.name)) {
 		logger.warn(
@@ -223,7 +227,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 		name: provider.name,
 
 		async generate(prompt, opts): Promise<string> {
-			if (!(await bucket.acquire(cfg.waitTimeoutMs))) {
+			if (!(await bucket.acquire(waitTimeoutMs))) {
 				warnIfThrottled();
 				throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
 			}
@@ -233,7 +237,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 		...(provider.generateWithUsage
 			? {
 					async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
-						if (!(await bucket.acquire(cfg.waitTimeoutMs))) {
+						if (!(await bucket.acquire(waitTimeoutMs))) {
 							warnIfThrottled();
 							throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
 						}
@@ -1427,9 +1431,7 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 				"--sandbox",
 				"read-only",
 				"-c",
-				// Keep MCP disabled for daemon-side Codex runs without creating
-				// partial per-server config that newer Codex rejects.
-				"mcp_servers={}",
+				"mcp_servers.signet.enabled=false",
 				"-C",
 				cfg.workingDirectory,
 				"--model",
