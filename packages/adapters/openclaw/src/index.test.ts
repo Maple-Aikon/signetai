@@ -2120,6 +2120,28 @@ describe("installFetchSanitizer", () => {
 		}
 	});
 
+	it("preserves original auth headers when no OAuth token available", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			await globalThis.fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				headers: { "x-api-key": "sk-ant-api-key-123", "anthropic-beta": "claude-code-20250219" },
+				body: JSON.stringify({
+					model: "claude-sonnet-4-6",
+					system: [{ type: "text", text: "You are a helpful assistant." }],
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			});
+			expect(capturedHeaders).toHaveLength(1);
+			// No OAuth token in test env → original x-api-key must be preserved
+			expect(
+				capturedHeaders[0]["x-api-key"] ?? capturedHeaders[0]["authorization"],
+			).toBeDefined();
+		} finally {
+			remove();
+		}
+	});
+
 	it("restores original fetch on cleanup", () => {
 		const before = globalThis.fetch;
 		const remove = installFetchSanitizer();

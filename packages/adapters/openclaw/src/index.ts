@@ -897,6 +897,8 @@ function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONL
 // ---------------------------------------------------------------------------
 
 // Routing metadata block — must be system[0] for correct subscription routing.
+// The version field tracks a specific SDK release; update if the gateway
+// begins validating it.
 const BILLING_BLOCK = {
 	type: "text",
 	text: "x-anthropic-billing-header: cc_version=2.1.80.a46; cc_entrypoint=sdk-cli; cch=00000;",
@@ -1037,16 +1039,13 @@ function isAnthropicApiUrl(url: string): boolean {
  */
 function readClaudeCodeOAuthToken(): string | undefined {
 	try {
-		const os = require("os") as typeof import("os");
-		const fs = require("fs") as typeof import("fs");
-		const path = require("path") as typeof import("path");
 		const candidates = [
-			path.join(os.homedir(), ".claude", ".credentials.json"),
-			path.join(os.homedir(), ".claude", "credentials.json"),
+			join(homedir(), ".claude", ".credentials.json"),
+			join(homedir(), ".claude", "credentials.json"),
 		];
 		for (const p of candidates) {
-			if (!fs.existsSync(p)) continue;
-			const raw = fs.readFileSync(p, "utf8");
+			if (!existsSync(p)) continue;
+			const raw = readFileSync(p, "utf8");
 			const creds = JSON.parse(raw) as Record<string, unknown>;
 			const oauth = creds.claudeAiOauth as Record<string, unknown> | undefined;
 			if (!oauth?.accessToken) continue;
@@ -1087,7 +1086,8 @@ function installFetchSanitizer(): () => void {
 				const newBody = carrier.body as string;
 				// Flatten headers, filtering stale transport headers that must
 				// be recalculated after body modification.
-				const skip = new Set(["host", "connection", "content-length", "authorization", "x-api-key", "anthropic-dangerous-direct-browser-access"]);
+				const oauthToken = readClaudeCodeOAuthToken();
+				const skip = new Set(["host", "connection", "content-length", "anthropic-dangerous-direct-browser-access"]);
 				const headers: Record<string, string> = {};
 				if (init.headers) {
 					if (init.headers instanceof Headers) {
@@ -1102,9 +1102,8 @@ function installFetchSanitizer(): () => void {
 				}
 				mergeBetaHeaders(headers);
 				headers["accept-encoding"] = "identity";
-				const oauthToken = readClaudeCodeOAuthToken();
 				if (oauthToken) {
-					headers["authorization"] = `Bearer ${oauthToken}`;
+					swapAuthHeaders(headers, oauthToken);
 				}
 				return original(input, { ...init, body: newBody, headers });
 			}
