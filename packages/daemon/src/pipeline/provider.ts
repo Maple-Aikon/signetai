@@ -135,7 +135,7 @@ export class TokenBucketRateLimiter {
 			return false;
 		}
 		const deadline = Date.now() + waitMs;
-		const pollIntervalMs = Math.max(waitMs, Math.floor(Math.min(100, waitMs / 4)));
+		const pollIntervalMs = Math.max(1, Math.floor(Math.min(100, waitMs / 4)));
 		while (Date.now() < deadline) {
 			await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
 			this.refill();
