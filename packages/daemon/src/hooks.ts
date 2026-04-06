@@ -2278,6 +2278,7 @@ export async function handleUserPromptSubmit(
 		if (rawTranscript) {
 			try {
 				writeTranscriptAudit({
+					basePath: getAgentsDir(),
 					agentId,
 					sessionId: req.sessionKey,
 					sessionKey: req.sessionKey,
@@ -2660,6 +2661,7 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	if (rawTranscript) {
 		try {
 			writeTranscriptAudit({
+				basePath: getAgentsDir(),
 				agentId,
 				sessionId: req.sessionId?.trim() || sessionKey || "",
 				sessionKey: sessionKey ?? null,

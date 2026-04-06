@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
 
-function getTranscriptAuditDir(): string {
-	return join(resolveDefaultBasePath(), ".daemon", "logs", "transcripts");
+function getTranscriptAuditDir(basePath: string): string {
+	return join(basePath, ".daemon", "logs", "transcripts");
 }
 
 function fsTimestamp(iso: string): string {
@@ -33,6 +33,7 @@ export interface TranscriptAuditWrite {
 }
 
 export function writeTranscriptAudit(params: {
+	readonly basePath?: string;
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -41,7 +42,7 @@ export function writeTranscriptAudit(params: {
 }): TranscriptAuditWrite | null {
 	if (params.rawTranscript.trim().length === 0) return null;
 
-	const dir = getTranscriptAuditDir();
+	const dir = getTranscriptAuditDir(params.basePath ?? process.env.SIGNET_PATH ?? resolveDefaultBasePath());
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}

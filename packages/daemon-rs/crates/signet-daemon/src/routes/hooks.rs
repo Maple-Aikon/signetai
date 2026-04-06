@@ -429,9 +429,9 @@ fn audit_fs_timestamp(iso: &str) -> String {
 
 fn is_safe_audit_name(value: &str) -> bool {
     !value.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn build_audit_path(root: &Path, file_name: &str) -> std::io::Result<PathBuf> {
@@ -494,10 +494,10 @@ fn write_transcript_audit(
         let final_path = build_audit_path(
             root,
             &format!(
-            "{}--{}--raw-transcript.log",
-            audit_fs_timestamp(captured_at),
-            token
-        ),
+                "{}--{}--raw-transcript.log",
+                audit_fs_timestamp(captured_at),
+                token
+            ),
         )?;
         fs::write(final_path, raw_transcript)?;
     }
@@ -571,7 +571,10 @@ fn enqueue_summary_job(
         rusqlite::params![agent_id, session_id, trigger],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     ) {
-        if existing_status == "pending" || existing_status == "leased" || existing_status == "processing" {
+        if existing_status == "pending"
+            || existing_status == "leased"
+            || existing_status == "processing"
+        {
             // Update the transcript so retries with fresher content are used.
             let _ = conn.execute(
                 "UPDATE summary_jobs SET transcript = ?1, updated_at = ?2 WHERE id = ?3",
@@ -644,7 +647,8 @@ pub async fn session_start(
 
     // Session claim
     if let Some(p) = path
-        && let ClaimResult::Conflict { claimed_by } = state.sessions.claim(&session_key, p, &agent_id)
+        && let ClaimResult::Conflict { claimed_by } =
+            state.sessions.claim(&session_key, p, &agent_id)
     {
         return conflict_response(claimed_by);
     }
@@ -748,6 +752,8 @@ pub struct PromptSubmitBody {
     #[allow(dead_code)] // Will be used for context-aware search in Phase 5
     pub last_assistant_message: Option<String>,
     pub session_key: Option<String>,
+    pub transcript: Option<String>,
+    pub transcript_path: Option<String>,
     pub runtime_path: Option<String>,
 }
 
@@ -859,6 +865,10 @@ pub async fn prompt_submit(
         .collect();
     let query_terms = terms.join(" ");
     let metadata_header = format_metadata_header();
+    let agent_id = body
+        .agent_id
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
 
     // Record in continuity tracker
     if let Some(key) = &body.session_key {
@@ -868,6 +878,59 @@ pub async fn prompt_submit(
             cleaned.as_str()
         };
         state.continuity.record_prompt(key, &query_terms, snippet);
+    }
+
+    if let Some(session_key_value) = body.session_key.clone() {
+        let mut raw_transcript = body.transcript.clone().unwrap_or_default();
+        if raw_transcript.is_empty()
+            && let Some(path) = body.transcript_path.as_deref()
+            && std::path::Path::new(path).exists()
+        {
+            match fs::read_to_string(path) {
+                Ok(content) => raw_transcript = content,
+                Err(e) => warn!(path, error = %e, "prompt-submit: transcript read failed"),
+            }
+        }
+
+        let normalized = normalize_session_transcript(harness, &raw_transcript);
+        if !normalized.trim().is_empty() {
+            let harness_value = harness.to_string();
+            let project_value = body.project.clone();
+            let agent_value = agent_id.clone();
+            let session_key_for_write = session_key_value.clone();
+            let normalized_for_write = normalized.clone();
+            if let Err(e) = state
+                .pool
+                .write(Priority::Low, move |conn| {
+                    upsert_session_transcript(
+                        conn,
+                        &session_key_for_write,
+                        &normalized_for_write,
+                        &harness_value,
+                        project_value.as_deref(),
+                        &agent_value,
+                    )
+                    .map(|_| serde_json::Value::Null)
+                    .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+                })
+                .await
+            {
+                warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript upsert failed");
+            }
+        }
+
+        if !raw_transcript.trim().is_empty()
+            && let Err(e) = write_transcript_audit(
+                &state.config.base_path,
+                &agent_id,
+                &session_key_value,
+                Some(session_key_value.as_str()),
+                &raw_transcript,
+                None,
+            )
+        {
+            warn!(error = %e, session_key = %session_key_value, "prompt-submit: transcript audit write failed");
+        }
     }
 
     if query_terms.is_empty() {
@@ -884,10 +947,6 @@ pub async fn prompt_submit(
 
     let project = body.project.clone();
     let session_key = body.session_key.clone();
-    let agent_id = body
-        .agent_id
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
     let query_terms_for_resp = query_terms.clone();
     // Mirror TS hooks.userPromptSubmit.minScore confidence gate. The TS path
     // uses calibrated hybridRecall + reranker scores; here we use term-coverage
@@ -1303,7 +1362,9 @@ pub async fn session_end(
     // being written under a different agent than the one that opened the session.
     let agent_id = match resolve_remember_agent(
         body.agent_id.as_deref(),
-        headers.get("x-signet-agent-id").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-signet-agent-id")
+            .and_then(|v| v.to_str().ok()),
         if session_key.trim().is_empty() {
             None
         } else {
@@ -1362,7 +1423,9 @@ pub async fn session_end(
                 state.dedup.clear(&session_key);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("transcript_path unresolvable: {e}")})),
+                    Json(
+                        serde_json::json!({"error": format!("transcript_path unresolvable: {e}")}),
+                    ),
                 )
                     .into_response();
             }
@@ -1380,7 +1443,9 @@ pub async fn session_end(
             state.dedup.clear(&session_key);
             return (
                 StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "transcript_path outside allowed workspace roots"})),
+                Json(
+                    serde_json::json!({"error": "transcript_path outside allowed workspace roots"}),
+                ),
             )
                 .into_response();
         }
@@ -1603,7 +1668,9 @@ pub async fn session_end(
             state.dedup.clear(&session_key);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("transcript artifact write failed: {e}")})),
+                Json(
+                    serde_json::json!({"error": format!("transcript artifact write failed: {e}")}),
+                ),
             )
                 .into_response();
         }
@@ -1981,12 +2048,7 @@ pub async fn recall(
     // Previously the handler used a hardcoded default of 10 and applied no min_score
     // filter; the TS endpoint was updated to pass cfg through hybridRecall which
     // uses cfg.search.top_k and cfg.search.min_score.  Mirror those semantics here.
-    let search_cfg = state
-        .config
-        .manifest
-        .search
-        .clone()
-        .unwrap_or_default();
+    let search_cfg = state.config.manifest.search.clone().unwrap_or_default();
     let limit = body.limit.unwrap_or(search_cfg.top_k).min(50);
     let min_score = search_cfg.min_score;
     let query = query.to_string();
@@ -2226,7 +2288,9 @@ pub async fn compaction_complete(
     // compaction lineage can't be attributed to an arbitrary caller-supplied id.
     let agent_id = match resolve_remember_agent(
         body.agent_id.as_deref(),
-        headers.get("x-signet-agent-id").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-signet-agent-id")
+            .and_then(|v| v.to_str().ok()),
         body.session_key.as_deref(),
     ) {
         Ok(id) => id,
@@ -2287,10 +2351,7 @@ pub async fn compaction_complete(
                     h.update(b":");
                     h.update(summary_value.as_bytes());
                     let digest = h.finalize();
-                    let hex: String = digest[..8]
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect();
+                    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
                     format!("compaction:{hex}")
                 });
                 let noise = is_noise_session(
@@ -2338,7 +2399,9 @@ pub async fn compaction_complete(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("compaction artifact write failed: {e}")})),
+                Json(
+                    serde_json::json!({"error": format!("compaction artifact write failed: {e}")}),
+                ),
             )
                 .into_response();
         }
@@ -2662,12 +2725,12 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        CHECKPOINT_MIN_DELTA, CompactionCompleteBody, SessionEndBody,
+        CHECKPOINT_MIN_DELTA, CompactionCompleteBody, PromptSubmitBody, SessionEndBody,
         build_signet_system_prompt, compaction_complete, extract_delta,
-        normalize_session_transcript, parse_visibility,
-        require_session_scope_for_write, resolve_compaction_project,
-        resolve_remember_agent, session_agent_id, session_end,
-        strip_untrusted_metadata, upsert_session_transcript,
+        normalize_session_transcript, parse_visibility, prompt_submit,
+        require_session_scope_for_write, resolve_compaction_project, resolve_remember_agent,
+        session_agent_id, session_end, session_transcript_content, strip_untrusted_metadata,
+        upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -2886,6 +2949,66 @@ mod tests {
             .unwrap();
         let manifest_text = std::fs::read_to_string(manifest).unwrap();
         assert!(manifest_text.contains("compaction_path: memory/"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_writes_transcript_audit_and_live_snapshot() {
+        let (state, writer, tmp) = test_state("hooks-prompt-submit-audit");
+        let transcript_path = tmp.path().join("prompt-transcript.txt");
+        std::fs::write(
+            &transcript_path,
+            "User: review the release checklist
+Assistant: here's the checklist",
+        )
+        .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("packages/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("review the release checklist".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-audit".to_string()),
+                transcript: None,
+                transcript_path: Some(transcript_path.display().to_string()),
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let stored = state
+            .pool
+            .read(|conn| {
+                session_transcript_content(conn, "sess-prompt-audit", "agent-a")
+                    .map_err(|err| signet_core::error::CoreError::Migration(err.to_string()))
+            })
+            .await
+            .unwrap();
+        assert!(
+            stored
+                .as_deref()
+                .is_some_and(|value| value.contains("review the release checklist"))
+        );
+
+        let audit_dir = tmp.path().join(".daemon/logs/transcripts");
+        let audit_entries = std::fs::read_dir(&audit_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|value| value.path()))
+            .collect::<Vec<_>>();
+        assert!(audit_entries.iter().any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("--latest.log"))
+        }));
 
         drop(state);
         let _ = writer.await;
@@ -3146,10 +3269,14 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
                     .unwrap_or(0);
                 let summaries: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| row.get(0))
+                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| {
+                        row.get(0)
+                    })
                     .unwrap_or(0);
                 let heads: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM memory_thread_heads", [], |row| row.get(0))
+                    .query_row("SELECT COUNT(*) FROM memory_thread_heads", [], |row| {
+                        row.get(0)
+                    })
                     .unwrap_or(0);
                 Ok((artifacts, memories, summaries, heads))
             })

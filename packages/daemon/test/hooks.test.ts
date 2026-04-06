@@ -1845,6 +1845,7 @@ describe("handleSessionEnd", () => {
 
 	test.serial("sanitizes transcript audit filenames to stay within the audit directory", () => {
 		const result = writeTranscriptAudit({
+			basePath: TEST_DIR,
 			agentId: "default",
 			sessionId: "sess-audit-safe",
 			sessionKey: "sess-audit-safe",
