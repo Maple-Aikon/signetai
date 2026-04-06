@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.94.0] - 2026-04-06
+
+### Features
+
+- **connector**: add Hermes Agent memory provider integration (#465)
+
+
 ## [0.93.7] - 2026-04-06
 
 ### Features
