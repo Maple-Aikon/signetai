@@ -1,5 +1,6 @@
 interface Env {
 	GHL_API_KEY: string;
+	GHL_LOCATION_ID: string;
 	RATE_LIMITER: RateLimit;
 }
 
@@ -7,10 +8,14 @@ const ALLOWED_ORIGINS = ["https://signetai.sh", "https://www.signetai.sh"];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function corsHeaders(origin: string): Record<string, string> {
-	if (!origin || !ALLOWED_ORIGINS.includes(origin)) return {};
-	return { "Access-Control-Allow-Origin": origin };
+	if (!origin) return {};
+	if (ALLOWED_ORIGINS.includes(origin)) return { "Access-Control-Allow-Origin": origin };
+	// Allow localhost and Tailscale origins for local dev
+	if (origin.startsWith("http://localhost:") || origin.startsWith("http://100.")) {
+		return { "Access-Control-Allow-Origin": origin };
+	}
+	return {};
 }
-
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
 	const origin = context.request.headers.get("Origin") ?? "";
@@ -20,13 +25,15 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 	};
 
 	// Rate limit by IP — 10 submissions per 60 seconds
-	const ip = context.request.headers.get("CF-Connecting-IP") ?? "unknown";
-	const { success } = await context.env.RATE_LIMITER.limit({ key: ip });
-	if (!success) {
-		return new Response(JSON.stringify({ error: "Too many requests" }), {
-			status: 429,
-			headers,
-		});
+	if (context.env.RATE_LIMITER) {
+		const ip = context.request.headers.get("CF-Connecting-IP") ?? "unknown";
+		const { success } = await context.env.RATE_LIMITER.limit({ key: ip });
+		if (!success) {
+			return new Response(JSON.stringify({ error: "Too many requests" }), {
+				status: 429,
+				headers,
+			});
+		}
 	}
 
 	try {
@@ -66,35 +73,43 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 			});
 		}
 
-		// Create/update contact in GoHighLevel
-		if (context.env.GHL_API_KEY) {
-			const ghlRes = await fetch("https://rest.gohighlevel.com/v1/contacts/", {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${context.env.GHL_API_KEY}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					firstName,
-					lastName,
-					...(email ? { email } : {}),
-					// Phone digits only, prepend +1 for US (form enforces 10-digit US format)
-					...(phoneDigits ? { phone: `+1${phoneDigits}` } : {}),
-					tags: ["signet new lead"],
-					source: "signetai.sh",
-					// Requires a custom field named "newsletter_optin" in your GHL account
-					customField: [{ id: "newsletter_optin", value: optin ? "yes" : "no" }],
-				}),
-			});
+		// Create/update contact in GoHighLevel (v2 API)
+		if (!context.env.GHL_API_KEY || !context.env.GHL_LOCATION_ID) {
+			console.error("Missing GHL_API_KEY or GHL_LOCATION_ID");
+			return new Response(
+				JSON.stringify({ error: "Server misconfigured", detail: "Missing GHL credentials" }),
+				{ status: 500, headers },
+			);
+		}
 
-			if (!ghlRes.ok) {
-				const err = await ghlRes.text();
-				console.error("GHL contacts error:", ghlRes.status, err);
-				return new Response(JSON.stringify({ error: "Signup failed" }), {
-					status: 502,
-					headers,
-				});
-			}
+		const ghlRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${context.env.GHL_API_KEY}`,
+				"Content-Type": "application/json",
+				Version: "2021-07-28",
+			},
+			body: JSON.stringify({
+				locationId: context.env.GHL_LOCATION_ID,
+				firstName,
+				lastName,
+				...(email ? { email } : {}),
+				...(phoneDigits ? { phone: `+1${phoneDigits}` } : {}),
+				tags: ["signet new lead"],
+				source: "signetai.sh",
+				customFields: [
+					{ key: "newsletter_optin", field_value: optin ? "yes" : "no" },
+				],
+			}),
+		});
+
+		if (!ghlRes.ok) {
+			const err = await ghlRes.text();
+			console.error("GHL error:", ghlRes.status, err);
+			return new Response(
+				JSON.stringify({ error: "Signup failed", detail: err }),
+				{ status: 502, headers },
+			);
 		}
 
 		return new Response(JSON.stringify({ ok: true }), { status: 200, headers });

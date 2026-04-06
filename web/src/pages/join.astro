@@ -220,11 +220,13 @@ import "../styles/landing.css";
         if (formWrap) formWrap.hidden = true;
         if (success) success.hidden = false;
       } else {
-        btn.textContent = 'Try Again';
+        const body = await res.json().catch(() => null);
+        const detail = body?.detail ?? body?.error ?? '';
+        btn.textContent = detail ? `Error: ${detail.slice(0, 60)}` : 'Try Again';
         btn.disabled = false;
       }
-    } catch {
-      btn.textContent = 'Try Again';
+    } catch (err) {
+      btn.textContent = `Network error — try again`;
       btn.disabled = false;
     }
   });
