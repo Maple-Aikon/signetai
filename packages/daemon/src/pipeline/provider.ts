@@ -16,6 +16,7 @@ import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
 	type LlmProvider,
+	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
 } from "@signet/core";
 import { logger } from "../logger";
@@ -159,9 +160,8 @@ export class TokenBucketRateLimiter {
 	}
 }
 
-// Keep in sync with the provider union in PipelineExtractionConfig (types.ts)
-// when adding new remote/paid providers — entries here are throttled;
-// missing entries silently pass through unthrottled.
+type RemoteProvider = Exclude<PipelineExtractionConfig["provider"], "none" | "ollama" | "command">;
+
 const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"claude-code",
 	"anthropic",
@@ -170,20 +170,26 @@ const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"opencode",
 ]);
 
+// Compile-time check: if a new remote provider is added to the union but
+// omitted from the set above, this line produces a type error.
+const _exhaustiveCheck: RemoteProvider[] = [...RATE_LIMIT_PROVIDERS] as unknown as RemoteProvider[];
+void _exhaustiveCheck;
+
 function shouldRateLimit(providerName: string): boolean {
 	const base = providerName.split(":")[0];
 	return RATE_LIMIT_PROVIDERS.has(base);
 }
 
+const RATE_LIMIT_CONFIG_KEYS: ReadonlySet<string> = new Set(["maxCallsPerHour", "burstSize", "waitTimeoutMs"]);
+
 export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitConfig): LlmProvider {
 	if (config === undefined) return provider;
 	if (Object.keys(config).length === 0) return provider;
-	// Filter out explicit undefined values so that partial configs like
-	// `{ maxCallsPerHour: 100, burstSize: undefined }` fall back to
-	// defaults instead of silently disabling rate limiting.
 	const clean: ProviderRateLimitConfig = {};
 	for (const [k, v] of Object.entries(config)) {
-		if (v !== undefined) clean[k as keyof ProviderRateLimitConfig] = v;
+		if (v !== undefined && RATE_LIMIT_CONFIG_KEYS.has(k)) {
+			clean[k as keyof ProviderRateLimitConfig] = v;
+		}
 	}
 	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...clean };
 	const maxCallsPerHour = cfg.maxCallsPerHour ?? 0;
@@ -216,6 +222,7 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 		}
 	}
 
+	const genWithUsage = provider.generateWithUsage;
 	return {
 		name: provider.name,
 
@@ -228,15 +235,14 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 			return fn.call(provider, prompt, opts);
 		},
 
-		...(provider.generateWithUsage
+		...(genWithUsage
 			? {
 					async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
 						if (!(await bucket.acquire(waitTimeoutMs))) {
 							warnIfThrottled();
 							throw new RateLimitExceededError(provider.name, maxCallsPerHour);
 						}
-						const fn = provider.generateWithUsage;
-						return fn.call(provider, prompt, opts);
+						return genWithUsage.call(provider, prompt, opts);
 					},
 				}
 			: {}),
