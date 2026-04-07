@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.95.0] - 2026-04-07
+
+### Features
+
+- **web**: Discord community CTAs + /join opt-in page (#470)
+
+### Bug Fixes
+
+- harden transcript capture and summary inputs (#466)
+
+
 ## [0.94.0] - 2026-04-06
 
 ### Features
