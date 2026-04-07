@@ -22,6 +22,7 @@ import {
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import { AGENTS_DIR, SCRIPTS_DIR } from "./state.js";
+import { harnessLastSeen } from "./hooks-routes.js";
 
 type ConnectorSyncStartOutcome =
 	| { status: "syncing" }
@@ -119,10 +120,6 @@ export function escapeLikePrefix(value: string): string {
 function findForgeBinaryPath(): string | null {
 	return findSignetForgeBinary(AGENTS_DIR);
 }
-
-// Shared last-seen map — must be imported by daemon and passed or set externally
-// if other routes need it. For now, export so daemon.ts can share the reference.
-export const harnessLastSeen = new Map<string, string>();
 
 export function registerConnectorRoutes(app: Hono): void {
 	app.get("/api/connectors", (c) => {
