@@ -1,13 +1,12 @@
 import type { Database } from "bun:sqlite";
-import type { ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { serve } from "@hono/node-server";
 import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveNetworkBinding } from "@signet/core";
 import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
+import { getDbAccessor } from "../db-accessor";
 import {
 	type DiagnosticsReport,
 	type PredictorHealthParams,
@@ -18,7 +17,8 @@ import {
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
 import { logger } from "../logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
-import type { DreamingWorkerHandle } from "../pipeline/dreaming-worker";
+import { enqueueExtractionJob as enqueueExtractionJobBase } from "../pipeline";
+import { deadLetterExtractionJob } from "../pipeline/extraction-fallback";
 import type { PredictorClient } from "../predictor-client";
 import { createRateLimiter } from "../repair-actions";
 import type { TelemetryCollector } from "../telemetry";
@@ -246,16 +246,11 @@ export const providerRuntimeResolution: ProviderRuntimeResolution = {
 };
 
 export let telemetryRef: TelemetryCollector | undefined;
-export const embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
+export let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 export let predictorClientRef: PredictorClient | null = null;
-export const shadowProcess: ChildProcess | null = null;
-export const skillReconcilerHandle: import("../pipeline/skill-reconciler").ReconcilerHandle | null = null;
-export const dreamingWorkerHandle: DreamingWorkerHandle | null = null;
-export const structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 export let pipelineTransition = false;
 export let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 export let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
-export const httpServer: ReturnType<typeof serve> | null = null;
 export let shuttingDown = false;
 export const bindAbort = new AbortController();
 export let diagnosticsCache: {
@@ -299,11 +294,6 @@ export const providerTracker = createProviderTracker();
 export const analyticsCollector = createAnalyticsCollector();
 export const repairLimiter = createRateLimiter();
 
-import { getDbAccessor } from "../db-accessor";
-import { enqueueExtractionJob } from "../pipeline";
-// queueExtractionJob
-import { deadLetterExtractionJob } from "../pipeline/extraction-fallback";
-
 export function queueExtractionJob(memoryId: string): void {
 	if (providerRuntimeResolution.extraction.status === "blocked") {
 		deadLetterExtractionJob(getDbAccessor(), memoryId, {
@@ -311,7 +301,7 @@ export function queueExtractionJob(memoryId: string): void {
 		});
 		return;
 	}
-	enqueueExtractionJob(getDbAccessor(), memoryId);
+	enqueueExtractionJobBase(getDbAccessor(), memoryId);
 }
 
 // Version
@@ -429,6 +419,10 @@ export function setCheckpointPruneTimer(value: ReturnType<typeof setInterval> | 
 
 export function setShuttingDown(value: boolean): void {
 	shuttingDown = value;
+}
+
+export function setEmbeddingTrackerHandle(value: EmbeddingTrackerHandle | null): void {
+	embeddingTrackerHandle = value;
 }
 
 export function reloadAuthState(agentsDir: string): void {

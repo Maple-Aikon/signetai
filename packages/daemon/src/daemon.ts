@@ -135,6 +135,7 @@ import {
 	reloadAuthState,
 	repairLimiter,
 	setCheckpointPruneTimer,
+	setEmbeddingTrackerHandle,
 	setHeartbeatTimer,
 	setPredictorClientRef,
 	setRestartPipelineRuntime,
@@ -201,6 +202,7 @@ let schedulerHandle: { stop(): Promise<void> } | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
+// predictorClientRef follows the same pattern (see getPredictorClient).
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -1422,6 +1424,7 @@ async function stopPipelineRuntime(): Promise<void> {
 			await embeddingTrackerHandle.stop();
 		} catch {}
 		embeddingTrackerHandle = null;
+		setEmbeddingTrackerHandle(null);
 	}
 
 	if (dreamingWorkerHandle) {
@@ -2143,6 +2146,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			fetchEmbedding,
 			checkEmbeddingProvider,
 		);
+		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
 
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
