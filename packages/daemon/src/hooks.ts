@@ -435,10 +435,10 @@ function buildTranscriptFallbackResponse(
 	warnings?: string[],
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
-		content: `- ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)}, session ${formatTranscriptSessionLabel(hit.sessionKey)})`,
+		content: `- [transcript ${formatTranscriptSessionLabel(hit.sessionKey)}] ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=transcript-fallback]\n${lines.join("\n")}`;
+	const inject = buildPromptRecallInject(metadataHeader, lines);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -461,10 +461,10 @@ function buildTemporalFallbackResponse(
 	warnings?: string[],
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
-		content: `- [node ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
+		content: `- [thread ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=temporal-fallback]\n${lines.join("\n")}`;
+	const inject = buildPromptRecallInject(metadataHeader, lines);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -517,6 +517,17 @@ export function applyTokenBudget(inject: string, mainBudget: number): string {
 	// Budget too tight to fit content + marker — truncate without marker
 	if (mainBudget <= TRUNCATED_MARKER_TOKENS) return truncateToTokens(inject, mainBudget);
 	return truncateToTokens(inject, mainBudget - TRUNCATED_MARKER_TOKENS) + TRUNCATED_MARKER;
+}
+
+function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>): string {
+	const parts = [metadataHeader.trimEnd(), "", "## Relevant Memory", ""];
+	parts.push(...lines);
+	parts.push("");
+	parts.push(
+		"if you need deeper history, use /recall or memory_search. if you learn something durable, save it with /remember or memory_store.",
+	);
+	return `${parts.join("\n").trimEnd()}\n`;
+}
 }
 
 /** Build a brief "since your last session" summary for temporal awareness */
@@ -2533,12 +2544,14 @@ export async function handleUserPromptSubmit(
 
 		const lines = selected.map((s) => {
 			const dateStr = formatMemoryDate(s.created_at);
-			return `- ${s.content} (${dateStr})`;
+			return `- [memory] ${s.content} (${dateStr})`;
 		});
 		if (omitted > 0) {
-			lines.push(`(+${omitted} more not shown — raise memory.guardrails.contextBudgetChars to include)`);
+			lines.push(
+				`- [note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight.`,
+			);
 		}
-		let inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+		let inject = buildPromptRecallInject(metadataHeader, lines);
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
