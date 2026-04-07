@@ -199,6 +199,8 @@ let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
+// These are mirrored into state.ts via setters for read access by
+// route modules. Only daemon.ts should assign or clear them.
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
