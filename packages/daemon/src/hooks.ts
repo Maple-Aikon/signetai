@@ -370,18 +370,6 @@ export interface RecallRequest {
 	runtimePath?: "plugin" | "legacy";
 }
 
-export interface RecallResponse {
-	results: Array<{
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		tags: string | null;
-		created_at: string;
-	}>;
-	count: number;
-}
-
 // ============================================================================
 // Shared Helpers
 // ============================================================================
@@ -3414,97 +3402,6 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 	} catch (e) {
 		logger.error("hooks", "Remember failed", e as Error);
 		return { saved: false, id: "" };
-	}
-}
-
-// ============================================================================
-// Recall
-// ============================================================================
-
-export function handleRecall(req: RecallRequest): RecallResponse {
-	const limit = req.limit || 10;
-
-	if (!existsSync(getMemoryDbPath())) {
-		return { results: [], count: 0 };
-	}
-
-	type RecallRow = {
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		tags: string | null;
-		created_at: string;
-	};
-
-	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			let found: RecallRow[] = [];
-
-			// Try FTS search first
-			try {
-				const words = req.query
-					.toLowerCase()
-					.split(/\W+/)
-					.filter((w) => w.length >= 3)
-					.slice(0, 10);
-
-				if (words.length > 0) {
-					const ftsQuery = words.join(" OR ");
-					const baseQuery = req.project
-						? `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-						   FROM memories m
-						   JOIN memories_fts f ON m.rowid = f.rowid
-						   WHERE memories_fts MATCH ?
-						   AND m.is_deleted = 0
-						   AND m.project = ?
-						   LIMIT ?`
-						: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-						   FROM memories m
-						   JOIN memories_fts f ON m.rowid = f.rowid
-						   WHERE memories_fts MATCH ?
-						   AND m.is_deleted = 0
-						   LIMIT ?`;
-
-					found = req.project
-						? (db.prepare(baseQuery).all(ftsQuery, req.project, limit) as RecallRow[])
-						: (db.prepare(baseQuery).all(ftsQuery, limit) as RecallRow[]);
-				}
-			} catch {
-				// FTS not available, fall through to LIKE
-			}
-
-			// Fallback to LIKE search
-			if (found.length === 0) {
-				const likePattern = `%${req.query}%`;
-				const baseQuery = req.project
-					? `SELECT id, content, type, importance, tags, created_at
-					   FROM memories
-					   WHERE content LIKE ? AND is_deleted = 0 AND project = ?
-					   ORDER BY importance DESC
-					   LIMIT ?`
-					: `SELECT id, content, type, importance, tags, created_at
-					   FROM memories
-					   WHERE content LIKE ? AND is_deleted = 0
-					   ORDER BY importance DESC
-					   LIMIT ?`;
-
-				found = req.project
-					? (db.prepare(baseQuery).all(likePattern, req.project, limit) as RecallRow[])
-					: (db.prepare(baseQuery).all(likePattern, limit) as RecallRow[]);
-			}
-
-			return found;
-		});
-
-		// Update access tracking
-		const ids = rows.map((r) => r.id);
-		updateAccessTracking(ids);
-
-		return { results: rows, count: rows.length };
-	} catch (e) {
-		logger.error("hooks", "Recall failed", e as Error);
-		return { results: [], count: 0 };
 	}
 }
 
