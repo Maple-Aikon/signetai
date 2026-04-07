@@ -173,7 +173,7 @@ import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
-import { getConfiguredProviderHints } from "./routes/utils.js";
+import { checkEmbeddingProvider, getConfiguredProviderHints } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
@@ -612,6 +612,8 @@ registerMiscRoutes(app);
 // ============================================================================
 
 setFetchEmbedding(fetchEmbedding);
+// authConfig.mode is the startup-time value; mountSkillsRoutes intentionally
+// ignores it (parameter prefixed _authMode) — live auth is handled via middleware.
 mountSkillsRoutes(app, authConfig.mode);
 mountMarketplaceRoutes(app, authConfig.mode);
 mountMcpAnalyticsRoutes(app, authConfig.mode);
