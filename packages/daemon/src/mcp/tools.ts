@@ -105,6 +105,28 @@ interface DaemonError {
 
 type FetchResult<T> = DaemonResponse<T> | DaemonError;
 
+interface RecallToolRow {
+	readonly content: string;
+	readonly created_at?: string;
+	readonly score?: number;
+	readonly source?: string;
+	readonly type?: string;
+	readonly supplementary?: boolean;
+}
+
+interface RecallToolMeta {
+	readonly totalReturned: number;
+	readonly hasSupplementary: boolean;
+	readonly noHits: boolean;
+}
+
+interface RecallToolPayload {
+	readonly query?: string;
+	readonly method?: string;
+	readonly results?: ReadonlyArray<RecallToolRow>;
+	readonly meta?: RecallToolMeta;
+}
+
 const BASE_TOOL_NAMES = new Set<string>([
 	"memory_search",
 	"memory_store",
@@ -193,6 +215,56 @@ function textResult(value: unknown): { content: Array<{ type: "text"; text: stri
 			},
 		],
 	};
+}
+
+function formatRecallToolResult(value: unknown): string {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+	}
+
+	const payload = value as RecallToolPayload;
+	const rows = Array.isArray(payload.results) ? payload.results : [];
+	const meta =
+		payload.meta && typeof payload.meta === "object"
+			? payload.meta
+			: {
+					totalReturned: rows.length,
+					hasSupplementary: rows.some((row) => row.supplementary === true),
+					noHits: rows.length === 0,
+				};
+
+	if (meta.noHits || rows.length === 0) {
+		return "No matching memories found.";
+	}
+
+	const primary = rows.filter((row) => row.supplementary !== true);
+	const supporting = rows.filter((row) => row.supplementary === true);
+	const parts = [
+		`Found ${meta.totalReturned} memories${payload.method ? ` (${payload.method})` : ""}.`,
+		"",
+		"Primary matches:",
+		...primary.map((row) => {
+			const score = typeof row.score === "number" ? `[${(row.score * 100).toFixed(0)}%] ` : "";
+			const source = typeof row.source === "string" ? row.source : "unknown";
+			const type = typeof row.type === "string" ? row.type : "memory";
+			const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
+			return `- ${score}${row.content} (${type}, ${source}, ${createdAt})`;
+		}),
+	];
+
+	if (supporting.length > 0) {
+		parts.push("", "Supporting context:");
+		parts.push(
+			...supporting.map((row) => {
+				const source = typeof row.source === "string" ? row.source : "unknown";
+				const type = typeof row.type === "string" ? row.type : "memory";
+				const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
+				return `- ${row.content} (${type}, ${source}, ${createdAt})`;
+			}),
+		);
+	}
+
+	return parts.join("\n");
 }
 
 function errorResult(msg: string): {
@@ -544,7 +616,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			return textResult(result.data);
+			return textResult(formatRecallToolResult(result.data));
 		},
 	);
 
