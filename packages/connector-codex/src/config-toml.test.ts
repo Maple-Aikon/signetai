@@ -30,6 +30,7 @@ let hooksPath: string;
 let localBinDir: string;
 let wrapperPath: string;
 let watcherPath: string;
+const originalPath = process.env.PATH;
 
 beforeEach(() => {
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -291,6 +292,23 @@ describe("CodexConnector.install — wrapper fallback", () => {
 		expect(readFileSync(wrapperPath, "utf-8")).toContain("user-wrapper");
 		expect(result.warnings).toContain(`Skipped installing Codex wrapper at ${wrapperPath} — existing file is not Signet-managed`);
 		expect(readFileSync(watcherPath, "utf-8")).toContain("SIGNET-CODEX-FALLBACK");
+	});
+
+	test("skips wrapper install when no real codex binary is found outside local bin", async () => {
+		process.env.PATH = localBinDir;
+
+		try {
+			const result = await connector().install(tempHome);
+
+			expect(existsSync(wrapperPath)).toBe(false);
+			expect(result.filesWritten).not.toContain(wrapperPath);
+			expect(result.warnings).toContain(
+				"Skipped installing Codex wrapper — no real codex binary found in PATH outside ~/.local/bin; run `signet connect codex` again after installing Codex",
+			);
+			expect(readFileSync(watcherPath, "utf-8")).toContain("SIGNET-CODEX-FALLBACK");
+		} finally {
+			process.env.PATH = originalPath;
+		}
 	});
 
 	test("uninstall removes Signet-managed wrapper files", async () => {

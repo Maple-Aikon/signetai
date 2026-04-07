@@ -622,12 +622,16 @@ export class CodexConnector extends BaseConnector {
 		const localBinDir = this.getLocalBinDir();
 		const wrapperPath = this.getCodexWrapperPath();
 		const watcherPath = this.getCodexWatcherPath();
-		const realCodexPath = findPathExecutable("codex", [localBinDir]) || "codex";
+		const realCodexPath = findPathExecutable("codex", [localBinDir]);
 
 		mkdirSync(localBinDir, { recursive: true });
 
 		if (existsSync(wrapperPath) && !this.isManagedWrapper(wrapperPath)) {
 			warnings.push(`Skipped installing Codex wrapper at ${wrapperPath} — existing file is not Signet-managed`);
+		} else if (!realCodexPath) {
+			warnings.push(
+				"Skipped installing Codex wrapper — no real codex binary found in PATH outside ~/.local/bin; run `signet connect codex` again after installing Codex",
+			);
 		} else {
 			writeFileSync(wrapperPath, buildCodexWrapperScript(realCodexPath, watcherPath), "utf-8");
 			chmodSync(wrapperPath, 0o755);
