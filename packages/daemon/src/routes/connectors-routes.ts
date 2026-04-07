@@ -21,8 +21,7 @@ import {
 } from "../connectors/registry.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
-import { AGENTS_DIR, SCRIPTS_DIR } from "./state.js";
-import { harnessLastSeen } from "./hooks-routes.js";
+import { AGENTS_DIR, SCRIPTS_DIR, harnessLastSeen } from "./state.js";
 
 type ConnectorSyncStartOutcome =
 	| { status: "syncing" }

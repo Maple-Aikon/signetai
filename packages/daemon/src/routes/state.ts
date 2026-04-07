@@ -249,6 +249,7 @@ export let telemetryRef: TelemetryCollector | undefined;
 export let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 export let predictorClientRef: PredictorClient | null = null;
 export let pipelineTransition = false;
+export const harnessLastSeen = new Map<string, string>();
 export let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 export let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 export let shuttingDown = false;

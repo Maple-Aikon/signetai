@@ -55,7 +55,7 @@ import {
 	renewSession,
 } from "../session-tracker.js";
 import { upsertThreadHead } from "../thread-heads";
-import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT } from "./state";
+import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT, harnessLastSeen } from "./state";
 import {
 	parseOptionalBoolean,
 	parseOptionalInt,
@@ -66,9 +66,6 @@ import {
 	toRecord,
 	validateSessionAgentBinding,
 } from "./utils";
-
-// Harness last-seen registry — in-memory, resets on daemon restart
-export const harnessLastSeen = new Map<string, string>();
 
 export function stampHarness(harness: string | undefined): void {
 	if (harness) {
