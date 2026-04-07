@@ -16,6 +16,7 @@ import {
 	getPredictorHealth,
 } from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
+import { logger } from "../logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import type { DreamingWorkerHandle } from "../pipeline/dreaming-worker";
 import type { PredictorClient } from "../predictor-client";
@@ -437,6 +438,13 @@ export function reloadAuthState(agentsDir: string): void {
 
 	authConfig = cfg.auth;
 	authSecret = authConfig.mode !== "local" ? loadOrCreateSecret(authConfig.secretPath) : null;
+
+	if (authConfig.mode !== "local" && !authSecret) {
+		logger.error(
+			"auth",
+			"reloadAuthState: token/team mode active but authSecret is null — all non-local requests will be rejected with 503",
+		);
+	}
 
 	const rl = authConfig.rateLimits;
 	authForgetLimiter = rl.forget
