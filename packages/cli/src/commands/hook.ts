@@ -48,12 +48,17 @@ function emitCodexOutput(output: CodexCommandOutput): void {
 	console.log(JSON.stringify(output));
 }
 
+function normalizeCodexAdditionalContext(inject?: string): string | null {
+	const normalized = inject?.trim();
+	return normalized ? normalized : null;
+}
+
 export function buildCodexSessionStartOutput(inject?: string): CodexCommandOutput {
 	return {
 		continue: true,
 		hookSpecificOutput: {
 			hookEventName: "SessionStart",
-			additionalContext: inject?.trim() ? inject : null,
+			additionalContext: normalizeCodexAdditionalContext(inject),
 		},
 	};
 }
@@ -63,7 +68,7 @@ export function buildCodexUserPromptSubmitOutput(inject?: string): CodexCommandO
 		continue: true,
 		hookSpecificOutput: {
 			hookEventName: "UserPromptSubmit",
-			additionalContext: inject?.trim() ? inject : null,
+			additionalContext: normalizeCodexAdditionalContext(inject),
 		},
 	};
 }
@@ -153,10 +158,10 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					if (res.reason === "offline") {
 						process.stderr.write("[signet] daemon offline — using static identity\n");
 					}
-					if (options.json) {
-						console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
-					} else if (options.harness === "codex") {
+					if (options.harness === "codex") {
 						emitCodexOutput(buildCodexSessionStartOutput(fallback));
+					} else if (options.json) {
+						console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
 					} else {
 						console.log(fallback);
 					}
@@ -175,10 +180,10 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
 			}
-			if (options.json) {
-				console.log(JSON.stringify(data, null, 2));
-			} else if (options.harness === "codex") {
+			if (options.harness === "codex") {
 				emitCodexOutput(buildCodexSessionStartOutput(data.inject));
+			} else if (options.json) {
+				console.log(JSON.stringify(data, null, 2));
 			} else if (data.inject) {
 				console.log(data.inject);
 			}

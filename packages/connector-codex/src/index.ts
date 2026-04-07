@@ -18,18 +18,24 @@ function resolvePackagedBin(relativePaths: string[]): string | null {
 	return null;
 }
 
-/** Resolve signet command for hook invocation. Returns shell-ready string form for hooks.json.
- *  Prefer the installed package's absolute bin path so Codex hooks do not depend on PATH.
- *  Falls back to bare "signet" only when the packaged layout is unavailable. */
+function shellDoubleQuote(value: string): string {
+	return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+/** Resolve signet command for hook invocation. hooks.json only supports a command string,
+ *  so keep the longstanding non-Windows "signet" path and only use the packaged absolute
+ *  entrypoint on Windows where PATH lookup is the historical failure mode. */
 function resolveSignetCommand(): string {
+	if (process.platform !== "win32") return "signet";
 	const signetJs = resolvePackagedBin(["bin/signet.js"]);
-	if (signetJs) return `"${process.execPath}" "${signetJs}"`;
+	if (signetJs) return `${shellDoubleQuote(process.execPath)} ${shellDoubleQuote(signetJs)}`;
 	return "signet";
 }
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
  *  Codex expects `command` as a string and `args` as a separate array. */
 function resolveSignetMcp(): { command: string; args: string[] } {
+	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
 	const mcpJs = resolvePackagedBin(["dist/mcp-stdio.js", "bin/mcp-stdio.js"]);
 	if (mcpJs) return { command: process.execPath, args: [mcpJs] };
 	return { command: "signet-mcp", args: [] };

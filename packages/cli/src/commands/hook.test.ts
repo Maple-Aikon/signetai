@@ -189,6 +189,36 @@ describe("buildUserPromptSubmitBody", () => {
 		expect(seen[0]?.body).toContain('"harness":"claude-code"');
 		expect(lines).toContain("recalled context");
 	});
+
+	test("hook command emits Codex wire format for user-prompt-submit", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: {
+					inject: "  recalled context  ",
+				},
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "user-prompt-submit", "-H", "codex"]);
+
+		expect(lines).toHaveLength(1);
+		expect(JSON.parse(lines[0] ?? "")).toEqual({
+			continue: true,
+			hookSpecificOutput: {
+				hookEventName: "UserPromptSubmit",
+				additionalContext: "recalled context",
+			},
+		});
+	});
 });
 
 describe("Codex hook wire output", () => {
@@ -218,6 +248,46 @@ describe("Codex hook wire output", () => {
 			hookSpecificOutput: {
 				hookEventName: "SessionStart",
 				additionalContext: null,
+			},
+		});
+	});
+
+	test("trims surrounding whitespace in Codex injection", () => {
+		expect(buildCodexSessionStartOutput("  hello  ")).toEqual({
+			continue: true,
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: "hello",
+			},
+		});
+	});
+
+	test("Codex harness output takes precedence over --json on session-start", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: {
+					inject: "session context",
+				},
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "session-start", "-H", "codex", "--json"]);
+
+		expect(lines).toHaveLength(1);
+		expect(JSON.parse(lines[0] ?? "")).toEqual({
+			continue: true,
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: "session context",
 			},
 		});
 	});
