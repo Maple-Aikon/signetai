@@ -18,19 +18,29 @@ class TempConnector extends CodexConnector {
 	protected override getCodexHome(): string {
 		return join(this.home, ".codex");
 	}
+	protected override getLocalBinDir(): string {
+		return join(this.home, ".local", "bin");
+	}
 }
 
 let tempHome: string;
 let codexDir: string;
 let configPath: string;
 let hooksPath: string;
+let localBinDir: string;
+let wrapperPath: string;
+let watcherPath: string;
 
 beforeEach(() => {
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
 	hooksPath = join(codexDir, "hooks.json");
+	localBinDir = join(tempHome, ".local", "bin");
+	wrapperPath = join(localBinDir, "codex");
+	watcherPath = join(localBinDir, "codex-signet-watch.js");
 	mkdirSync(codexDir, { recursive: true });
+	mkdirSync(localBinDir, { recursive: true });
 });
 
 afterEach(() => {
@@ -252,6 +262,38 @@ describe("CodexConnector.install — hooks.json registration", () => {
 				],
 			},
 		]);
+	});
+});
+
+describe("CodexConnector.install — wrapper fallback", () => {
+	test("installs Signet-managed Codex wrapper and watcher", async () => {
+		const result = await connector().install(tempHome);
+
+		expect(result.filesWritten).toContain(wrapperPath);
+		expect(result.filesWritten).toContain(watcherPath);
+		expect(readFileSync(wrapperPath, "utf-8")).toContain("SIGNET-CODEX-FALLBACK");
+		expect(readFileSync(watcherPath, "utf-8")).toContain("SIGNET-CODEX-FALLBACK");
+	});
+
+	test("does not replace a non-Signet codex wrapper", async () => {
+		writeFileSync(wrapperPath, "#!/bin/zsh\necho user-wrapper\n", "utf-8");
+
+		const result = await connector().install(tempHome);
+
+		expect(readFileSync(wrapperPath, "utf-8")).toContain("user-wrapper");
+		expect(result.warnings).toContain(`Skipped installing Codex wrapper at ${wrapperPath} — existing file is not Signet-managed`);
+		expect(readFileSync(watcherPath, "utf-8")).toContain("SIGNET-CODEX-FALLBACK");
+	});
+
+	test("uninstall removes Signet-managed wrapper files", async () => {
+		await connector().install(tempHome);
+
+		const result = await connector().uninstall();
+
+		expect(result.filesRemoved).toContain(wrapperPath);
+		expect(result.filesRemoved).toContain(watcherPath);
+		expect(existsSync(wrapperPath)).toBe(false);
+		expect(existsSync(watcherPath)).toBe(false);
 	});
 });
 

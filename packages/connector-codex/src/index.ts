@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
@@ -13,6 +13,16 @@ function resolvePackagedBin(relativePaths: string[]): string | null {
 	if (!entry) return null;
 	for (const relativePath of relativePaths) {
 		const candidate = join(entry, "..", "..", relativePath);
+		if (existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+function findPathExecutable(name: string, excludeDirs: string[] = []): string | null {
+	const pathValue = process.env.PATH || "";
+	for (const dir of pathValue.split(":")) {
+		if (!dir || excludeDirs.includes(dir)) continue;
+		const candidate = join(dir, name);
 		if (existsSync(candidate)) return candidate;
 	}
 	return null;
@@ -39,6 +49,318 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 	const mcpJs = resolvePackagedBin(["dist/mcp-stdio.js", "bin/mcp-stdio.js"]);
 	if (mcpJs) return { command: process.execPath, args: [mcpJs] };
 	return { command: "signet-mcp", args: [] };
+}
+
+const WRAPPER_MARKER = "SIGNET-CODEX-FALLBACK";
+const WRAPPER_LOG_SOURCE = "codex-wrapper-fallback";
+
+function buildWatcherScript(): string {
+	return `#!/usr/bin/env node
+// ${WRAPPER_MARKER}
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const project = process.argv[2];
+const launchMs = Number(process.argv[3] || Date.now());
+if (!project) process.exit(1);
+
+const sessionsRoot = path.join(os.homedir(), ".codex", "sessions");
+const logDir = path.join(os.homedir(), ".agents", ".daemon", "logs");
+
+let watchedFile = null;
+let lineCount = 0;
+
+function walk(dir, results = []) {
+  if (!fs.existsSync(dir)) return results;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full, results);
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) results.push(full);
+  }
+  return results;
+}
+
+function latestSessionFile() {
+  const files = walk(sessionsRoot);
+  let best = null;
+  let bestMtime = -1;
+  for (const file of files) {
+    const stat = fs.statSync(file);
+    if (stat.mtimeMs + 1000 < launchMs) continue;
+    try {
+      const firstLine = fs.readFileSync(file, "utf8").split("\\n", 1)[0];
+      const record = JSON.parse(firstLine);
+      const startedAt = Date.parse(record?.payload?.timestamp || "");
+      if (!Number.isFinite(startedAt) || startedAt + 1000 < launchMs) continue;
+    } catch {
+      continue;
+    }
+    if (stat.mtimeMs > bestMtime) {
+      best = file;
+      bestMtime = stat.mtimeMs;
+    }
+  }
+  return best;
+}
+
+function appendDaemonLog(message, extra = {}) {
+  fs.mkdirSync(logDir, { recursive: true });
+  const stamp = new Date().toISOString();
+  const file = path.join(logDir, \`signet-\${stamp.slice(0, 10)}.log\`);
+  const line = {
+    timestamp: stamp,
+    level: "info",
+    category: "hooks",
+    message,
+    data: {
+      harness: "codex",
+      project,
+      source: "${WRAPPER_LOG_SOURCE}",
+      nativeHooks: false,
+      ...extra,
+    },
+  };
+  fs.appendFileSync(file, \`\${JSON.stringify(line)}\\n\`);
+}
+
+function extractPrompt(record) {
+  if (record?.type !== "response_item") return null;
+  const payload = record.payload;
+  if (payload?.type !== "message" || payload?.role !== "user") return null;
+  const texts = [];
+  for (const item of payload.content || []) {
+    if (item?.type === "input_text" && typeof item.text === "string") texts.push(item.text);
+  }
+  if (texts.length === 0) return null;
+  const text = texts.join("\\n").trim();
+  if (!text) return null;
+  if (text.includes("<INSTRUCTIONS>")) return null;
+  if (text.startsWith("<environment_context>")) return null;
+  return text;
+}
+
+function emitPromptHook(prompt) {
+  appendDaemonLog("Codex native prompt hook unavailable — using wrapper fallback", { prompt });
+  spawnSync("signet", ["hook", "user-prompt-submit", "-H", "codex", "--project", project], {
+    input: JSON.stringify({ cwd: project, prompt, userMessage: prompt }),
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+}
+
+function poll() {
+  if (!watchedFile) {
+    watchedFile = latestSessionFile();
+    if (!watchedFile) return;
+  }
+
+  let content;
+  try {
+    content = fs.readFileSync(watchedFile, "utf8");
+  } catch {
+    return;
+  }
+
+  const lines = content.split("\\n").filter(Boolean);
+  if (lines.length <= lineCount) return;
+  for (const line of lines.slice(lineCount)) {
+    try {
+      const record = JSON.parse(line);
+      const prompt = extractPrompt(record);
+      if (prompt) emitPromptHook(prompt);
+    } catch {
+      // Ignore malformed lines while the file is still being written.
+    }
+  }
+  lineCount = lines.length;
+}
+
+setInterval(poll, 250);
+
+process.on("SIGTERM", () => {
+  poll();
+  process.exit(0);
+});
+
+process.on("SIGINT", () => {
+  poll();
+  process.exit(0);
+});
+`;
+}
+
+function buildCodexWrapperScript(realCodexPath: string, watcherPath: string): string {
+	return `#!/bin/zsh
+
+set -euo pipefail
+
+readonly REAL_CODEX=${tomlQuote(realCodexPath).replace(/^'|'$/g, '"')}
+readonly WATCHER_BIN=${tomlQuote(watcherPath).replace(/^'|'$/g, '"')}
+readonly SIGNET_WORKSPACE="\${SIGNET_WORKSPACE:-$HOME/.agents}"
+readonly MARKER_START="<!-- ${WRAPPER_MARKER}:START -->"
+readonly MARKER_END="<!-- ${WRAPPER_MARKER}:END -->"
+readonly SIGNET_LOG_DIR="$HOME/.agents/.daemon/logs"
+
+daemon_log_path() {
+  printf '%s/signet-%s.log\\n' "$SIGNET_LOG_DIR" "$(date +%F)"
+}
+
+append_daemon_log() {
+  local message="$1"
+  local project="$2"
+  local log_path payload
+
+  mkdir -p "$SIGNET_LOG_DIR"
+  log_path="$(daemon_log_path)"
+  payload="$(printf '{"timestamp":"%s","level":"info","category":"hooks","message":"%s","data":{"harness":"codex","project":"%s","source":"${WRAPPER_LOG_SOURCE}","nativeHooks":false}}' \\
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
+    "$message" \\
+    "$project")"
+  printf '%s\\n' "$payload" >>"$log_path"
+}
+
+trigger_session_start() {
+  local project="$1"
+
+  append_daemon_log "Codex native hooks unavailable — using wrapper fallback" "$project"
+  signet hook session-start -H codex --project "$project" >/dev/null 2>/dev/null || true
+}
+
+trigger_session_end() {
+  local project="$1"
+
+  append_daemon_log "Codex native stop hook unavailable — using wrapper fallback" "$project"
+  signet hook session-end -H codex >/dev/null 2>/dev/null || true
+}
+
+workspace_root() {
+  local root
+  if root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    printf '%s\\n' "$root"
+  else
+    pwd
+  fi
+}
+
+compose_block() {
+  local source content
+
+  printf '%s\\n' "$MARKER_START"
+  printf '%s\\n\\n' "# Signet Codex Fallback"
+  printf '%s\\n\\n' "This block is generated by the local Signet Codex wrapper because Codex native hooks are unreliable on this machine."
+  printf '%s\\n\\n' "Treat the following content as your persistent identity baseline for this session."
+
+  for source in AGENTS.md SOUL.md IDENTITY.md USER.md MEMORY.md; do
+    if [[ ! -f "$SIGNET_WORKSPACE/$source" ]]; then
+      continue
+    fi
+    content="$(<"$SIGNET_WORKSPACE/$source")"
+    content="\${content%"\${content##*[!$'\\n']}"}"
+    if [[ -z "$content" ]]; then
+      continue
+    fi
+    printf '%s\\n\\n' "## $source"
+    printf '%s\\n\\n' "$content"
+  done
+
+  printf '%s\\n' "$MARKER_END"
+}
+
+ensure_git_ignored() {
+  local root="$1"
+  local exclude
+
+  if [[ ! -d "$root/.git" ]]; then
+    return 0
+  fi
+
+  if git -C "$root" ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+    return 0
+  fi
+
+  exclude="$root/.git/info/exclude"
+  mkdir -p "\${exclude:h}"
+  touch "$exclude"
+  if ! grep -Fxq "AGENTS.md" "$exclude"; then
+    printf '\\n# Signet Codex fallback\\nAGENTS.md\\n' >>"$exclude"
+  fi
+}
+
+sync_agents_file() {
+  local root="$1"
+  local target="$root/AGENTS.md"
+  local block existing
+
+  block="$(compose_block)"
+
+  if [[ ! -f "$target" ]]; then
+    printf '%s\\n' "$block" >"$target"
+    ensure_git_ignored "$root"
+    return 0
+  fi
+
+  existing="$(<"$target")"
+
+  if [[ "$existing" == *"$MARKER_START"* && "$existing" == *"$MARKER_END"* ]]; then
+    existing="\${existing%%$MARKER_START*}"
+    existing="\${existing%"\${existing##*[!$'\\n']}"}"
+    if [[ -n "$existing" ]]; then
+      printf '%s\\n\\n%s\\n' "$existing" "$block" >"$target"
+    else
+      printf '%s\\n' "$block" >"$target"
+    fi
+    ensure_git_ignored "$root"
+    return 0
+  fi
+
+  if git -C "$root" rev-parse --show-toplevel >/dev/null 2>&1; then
+    if git -C "$root" ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+}
+
+main() {
+  local root launch_ms watcher_pid child_pid exit_code
+  root="$(workspace_root)"
+  launch_ms="$(python3 - <<'PY'
+import time
+print(int(time.time() * 1000))
+PY
+)"
+
+  if [[ -d "$SIGNET_WORKSPACE" ]]; then
+    sync_agents_file "$root"
+  fi
+
+  trigger_session_start "$root"
+  if [[ -x "$WATCHER_BIN" ]]; then
+    "$WATCHER_BIN" "$root" "$launch_ms" >/dev/null 2>/dev/null &
+    watcher_pid=$!
+  else
+    watcher_pid=""
+  fi
+
+  "$REAL_CODEX" "$@" &
+  child_pid=$!
+  trap 'kill -TERM "$child_pid" >/dev/null 2>&1 || true' INT TERM
+  wait "$child_pid"
+  exit_code=$?
+
+  if [[ -n "\${watcher_pid:-}" ]]; then
+    sleep 1
+    kill -TERM "$watcher_pid" >/dev/null 2>&1 || true
+    wait "$watcher_pid" >/dev/null 2>&1 || true
+  fi
+
+  trigger_session_end "$root"
+  exit "$exit_code"
+}
+
+main "$@"
+`;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +581,56 @@ export class CodexConnector extends BaseConnector {
 		return join(this.getCodexHome(), "config.toml");
 	}
 
+	protected getLocalBinDir(): string {
+		return join(homedir(), ".local", "bin");
+	}
+
+	protected getCodexWrapperPath(): string {
+		return join(this.getLocalBinDir(), "codex");
+	}
+
+	protected getCodexWatcherPath(): string {
+		return join(this.getLocalBinDir(), "codex-signet-watch.js");
+	}
+
+	private isManagedWrapper(path: string): boolean {
+		if (!existsSync(path)) return false;
+		return readFileSync(path, "utf-8").includes(WRAPPER_MARKER);
+	}
+
+	private installWrapperFiles(filesWritten: string[], warnings: string[]): void {
+		const localBinDir = this.getLocalBinDir();
+		const wrapperPath = this.getCodexWrapperPath();
+		const watcherPath = this.getCodexWatcherPath();
+		const realCodexPath = findPathExecutable("codex", [localBinDir]) || "codex";
+
+		mkdirSync(localBinDir, { recursive: true });
+
+		if (existsSync(wrapperPath) && !this.isManagedWrapper(wrapperPath)) {
+			warnings.push(`Skipped installing Codex wrapper at ${wrapperPath} — existing file is not Signet-managed`);
+		} else {
+			writeFileSync(wrapperPath, buildCodexWrapperScript(realCodexPath, watcherPath), "utf-8");
+			chmodSync(wrapperPath, 0o755);
+			filesWritten.push(wrapperPath);
+		}
+
+		if (existsSync(watcherPath) && !this.isManagedWrapper(watcherPath)) {
+			warnings.push(`Skipped installing Codex watcher at ${watcherPath} — existing file is not Signet-managed`);
+		} else {
+			writeFileSync(watcherPath, buildWatcherScript(), "utf-8");
+			chmodSync(watcherPath, 0o755);
+			filesWritten.push(watcherPath);
+		}
+	}
+
+	private uninstallWrapperFiles(filesRemoved: string[]): void {
+		for (const path of [this.getCodexWrapperPath(), this.getCodexWatcherPath()]) {
+			if (!existsSync(path) || !this.isManagedWrapper(path)) continue;
+			rmSync(path, { force: true });
+			filesRemoved.push(path);
+		}
+	}
+
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
@@ -307,9 +679,12 @@ export class CodexConnector extends BaseConnector {
 			configsPatched.push(this.getConfigPath());
 		}
 
+		// 4. Install wrapper fallback for Codex builds that skip native hooks.
+		this.installWrapperFiles(filesWritten, warnings);
+
 		return {
 			success: true,
-			message: "Codex integration installed — native hooks + MCP server",
+			message: "Codex integration installed — native hooks + MCP server + wrapper fallback",
 			filesWritten,
 			configsPatched,
 			warnings,
@@ -355,6 +730,9 @@ export class CodexConnector extends BaseConnector {
 		if (unpatchConfigToml(this.getConfigPath())) {
 			configsPatched.push(this.getConfigPath());
 		}
+
+		// 4. Remove Signet-managed fallback wrapper files.
+		this.uninstallWrapperFiles(filesRemoved);
 
 		return { filesRemoved, configsPatched };
 	}

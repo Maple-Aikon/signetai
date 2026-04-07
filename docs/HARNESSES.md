@@ -236,14 +236,17 @@ registers as an MCP server so Codex can call `signet_remember` and
 | `~/.codex/hooks.json` | Native Codex hooks — SessionStart, UserPromptSubmit, Stop |
 | `~/.codex/config.toml` | MCP server registration (`[mcp_servers.signet]`) |
 | `~/.codex/skills` | Symlink to `$SIGNET_WORKSPACE/skills` |
+| `~/.local/bin/codex` | Signet-managed wrapper fallback for Codex builds that skip native hooks |
+| `~/.local/bin/codex-signet-watch.js` | Session watcher that replays prompt-submit logging through Signet |
 
 ### How it works
 
-1. Codex reads `~/.codex/hooks.json` at startup and registers three hooks.
+1. Codex reads `~/.codex/hooks.json` at startup and registers three hooks when the current Codex build honors native hooks.
 2. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex` → Signet returns Codex hook JSON with `hookSpecificOutput.additionalContext` containing identity + memories.
-3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex` → Signet returns Codex hook JSON with `hookSpecificOutput.additionalContext` containing per-prompt recalled memories. This is blocking — Codex waits for the hook before sending to the model.
+3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex` → Signet returns Codex hook JSON with `hookSpecificOutput.additionalContext` containing per-prompt recalled memories. This is blocking when native hooks are active.
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
-5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
+5. If a Codex build skips native hooks, the Signet-managed `~/.local/bin/codex` wrapper injects identity via workspace `AGENTS.md`, emits explicit fallback log markers, calls the real session-start and session-end hooks, and uses `codex-signet-watch.js` to replay prompt-submit hooks from the session JSONL stream.
+6. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
@@ -253,9 +256,9 @@ Claude Code or OpenCode.
 
 | Hook | Supported |
 |------|-----------|
-| session-start | yes — identity + memories via `hookSpecificOutput.additionalContext` |
-| user-prompt-submit | yes — per-prompt recall via `hookSpecificOutput.additionalContext` |
-| session-end | yes — transcript extraction via `Stop` hook |
+| session-start | yes — native hooks when available, wrapper fallback otherwise |
+| user-prompt-submit | yes — native hooks when available, session watcher fallback otherwise |
+| session-end | yes — native hooks when available, wrapper fallback otherwise |
 
 ### MCP tools
 
