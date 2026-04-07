@@ -8,24 +8,30 @@ import { expandHome } from "@signet/core";
 // Signet command resolution
 // ---------------------------------------------------------------------------
 
-/** Resolve signet command for hook invocation. Returns shell-ready string form for hooks.json.
- *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
- *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
-function resolveSignetCommand(): string {
-	if (process.platform !== "win32") return "signet";
+function resolvePackagedBin(relativePaths: string[]): string | null {
 	const entry = process.argv[1] || "";
-	const signetJs = join(entry, "..", "..", "bin", "signet.js");
-	if (existsSync(signetJs)) return `"${process.execPath}" "${signetJs}"`;
+	if (!entry) return null;
+	for (const relativePath of relativePaths) {
+		const candidate = join(entry, "..", "..", relativePath);
+		if (existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+/** Resolve signet command for hook invocation. Returns shell-ready string form for hooks.json.
+ *  Prefer the installed package's absolute bin path so Codex hooks do not depend on PATH.
+ *  Falls back to bare "signet" only when the packaged layout is unavailable. */
+function resolveSignetCommand(): string {
+	const signetJs = resolvePackagedBin(["bin/signet.js"]);
+	if (signetJs) return `"${process.execPath}" "${signetJs}"`;
 	return "signet";
 }
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
  *  Codex expects `command` as a string and `args` as a separate array. */
 function resolveSignetMcp(): { command: string; args: string[] } {
-	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
-	const entry = process.argv[1] || "";
-	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
-	if (existsSync(mcpJs)) return { command: process.execPath, args: [mcpJs] };
+	const mcpJs = resolvePackagedBin(["dist/mcp-stdio.js", "bin/mcp-stdio.js"]);
+	if (mcpJs) return { command: process.execPath, args: [mcpJs] };
 	return { command: "signet-mcp", args: [] };
 }
 
