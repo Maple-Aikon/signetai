@@ -614,12 +614,13 @@ registerMiscRoutes(app);
 // ============================================================================
 
 setFetchEmbedding(fetchEmbedding);
-// authConfig.mode is the startup-time value; mountSkillsRoutes intentionally
-// ignores it (parameter prefixed _authMode) — live auth is handled via middleware.
+// mountSkillsRoutes intentionally ignores its second parameter (_authMode);
+// the other three mount functions now read authConfig.mode at request time
+// from state.ts, so the startup-time value passed here is unused.
 mountSkillsRoutes(app, authConfig.mode);
-mountMarketplaceRoutes(app, authConfig.mode);
-mountMcpAnalyticsRoutes(app, authConfig.mode);
-mountSkillAnalyticsRoutes(app, authConfig.mode);
+mountMarketplaceRoutes(app);
+mountMcpAnalyticsRoutes(app);
+mountSkillAnalyticsRoutes(app);
 mountAppTrayRoutes(app);
 mountWidgetRoutes(app);
 mountEventBusRoutes(app);
