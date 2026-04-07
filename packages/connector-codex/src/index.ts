@@ -370,12 +370,13 @@ main() {
   fi
 
   trap '
+    set +e
+    trigger_session_end "$root" "\${exit_code:-terminated}"
     if [[ -n "\${watcher_pid:-}" ]]; then
       sleep 1
       kill -TERM "$watcher_pid" >/dev/null 2>&1 || true
       wait "$watcher_pid" >/dev/null 2>&1 || true
     fi
-    trigger_session_end "$root" "\${exit_code:-terminated}"
   ' EXIT
   trap 'exit 130' INT TERM
 
