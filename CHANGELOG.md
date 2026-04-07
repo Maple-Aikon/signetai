@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.98.0] - 2026-04-07
+
+### Refactoring
+
+- **daemon**: extract routes from daemon.ts into separate modules (#473)
+
+
 ## [0.97.0] - 2026-04-07
 
 ### Features
