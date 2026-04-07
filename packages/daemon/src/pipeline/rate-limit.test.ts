@@ -193,28 +193,38 @@ describe("withRateLimit", () => {
 		expect(wrapped).toBe(provider);
 	});
 
-	it("returns provider unwrapped when maxCallsPerHour is undefined (NaN guard)", () => {
+	it("falls back to defaults when maxCallsPerHour is undefined", () => {
 		const provider = mockProvider("claude-code:haiku");
 		const wrapped = withRateLimit(provider, { maxCallsPerHour: undefined, burstSize: 5 });
-		expect(wrapped).toBe(provider);
+		expect(wrapped).not.toBe(provider);
 	});
 
-	it("returns provider unwrapped when burstSize is undefined (NaN guard)", () => {
+	it("falls back to defaults when burstSize is undefined", () => {
 		const provider = mockProvider("claude-code:haiku");
 		const wrapped = withRateLimit(provider, { burstSize: undefined, maxCallsPerHour: 100 });
-		expect(wrapped).toBe(provider);
+		expect(wrapped).not.toBe(provider);
 	});
 
-	it("treats waitTimeoutMs: undefined as 0 (immediate fail, no NaN polling)", async () => {
+	it("treats explicit waitTimeoutMs: 0 as immediate fail", async () => {
+		const provider = mockProvider("claude-code:haiku");
+		const wrapped = withRateLimit(provider, {
+			maxCallsPerHour: 100,
+			burstSize: 1,
+			waitTimeoutMs: 0,
+		});
+		// First call succeeds (burst)
+		await wrapped.generate("a");
+		// Second call should throw immediately
+		await expect(wrapped.generate("b")).rejects.toThrow(RateLimitExceededError);
+	});
+
+	it("falls back to default waitTimeoutMs when undefined", async () => {
 		const provider = mockProvider("claude-code:haiku");
 		const wrapped = withRateLimit(provider, {
 			maxCallsPerHour: 100,
 			burstSize: 1,
 			waitTimeoutMs: undefined,
 		});
-		// First call succeeds (burst)
-		await wrapped.generate("a");
-		// Second call should throw immediately, not hang on NaN deadline
-		await expect(wrapped.generate("b")).rejects.toThrow(RateLimitExceededError);
+		expect(wrapped).not.toBe(provider);
 	});
 });

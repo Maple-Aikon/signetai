@@ -159,6 +159,9 @@ export class TokenBucketRateLimiter {
 	}
 }
 
+// Keep in sync with the provider union in PipelineExtractionConfig (types.ts)
+// when adding new remote/paid providers — entries here are throttled;
+// missing entries silently pass through unthrottled.
 const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"claude-code",
 	"anthropic",
@@ -172,16 +175,17 @@ function shouldRateLimit(providerName: string): boolean {
 	return RATE_LIMIT_PROVIDERS.has(base);
 }
 
-export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRateLimitConfig>): LlmProvider {
+export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitConfig): LlmProvider {
 	if (config === undefined) return provider;
 	if (Object.keys(config).length === 0) return provider;
-	// Spread means explicit `undefined` values in config override the defaults (e.g.
-	// `{ maxCallsPerHour: 100, burstSize: undefined }` → cfg.burstSize is undefined).
-	// The nullish-coalesce guards below treat undefined as 0, disabling rate limiting.
-	// This is intentional: the YAML path (parseRateLimitConfig) always fills all fields,
-	// so only direct/programmatic callers can hit this — and passing undefined for a field
-	// signals "don't use it".
-	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...config };
+	// Filter out explicit undefined values so that partial configs like
+	// `{ maxCallsPerHour: 100, burstSize: undefined }` fall back to
+	// defaults instead of silently disabling rate limiting.
+	const clean: ProviderRateLimitConfig = {};
+	for (const [k, v] of Object.entries(config)) {
+		if (v !== undefined) clean[k as keyof ProviderRateLimitConfig] = v;
+	}
+	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...clean };
 	const maxCallsPerHour = cfg.maxCallsPerHour ?? 0;
 	const burstSize = cfg.burstSize ?? 0;
 	if (maxCallsPerHour <= 0 || burstSize <= 0) return provider;
