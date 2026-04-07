@@ -8,15 +8,15 @@ import { expandHome } from "@signet/core";
 // Signet command resolution
 // ---------------------------------------------------------------------------
 
-/** Resolve signet command for hook invocation. Returns array form for hooks.json command field.
+/** Resolve signet command for hook invocation. Returns shell-ready string form for hooks.json.
  *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
  *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
-function resolveSignetArgs(): string[] {
-	if (process.platform !== "win32") return ["signet"];
+function resolveSignetCommand(): string {
+	if (process.platform !== "win32") return "signet";
 	const entry = process.argv[1] || "";
 	const signetJs = join(entry, "..", "..", "bin", "signet.js");
-	if (existsSync(signetJs)) return [process.execPath, signetJs];
-	return ["signet"];
+	if (existsSync(signetJs)) return `"${process.execPath}" "${signetJs}"`;
+	return "signet";
 }
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
@@ -35,40 +35,43 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 
 interface HooksJson {
 	_signet?: boolean;
-	sessionStart?: unknown[];
-	userPromptSubmit?: unknown[];
-	stop?: unknown[];
+	SessionStart?: unknown[];
+	UserPromptSubmit?: unknown[];
+	Stop?: unknown[];
 	[key: string]: unknown;
 }
 
-function buildHooksJson(signetArgs: string[]): HooksJson {
+function buildHooksJson(signetCommand: string): HooksJson {
 	return {
 		_signet: true,
-		sessionStart: [
+		SessionStart: [
 			{
-				handlers: [
+				hooks: [
 					{
-						command: [...signetArgs, "hook", "session-start", "-H", "codex"],
+						type: "command",
+						command: `${signetCommand} hook session-start -H codex`,
 						timeout: 10,
 					},
 				],
 			},
 		],
-		userPromptSubmit: [
+		UserPromptSubmit: [
 			{
-				handlers: [
+				hooks: [
 					{
-						command: [...signetArgs, "hook", "user-prompt-submit", "-H", "codex"],
+						type: "command",
+						command: `${signetCommand} hook user-prompt-submit -H codex`,
 						timeout: 5,
 					},
 				],
 			},
 		],
-		stop: [
+		Stop: [
 			{
-				handlers: [
+				hooks: [
 					{
-						command: [...signetArgs, "hook", "session-end", "-H", "codex"],
+						type: "command",
+						command: `${signetCommand} hook session-end -H codex`,
 						timeout: 30,
 					},
 				],
@@ -102,21 +105,31 @@ const SIGNET_HOOK_CMDS = ["hook session-start", "hook user-prompt-submit", "hook
 
 function isSignetHandler(entry: unknown): boolean {
 	if (typeof entry !== "object" || entry === null) return false;
+	const hooks = (entry as Record<string, unknown>).hooks;
+	if (Array.isArray(hooks)) {
+		for (const hook of hooks) {
+			if (typeof hook !== "object" || hook === null) continue;
+			const cmd = (hook as Record<string, unknown>).command;
+			if (typeof cmd === "string" && SIGNET_HOOK_CMDS.some((s) => cmd.includes(s))) return true;
+		}
+	}
 	const handlers = (entry as Record<string, unknown>).handlers;
-	if (!Array.isArray(handlers)) return false;
-	for (const handler of handlers) {
-		if (typeof handler !== "object" || handler === null) continue;
-		const cmd = (handler as Record<string, unknown>).command;
-		if (!Array.isArray(cmd)) continue;
-		const joined = cmd.join(" ");
-		if (SIGNET_HOOK_CMDS.some((s) => joined.includes(s))) return true;
+	if (Array.isArray(handlers)) {
+		for (const handler of handlers) {
+			if (typeof handler !== "object" || handler === null) continue;
+			const cmd = (handler as Record<string, unknown>).command;
+			if (Array.isArray(cmd)) {
+				const joined = cmd.join(" ");
+				if (SIGNET_HOOK_CMDS.some((s) => joined.includes(s))) return true;
+			}
+		}
 	}
 	return false;
 }
 
 function removeSignetHooks(hooks: HooksJson): HooksJson {
 	const cleaned = { ...hooks };
-	for (const key of ["sessionStart", "userPromptSubmit", "stop"] as const) {
+	for (const key of ["SessionStart", "UserPromptSubmit", "Stop", "sessionStart", "userPromptSubmit", "stop"] as const) {
 		if (!Array.isArray(cleaned[key])) continue;
 		const filtered = (cleaned[key] as unknown[]).filter((e) => !isSignetHandler(e));
 		if (filtered.length === 0) {
@@ -126,7 +139,7 @@ function removeSignetHooks(hooks: HooksJson): HooksJson {
 		}
 	}
 	// Only remove marker if no Signet entries remain
-	const hasSignet = ["sessionStart", "userPromptSubmit", "stop"].some(
+	const hasSignet = ["SessionStart", "UserPromptSubmit", "Stop", "sessionStart", "userPromptSubmit", "stop"].some(
 		(k) => Array.isArray(cleaned[k]) && (cleaned[k] as unknown[]).some(isSignetHandler),
 	);
 	if (!hasSignet) delete cleaned._signet;
@@ -247,7 +260,7 @@ export class CodexConnector extends BaseConnector {
 		const codexHome = this.getCodexHome();
 		mkdirSync(codexHome, { recursive: true });
 
-		const signetArgs = resolveSignetArgs();
+		const signetCommand = resolveSignetCommand();
 
 		// 1. Install hooks.json (native Codex hook system)
 		const hooksPath = this.getHooksJsonPath();
@@ -255,10 +268,10 @@ export class CodexConnector extends BaseConnector {
 
 		if (existing && !isSignetOwned(existing)) {
 			// User has their own hooks.json — merge Signet hooks in
-			const signetHooks = buildHooksJson(signetArgs);
+			const signetHooks = buildHooksJson(signetCommand);
 			const merged: HooksJson = { ...existing };
 			merged._signet = true;
-			for (const key of ["sessionStart", "userPromptSubmit", "stop"] as const) {
+			for (const key of ["SessionStart", "UserPromptSubmit", "Stop"] as const) {
 				const current = Array.isArray(merged[key]) ? (merged[key] as unknown[]) : [];
 				const signet = signetHooks[key] as unknown[];
 				merged[key] = [...current, ...signet];
@@ -266,7 +279,7 @@ export class CodexConnector extends BaseConnector {
 			writeHooksJson(hooksPath, merged);
 			warnings.push("Merged Signet hooks into existing hooks.json — existing hooks preserved");
 		} else {
-			writeHooksJson(hooksPath, buildHooksJson(signetArgs));
+			writeHooksJson(hooksPath, buildHooksJson(signetCommand));
 		}
 		filesWritten.push(hooksPath);
 
@@ -301,7 +314,7 @@ export class CodexConnector extends BaseConnector {
 		if (existing) {
 			// Check marker first; fall back to handler scan if marker was stripped
 			const hasMarker = isSignetOwned(existing);
-			const hasHandlers = ["sessionStart", "userPromptSubmit", "stop"].some(
+			const hasHandlers = ["SessionStart", "UserPromptSubmit", "Stop", "sessionStart", "userPromptSubmit", "stop"].some(
 				(k) =>
 					Array.isArray((existing as Record<string, unknown>)[k]) &&
 					((existing as Record<string, unknown>)[k] as unknown[]).some(isSignetHandler),
@@ -337,7 +350,7 @@ export class CodexConnector extends BaseConnector {
 	isInstalled(): boolean {
 		const hooks = readHooksJson(this.getHooksJsonPath());
 		if (!hooks) return false;
-		return ["sessionStart", "userPromptSubmit", "stop"].some(
+		return ["SessionStart", "UserPromptSubmit", "Stop", "sessionStart", "userPromptSubmit", "stop"].some(
 			(k) =>
 				Array.isArray((hooks as Record<string, unknown>)[k]) &&
 				((hooks as Record<string, unknown>)[k] as unknown[]).some(isSignetHandler),

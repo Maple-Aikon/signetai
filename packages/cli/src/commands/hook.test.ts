@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Command } from "commander";
 import {
+	buildCodexSessionStartOutput,
+	buildCodexUserPromptSubmitOutput,
 	buildCompactionCompleteBody,
 	buildSessionEndBody,
 	buildSessionStartFallback,
@@ -186,6 +188,38 @@ describe("buildUserPromptSubmitBody", () => {
 		expect(seen[0]?.path).toBe("/api/hooks/user-prompt-submit");
 		expect(seen[0]?.body).toContain('"harness":"claude-code"');
 		expect(lines).toContain("recalled context");
+	});
+});
+
+describe("Codex hook wire output", () => {
+	test("wraps session-start injection in Codex hook JSON", () => {
+		expect(buildCodexSessionStartOutput("hello")).toEqual({
+			continue: true,
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: "hello",
+			},
+		});
+	});
+
+	test("wraps prompt-submit injection in Codex hook JSON", () => {
+		expect(buildCodexUserPromptSubmitOutput("prompt ctx")).toEqual({
+			continue: true,
+			hookSpecificOutput: {
+				hookEventName: "UserPromptSubmit",
+				additionalContext: "prompt ctx",
+			},
+		});
+	});
+
+	test("normalizes empty Codex injection to null", () => {
+		expect(buildCodexSessionStartOutput("")).toEqual({
+			continue: true,
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: null,
+			},
+		});
 	});
 });
 

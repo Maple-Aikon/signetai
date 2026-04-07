@@ -36,6 +36,38 @@ export function buildSessionStartFallback(
 	return readStaticIdentity(agentsDir);
 }
 
+interface CodexCommandOutput {
+	continue: true;
+	hookSpecificOutput?: {
+		hookEventName: "SessionStart" | "UserPromptSubmit";
+		additionalContext: string | null;
+	};
+}
+
+function emitCodexOutput(output: CodexCommandOutput): void {
+	console.log(JSON.stringify(output));
+}
+
+export function buildCodexSessionStartOutput(inject?: string): CodexCommandOutput {
+	return {
+		continue: true,
+		hookSpecificOutput: {
+			hookEventName: "SessionStart",
+			additionalContext: inject?.trim() ? inject : null,
+		},
+	};
+}
+
+export function buildCodexUserPromptSubmitOutput(inject?: string): CodexCommandOutput {
+	return {
+		continue: true,
+		hookSpecificOutput: {
+			hookEventName: "UserPromptSubmit",
+			additionalContext: inject?.trim() ? inject : null,
+		},
+	};
+}
+
 function formatHookFailure(
 	name: string,
 	res: {
@@ -123,6 +155,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					}
 					if (options.json) {
 						console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
+					} else if (options.harness === "codex") {
+						emitCodexOutput(buildCodexSessionStartOutput(fallback));
 					} else {
 						console.log(fallback);
 					}
@@ -143,6 +177,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			}
 			if (options.json) {
 				console.log(JSON.stringify(data, null, 2));
+			} else if (options.harness === "codex") {
+				emitCodexOutput(buildCodexSessionStartOutput(data.inject));
 			} else if (data.inject) {
 				console.log(data.inject);
 			}
@@ -169,7 +205,11 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			if (!data) {
 				process.exit(0);
 			}
-			if (data.inject) console.log(data.inject);
+			if (options.harness === "codex") {
+				emitCodexOutput(buildCodexUserPromptSubmitOutput(data.inject));
+			} else if (data.inject) {
+				console.log(data.inject);
+			}
 		});
 
 	hookCmd
@@ -186,6 +226,10 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			});
 			if (!data) {
 				process.exit(0);
+			}
+			if (options.harness === "codex") {
+				console.log(JSON.stringify({ continue: true }));
+				return;
 			}
 			if ((data.memoriesSaved ?? 0) > 0) {
 				process.stderr.write(`[signet] ${data.memoriesSaved} memories saved\n`);

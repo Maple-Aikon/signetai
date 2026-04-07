@@ -23,11 +23,13 @@ class TempConnector extends CodexConnector {
 let tempHome: string;
 let codexDir: string;
 let configPath: string;
+let hooksPath: string;
 
 beforeEach(() => {
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
+	hooksPath = join(codexDir, "hooks.json");
 	mkdirSync(codexDir, { recursive: true });
 });
 
@@ -136,6 +138,120 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 
 		const content = readFileSync(configPath, "utf-8");
 		expect(content.match(/\[mcp_servers\.signet\]/g)?.length).toBe(1);
+	});
+});
+
+describe("CodexConnector.install — hooks.json registration", () => {
+	test("writes Codex 0.118+ hook schema with command hooks", async () => {
+		await connector().install(tempHome);
+
+		const hooks = JSON.parse(readFileSync(hooksPath, "utf-8")) as Record<string, unknown>;
+		expect(hooks._signet).toBe(true);
+		expect(hooks.SessionStart).toBeArray();
+		expect(hooks.UserPromptSubmit).toBeArray();
+		expect(hooks.Stop).toBeArray();
+
+		const sessionStartEntry = (hooks.SessionStart as Array<Record<string, unknown>>)[0];
+		const sessionStartHook = (sessionStartEntry.hooks as Array<Record<string, unknown>>)[0];
+		expect(sessionStartHook.type).toBe("command");
+		expect(sessionStartHook.command).toBe("signet hook session-start -H codex");
+		expect(sessionStartHook.timeout).toBe(10);
+	});
+
+	test("merges Signet hooks into existing modern hooks.json without replacing user hooks", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify(
+				{
+					SessionStart: [
+						{
+							hooks: [
+								{
+									type: "command",
+									command: "echo existing-hook",
+									timeout: 3,
+								},
+							],
+						},
+					],
+				},
+				null,
+				2,
+			),
+		);
+
+		const result = await connector().install(tempHome);
+		const hooks = JSON.parse(readFileSync(hooksPath, "utf-8")) as Record<string, unknown>;
+		const sessionStart = hooks.SessionStart as Array<Record<string, unknown>>;
+
+		expect(result.warnings).toContain("Merged Signet hooks into existing hooks.json — existing hooks preserved");
+		expect(sessionStart).toHaveLength(2);
+		expect(((sessionStart[0]?.hooks as Array<Record<string, unknown>>)[0]?.command)).toBe("echo existing-hook");
+		expect(((sessionStart[1]?.hooks as Array<Record<string, unknown>>)[0]?.command)).toBe(
+			"signet hook session-start -H codex",
+		);
+	});
+
+	test("uninstall removes legacy lowercase and modern uppercase Signet hook blocks", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify(
+				{
+					_signet: true,
+					sessionStart: [
+						{
+							handlers: [
+								{
+									command: ["signet", "hook", "session-start", "-H", "codex"],
+									timeout: 10,
+								},
+							],
+						},
+					],
+					SessionStart: [
+						{
+							hooks: [
+								{
+									type: "command",
+									command: "signet hook session-start -H codex",
+									timeout: 10,
+								},
+							],
+						},
+					],
+					Stop: [
+						{
+							hooks: [
+								{
+									type: "command",
+									command: "echo keep-me",
+									timeout: 3,
+								},
+							],
+						},
+					],
+				},
+				null,
+				2,
+			),
+		);
+
+		await connector().uninstall();
+
+		const hooks = JSON.parse(readFileSync(hooksPath, "utf-8")) as Record<string, unknown>;
+		expect(hooks.sessionStart).toBeUndefined();
+		expect(hooks.SessionStart).toBeUndefined();
+		expect(hooks.Stop).toEqual([
+			{
+				hooks: [
+					{
+						type: "command",
+						command: "echo keep-me",
+						timeout: 3,
+					},
+				],
+			},
+		]);
 	});
 });
 
