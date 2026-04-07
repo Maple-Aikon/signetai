@@ -32,6 +32,10 @@ function shellDoubleQuote(value: string): string {
 	return `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function shellSingleQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
 /** Resolve signet command for hook invocation. hooks.json only supports a command string,
  *  so keep the longstanding non-Windows "signet" path and only use the packaged absolute
  *  entrypoint on Windows where PATH lookup is the historical failure mode. */
@@ -65,10 +69,11 @@ const { spawnSync } = require("child_process");
 
 const project = process.argv[2];
 const launchMs = Number(process.argv[3] || Date.now());
+const signetWorkspace = process.argv[4] || path.join(os.homedir(), ".agents");
 if (!project) process.exit(1);
 
 const sessionsRoot = path.join(os.homedir(), ".codex", "sessions");
-const logDir = path.join(os.homedir(), ".agents", ".daemon", "logs");
+const logDir = path.join(signetWorkspace, ".daemon", "logs");
 
 let watchedFile = null;
 let lineCount = 0;
@@ -147,6 +152,7 @@ function emitPromptHook(prompt) {
   spawnSync("signet", ["hook", "user-prompt-submit", "-H", "codex", "--project", project], {
     input: JSON.stringify({ cwd: project, prompt, userMessage: prompt }),
     stdio: ["pipe", "ignore", "ignore"],
+    timeout: 8000,
   });
 }
 
@@ -196,12 +202,22 @@ function buildCodexWrapperScript(realCodexPath: string, watcherPath: string): st
 
 set -euo pipefail
 
-readonly REAL_CODEX=${tomlQuote(realCodexPath).replace(/^'|'$/g, '"')}
-readonly WATCHER_BIN=${tomlQuote(watcherPath).replace(/^'|'$/g, '"')}
+readonly REAL_CODEX=${shellSingleQuote(realCodexPath)}
+readonly WATCHER_BIN=${shellSingleQuote(watcherPath)}
 readonly SIGNET_WORKSPACE="\${SIGNET_WORKSPACE:-$HOME/.agents}"
 readonly MARKER_START="<!-- ${WRAPPER_MARKER}:START -->"
 readonly MARKER_END="<!-- ${WRAPPER_MARKER}:END -->"
-readonly SIGNET_LOG_DIR="$HOME/.agents/.daemon/logs"
+readonly SIGNET_LOG_DIR="$SIGNET_WORKSPACE/.daemon/logs"
+
+json_escape() {
+  local value="$1"
+  value="\${value//\\/\\\\}"
+  value="\${value//\"/\\\"}"
+  value="\${value//$'\\n'/\\n}"
+  value="\${value//$'\\r'/\\r}"
+  value="\${value//$'\\t'/\\t}"
+  printf '%s' "$value"
+}
 
 daemon_log_path() {
   printf '%s/signet-%s.log\\n' "$SIGNET_LOG_DIR" "$(date +%F)"
@@ -210,14 +226,17 @@ daemon_log_path() {
 append_daemon_log() {
   local message="$1"
   local project="$2"
-  local log_path payload
+  local log_path payload message_json project_json
+
+  message_json="$(json_escape "$message")"
+  project_json="$(json_escape "$project")"
 
   mkdir -p "$SIGNET_LOG_DIR"
   log_path="$(daemon_log_path)"
   payload="$(printf '{"timestamp":"%s","level":"info","category":"hooks","message":"%s","data":{"harness":"codex","project":"%s","source":"${WRAPPER_LOG_SOURCE}","nativeHooks":false}}' \\
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
-    "$message" \\
-    "$project")"
+    "$message_json" \\
+    "$project_json")"
   printf '%s\\n' "$payload" >>"$log_path"
 }
 
@@ -317,19 +336,18 @@ sync_agents_file() {
 
   if git -C "$root" rev-parse --show-toplevel >/dev/null 2>&1; then
     if git -C "$root" ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+      append_daemon_log "Signet fallback AGENTS sync skipped — repository already tracks AGENTS.md" "$root"
       return 0
     fi
   fi
+
+  append_daemon_log "Signet fallback AGENTS sync skipped — existing AGENTS.md is not Signet-managed" "$root"
 }
 
 main() {
   local root launch_ms watcher_pid child_pid exit_code
   root="$(workspace_root)"
-  launch_ms="$(python3 - <<'PY'
-import time
-print(int(time.time() * 1000))
-PY
-)"
+  launch_ms="$(( $(date +%s) * 1000 ))"
 
   if [[ -d "$SIGNET_WORKSPACE" ]]; then
     sync_agents_file "$root"
@@ -337,7 +355,7 @@ PY
 
   trigger_session_start "$root"
   if [[ -x "$WATCHER_BIN" ]]; then
-    "$WATCHER_BIN" "$root" "$launch_ms" >/dev/null 2>/dev/null &
+    "$WATCHER_BIN" "$root" "$launch_ms" "$SIGNET_WORKSPACE" >/dev/null 2>/dev/null &
     watcher_pid=$!
   else
     watcher_pid=""
