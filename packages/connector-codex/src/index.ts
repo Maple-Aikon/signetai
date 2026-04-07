@@ -144,7 +144,7 @@ function extractPrompt(record) {
 }
 
 function emitPromptHook(prompt) {
-  appendDaemonLog("Codex native prompt hook unavailable — using wrapper fallback", { prompt });
+  appendDaemonLog("Codex native prompt hook unavailable — using wrapper fallback");
   spawnSync("signet", ["hook", "user-prompt-submit", "-H", "codex", "--project", project], {
     input: JSON.stringify({ cwd: project, prompt, userMessage: prompt }),
     stdio: ["pipe", "ignore", "ignore"],
@@ -213,6 +213,7 @@ readonly SIGNET_LOG_DIR="$SIGNET_WORKSPACE/.daemon/logs"
 
 json_escape() {
   local value="$1"
+  value="$(printf '%s' "$value" | LC_ALL=C tr -d '\\001-\\010\\013\\014\\016-\\037')"
   value="\${value//\\/\\\\}"
   value="\${value//\"/\\\"}"
   value="\${value//$'\\n'/\\n}"

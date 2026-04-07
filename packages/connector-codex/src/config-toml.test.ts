@@ -277,11 +277,13 @@ describe("CodexConnector.install — wrapper fallback", () => {
 		expect(wrapper).toContain("SIGNET-CODEX-FALLBACK");
 		expect(wrapper).toContain('readonly SIGNET_LOG_DIR="$SIGNET_WORKSPACE/.daemon/logs"');
 		expect(wrapper).not.toContain("python3 - <<'PY'");
+		expect(wrapper).toContain("LC_ALL=C tr -d '\\001-\\010\\013\\014\\016-\\037'");
 		expect(wrapper).toContain('"$WATCHER_BIN" "$root" "$launch_ms" "$SIGNET_WORKSPACE"');
 		expect(watcher).toContain("SIGNET-CODEX-FALLBACK");
 		expect(watcher).toContain('const signetWorkspace = process.argv[4] || path.join(os.homedir(), ".agents");');
 		expect(watcher).toContain('const logDir = path.join(signetWorkspace, ".daemon", "logs");');
 		expect(watcher).toContain("timeout: 8000");
+		expect(watcher).not.toContain("{ prompt }");
 	});
 
 	test("does not replace a non-Signet codex wrapper", async () => {
