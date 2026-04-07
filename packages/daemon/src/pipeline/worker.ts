@@ -1575,12 +1575,14 @@ export function startWorker(
 							: "EXTRACTION_PARSE_FAIL",
 					durationMs: runtime.now() - jobStart,
 				});
+				if (nonRetryable) {
+					logger.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, {
+						error: msg,
+						memoryId: job.memory_id,
+					});
+				}
 				accessor.withWriteTx((db) => {
 					if (nonRetryable) {
-						logger.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, {
-							error: msg,
-							memoryId: job.memory_id,
-						});
 						deadLetterJob(db, job.id, msg);
 					} else {
 						failJob(db, job.id, msg, job.attempts, job.max_attempts);

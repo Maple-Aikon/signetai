@@ -12292,6 +12292,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		initSynthesisProvider(synthesisProvider);
 		// Widget generation uses the same model family by default, but should not
 		// consume the background synthesis rate-limit budget.
+		if (memoryCfg.pipelineV2.synthesis.rateLimit !== undefined && Object.keys(memoryCfg.pipelineV2.synthesis.rateLimit).length > 0) {
+			logger.info("pipeline", "Widget synthesis provider is exempt from the synthesis rate limit", {
+				rateLimit: memoryCfg.pipelineV2.synthesis.rateLimit,
+			});
+		}
 		initWidgetProvider(widgetProvider);
 	} else {
 		providerRuntimeResolution.synthesis = {

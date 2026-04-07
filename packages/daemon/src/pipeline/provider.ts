@@ -171,8 +171,14 @@ const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 ]);
 
 // Compile-time check: if a new remote provider is added to the union but
-// omitted from the set above, this line produces a type error.
-const _exhaustiveCheck: RemoteProvider[] = [...RATE_LIMIT_PROVIDERS] as unknown as RemoteProvider[];
+// omitted from the set above, this produces a type error.
+const _exhaustiveCheck: Record<RemoteProvider, true> = {
+	"claude-code": true,
+	anthropic: true,
+	openrouter: true,
+	codex: true,
+	opencode: true,
+};
 void _exhaustiveCheck;
 
 function shouldRateLimit(providerName: string): boolean {
@@ -180,22 +186,13 @@ function shouldRateLimit(providerName: string): boolean {
 	return RATE_LIMIT_PROVIDERS.has(base);
 }
 
-const RATE_LIMIT_CONFIG_KEYS: ReadonlySet<string> = new Set(["maxCallsPerHour", "burstSize", "waitTimeoutMs"]);
-
 export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitConfig): LlmProvider {
 	if (config === undefined) return provider;
 	if (Object.keys(config).length === 0) return provider;
-	const clean: ProviderRateLimitConfig = {};
-	for (const [k, v] of Object.entries(config)) {
-		if (v !== undefined && RATE_LIMIT_CONFIG_KEYS.has(k)) {
-			clean[k as keyof ProviderRateLimitConfig] = v;
-		}
-	}
-	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...clean };
-	const maxCallsPerHour = cfg.maxCallsPerHour ?? 0;
-	const burstSize = cfg.burstSize ?? 0;
+	const maxCallsPerHour = config.maxCallsPerHour ?? DEFAULT_PROVIDER_RATE_LIMIT.maxCallsPerHour;
+	const burstSize = config.burstSize ?? DEFAULT_PROVIDER_RATE_LIMIT.burstSize;
+	const waitTimeoutMs = config.waitTimeoutMs ?? DEFAULT_PROVIDER_RATE_LIMIT.waitTimeoutMs;
 	if (maxCallsPerHour <= 0 || burstSize <= 0) return provider;
-	const waitTimeoutMs = cfg.waitTimeoutMs ?? 0;
 
 	if (!shouldRateLimit(provider.name)) {
 		logger.warn(
