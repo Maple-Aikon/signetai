@@ -220,7 +220,8 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 				warnIfThrottled();
 				throw new RateLimitExceededError(provider.name, maxCallsPerHour);
 			}
-			return provider.generate(prompt, opts);
+			const fn = provider.generate;
+			return fn.call(provider, prompt, opts);
 		},
 
 		...(provider.generateWithUsage

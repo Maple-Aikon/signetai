@@ -247,6 +247,11 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 	).run(nextStatus, error, now, now, jobId);
 }
 
+// deadLetterJob writes status='dead' directly via SQL, bypassing failJob.
+// It intentionally does NOT increment the attempts column — the caller
+// (rate-limit exhaustion) classifies the job as non-retryable before the
+// normal retry loop can increment attempts. This keeps the attempts value
+// consistent with the lease/claim logic, not the dead-letter classification.
 function deadLetterJob(db: WriteDb, jobId: string, error: string): void {
 	const now = new Date().toISOString();
 	db.prepare(

@@ -360,6 +360,13 @@ The lower-level `withRateLimit()` helper is more defensive: passing
 `burstSize: 0` or `maxCallsPerHour: 0` disables the wrapper entirely
 instead of constructing a limiter that can never acquire a token.
 
+Rate-limiter state is in-memory only. After a daemon restart the full
+`burstSize` is available immediately (the token bucket starts full). In
+environments with frequent restarts (crash-loops, rolling deployments),
+this means the limiter cannot protect against a burst of calls right
+after startup. Set `burstSize` conservatively if your daemon restarts
+often under load.
+
 When using `ollama`, the model must be available locally. When using
 `claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
 Codex CLI as the extraction provider. Lower `minConfidence` to capture
