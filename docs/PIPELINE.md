@@ -894,10 +894,13 @@ are re-sorted by adjusted score descending.
 Lossless Session Transcripts
 ---
 
-After the summary worker extracts facts from a session, it also writes
-the raw transcript to the `session_transcripts` table (migration 040).
-This preserves completeness — extraction creates the search surface, but
-the full conversation text is never lost.
+After the summary worker extracts facts from a session, Signet also
+stores a cleaned conversation-only transcript in the
+`session_transcripts` table (migration 040). Tool calls, tool outputs,
+and thinking traces are removed from this memory surface so retrieval
+and summarization stay focused on the actual conversation. Raw
+auditable traces may still be written to daemon logs outside the memory
+lineage.
 
 The table schema (`session_key TEXT PRIMARY KEY, content TEXT NOT NULL,
 harness TEXT, project TEXT, agent_id TEXT, created_at TEXT`) is indexed
@@ -907,7 +910,7 @@ session via `INSERT OR IGNORE`, keyed on `session_key`.
 The `/api/memory/remember` endpoint accepts an optional `transcript`
 field. When present and a `sourceId` (session key) is available, the
 transcript is written to `session_transcripts` in a separate write
-transaction. This allows connectors to push the raw conversation text
+transaction. This allows connectors to push cleaned conversation text
 alongside memories without waiting for session-end summary processing.
 
 At recall time, the `/api/memory/recall` endpoint supports `expand:

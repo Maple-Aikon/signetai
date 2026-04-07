@@ -1746,8 +1746,9 @@ Releases the session's runtime path claim.
 ```
 
 `harness` is required.
-`transcriptPath` or inline `transcript` may be provided for lossless transcript
-capture.
+`transcriptPath` or inline `transcript` may be provided for transcript
+capture. Signet stores a cleaned conversation-only transcript in memory
+surfaces and may retain raw auditable traces separately in daemon logs.
 
 When transcript text is available, the daemon first writes canonical
 workspace-root-relative markdown lineage files under

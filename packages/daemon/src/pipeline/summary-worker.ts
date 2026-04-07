@@ -153,26 +153,27 @@ const CHUNK_TARGET_CHARS = 20_000;
 // ---------------------------------------------------------------------------
 
 function buildPrompt(transcript: string, date: string): string {
-	return `You are a session librarian. Summarize this coding session as a dated markdown note and extract key durable facts.
+	return `You are reviewing a cleaned transcript from one coding session. The transcript already contains only the human/agent conversation turns, with tool calls, tool outputs, and thinking removed.
+
+Use judgment. Focus on what actually mattered.
 
 Return ONLY a JSON object (no markdown fences, no other text):
 {
-  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nProse summary...",
+  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...",
   "facts": [{"content": "...", "importance": 0.3, "tags": "tag1,tag2", "type": "fact"}]
 }
 
-Summary guidelines:
+Summary:
 - Start with "# ${date} Session Notes"
 - Use ## headings for each distinct topic discussed
-- Include: what was worked on, key decisions, open threads
-- Be concise but complete (200-500 words)
+- Cover what was worked on, key decisions, unresolved threads, and anything likely to matter later
+- Prefer concrete names, files, systems, or people when they matter
 - Write in past tense, third person
 
-Fact extraction guidelines:
+Facts:
 - Each fact must be self-contained and understandable without this conversation
 - Include the specific subject (package name, file path, tool, component) in every fact
-- BAD: "switched to a reactive pattern" → GOOD: "The EmbeddingCanvas2D component switched from polling to a reactive requestRedraw pattern for GPU efficiency"
-- Only durable, reusable knowledge (skip ephemeral details)
+- Keep only durable knowledge, preferences, rules, or decisions
 - Types: fact, preference, decision, learning, rule, issue
 - Importance: 0.3 (routine) to 0.5 (significant)
 - Max 15 facts
@@ -182,23 +183,25 @@ ${transcript}`;
 }
 
 function buildChunkPrompt(chunk: string, index: number, total: number, date: string): string {
-	return `You are a session librarian. This is chunk ${index + 1} of ${total} from a long coding session on ${date}. Summarize this segment and extract key facts.
+	return `You are reviewing chunk ${index + 1} of ${total} from one cleaned coding-session transcript on ${date}. Tool calls, tool outputs, and thinking have already been removed.
+
+Use judgment. Focus on what mattered in this segment.
 
 Return ONLY a JSON object (no markdown fences, no other text):
 {
-  "summary": "Prose summary of this segment (100-300 words)...",
+  "summary": "Free-form summary of this segment...",
   "facts": [{"content": "...", "importance": 0.3, "tags": "tag1,tag2", "type": "fact"}]
 }
 
-Summary guidelines:
-- Summarize what was discussed/worked on in this segment
-- Be concise but capture key decisions and context
+Summary:
+- Summarize what was discussed or worked on in this segment
+- Capture decisions, important context, and unresolved threads
 - Write in past tense, third person
 
-Fact extraction guidelines:
+Facts:
 - Each fact must be self-contained and understandable without this conversation
 - Include the specific subject (package name, file path, tool, component) in every fact
-- Only durable, reusable knowledge (skip ephemeral details)
+- Keep only durable knowledge worth carrying forward
 - Types: fact, preference, decision, learning, rule, issue
 - Importance: 0.3 (routine) to 0.5 (significant)
 - Max 10 facts per chunk
@@ -217,23 +220,22 @@ function buildCombinePrompt(
 		.map((f) => `- ${f.content}`)
 		.join("\n");
 
-	return `You are a session librarian. Below are summaries of ${summaries.length} consecutive segments from one coding session on ${date}, plus extracted facts. Produce a unified session summary and deduplicated fact list.
+	return `You are combining ${summaries.length} segment summaries from one cleaned coding-session transcript on ${date}. Produce one coherent session note and one deduplicated durable fact list.
 
 Return ONLY a JSON object (no markdown fences, no other text):
 {
-  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nProse summary...",
+  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...",
   "facts": [{"content": "...", "importance": 0.3, "tags": "tag1,tag2", "type": "fact"}]
 }
 
-Summary guidelines:
+Summary:
 - Start with "# ${date} Session Notes"
 - Use ## headings for each distinct topic discussed
-- Merge overlapping content from segments — don't repeat
-- Include: what was worked on, key decisions, open threads
-- Be concise but complete (200-500 words)
+- Merge overlapping content from segments without repeating yourself
+- Keep the note coherent, concrete, and useful for future continuity
 - Write in past tense, third person
 
-Fact guidelines:
+Facts:
 - Deduplicate facts that say the same thing in different words
 - Keep the most specific version of each fact
 - Max 15 facts total

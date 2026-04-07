@@ -7,6 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ process.env.SIGNET_PATH = TEST_DIR;
 const { initDbAccessor, closeDbAccessor } = await import("../src/db-accessor");
 const hooks = await import("../src/hooks");
 const lineage = await import("../src/memory-lineage");
+const transcriptAudit = await import("../src/transcript-audit");
 const {
 	handleSessionStart,
 	handlePreCompaction,
@@ -49,6 +51,7 @@ const {
 	writeSummaryArtifact,
 	writeTranscriptArtifact,
 } = lineage;
+const { writeTranscriptAudit } = transcriptAudit;
 
 // ============================================================================
 // Helpers
@@ -1755,6 +1758,133 @@ describe("handleSessionEnd", () => {
 		expect(manifest).toContain('transcript_path: "memory/');
 	});
 
+	test.serial("falls back to the stored live transcript when session-end input is missing", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		try {
+			const now = new Date().toISOString();
+			db.prepare(
+				`INSERT INTO session_transcripts (
+					session_key, content, harness, project, agent_id, created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"sess-live-fallback",
+				"User: keep the live transcript if session-end falls over.\nAssistant: using the stored live transcript avoids losing the session.\n".repeat(
+					8,
+				),
+				"test",
+				"/home/user/signetai",
+				"default",
+				now,
+				now,
+			);
+		} finally {
+			db.close();
+		}
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: "/nonexistent/path.txt",
+			sessionKey: "sess-live-fallback",
+			sessionId: "sess-live-fallback",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+
+		const files = readdirSync(join(TEST_DIR, "memory")).sort();
+		const transcriptFile = files.find((name) => name.endsWith("--transcript.md"));
+		expect(transcriptFile).toBeDefined();
+		const transcript = readFileSync(join(TEST_DIR, "memory", transcriptFile ?? ""), "utf-8");
+		expect(transcript).toContain("keep the live transcript if session-end falls over");
+		expect(transcript).toContain("using the stored live transcript avoids losing the session");
+	});
+
+	test.serial("writes raw audit logs while keeping the canonical transcript conversation-only", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "codex-transcript.jsonl");
+		writeFileSync(
+			transcriptPath,
+			[
+				'{"type":"event_msg","payload":{"type":"user_message","message":"Run diagnostics"}}',
+				'{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\\"cmd\\":\\"ls\\"}"}}',
+				'{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}',
+				'{"type":"item.completed","item":{"type":"agent_message","text":"Diagnostics complete"}}',
+			]
+				.join("\n")
+				.concat("\n")
+				.repeat(20),
+		);
+
+		const result = await handleSessionEnd({
+			harness: "codex",
+			transcriptPath,
+			sessionKey: "sess-audit",
+			sessionId: "sess-audit",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+
+		const memoryFiles = readdirSync(join(TEST_DIR, "memory")).sort();
+		const transcriptFile = memoryFiles.find((name) => name.endsWith("--transcript.md"));
+		expect(transcriptFile).toBeDefined();
+		const transcript = readFileSync(join(TEST_DIR, "memory", transcriptFile ?? ""), "utf-8");
+		expect(transcript).toContain("User: Run diagnostics");
+		expect(transcript).toContain("Assistant: Diagnostics complete");
+		expect(transcript).not.toContain("function_call");
+		expect(transcript).not.toContain("README.md");
+
+		const auditDir = join(TEST_DIR, ".daemon", "logs", "transcripts");
+		const auditFiles = readdirSync(auditDir).sort();
+		expect(auditFiles.some((name) => name.endsWith("--raw-transcript.log"))).toBe(true);
+		const finalAudit = auditFiles.find((name) => name.endsWith("--raw-transcript.log"));
+		const audit = readFileSync(join(auditDir, finalAudit ?? ""), "utf-8");
+		expect(audit).toContain('"type":"function_call"');
+		expect(audit).toContain("README.md");
+	});
+
+	test.serial("sanitizes transcript audit filenames to stay within the audit directory", () => {
+		const result = writeTranscriptAudit({
+			basePath: TEST_DIR,
+			agentId: "default",
+			sessionId: "sess-audit-safe",
+			sessionKey: "sess-audit-safe",
+			rawTranscript: "raw transcript",
+			capturedAt: "../../../../tmp/evil",
+		});
+
+		expect(result).not.toBeNull();
+		const finalPath = result?.finalPath;
+		expect(finalPath).toBeDefined();
+		const auditDir = join(TEST_DIR, ".daemon", "logs", "transcripts");
+		const auditName = finalPath ? finalPath.slice(auditDir.length + 1) : "";
+		expect(finalPath?.startsWith(auditDir)).toBe(true);
+		expect(auditName).toMatch(/^[A-Za-z0-9._-]+$/);
+		expect(finalPath).not.toContain("/tmp/evil");
+	});
+
+	test.serial("uses the full raw transcript hash when audit ids are missing", () => {
+		const rawTranscript = "User: audit me\nAssistant: on it";
+		const result = writeTranscriptAudit({
+			basePath: TEST_DIR,
+			agentId: "agent-a",
+			sessionId: "",
+			sessionKey: null,
+			rawTranscript,
+		});
+
+		expect(result).not.toBeNull();
+		const latestPath = result?.latestPath ?? "";
+		const latestName = latestPath.split("/").pop() ?? "";
+		const scoped = createHash("sha256").update(rawTranscript, "utf8").digest("hex");
+		const expectedToken = createHash("sha256")
+			.update(`agent-a:${scoped}`, "utf8")
+			.digest("hex")
+			.slice(0, 16);
+		expect(latestName).toBe(`${expectedToken}--latest.log`);
+	});
+
 	test.serial(
 		"creates fresh canonical artifacts when distinct session-end events reuse the same sessionKey",
 		async () => {
@@ -1774,46 +1904,46 @@ describe("handleSessionEnd", () => {
 				),
 			);
 
-		const first = await handleSessionEnd({
-			harness: "test",
-			transcriptPath: transcriptAPath,
-			sessionKey: "agent:main:main",
-			cwd: "/home/user/signetai",
-		});
-		const second = await handleSessionEnd({
-			harness: "test",
-			transcriptPath: transcriptBPath,
-			sessionKey: "agent:main:main",
-			cwd: "/home/user/signetai",
-		});
+			const first = await handleSessionEnd({
+				harness: "test",
+				transcriptPath: transcriptAPath,
+				sessionKey: "agent:main:main",
+				cwd: "/home/user/signetai",
+			});
+			const second = await handleSessionEnd({
+				harness: "test",
+				transcriptPath: transcriptBPath,
+				sessionKey: "agent:main:main",
+				cwd: "/home/user/signetai",
+			});
 
-		expect(first.queued).toBe(true);
-		expect(second.queued).toBe(true);
+			expect(first.queued).toBe(true);
+			expect(second.queued).toBe(true);
 
-		const files = readdirSync(join(TEST_DIR, "memory")).sort();
-		expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
-		expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
+			const files = readdirSync(join(TEST_DIR, "memory")).sort();
+			expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
+			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
 
-		const db = openTestDb();
-		try {
-			const sessionIds = db
-				.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC")
-				.all() as Array<{ session_id: string | null }>;
-			expect(sessionIds).toHaveLength(2);
-			// Path-based fallback IDs include a content digest suffix so
-			// rotating log files that reuse the same path produce distinct IDs.
-			expect(sessionIds[0]?.session_id).toMatch(
-				new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-			);
-			expect(sessionIds[1]?.session_id).toMatch(
-				new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-			);
-			expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
-		} finally {
-			db.close();
-		}
-	},
-);
+			const db = openTestDb();
+			try {
+				const sessionIds = db.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC").all() as Array<{
+					session_id: string | null;
+				}>;
+				expect(sessionIds).toHaveLength(2);
+				// Path-based fallback IDs include a content digest suffix so
+				// rotating log files that reuse the same path produce distinct IDs.
+				expect(sessionIds[0]?.session_id).toMatch(
+					new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+				);
+				expect(sessionIds[1]?.session_id).toMatch(
+					new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+				);
+				expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
+			} finally {
+				db.close();
+			}
+		},
+	);
 
 	test("adds a random suffix when transcript context is unavailable", () => {
 		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");

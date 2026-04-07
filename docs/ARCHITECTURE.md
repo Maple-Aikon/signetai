@@ -184,11 +184,14 @@ Gated on `hints.enabled` in pipeline config.
 writes complete. A failure here is non-fatal — it logs a warning and
 does not revert the extracted memories.
 
-**Lossless transcripts**: at session end, the raw conversation text
-is stored in `session_transcripts` (migration 040) alongside the
-extracted memories. This preserves context that extraction may
-discard. The recall endpoint's `expand: true` flag joins transcript
-content back into search results via `source_id`.
+**Lossless transcripts**: Signet stores a cleaned conversation-only
+transcript in `session_transcripts` (migration 040) alongside the
+extracted memories. Tool calls, tool outputs, and thinking traces are
+kept out of this memory surface so retrieval and summarization operate
+on the human/agent exchange. Raw auditable traces may still be written
+to daemon logs outside the memory lineage. The recall endpoint's
+`expand: true` flag joins transcript content back into search results
+via `source_id`.
 
 **Shadow mode**: when `shadowMode = true`, all proposals are logged
 to `memory_history` under the `pipeline-shadow` actor but no
@@ -658,11 +661,12 @@ reappear.
 **session_transcripts** (migration 040)
 
 Lossless session transcript storage. Fields: `session_key` (PK),
-`content` (raw conversation text), `harness`, `project`, `agent_id`,
-`created_at`. Written at session end alongside extracted memories.
-The recall endpoint supports `expand: true` to join transcript
-content back into results via `source_id`, preserving facts that
-extraction may drop. Indexed on `project` and `created_at`.
+`content` (cleaned conversation transcript), `harness`, `project`,
+`agent_id`, `created_at`. The transcript keeps only user/assistant
+conversation turns for memory use. Raw tool traces may be retained in
+daemon logs for audit. The recall endpoint supports `expand: true` to
+join transcript content back into results via `source_id`, preserving
+facts that extraction may drop. Indexed on `project` and `created_at`.
 
 **umap_cache**
 
