@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.97.0] - 2026-04-07
+
+### Features
+
+- **cli**: manage workspace source checkout (#472)
+
+
 ## [0.96.0] - 2026-04-07
 
 ### Features
