@@ -32,10 +32,6 @@ function shellDoubleQuote(value: string): string {
 	return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-function shellSingleQuote(value: string): string {
-	return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
 /** Resolve signet command for hook invocation. hooks.json only supports a command string,
  *  so keep the longstanding non-Windows "signet" path and only use the packaged absolute
  *  entrypoint on Windows where PATH lookup is the historical failure mode. */
@@ -202,8 +198,14 @@ function buildCodexWrapperScript(realCodexPath: string, watcherPath: string): st
 
 set -euo pipefail
 
-readonly REAL_CODEX=${shellSingleQuote(realCodexPath)}
-readonly WATCHER_BIN=${shellSingleQuote(watcherPath)}
+readonly REAL_CODEX="$(cat <<'__SIGNET_REAL_CODEX__'
+${realCodexPath}
+__SIGNET_REAL_CODEX__
+)"
+readonly WATCHER_BIN="$(cat <<'__SIGNET_WATCHER_BIN__'
+${watcherPath}
+__SIGNET_WATCHER_BIN__
+)"
 readonly SIGNET_WORKSPACE="\${SIGNET_WORKSPACE:-$HOME/.agents}"
 readonly MARKER_START="<!-- ${WRAPPER_MARKER}:START -->"
 readonly MARKER_END="<!-- ${WRAPPER_MARKER}:END -->"
