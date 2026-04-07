@@ -15,6 +15,87 @@ interface MemoryDeps {
 	}>;
 }
 
+interface RecallMeta {
+	readonly totalReturned: number;
+	readonly hasSupplementary: boolean;
+	readonly noHits: boolean;
+}
+
+interface RecallRow {
+	readonly content: string;
+	readonly created_at?: string;
+	readonly score?: number;
+	readonly source?: string;
+	readonly who?: string;
+	readonly type?: string;
+	readonly tags?: string | null;
+	readonly pinned?: boolean;
+	readonly supplementary?: boolean;
+}
+
+interface ParsedRecallResult {
+	readonly rows: RecallRow[];
+	readonly meta: RecallMeta;
+	readonly query?: string;
+	readonly method?: string;
+}
+
+function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return {
+			totalReturned: fallbackCount,
+			hasSupplementary: false,
+			noHits: fallbackCount === 0,
+		};
+	}
+	const totalReturned =
+		"totalReturned" in raw && typeof raw.totalReturned === "number" ? raw.totalReturned : fallbackCount;
+	const hasSupplementary = "hasSupplementary" in raw && raw.hasSupplementary === true;
+	const noHits = "noHits" in raw ? raw.noHits === true : totalReturned === 0;
+	return { totalReturned, hasSupplementary, noHits };
+}
+
+export function parseRecallResult(raw: unknown): ParsedRecallResult {
+	const result = typeof raw === "object" && raw !== null ? raw : {};
+	const rows = Array.isArray(result.results) ? (result.results as RecallRow[]) : [];
+	const meta = parseRecallMeta("meta" in result ? result.meta : undefined, rows.length);
+	const query = "query" in result && typeof result.query === "string" ? result.query : undefined;
+	const method = "method" in result && typeof result.method === "string" ? result.method : undefined;
+	return { rows, meta, query, method };
+}
+
+export function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {
+	const primary = rows.filter((row) => row.supplementary !== true);
+	const supporting = rows.filter((row) => row.supplementary === true);
+	const sections: Array<{ heading?: string; rows: ReadonlyArray<RecallRow> }> = [];
+	if (primary.length > 0) sections.push({ rows: primary });
+	if (supporting.length > 0) sections.push({ heading: "  Supporting context:\n", rows: supporting });
+
+	const lines: string[] = [];
+	for (const section of sections) {
+		if (section.heading) lines.push(chalk.bold(section.heading));
+		for (const row of section.rows) {
+			const content = typeof row.content === "string" ? row.content : "";
+			const createdAt = typeof row.created_at === "string" ? row.created_at : "";
+			const scoreValue = typeof row.score === "number" ? row.score : 0;
+			const source = typeof row.source === "string" ? row.source : "unknown";
+			const who = typeof row.who === "string" && row.who.length > 0 ? row.who : "unknown";
+			const type = typeof row.type === "string" ? row.type : "memory";
+			const tags = typeof row.tags === "string" ? row.tags : "";
+			const pinned = row.pinned === true;
+			const date = createdAt.slice(0, 10) || "unknown";
+			const score = chalk.dim(`[${(scoreValue * 100).toFixed(0)}%]`);
+			const critical = pinned ? chalk.red("★") : "";
+			const tagLabel = tags ? chalk.dim(` [${tags}]`) : "";
+			const displayContent = content.length > 120 ? `${content.slice(0, 117)}...` : content;
+
+			lines.push(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tagLabel}`);
+			lines.push(chalk.dim(`      ${type} · ${source} · by ${who}`));
+		}
+	}
+	return lines;
+}
+
 export function registerMemoryCommands(program: Command, deps: MemoryDeps): void {
 	program
 		.command("remember <content>")
@@ -94,41 +175,25 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
-			const result = typeof data === "object" && data !== null ? data : {};
-			const rows = Array.isArray(result.results) ? result.results : [];
+			const parsed = parseRecallResult(data);
 
 			if (options.json) {
-				console.log(JSON.stringify(rows, null, 2));
+				console.log(JSON.stringify(data, null, 2));
 				return;
 			}
 
-			if (rows.length === 0) {
+			if (parsed.meta.noHits || parsed.rows.length === 0) {
 				console.log(chalk.dim("  No memories found"));
 				console.log(chalk.dim("  Try a different query or add memories with `signet remember`"));
 				return;
 			}
 
-			console.log(chalk.bold(`\n  Found ${rows.length} memories:\n`));
-			for (const row of rows) {
-				if (typeof row !== "object" || row === null) continue;
-				const content = typeof row.content === "string" ? row.content : "";
-				const createdAt = typeof row.created_at === "string" ? row.created_at : "";
-				const scoreValue = typeof row.score === "number" ? row.score : 0;
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const who = typeof row.who === "string" ? row.who : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const tags = typeof row.tags === "string" ? row.tags : "";
-				const pinned = row.pinned === true;
-				const date = createdAt.slice(0, 10);
-				const score = chalk.dim(`[${(scoreValue * 100).toFixed(0)}%]`);
-				const sourceLabel = chalk.dim(`(${source})`);
-				const critical = pinned ? chalk.red("★") : "";
-				const tagLabel = tags ? chalk.dim(` [${tags}]`) : "";
-				const displayContent = content.length > 120 ? `${content.slice(0, 117)}...` : content;
-
-				console.log(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tagLabel}`);
-				console.log(chalk.dim(`      by ${who} · ${type} · ${sourceLabel}`));
-			}
+			const summarySuffix: string[] = [];
+			if (parsed.method) summarySuffix.push(parsed.method);
+			if (parsed.meta.hasSupplementary) summarySuffix.push("includes supporting context");
+			const summary = summarySuffix.length > 0 ? ` ${chalk.dim(`(${summarySuffix.join(" · ")})`)}` : "";
+			console.log(chalk.bold(`\n  Found ${parsed.meta.totalReturned} memories:${summary}\n`));
+			for (const line of formatRecallRows(parsed.rows)) console.log(line);
 			console.log();
 		});
 
