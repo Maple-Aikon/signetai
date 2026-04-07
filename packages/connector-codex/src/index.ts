@@ -369,19 +369,24 @@ main() {
     watcher_pid=""
   fi
 
+  typeset -g SIGNET_TRAP_ROOT="$root"
+  typeset -g SIGNET_TRAP_WATCHER_PID="$watcher_pid"
+  typeset -g SIGNET_TRAP_EXIT_CODE="terminated"
+
   trap '
     set +e
-    trigger_session_end "$root" "\${exit_code:-terminated}"
-    if [[ -n "\${watcher_pid:-}" ]]; then
+    trigger_session_end "$SIGNET_TRAP_ROOT" "$SIGNET_TRAP_EXIT_CODE"
+    if [[ -n "\${SIGNET_TRAP_WATCHER_PID:-}" ]]; then
       sleep 1
-      kill -TERM "$watcher_pid" >/dev/null 2>&1 || true
-      wait "$watcher_pid" >/dev/null 2>&1 || true
+      kill -TERM "$SIGNET_TRAP_WATCHER_PID" >/dev/null 2>&1 || true
+      wait "$SIGNET_TRAP_WATCHER_PID" >/dev/null 2>&1 || true
     fi
   ' EXIT
   trap 'exit 130' INT TERM
 
   "$REAL_CODEX" "$@"
   exit_code=$?
+  SIGNET_TRAP_EXIT_CODE="$exit_code"
 
   exit "$exit_code"
 }

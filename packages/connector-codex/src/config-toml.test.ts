@@ -279,9 +279,12 @@ describe("CodexConnector.install — wrapper fallback", () => {
 		expect(wrapper).not.toContain("python3 - <<'PY'");
 		expect(wrapper).toContain("LC_ALL=C tr -d '\\001-\\010\\013\\014\\016-\\037'");
 		expect(wrapper).toContain('"$WATCHER_BIN" "$root" "$launch_ms" "$SIGNET_WORKSPACE"');
-		expect(wrapper).toContain('trigger_session_end "$root"');
+		expect(wrapper).toContain('trigger_session_end "$SIGNET_TRAP_ROOT" "$SIGNET_TRAP_EXIT_CODE"');
 		expect(wrapper).toContain(`printf '%s' "$payload" | signet hook session-end -H codex`);
 		expect(wrapper).toContain(`payload="$(printf '{"cwd":"%s","reason":"%s"}'`);
+		expect(wrapper).toContain(`typeset -g SIGNET_TRAP_ROOT="$root"`);
+		expect(wrapper).toContain(`typeset -g SIGNET_TRAP_WATCHER_PID="$watcher_pid"`);
+		expect(wrapper).toContain(`typeset -g SIGNET_TRAP_EXIT_CODE="terminated"`);
 		expect(wrapper).toContain("trap 'exit 130' INT TERM");
 		expect(watcher).toContain("SIGNET-CODEX-FALLBACK");
 		expect(watcher).toContain('const signetWorkspace = process.argv[4] || path.join(os.homedir(), ".agents");');
