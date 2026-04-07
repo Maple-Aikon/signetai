@@ -252,9 +252,14 @@ trigger_session_start() {
 
 trigger_session_end() {
   local project="$1"
+  local reason="$2"
+  local payload
 
   append_daemon_log "Codex native stop hook unavailable — using wrapper fallback" "$project"
-  signet hook session-end -H codex >/dev/null 2>/dev/null || true
+  payload="$(printf '{"cwd":"%s","reason":"%s"}' \
+    "$(json_escape "$project")" \
+    "$(json_escape "$reason")")"
+  printf '%s' "$payload" | signet hook session-end -H codex >/dev/null 2>/dev/null || true
 }
 
 workspace_root() {
@@ -370,7 +375,7 @@ main() {
       kill -TERM "$watcher_pid" >/dev/null 2>&1 || true
       wait "$watcher_pid" >/dev/null 2>&1 || true
     fi
-    trigger_session_end "$root"
+    trigger_session_end "$root" "\${exit_code:-terminated}"
   ' EXIT
   trap 'exit 130' INT TERM
 
