@@ -348,7 +348,7 @@ sync_agents_file() {
 }
 
 main() {
-  local root launch_ms watcher_pid child_pid exit_code
+  local root launch_ms watcher_pid exit_code
   root="$(workspace_root)"
   launch_ms="$(( $(date +%s) * 1000 ))"
 
@@ -364,19 +364,19 @@ main() {
     watcher_pid=""
   fi
 
-  "$REAL_CODEX" "$@" &
-  child_pid=$!
-  trap 'kill -TERM "$child_pid" >/dev/null 2>&1 || true' INT TERM
-  wait "$child_pid"
+  trap '
+    if [[ -n "\${watcher_pid:-}" ]]; then
+      sleep 1
+      kill -TERM "$watcher_pid" >/dev/null 2>&1 || true
+      wait "$watcher_pid" >/dev/null 2>&1 || true
+    fi
+    trigger_session_end "$root"
+  ' EXIT
+  trap 'exit 130' INT TERM
+
+  "$REAL_CODEX" "$@"
   exit_code=$?
 
-  if [[ -n "\${watcher_pid:-}" ]]; then
-    sleep 1
-    kill -TERM "$watcher_pid" >/dev/null 2>&1 || true
-    wait "$watcher_pid" >/dev/null 2>&1 || true
-  fi
-
-  trigger_session_end "$root"
   exit "$exit_code"
 }
 
