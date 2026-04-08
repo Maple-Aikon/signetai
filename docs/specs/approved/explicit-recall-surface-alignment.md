@@ -2,7 +2,9 @@
 title: "Explicit Recall Surface Alignment"
 id: explicit-recall-surface-alignment
 status: approved
-informed_by: []
+informed_by:
+  - "docs/research/technical/RESEARCH-OBSIDIAN-VAULT-RECALL-EVAL.md"
+  - "docs/research/market/memory-benchmark-comparison.md"
 section: "Runtime"
 depends_on:
   - "memory-pipeline-v2"

@@ -59,7 +59,7 @@ function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta {
 
 export function parseRecallResult(raw: unknown): ParsedRecallResult {
 	const result = typeof raw === "object" && raw !== null ? raw : {};
-	const rows = Array.isArray(result.results) ? (result.results as RecallRow[]) : [];
+	const rows = "results" in result && Array.isArray(result.results) ? (result.results as RecallRow[]) : [];
 	const meta = parseRecallMeta("meta" in result ? result.meta : undefined, rows.length);
 	const query = "query" in result && typeof result.query === "string" ? result.query : undefined;
 	const method = "method" in result && typeof result.method === "string" ? result.method : undefined;
