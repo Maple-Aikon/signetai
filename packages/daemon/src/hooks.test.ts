@@ -362,4 +362,9 @@ describe("selectWithTokenBudget", () => {
 		const result = selectWithTokenBudget(rows, 0);
 		expect(result).toHaveLength(0);
 	});
+
+	it("handles negative budget the same as zero", () => {
+		const result = selectWithTokenBudget(rows, -100);
+		expect(result).toHaveLength(0);
+	});
 });

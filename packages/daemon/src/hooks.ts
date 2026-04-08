@@ -212,6 +212,8 @@ export interface HooksConfig {
 		recencyBias?: number;
 		query?: string;
 		maxInjectTokens?: number;
+		/** @deprecated renamed to maxInjectTokens — will be ignored */
+		maxInjectChars?: number;
 	};
 	userPromptSubmit?: {
 		/** Set to false to disable per-prompt memory injection entirely. Default: true. */
@@ -1455,6 +1457,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
+	if (config.maxInjectChars !== undefined) {
+		logger.warn("hooks", "hooks.sessionStart.maxInjectChars is ignored — rename to maxInjectTokens in agent.yaml");
+	}
 	const rawTokenBudget = config.maxInjectTokens ?? 20000;
 	if (rawTokenBudget <= 0) {
 		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
@@ -1746,8 +1751,16 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		countTokens(recoverySection) + countTokens(constraintsSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
-	if (countTokens(inject) > mainBudget) {
-		inject = `${truncateToTokens(inject, mainBudget)}\n[context truncated]`;
+	if (mainBudget === 0) {
+		logger.warn("hooks", "Session-start reserved sections exhaust token budget — main inject cleared", {
+			maxTokens,
+			reservedTokens,
+		});
+		inject = "";
+	} else if (countTokens(inject) > mainBudget) {
+		const TRUNCATED_MARKER = "\n[context truncated]";
+		const markerTokens = countTokens(TRUNCATED_MARKER);
+		inject = truncateToTokens(inject, Math.max(1, mainBudget - markerTokens)) + TRUNCATED_MARKER;
 	}
 	if (constraintsSection) {
 		inject += constraintsSection;
