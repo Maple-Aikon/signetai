@@ -88,6 +88,7 @@ import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTra
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
+import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import { getUpdateSummary } from "./update-system";
 
 function getAgentsDir(): string {
@@ -210,7 +211,7 @@ export interface HooksConfig {
 		includeRecentContext?: boolean;
 		recencyBias?: number;
 		query?: string;
-		maxInjectChars?: number;
+		maxInjectTokens?: number;
 	};
 	userPromptSubmit?: {
 		/** Set to false to disable per-prompt memory injection entirely. Default: true. */
@@ -475,6 +476,22 @@ export function selectWithBudget<T extends { content: string }>(rows: ReadonlyAr
 		if (used + row.content.length > charBudget) break;
 		selected.push(row);
 		used += row.content.length;
+	}
+	return selected;
+}
+
+/** Truncate rows to fit a token budget using BPE token counts. */
+export function selectWithTokenBudget<T extends { content: string }>(
+	rows: ReadonlyArray<T>,
+	tokenBudget: number,
+): T[] {
+	const selected: T[] = [];
+	let used = 0;
+	for (const row of rows) {
+		const cost = countTokens(row.content);
+		if (used + cost > tokenBudget) break;
+		selected.push(row);
+		used += cost;
 	}
 	return selected;
 }
@@ -1438,7 +1455,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	const memories = selectWithBudget(sortedCandidates, config.maxInjectChars ?? 2000);
+	const tokenBudget = config.maxInjectTokens ?? 20000;
+	const memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -1716,13 +1734,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const duration = Date.now() - start;
-	const maxInject = config.maxInjectChars ?? 24000;
+	const maxTokens = config.maxInjectTokens ?? 20000;
 	// Pre-reserve space for constraints + recovery so they are never truncated
-	const reservedChars = recoverySection.length + constraintsSection.length;
-	const mainBudget = Math.max(0, maxInject - reservedChars);
+	const reservedTokens =
+		countTokens(recoverySection) + countTokens(constraintsSection);
+	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
-	if (inject.length > mainBudget) {
-		inject = `${inject.slice(0, mainBudget)}\n[context truncated]`;
+	if (countTokens(inject) > mainBudget) {
+		inject = `${truncateToTokens(inject, mainBudget)}\n[context truncated]`;
 	}
 	if (constraintsSection) {
 		inject += constraintsSection;
@@ -1740,7 +1759,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalMemories,
 		traversalConstraints,
 		traversalTimedOut,
-		injectChars: inject.length,
+		injectTokens: countTokens(inject),
 		inject,
 		durationMs: duration,
 	});
