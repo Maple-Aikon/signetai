@@ -69,6 +69,9 @@ Prevent these proactively:
    - Update behavior, API, schema, and status docs in the same PR.
    - Keep `docs/API.md`, `docs/specs/INDEX.md`, and
      `docs/specs/dependencies.yaml` accurate when affected.
+   - Root docs duplicated into `docs/` are generated artifacts. Edit the
+     root source, then run `bun scripts/sync-root-docs.ts`. Do not hand-edit
+     `docs/CONTRIBUTING.md` or `docs/ROADMAP.md`.
 
 5. **Duplication / parity drift**
    - Do not duplicate constants, maps, dependency types, descriptions,
