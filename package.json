@@ -1,6 +1,6 @@
 {
 	"name": "signet",
-	"version": "0.98.1",
+	"version": "0.98.6",
 	"private": true,
 	"description": "Portable AI agent identity",
 	"repository": {
@@ -23,8 +23,6 @@
 		"build:publish": "bun run build:dashboard && bun run build:signetai",
 		"build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
 		"build:desktop": "cd packages/tray && bun run build:desktop",
-		"docs:sync": "bun scripts/sync-root-docs.ts",
-		"docs:check-sync": "bun scripts/sync-root-docs.ts --check",
 		"start": "cd packages/daemon && bun run start",
 		"dev": "bun run --filter '*' dev",
 		"test": "bun run --filter '*' test",
@@ -37,7 +35,9 @@
 		"deploy:web": "cd web && bun run deploy",
 		"changelog": "bun scripts/changelog.ts",
 		"test:prompt:structural": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/structural-dependency.test.ts",
-		"test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts"
+		"test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts",
+		"docs:sync": "bun scripts/sync-root-docs.ts",
+		"docs:check-sync": "bun scripts/sync-root-docs.ts --check"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.0",
