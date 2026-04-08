@@ -59,20 +59,32 @@ reranking.
 
 **Parameters:**
 
+Primary controls:
+
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `query` | string | yes | Search query text |
-| `keyword_query` | string | no | Override the keyword/FTS query used for recall |
 | `limit` | number | no | Max results to return (default 10) |
 | `project` | string | no | Optional project path filter |
+| `expand` | boolean | no | Include expanded transcript/context sources |
+
+Common refinements:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
 | `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
 | `tags` | string | no | Filter by tags (comma-separated) |
 | `who` | string | no | Filter by author |
-| `pinned` | boolean | no | Only return pinned memories |
-| `importance_min` | number | no | Minimum memory importance threshold |
 | `since` | string | no | Only include memories created after this date |
 | `until` | string | no | Only include memories created before this date |
-| `expand` | boolean | no | Include expanded transcript/context sources |
+
+Advanced controls:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `keyword_query` | string | no | Override the keyword/FTS query used for recall |
+| `pinned` | boolean | no | Only return pinned memories |
+| `importance_min` | number | no | Minimum memory importance threshold |
 | `min_score` | number | no | Minimum recall score threshold, applied client-side to returned rows |
 
 **Returns:** A formatted recall brief with primary matches, supporting

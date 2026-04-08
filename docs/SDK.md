@@ -83,9 +83,24 @@ const result = await signet.remember("Prefers TypeScript over JavaScript", {
 **`recall(query, opts?)`** — Hybrid search across memories using both
 vector similarity and keyword matching.
 
+A good default posture is:
+
+- start with `query`
+- add `limit`, `project`, or `expand` when you need more control
+- reach for the other filters only when you know why you want them
+
 ```typescript
 const { results, query, method, meta } = await signet.recall("language preferences", {
+  project: "/home/user/myapp",
   limit: 10,
+  expand: true,
+});
+```
+
+You can refine further when needed:
+
+```typescript
+const result = await signet.recall("language preferences", {
   keywordQuery: "\"language preferences\" OR tooling",
   project: "/home/user/myapp",
   type: "preference",
@@ -94,12 +109,12 @@ const { results, query, method, meta } = await signet.recall("language preferenc
   since: "2025-01-01T00:00:00Z",
   until: "2026-01-01T00:00:00Z",
 });
-// results[n].score — relevance score
-// results[n].source — "hybrid" | "vector" | "keyword" | "llm_summary"
-// results[n].supplementary — true for supporting context like summary cards
-// query — normalized query used by the daemon
-// method — "hybrid" | "keyword"
-// meta.totalReturned — result count after client-side minScore filtering
+// result.results[n].score — relevance score
+// result.results[n].source — "hybrid" | "vector" | "keyword" | "llm_summary"
+// result.results[n].supplementary — true for supporting context like summary cards
+// result.query — normalized query used by the daemon
+// result.method — "hybrid" | "keyword"
+// result.meta.totalReturned — result count after client-side minScore filtering
 ```
 
 `minScore` is applied client-side by the SDK after the daemon returns recall
