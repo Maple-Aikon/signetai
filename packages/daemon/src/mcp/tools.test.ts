@@ -165,7 +165,7 @@ describe("createMcpServer", () => {
 				since: "2026-01-01",
 				until: "2026-04-01",
 				expand: true,
-				min_score: 0.8,
+				score_min: 0.8,
 			});
 
 			expect(cap.url).toBe("http://localhost:3850/api/memory/recall");
@@ -183,6 +183,7 @@ describe("createMcpServer", () => {
 			expect(body.until).toBe("2026-04-01");
 			expect(body.expand).toBe(true);
 			expect(body.min_score).toBeUndefined();
+			expect(body.score_min).toBeUndefined();
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toContain("Found 1 memories (hybrid).");
 			expect(result.content[0]?.text).toContain("Primary matches:");
@@ -221,7 +222,7 @@ describe("createMcpServer", () => {
 			expect(result.content[0]?.text).toBe("No matching memories found.");
 		});
 
-		it("omits the primary section when only supporting context survives min_score filtering", async () => {
+		it("omits the primary section when only supporting context survives score_min filtering", async () => {
 			mockFetch(200, {
 				method: "hybrid",
 				results: [
@@ -252,13 +253,39 @@ describe("createMcpServer", () => {
 
 			const result = await callTool(server, "memory_search", {
 				query: "supporting only",
-				min_score: 0.8,
+				score_min: 0.8,
 			});
 
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).not.toContain("Primary matches:");
 			expect(result.content[0]?.text).toContain("Supporting context:");
 			expect(result.content[0]?.text).toContain("strong supporting rationale");
+		});
+
+		it("preserves legacy min_score as an importance_min compatibility alias", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(
+				200,
+				{
+					method: "hybrid",
+					results: [],
+					meta: {
+						totalReturned: 0,
+						hasSupplementary: false,
+						noHits: true,
+					},
+				},
+				cap,
+			);
+
+			const result = await callTool(server, "memory_search", {
+				query: "legacy threshold",
+				min_score: 0.6,
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.importance_min).toBe(0.6);
+			expect(result.isError).toBeUndefined();
 		});
 	});
 

@@ -7,6 +7,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { applyRecallScoreThreshold } from "@signet/core";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -131,24 +132,8 @@ interface RecallToolPayload {
 	readonly meta?: RecallToolMeta;
 }
 
-function applyRecallToolMinScore(value: unknown, minScore?: number): unknown {
-	if (typeof minScore !== "number" || typeof value !== "object" || value === null || Array.isArray(value)) {
-		return value;
-	}
-
-	const payload = value as RecallToolPayload;
-	const rows = Array.isArray(payload.results) ? payload.results : [];
-	const filtered = rows.filter((row) => typeof row.score !== "number" || row.score >= minScore);
-
-	return {
-		...payload,
-		results: filtered,
-		meta: {
-			totalReturned: filtered.length,
-			hasSupplementary: filtered.some((row) => row.supplementary === true),
-			noHits: filtered.length === 0,
-		},
-	};
+function applyRecallToolScoreMin(value: unknown, minScore?: number): unknown {
+	return applyRecallScoreThreshold(value, minScore);
 }
 
 const BASE_TOOL_NAMES = new Set<string>([
@@ -632,7 +617,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
 				pinned: z.boolean().optional().describe("Only return pinned memories"),
 				importance_min: z.number().optional().describe("Minimum memory importance threshold"),
-				min_score: z.number().optional().describe("Minimum recall score threshold (client-side)"),
+				min_score: z.number().optional().describe("Deprecated compatibility alias for importance_min"),
+				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
 			}),
 		},
 		async ({
@@ -648,6 +634,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			since,
 			until,
 			min_score,
+			score_min,
 			expand,
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
@@ -661,7 +648,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					tags,
 					who,
 					pinned,
-					importance_min,
+					importance_min: importance_min ?? min_score,
 					since,
 					until,
 					expand: expand === true ? true : undefined,
@@ -671,7 +658,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			return textResult(formatRecallToolResult(applyRecallToolMinScore(result.data, min_score)));
+			return textResult(formatRecallToolResult(applyRecallToolScoreMin(result.data, score_min)));
 		},
 	);
 

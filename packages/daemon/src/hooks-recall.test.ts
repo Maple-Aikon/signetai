@@ -192,4 +192,49 @@ describe("/api/hooks/recall", () => {
 		expect(body.query).toBe("deploy checklist");
 		expect(body.meta?.noHits).toBeFalse();
 	});
+
+	it("forwards type filtering through to hybrid recall", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor?.().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'test')`,
+			).run("mem-type-fact", "deploy release checklist", "fact", "sess-type-a", "default", "proj-type", now, now);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'test')`,
+			).run(
+				"mem-type-decision",
+				"deploy release checklist",
+				"decision",
+				"sess-type-b",
+				"default",
+				"proj-type",
+				now,
+				now,
+			);
+		});
+
+		const resp = await app.request("/api/hooks/recall", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "openclaw",
+				query: "deploy release checklist",
+				project: "proj-type",
+				type: "decision",
+				limit: 5,
+			}),
+		});
+
+		expect(resp.status).toBe(200);
+		const body = await resp.json();
+		expect(Array.isArray(body.results)).toBeTrue();
+		expect(body.results.map((row: { id: string }) => row.id)).toContain("mem-type-decision");
+		expect(body.results.map((row: { id: string }) => row.id)).not.toContain("mem-type-fact");
+		expect(body.memories).toEqual(body.results);
+		expect(body.count).toBe(body.results.length);
+	});
 });

@@ -110,6 +110,7 @@ export {
 	type VectorSearchOptions,
 	type HybridSearchOptions,
 } from "./search";
+export { applyRecallScoreThreshold } from "./recall";
 export { migrate, MigrationSource } from "./migrate";
 export {
 	detectSchema,

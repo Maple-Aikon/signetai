@@ -1,3 +1,4 @@
+import { applyRecallScoreThreshold } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -66,23 +67,7 @@ export function parseRecallResult(raw: unknown): ParsedRecallResult {
 }
 
 export function applyRecallMinScore(raw: unknown, minScore?: number): unknown {
-	if (typeof minScore !== "number" || typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-		return raw;
-	}
-
-	const result = raw as { readonly results?: ReadonlyArray<RecallRow> };
-	const rows = Array.isArray(result.results) ? result.results : [];
-	const filtered = rows.filter((row) => typeof row.score !== "number" || row.score >= minScore);
-
-	return {
-		...result,
-		results: filtered,
-		meta: {
-			totalReturned: filtered.length,
-			hasSupplementary: filtered.some((row) => row.supplementary === true),
-			noHits: filtered.length === 0,
-		},
-	};
+	return applyRecallScoreThreshold(raw, minScore);
 }
 
 export function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {

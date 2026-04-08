@@ -85,7 +85,8 @@ Advanced controls:
 | `keyword_query` | string | no | Override the keyword/FTS query used for recall |
 | `pinned` | boolean | no | Only return pinned memories |
 | `importance_min` | number | no | Minimum memory importance threshold |
-| `min_score` | number | no | Minimum recall score threshold, applied client-side to returned rows |
+| `min_score` | number | no | Deprecated compatibility alias for `importance_min` |
+| `score_min` | number | no | Minimum recall score threshold, applied client-side to returned rows |
 
 **Returns:** A formatted recall brief with primary matches, supporting
 context, and no-hit handling. The tool still reads from
@@ -99,7 +100,7 @@ context, and no-hit handling. The tool still reads from
   "project": "/home/user/myapp",
   "limit": 5,
   "type": "preference",
-  "min_score": 0.8
+  "score_min": 0.8
 }
 ```
 

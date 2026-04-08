@@ -816,10 +816,8 @@ fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> Stri
         String::new(),
     ];
 
-    if !sources.is_empty() {
-        parts.extend_from_slice(sources);
-        parts.push(String::new());
-    }
+    parts.extend_from_slice(sources);
+    parts.push(String::new());
 
     parts.push(
         "if you need deeper history, use /recall or memory_search. if you learn something durable, save it with /remember or memory_store."
