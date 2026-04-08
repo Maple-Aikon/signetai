@@ -9,7 +9,7 @@ date: 2026-04-08
 ## Abstract
 
 This memo reports a fast retrieval-only comparison over 385 eligible
-notes from Nicholai's Obsidian vault. The goal was to answer a narrow
+notes from a private Obsidian vault. The goal was to answer a narrow
 but important question: on a messy real-world corpus, what actually
 improves recall quality, a lexical-first search posture, plain hybrid
 RAG, chunked hybrid RAG, prospective hint FTS, or semantic retrieval
@@ -38,14 +38,14 @@ goal was a 1:1 retrieval-method comparison on a real corpus:
 3. Signet's current hybrid retrieval plus prospective hint FTS,
 4. the same stack plus semantic retrieval over prospective hints.
 
-The test corpus was drawn read-only from Nicholai's Obsidian vault at
-`/mnt/work/obsidian-vault`. The vault was not modified.
+The test corpus was drawn read-only from a private Obsidian vault. The
+vault was not modified.
 
 ## Scope and setup
 
 ### Corpus
 
-- Source vault: `/mnt/work/obsidian-vault`
+- Source vault: private local Obsidian workspace
 - Total markdown files discovered: 513
 - Eligible notes used in full-vault run: 385
 - Excluded:
@@ -230,9 +230,9 @@ future cues.
 The hardest failures cluster around:
 
 - fleeting notes
-- diary-style entries
+- day-note style entries
 - generic planning / recap language
-- repetitive journal semantics
+- repetitive note semantics
 - weak or broad note titles
 
 Even the strongest lane still struggles when the underlying note surface
@@ -256,7 +256,7 @@ Query:
 
 Target:
 
-- `fleeting/2026-02/2026-02-17 Solvr Meeting with Jake.md`
+- a fleeting project meeting note
 
 Result:
 
@@ -273,11 +273,11 @@ supposed to close.
 Examples such as:
 
 - `What projects and tasks were discussed on this date?`
-- `What were the main activities and thoughts recorded in the journal entry?`
+- `What were the main activities and thoughts recorded in the note?`
 - `What were my priorities and accomplishments for yesterday?`
 
 still produced poor ranking on some fleeting notes because the notes
-share highly repetitive diary language and weakly discriminative titles.
+share highly repetitive language and weakly discriminative titles.
 
 This is not just a scoring problem. It is also a representation problem.
 
@@ -363,7 +363,7 @@ durable, not just clever on a benchmark.
 
 2. **Bucketed analysis by note class**
    - Run separate metrics for:
-     - fleeting / journal notes
+     - fleeting / day-note style notes
      - people notes
      - permanent notes
      - technical / raw docs

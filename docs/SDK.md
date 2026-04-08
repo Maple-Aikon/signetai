@@ -937,6 +937,8 @@ await signet.hookRemember({
 });
 ```
 
+`rememberHook(opts)` remains available as a deprecated compatibility alias.
+
 **`hookRecall(opts)`** — Recall via hook (with session context).
 
 ```typescript
@@ -950,10 +952,14 @@ const result = await signet.hookRecall({
   runtimePath: "plugin",
 });
 // result.results — recall rows
+// result.memories — deprecated alias of result.results
+// result.count — deprecated alias of result.results.length
 // result.meta.noHits — true when recall succeeded but found nothing
 // result.bypassed — true when the session is bypassed
 // result.internal — true for no-hook internal calls
 ```
+
+`recallHook(opts)` remains available as a deprecated compatibility alias.
 
 **Compaction Hooks**
 

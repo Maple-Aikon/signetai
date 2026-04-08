@@ -515,6 +515,8 @@ export function applyTokenBudget(inject: string, mainBudget: number): string {
 }
 
 function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>): string {
+	// Keep formatting behavior aligned with daemon-rs
+	// `build_prompt_recall_inject()` in `packages/daemon-rs/.../routes/hooks.rs`.
 	const parts = [metadataHeader.trimEnd(), "", "## Relevant Memory", ""];
 	parts.push(...lines);
 	parts.push("");

@@ -37,6 +37,8 @@ export interface HookRecallResult {
 
 export interface HookRecallResponse {
 	readonly results: readonly HookRecallResult[];
+	readonly memories?: readonly HookRecallResult[];
+	readonly count?: number;
 	readonly query: string;
 	readonly method: "hybrid" | "keyword";
 	readonly meta: {

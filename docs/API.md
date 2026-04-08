@@ -1824,11 +1824,14 @@ remapped to recall `scope`.
 
 **Response**
 
-Same recall-family shape as `POST /api/memory/recall`:
+Same recall-family shape as `POST /api/memory/recall`, plus legacy
+compatibility fields during the transition period:
 
 ```json
 {
   "results": [],
+  "memories": [],
+  "count": 0,
   "query": "user UI preferences",
   "method": "hybrid",
   "meta": {
@@ -1843,6 +1846,10 @@ Special no-op cases preserve the same shape and add a flag:
 
 - `{ ..., "bypassed": true }` when the session is bypassed
 - `{ ..., "internal": true }` for internal no-hook calls
+
+`memories` and `count` are legacy compatibility aliases for older hook
+consumers and will mirror `results` and `results.length` during the
+transition period.
 
 ### POST /api/hooks/pre-compaction
 

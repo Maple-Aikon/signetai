@@ -250,6 +250,43 @@ describe("SignetClient", () => {
 		expect(result.results[0]?.project).toBe("proj-a");
 	});
 
+	test("deprecated rememberHook()/recallHook() aliases still work", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/hooks/remember") {
+				return { id: "mem-1" };
+			}
+			if (req.path === "/api/hooks/recall") {
+				return {
+					results: [],
+					memories: [],
+					count: 0,
+					query: "dark mode",
+					method: "hybrid",
+					meta: {
+						totalReturned: 0,
+						hasSupplementary: false,
+						noHits: true,
+					},
+				};
+			}
+			return { ok: true };
+		});
+
+		const rememberResult = await client.rememberHook({
+			content: "dark mode",
+			type: "preference",
+		});
+		expect(rememberResult.id).toBe("mem-1");
+		expect(lastRequest().path).toBe("/api/hooks/remember");
+
+		const recallResult = await client.recallHook({
+			query: "dark mode",
+			sessionKey: "sess-123",
+		});
+		expect(recallResult.query).toBe("dark mode");
+		expect(lastRequest().path).toBe("/api/hooks/recall");
+	});
+
 	test("getMemory() sends GET /api/memory/:id", async () => {
 		const { client } = mockDaemon();
 		await client.getMemory("mem-abc-123");

@@ -137,6 +137,21 @@ export class SignetClientP2 {
 	}
 
 	/**
+	 * @deprecated Use `hookRemember()` instead.
+	 */
+	async rememberHook(opts: {
+		readonly content: string;
+		readonly type?: string;
+		readonly importance?: number;
+		readonly tags?: string;
+		readonly who?: string;
+		readonly sessionKey?: string;
+		readonly runtimePath?: string;
+	}): Promise<{ readonly id: string }> {
+		return this.hookRemember(opts);
+	}
+
+	/**
 	 * @example
 	 * const result = await client.hookRecall({
 	 *   query: 'dark mode preferences'
@@ -157,6 +172,26 @@ export class SignetClientP2 {
 		readonly runtimePath?: string;
 	}): Promise<HookRecallResponse> {
 		return this.transport.post<HookRecallResponse>("/api/hooks/recall", opts);
+	}
+
+	/**
+	 * @deprecated Use `hookRecall()` instead.
+	 */
+	async recallHook(opts: {
+		readonly query: string;
+		readonly keywordQuery?: string;
+		readonly limit?: number;
+		readonly project?: string;
+		readonly type?: string;
+		readonly tags?: string;
+		readonly who?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly expand?: boolean;
+		readonly sessionKey?: string;
+		readonly runtimePath?: string;
+	}): Promise<HookRecallResponse> {
+		return this.hookRecall(opts);
 	}
 
 	/**

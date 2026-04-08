@@ -116,6 +116,8 @@ function emptyHookRecallResponse(
 	extras?: { readonly bypassed?: boolean; readonly internal?: boolean },
 ): {
 	results: [];
+	memories: [];
+	count: 0;
 	query: string;
 	method: "hybrid";
 	meta: {
@@ -128,6 +130,8 @@ function emptyHookRecallResponse(
 } {
 	return {
 		results: [],
+		memories: [],
+		count: 0,
 		query,
 		method: "hybrid",
 		meta: {
@@ -137,6 +141,18 @@ function emptyHookRecallResponse(
 		},
 		...(extras?.bypassed ? { bypassed: true } : {}),
 		...(extras?.internal ? { internal: true } : {}),
+	};
+}
+
+function withHookRecallCompat<
+	T extends {
+		readonly results: ReadonlyArray<unknown>;
+	},
+>(result: T): T & { memories: T["results"]; count: number } {
+	return {
+		...result,
+		memories: result.results,
+		count: result.results.length,
 	};
 }
 
@@ -456,7 +472,7 @@ function registerRecall(app: Hono): void {
 				cfg,
 				fetchEmbedding,
 			);
-			return c.json(result);
+			return c.json(withHookRecallCompat(result));
 		} catch (e) {
 			logger.error("hooks", "Recall hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);

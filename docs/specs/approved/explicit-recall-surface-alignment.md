@@ -1,7 +1,7 @@
 ---
 title: "Explicit Recall Surface Alignment"
 id: explicit-recall-surface-alignment
-status: planning
+status: approved
 informed_by: []
 section: "Runtime"
 depends_on:

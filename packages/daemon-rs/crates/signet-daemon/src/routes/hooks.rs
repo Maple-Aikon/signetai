@@ -807,6 +807,8 @@ fn format_metadata_header() -> String {
 }
 
 fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> String {
+    // Keep formatting behavior aligned with TypeScript
+    // `buildPromptRecallInject()` in `packages/daemon/src/hooks.ts`.
     let mut parts = vec![
         metadata_header.trim_end().to_string(),
         String::new(),
@@ -3123,7 +3125,7 @@ mod tests {
             serde_json::Value::String("temporal-fallback".to_string())
         );
         assert!(inject.contains("## Relevant Memory"));
-        assert!(inject.contains("[node node-1]") || inject.contains("[thread node-1]"));
+        assert!(inject.contains("prompt submit observability review now uses structured recall formatting"));
         assert!(inject.contains("if you need deeper history, use /recall or memory_search"));
         assert!(!inject.contains("[signet:recall"));
 

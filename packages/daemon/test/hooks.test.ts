@@ -15,7 +15,7 @@ import { join } from "node:path";
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
 
-const { initDbAccessor, closeDbAccessor } = await import("../src/db-accessor");
+const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("../src/db-accessor");
 const hooks = await import("../src/hooks");
 const lineage = await import("../src/memory-lineage");
 const transcriptAudit = await import("../src/transcript-audit");
@@ -498,6 +498,19 @@ afterEach(() => {
 	if (existsSync(TEST_DIR)) {
 		rmSync(TEST_DIR, { recursive: true, force: true });
 	}
+});
+
+describe("db accessor pragmas", () => {
+	test.serial("openDb path sets busy_timeout", () => {
+		createMemoryDb();
+		closeDbAccessor();
+		initDbAccessor(join(TEST_DIR, "memory", "memories.db"));
+		const timeout = getDbAccessor().withReadDb((db) => {
+			const row = db.prepare("PRAGMA busy_timeout").get() as { timeout?: number } | undefined;
+			return row?.timeout ?? 0;
+		});
+		expect(timeout).toBe(5000);
+	});
 });
 
 // ============================================================================

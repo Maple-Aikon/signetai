@@ -43,7 +43,7 @@ describe("/api/hooks/recall", () => {
 
 	afterAll(() => {
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			Reflect.deleteProperty(process.env as Record<string, string | undefined>, "SIGNET_PATH");
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}
@@ -72,6 +72,8 @@ describe("/api/hooks/recall", () => {
 		const body = await resp.json();
 		expect(body.error).not.toBe("Hook execution failed");
 		expect(body.meta?.noHits).toBeTrue();
+		expect(body.memories).toEqual(body.results);
+		expect(body.count).toBe(body.results.length);
 	});
 
 	it("rejects requests missing harness", async () => {
@@ -111,6 +113,8 @@ describe("/api/hooks/recall", () => {
 		const body = await resp.json();
 		expect(body).toMatchObject({
 			results: [],
+			memories: [],
+			count: 0,
 			query: "",
 			method: "hybrid",
 			meta: {
@@ -139,6 +143,8 @@ describe("/api/hooks/recall", () => {
 		const body = await resp.json();
 		expect(body).toMatchObject({
 			results: [],
+			memories: [],
+			count: 0,
 			query: "test query",
 			method: "hybrid",
 			meta: {
@@ -181,6 +187,8 @@ describe("/api/hooks/recall", () => {
 		expect(Array.isArray(body.results)).toBeTrue();
 		expect(body.results.map((row: { id: string }) => row.id)).toContain("mem-proj-a");
 		expect(body.results.map((row: { id: string }) => row.id)).not.toContain("mem-proj-b");
+		expect(body.memories).toEqual(body.results);
+		expect(body.count).toBe(body.results.length);
 		expect(body.query).toBe("deploy checklist");
 		expect(body.meta?.noHits).toBeFalse();
 	});

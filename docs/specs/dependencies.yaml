@@ -239,8 +239,8 @@ specs:
     decision: null
 
   - id: explicit-recall-surface-alignment
-    status: planning
-    path: docs/specs/planning/explicit-recall-surface-alignment.md
+    status: approved
+    path: docs/specs/approved/explicit-recall-surface-alignment.md
     hard_depends_on:
       - memory-pipeline-v2
       - signet-runtime
