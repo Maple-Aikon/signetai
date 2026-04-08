@@ -111,6 +111,35 @@ function checkBypass(body?: { sessionKey?: string; sessionId?: string }): boolea
 	return isSessionBypassed(key);
 }
 
+function emptyHookRecallResponse(
+	query: string,
+	extras?: { readonly bypassed?: boolean; readonly internal?: boolean },
+): {
+	results: [];
+	query: string;
+	method: "hybrid";
+	meta: {
+		totalReturned: 0;
+		hasSupplementary: false;
+		noHits: true;
+	};
+	bypassed?: boolean;
+	internal?: boolean;
+} {
+	return {
+		results: [],
+		query,
+		method: "hybrid",
+		meta: {
+			totalReturned: 0,
+			hasSupplementary: false,
+			noHits: true,
+		},
+		...(extras?.bypassed ? { bypassed: true } : {}),
+		...(extras?.internal ? { internal: true } : {}),
+	};
+}
+
 export function listLiveSessions(agentId: string): Array<{
 	key: string;
 	runtimePath: string;
@@ -383,7 +412,7 @@ function registerRemember(app: Hono): void {
 function registerRecall(app: Hono): void {
 	app.post("/api/hooks/recall", async (c) => {
 		if (isInternalCall(c)) {
-			return c.json({ memories: [], count: 0 });
+			return c.json(emptyHookRecallResponse("", { internal: true }));
 		}
 		try {
 			const body = (await c.req.json()) as RecallRequest;
@@ -399,7 +428,7 @@ function registerRecall(app: Hono): void {
 			if (conflict) return conflict;
 
 			if (checkBypass(body)) {
-				return c.json({ memories: [], count: 0, bypassed: true });
+				return c.json(emptyHookRecallResponse(body.query, { bypassed: true }));
 			}
 
 			const agentId = resolveAgentId({
@@ -411,8 +440,15 @@ function registerRecall(app: Hono): void {
 			const result = await hybridRecall(
 				{
 					query: body.query,
+					keywordQuery: body.keywordQuery,
 					limit: body.limit,
-					scope: body.project,
+					project: body.project,
+					type: body.type,
+					tags: body.tags,
+					who: body.who,
+					since: body.since,
+					until: body.until,
+					expand: body.expand,
 					agentId,
 					readPolicy: agentScope.readPolicy,
 					policyGroup: agentScope.policyGroup,
