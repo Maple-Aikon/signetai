@@ -36,6 +36,9 @@ export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unkn
 
 	const payload = raw as RecallScoreFilterPayload;
 	const rows = Array.isArray(payload.results) ? payload.results : [];
+	// Keep unscored rows such as supplementary summaries in-band. Callers use
+	// score thresholds to trim ranked matches, not to strip contextual cards
+	// that do not participate in numeric ranking.
 	const filtered = rows.filter((row) => typeof row.score !== "number" || row.score >= minScore);
 
 	return {

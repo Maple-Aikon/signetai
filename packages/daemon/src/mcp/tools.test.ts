@@ -185,7 +185,7 @@ describe("createMcpServer", () => {
 			expect(body.min_score).toBeUndefined();
 			expect(body.score_min).toBeUndefined();
 			expect(result.isError).toBeUndefined();
-			expect(result.content[0]?.text).toContain("Found 1 memories (hybrid).");
+			expect(result.content[0]?.text).toContain("Found 1 memory (hybrid).");
 			expect(result.content[0]?.text).toContain("Primary matches:");
 			expect(result.content[0]?.text).not.toContain("Supporting context:");
 			expect(result.content[0]?.text).not.toContain("supporting rationale");

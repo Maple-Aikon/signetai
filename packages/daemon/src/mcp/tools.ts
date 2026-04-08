@@ -243,7 +243,8 @@ function formatRecallToolResult(value: unknown): string {
 	}
 
 	const { primary, supporting } = partitionRecallRows(rows);
-	const parts = [`Found ${meta.totalReturned} memories${payload.method ? ` (${payload.method})` : ""}.`];
+	const noun = meta.totalReturned === 1 ? "memory" : "memories";
+	const parts = [`Found ${meta.totalReturned} ${noun}${payload.method ? ` (${payload.method})` : ""}.`];
 
 	if (primary.length > 0) {
 		parts.push("", "Primary matches:");

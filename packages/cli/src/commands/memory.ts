@@ -205,7 +205,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			if (parsed.method) summarySuffix.push(parsed.method);
 			if (parsed.meta.hasSupplementary) summarySuffix.push("includes supporting context");
 			const summary = summarySuffix.length > 0 ? ` ${chalk.dim(`(${summarySuffix.join(" · ")})`)}` : "";
-			console.log(chalk.bold(`\n  Found ${parsed.meta.totalReturned} memories:${summary}\n`));
+			const noun = parsed.meta.totalReturned === 1 ? "memory" : "memories";
+			console.log(chalk.bold(`\n  Found ${parsed.meta.totalReturned} ${noun}:${summary}\n`));
 			for (const line of formatRecallRows(parsed.rows)) console.log(line);
 			console.log();
 		});
