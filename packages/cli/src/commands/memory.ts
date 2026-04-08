@@ -187,6 +187,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
+			// Score thresholds trim ranked matches, but intentionally keep
+			// unscored supporting context in-band.
 			const filtered = applyRecallScoreThreshold(data, options.minScore);
 			const parsed = parseRecallResult(filtered);
 

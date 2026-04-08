@@ -657,6 +657,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
+			// Score thresholds trim ranked matches, but intentionally keep
+			// unscored supporting context in-band.
 			return textResult(formatRecallToolResult(applyRecallScoreThreshold(result.data, score_min)));
 		},
 	);
