@@ -8,6 +8,13 @@ let app: {
 };
 let dir = "";
 let prev: string | undefined;
+let closeDbAccessor: (() => void) | undefined;
+let getDbAccessor:
+	| (() => {
+			withWriteTx: (fn: (db: import("bun:sqlite").Database) => void) => void;
+	  })
+	| undefined;
+let bypassSession: ((sessionKey: string, opts?: { readonly allowUnknown?: boolean }) => boolean) | undefined;
 
 describe("/api/hooks/recall", () => {
 	beforeAll(async () => {
@@ -23,16 +30,24 @@ describe("/api/hooks/recall", () => {
 		);
 		process.env.SIGNET_PATH = dir;
 
+		const dbAccessor = await import("./db-accessor");
+		dbAccessor.initDbAccessor(join(dir, "memory", "memories.db"));
+		closeDbAccessor = dbAccessor.closeDbAccessor;
+		getDbAccessor = () => dbAccessor.getDbAccessor();
+		const tracker = await import("./session-tracker");
+		bypassSession = tracker.bypassSession;
+
 		const daemon = await import("./daemon");
 		app = daemon.app;
 	});
 
 	afterAll(() => {
 		if (prev === undefined) {
-			delete process.env.SIGNET_PATH;
+			process.env.SIGNET_PATH = undefined;
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}
+		closeDbAccessor?.();
 		try {
 			rmSync(dir, { recursive: true, force: true });
 		} catch {
@@ -56,6 +71,7 @@ describe("/api/hooks/recall", () => {
 		expect(resp.status).toBe(200);
 		const body = await resp.json();
 		expect(body.error).not.toBe("Hook execution failed");
+		expect(body.meta?.noHits).toBeTrue();
 	});
 
 	it("rejects requests missing harness", async () => {
@@ -76,5 +92,96 @@ describe("/api/hooks/recall", () => {
 		});
 
 		expect(resp.status).toBe(400);
+	});
+
+	it("returns the normalized no-op shape for internal calls", async () => {
+		const resp = await app.request("/api/hooks/recall", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"x-signet-no-hooks": "1",
+			},
+			body: JSON.stringify({
+				harness: "openclaw",
+				query: "test query",
+			}),
+		});
+
+		expect(resp.status).toBe(200);
+		const body = await resp.json();
+		expect(body).toMatchObject({
+			results: [],
+			query: "",
+			method: "hybrid",
+			meta: {
+				totalReturned: 0,
+				hasSupplementary: false,
+				noHits: true,
+			},
+			internal: true,
+		});
+	});
+
+	it("returns the normalized no-op shape for bypassed sessions", async () => {
+		bypassSession?.("session-bypass", { allowUnknown: true });
+
+		const resp = await app.request("/api/hooks/recall", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "openclaw",
+				query: "test query",
+				sessionKey: "session-bypass",
+			}),
+		});
+
+		expect(resp.status).toBe(200);
+		const body = await resp.json();
+		expect(body).toMatchObject({
+			results: [],
+			query: "test query",
+			method: "hybrid",
+			meta: {
+				totalReturned: 0,
+				hasSupplementary: false,
+				noHits: true,
+			},
+			bypassed: true,
+		});
+	});
+
+	it("treats project as project filtering instead of scope filtering", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor?.().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, ?, ?, 'test')`,
+			).run("mem-proj-a", "deploy checklist for alpha", "sess-a", "default", "proj-a", now, now);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, ?, ?, 'test')`,
+			).run("mem-proj-b", "deploy checklist for beta", "sess-b", "default", "proj-b", now, now);
+		});
+
+		const resp = await app.request("/api/hooks/recall", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "openclaw",
+				query: "deploy checklist",
+				project: "proj-a",
+				limit: 5,
+			}),
+		});
+
+		expect(resp.status).toBe(200);
+		const body = await resp.json();
+		expect(Array.isArray(body.results)).toBeTrue();
+		expect(body.results.map((row: { id: string }) => row.id)).toContain("mem-proj-a");
+		expect(body.results.map((row: { id: string }) => row.id)).not.toContain("mem-proj-b");
+		expect(body.query).toBe("deploy checklist");
+		expect(body.meta?.noHits).toBeFalse();
 	});
 });

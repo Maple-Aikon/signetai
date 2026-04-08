@@ -364,8 +364,15 @@ export interface RememberResponse {
 export interface RecallRequest {
 	harness: string;
 	query: string;
+	keywordQuery?: string;
 	project?: string;
 	limit?: number;
+	type?: string;
+	tags?: string;
+	who?: string;
+	since?: string;
+	until?: string;
+	expand?: boolean;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
 }
