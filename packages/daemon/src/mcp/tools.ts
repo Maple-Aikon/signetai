@@ -7,7 +7,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { applyRecallScoreThreshold } from "@signet/core";
+import { applyRecallScoreThreshold, partitionRecallRows } from "@signet/core";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -246,8 +246,7 @@ function formatRecallToolResult(value: unknown): string {
 		return "No matching memories found.";
 	}
 
-	const primary = rows.filter((row) => row.supplementary !== true);
-	const supporting = rows.filter((row) => row.supplementary === true);
+	const { primary, supporting } = partitionRecallRows(rows);
 	const parts = [`Found ${meta.totalReturned} memories${payload.method ? ` (${payload.method})` : ""}.`];
 
 	if (primary.length > 0) {

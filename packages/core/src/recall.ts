@@ -3,8 +3,24 @@ interface RecallScoreFilterRow {
 	readonly supplementary?: boolean;
 }
 
+export interface RecallPartitionableRow {
+	readonly supplementary?: boolean;
+}
+
 interface RecallScoreFilterPayload {
 	readonly results?: ReadonlyArray<RecallScoreFilterRow>;
+}
+
+export function partitionRecallRows<T extends RecallPartitionableRow>(
+	rows: ReadonlyArray<T>,
+): {
+	readonly primary: T[];
+	readonly supporting: T[];
+} {
+	return {
+		primary: rows.filter((row) => row.supplementary !== true),
+		supporting: rows.filter((row) => row.supplementary === true),
+	};
 }
 
 export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unknown {

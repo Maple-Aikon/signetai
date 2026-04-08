@@ -1,4 +1,4 @@
-import { applyRecallScoreThreshold } from "@signet/core";
+import { applyRecallScoreThreshold, partitionRecallRows } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -57,7 +57,7 @@ function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta {
 	return { totalReturned, hasSupplementary, noHits };
 }
 
-export function parseRecallResult(raw: unknown): ParsedRecallResult {
+function parseRecallResult(raw: unknown): ParsedRecallResult {
 	const result = typeof raw === "object" && raw !== null ? raw : {};
 	const rows = "results" in result && Array.isArray(result.results) ? (result.results as RecallRow[]) : [];
 	const meta = parseRecallMeta("meta" in result ? result.meta : undefined, rows.length);
@@ -66,13 +66,8 @@ export function parseRecallResult(raw: unknown): ParsedRecallResult {
 	return { rows, meta, query, method };
 }
 
-export function applyRecallMinScore(raw: unknown, minScore?: number): unknown {
-	return applyRecallScoreThreshold(raw, minScore);
-}
-
-export function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {
-	const primary = rows.filter((row) => row.supplementary !== true);
-	const supporting = rows.filter((row) => row.supplementary === true);
+function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {
+	const { primary, supporting } = partitionRecallRows(rows);
 	const sections: Array<{ heading?: string; rows: ReadonlyArray<RecallRow> }> = [];
 	if (primary.length > 0) sections.push({ rows: primary });
 	if (supporting.length > 0) sections.push({ heading: "  Supporting context:\n", rows: supporting });
@@ -192,7 +187,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
-			const filtered = applyRecallMinScore(data, options.minScore);
+			const filtered = applyRecallScoreThreshold(data, options.minScore);
 			const parsed = parseRecallResult(filtered);
 
 			if (options.json) {

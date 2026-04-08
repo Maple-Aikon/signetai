@@ -2545,7 +2545,7 @@ export async function handleUserPromptSubmit(
 		});
 		if (omitted > 0) {
 			lines.push(
-				`- [note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight.`,
+				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight.`,
 			);
 		}
 		let inject = buildPromptRecallInject(metadataHeader, lines);
