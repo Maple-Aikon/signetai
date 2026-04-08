@@ -111,6 +111,10 @@ interface RecallToolRow {
 	readonly score?: number;
 	readonly source?: string;
 	readonly type?: string;
+	readonly tags?: string | null;
+	readonly who?: string;
+	readonly pinned?: boolean;
+	readonly project?: string | null;
 	readonly supplementary?: boolean;
 }
 
@@ -125,6 +129,26 @@ interface RecallToolPayload {
 	readonly method?: string;
 	readonly results?: ReadonlyArray<RecallToolRow>;
 	readonly meta?: RecallToolMeta;
+}
+
+function applyRecallToolMinScore(value: unknown, minScore?: number): unknown {
+	if (typeof minScore !== "number" || typeof value !== "object" || value === null || Array.isArray(value)) {
+		return value;
+	}
+
+	const payload = value as RecallToolPayload;
+	const rows = Array.isArray(payload.results) ? payload.results : [];
+	const filtered = rows.filter((row) => typeof row.score !== "number" || row.score >= minScore);
+
+	return {
+		...payload,
+		results: filtered,
+		meta: {
+			totalReturned: filtered.length,
+			hasSupplementary: filtered.some((row) => row.supplementary === true),
+			noHits: filtered.length === 0,
+		},
+	};
 }
 
 const BASE_TOOL_NAMES = new Set<string>([
@@ -239,18 +263,20 @@ function formatRecallToolResult(value: unknown): string {
 
 	const primary = rows.filter((row) => row.supplementary !== true);
 	const supporting = rows.filter((row) => row.supplementary === true);
-	const parts = [
-		`Found ${meta.totalReturned} memories${payload.method ? ` (${payload.method})` : ""}.`,
-		"",
-		"Primary matches:",
-		...primary.map((row) => {
-			const score = typeof row.score === "number" ? `[${(row.score * 100).toFixed(0)}%] ` : "";
-			const source = typeof row.source === "string" ? row.source : "unknown";
-			const type = typeof row.type === "string" ? row.type : "memory";
-			const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-			return `- ${score}${row.content} (${type}, ${source}, ${createdAt})`;
-		}),
-	];
+	const parts = [`Found ${meta.totalReturned} memories${payload.method ? ` (${payload.method})` : ""}.`];
+
+	if (primary.length > 0) {
+		parts.push("", "Primary matches:");
+		parts.push(
+			...primary.map((row) => {
+				const score = typeof row.score === "number" ? `[${(row.score * 100).toFixed(0)}%] ` : "";
+				const source = typeof row.source === "string" ? row.source : "unknown";
+				const type = typeof row.type === "string" ? row.type : "memory";
+				const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
+				return `- ${score}${row.content} (${type}, ${source}, ${createdAt})`;
+			}),
+		);
+	}
 
 	if (supporting.length > 0) {
 		parts.push("", "Supporting context:");
@@ -595,28 +621,57 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			description: "Search memories using hybrid vector + keyword search",
 			inputSchema: z.object({
 				query: z.string().describe("Search query text"),
+				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
 				limit: z.number().optional().describe("Max results to return (default 10)"),
+				project: z.string().optional().describe("Optional project path filter"),
 				type: z.string().optional().describe("Filter by memory type"),
-				min_score: z.number().optional().describe("Minimum relevance score threshold"),
+				tags: z.string().optional().describe("Filter by tags (comma-separated)"),
+				who: z.string().optional().describe("Filter by author"),
+				pinned: z.boolean().optional().describe("Only return pinned memories"),
+				importance_min: z.number().optional().describe("Minimum memory importance threshold"),
+				since: z.string().optional().describe("Only include memories created after this date"),
+				until: z.string().optional().describe("Only include memories created before this date"),
+				min_score: z.number().optional().describe("Minimum recall score threshold (client-side)"),
 				expand: z.boolean().optional().describe("Include lossless session transcripts as sources"),
 			}),
 		},
-		async ({ query, limit, type, min_score, expand }) => {
+		async ({
+			query,
+			keyword_query,
+			limit,
+			project,
+			type,
+			tags,
+			who,
+			pinned,
+			importance_min,
+			since,
+			until,
+			min_score,
+			expand,
+		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
 				body: {
 					query,
+					keywordQuery: keyword_query,
 					limit: limit ?? 10,
+					project,
 					type,
-					importance_min: min_score,
-					expand,
+					tags,
+					who,
+					pinned,
+					importance_min,
+					since,
+					until,
+					expand: expand === true ? true : undefined,
 				},
 			});
 
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			return textResult(formatRecallToolResult(result.data));
+			return textResult(formatRecallToolResult(applyRecallToolMinScore(result.data, min_score)));
 		},
 	);
 

@@ -437,6 +437,8 @@ Search memories using hybrid vector + keyword search.
 signet recall "user preferences"
 signet recall "deploy process" --limit 5
 signet recall "auth" --tags backend --who claude-code
+signet recall "release notes" --project /home/user/myapp --expand
+signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
 signet recall "secrets" --json
 ```
 
@@ -445,7 +447,19 @@ Options:
 | Option | Description |
 |--------|-------------|
 | `-l, --limit <n>` | Max results (default: 10) |
+| `--keyword-query <query>` | Override the keyword/FTS query used for recall |
+| `--project <project>` | Filter by project |
 | `-t, --type <type>` | Filter by memory type |
+| `--tags <tags>` | Filter by tags (comma-separated) |
+| `--who <who>` | Filter by author |
+| `--pinned` | Only return pinned memories |
+| `--importance-min <n>` | Only return memories at or above this importance |
+| `--since <date>` | Only include memories created after this date |
+| `--until <date>` | Only include memories created before this date |
+| `--expand` | Include expanded transcript/context sources |
+| `--min-score <n>` | Minimum recall score threshold, applied client-side |
+| `--agent <name>` | Filter by agent ID |
+| `--json` | Print the recall response as JSON |
 | `--tags <tags>` | Filter by tags (comma-separated) |
 | `--who <who>` | Filter by author |
 | `--json` | Output raw JSON |

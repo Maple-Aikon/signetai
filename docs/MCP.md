@@ -62,20 +62,32 @@ reranking.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `query` | string | yes | Search query text |
+| `keyword_query` | string | no | Override the keyword/FTS query used for recall |
 | `limit` | number | no | Max results to return (default 10) |
+| `project` | string | no | Optional project path filter |
 | `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
-| `min_score` | number | no | Minimum relevance score threshold |
+| `tags` | string | no | Filter by tags (comma-separated) |
+| `who` | string | no | Filter by author |
+| `pinned` | boolean | no | Only return pinned memories |
+| `importance_min` | number | no | Minimum memory importance threshold |
+| `since` | string | no | Only include memories created after this date |
+| `until` | string | no | Only include memories created before this date |
+| `expand` | boolean | no | Include expanded transcript/context sources |
+| `min_score` | number | no | Minimum recall score threshold, applied client-side to returned rows |
 
-**Returns:** Array of memory objects with content, type, importance, tags,
-and relevance score.
+**Returns:** A formatted recall brief with primary matches, supporting
+context, and no-hit handling. The tool still reads from
+`POST /api/memory/recall` under the hood.
 
 **Example:**
 
 ```json
 {
   "query": "user prefers dark mode",
+  "project": "/home/user/myapp",
   "limit": 5,
-  "type": "preference"
+  "type": "preference",
+  "min_score": 0.8
 }
 ```
 

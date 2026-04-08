@@ -155,16 +155,39 @@ describe("createMcpServer", () => {
 			const result = await callTool(server, "memory_search", {
 				query: "test query",
 				limit: 5,
+				keyword_query: "test OR query",
+				project: "/tmp/proj",
+				type: "fact",
+				tags: "release",
+				who: "claude-code",
+				pinned: true,
+				importance_min: 0.7,
+				since: "2026-01-01",
+				until: "2026-04-01",
+				expand: true,
+				min_score: 0.8,
 			});
 
 			expect(cap.url).toBe("http://localhost:3850/api/memory/recall");
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.query).toBe("test query");
+			expect(body.keywordQuery).toBe("test OR query");
 			expect(body.limit).toBe(5);
+			expect(body.project).toBe("/tmp/proj");
+			expect(body.type).toBe("fact");
+			expect(body.tags).toBe("release");
+			expect(body.who).toBe("claude-code");
+			expect(body.pinned).toBe(true);
+			expect(body.importance_min).toBe(0.7);
+			expect(body.since).toBe("2026-01-01");
+			expect(body.until).toBe("2026-04-01");
+			expect(body.expand).toBe(true);
+			expect(body.min_score).toBeUndefined();
 			expect(result.isError).toBeUndefined();
-			expect(result.content[0]?.text).toContain("Found 2 memories (hybrid).");
+			expect(result.content[0]?.text).toContain("Found 1 memories (hybrid).");
 			expect(result.content[0]?.text).toContain("Primary matches:");
-			expect(result.content[0]?.text).toContain("Supporting context:");
+			expect(result.content[0]?.text).not.toContain("Supporting context:");
+			expect(result.content[0]?.text).not.toContain("supporting rationale");
 			expect(result.content[0]?.text).toContain("test (fact, hybrid, 2026-04-07)");
 		});
 
@@ -196,6 +219,46 @@ describe("createMcpServer", () => {
 
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toBe("No matching memories found.");
+		});
+
+		it("omits the primary section when only supporting context survives min_score filtering", async () => {
+			mockFetch(200, {
+				method: "hybrid",
+				results: [
+					{
+						id: "1",
+						content: "weak primary",
+						score: 0.2,
+						source: "hybrid",
+						type: "fact",
+						created_at: "2026-04-07T12:00:00.000Z",
+					},
+					{
+						id: "2",
+						content: "strong supporting rationale",
+						score: 0.92,
+						source: "graph",
+						type: "rationale",
+						created_at: "2026-04-06T12:00:00.000Z",
+						supplementary: true,
+					},
+				],
+				meta: {
+					totalReturned: 2,
+					hasSupplementary: true,
+					noHits: false,
+				},
+			});
+
+			const result = await callTool(server, "memory_search", {
+				query: "supporting only",
+				min_score: 0.8,
+			});
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).not.toContain("Primary matches:");
+			expect(result.content[0]?.text).toContain("Supporting context:");
+			expect(result.content[0]?.text).toContain("strong supporting rationale");
 		});
 	});
 

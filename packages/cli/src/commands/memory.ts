@@ -30,6 +30,7 @@ interface RecallRow {
 	readonly type?: string;
 	readonly tags?: string | null;
 	readonly pinned?: boolean;
+	readonly project?: string | null;
 	readonly supplementary?: boolean;
 }
 
@@ -62,6 +63,26 @@ export function parseRecallResult(raw: unknown): ParsedRecallResult {
 	const query = "query" in result && typeof result.query === "string" ? result.query : undefined;
 	const method = "method" in result && typeof result.method === "string" ? result.method : undefined;
 	return { rows, meta, query, method };
+}
+
+export function applyRecallMinScore(raw: unknown, minScore?: number): unknown {
+	if (typeof minScore !== "number" || typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return raw;
+	}
+
+	const result = raw as { readonly results?: ReadonlyArray<RecallRow> };
+	const rows = Array.isArray(result.results) ? result.results : [];
+	const filtered = rows.filter((row) => typeof row.score !== "number" || row.score >= minScore);
+
+	return {
+		...result,
+		results: filtered,
+		meta: {
+			totalReturned: filtered.length,
+			hasSupplementary: filtered.some((row) => row.supplementary === true),
+			noHits: filtered.length === 0,
+		},
+	};
 }
 
 export function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {
@@ -146,11 +167,17 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.command("recall <query>")
 		.description("Search memories using hybrid (vector + keyword) search")
 		.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
+		.option("--keyword-query <query>", "Override the keyword/FTS query used for recall")
+		.option("--project <project>", "Filter by project")
 		.option("-t, --type <type>", "Filter by type")
 		.option("--tags <tags>", "Filter by tags (comma-separated)")
 		.option("--who <who>", "Filter by who")
+		.option("--pinned", "Only return pinned memories", false)
+		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
 		.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
 		.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
+		.option("--expand", "Include expanded transcript/context sources", false)
+		.option("--min-score <n>", "Minimum recall score threshold (client-side)", Number.parseFloat)
 		.option("--agent <name>", "Filter by agent ID")
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
@@ -159,12 +186,17 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			const spinner = ora("Searching memories...").start();
 			const { ok, data } = await deps.secretApiCall("POST", "/api/memory/recall", {
 				query,
+				keywordQuery: options.keywordQuery,
 				limit: options.limit,
+				project: options.project,
 				type: options.type,
 				tags: options.tags,
 				who: options.who,
+				pinned: options.pinned === true ? true : undefined,
+				importance_min: options.importanceMin,
 				since: options.since,
 				until: options.until,
+				expand: options.expand === true ? true : undefined,
 				...(options.agent ? { agentId: options.agent } : {}),
 			});
 
@@ -175,10 +207,11 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
-			const parsed = parseRecallResult(data);
+			const filtered = applyRecallMinScore(data, options.minScore);
+			const parsed = parseRecallResult(filtered);
 
 			if (options.json) {
-				console.log(JSON.stringify(data, null, 2));
+				console.log(JSON.stringify(filtered, null, 2));
 				return;
 			}
 
