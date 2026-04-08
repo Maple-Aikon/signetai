@@ -4,6 +4,9 @@ Contributing to Signet
 This guide is for developers contributing to the `signetai/` monorepo,
 the reference implementation of the Signet open standard.
 
+**New to git or GitHub?** Start with [Your First PR](./docs/FIRST-PR.md),
+a step-by-step walkthrough of making your first contribution.
+
 Development Setup
 ---
 
@@ -39,10 +42,17 @@ packages/
 ├── connector-claude-code/ # @signet/connector-claude-code — Claude Code integration
 ├── connector-opencode/    # @signet/connector-opencode — OpenCode integration
 ├── connector-openclaw/    # @signet/connector-openclaw — OpenClaw integration
-├── adapters/openclaw/     # @signetai/adapter-openclaw — OpenClaw runtime plugin
+├── connector-codex/       # @signet/connector-codex — Codex wrapper + session hooks
+├── opencode-plugin/       # @signet/opencode-plugin — OpenCode runtime plugin (bundled)
+├── adapters/openclaw/     # @signetai/signet-memory-openclaw — OpenClaw runtime adapter
+├── native/                # @signet/native — native embedding accelerators (Rust)
+├── tray/                  # @signet/tray — Tauri system tray application
+├── extension/             # @signet/extension — browser extension (popup, highlight-to-remember)
 ├── signetai/              # signetai — meta-package bundling CLI + daemon
-└── web/                   # @signet/web — marketing site (Cloudflare Worker)
+└── web/                   # @signet/web — marketing site (Cloudflare Pages)
 ```
+
+> Note: `predictor/` is a Rust sidecar (predictive memory scorer, WIP) at the monorepo root.
 
 Key Modules
 ---
@@ -55,9 +65,10 @@ pipeline. It runs in stages: extraction (`extraction.ts`, uses Ollama by
 default with `qwen3:4b`) → decision (`decision.ts`, write/update/skip) →
 optional graph operations → retention decay. The entrypoint is `worker.ts`;
 `provider.ts` wires up the stages. Config modes like `shadowMode` and
-`mutationsFrozen` are respected here.
+`mutationsFrozen` are respected here. For live prompt checks against local
+Ollama models, see `packages/daemon/src/pipeline/README.md`.
 
-**`packages/daemon/src/auth/`** handles ERC-8128 wallet-based auth for the
+**`packages/daemon/src/auth/`** handles token-based auth for the
 HTTP API. Key files: `middleware.ts` (Hono middleware), `tokens.ts` (token
 lifecycle), `policy.ts` (access rules), `rate-limiter.ts`.
 
@@ -128,6 +139,69 @@ a file grows unwieldy, especially if it improves testability.
 **Comments:** Explain why, not what. Self-explanatory code needs no
 inline narration; non-obvious logic or workarounds deserve a brief note.
 
+### Naming
+
+Use single word names by default. Multi-word names only when a single
+word would be ambiguous. Reduce variable count by inlining values used once.
+
+```ts
+// Good
+const foo = 1
+function journal(dir: string) {}
+const journal = await Bun.file(path.join(dir, "journal.json")).json()
+
+// Bad
+const fooBar = 1
+function prepareJournal(dir: string) {}
+const journalPath = path.join(dir, "journal.json")
+const journal = await Bun.file(journalPath).json()
+```
+
+### Destructuring
+
+Avoid unnecessary destructuring. Use dot notation to preserve context.
+
+```ts
+// Good
+obj.a
+obj.b
+
+// Bad
+const { a, b } = obj
+```
+
+### Variables
+
+Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
+
+```ts
+// Good
+const foo = condition ? 1 : 2
+
+// Bad
+let foo
+if (condition) foo = 1
+else foo = 2
+```
+
+### Control Flow
+
+Avoid `else` statements. Prefer early returns.
+
+```ts
+// Good
+function foo() {
+  if (condition) return 1
+  return 2
+}
+
+// Bad
+function foo() {
+  if (condition) return 1
+  else return 2
+}
+```
+
 Pull Requests
 ---
 
@@ -140,7 +214,11 @@ Before contributing a connector or adapter, look at how
 are designed to be idempotent — safe to install multiple times. Follow
 that pattern.
 
-Be transparent about AI assistance in PRs where applicable.
+PRs with UI changes (dashboard, web, extension) must include
+screenshots. No screenshots, no merge.
+
+Be transparent about AI assistance in PRs where applicable. See the
+[AI Policy](./AI_POLICY.md) for disclosure requirements and expectations.
 
 Conventional Commits and Versioning
 ---
@@ -207,6 +285,40 @@ All scripts live in `scripts/` and are written in TypeScript (run via
 | `extract-changelog-section.ts` | Extracts a single version's section from CHANGELOG.md. Used by CI to populate GitHub release notes. |
 | `check-install-guide.ts` | Validates that the install guide (`web/public/skill.md`), README, and landing page components contain the expected install prompt and don't reference deprecated commands. |
 | `post-push-sync.sh` | Watches for the release workflow to complete after a push to `main`, then pulls the resulting release commit locally. Useful for staying in sync after pushing. |
+
+Identity Files
+---
+
+Signet recognizes these standard identity files at `$SIGNET_WORKSPACE/`:
+
+| File | Required | Description |
+|------|----------|-------------|
+| AGENTS.md | yes | Operational rules and behavioral settings |
+| SOUL.md | yes | Persona, character, and security settings |
+| IDENTITY.md | yes | Agent name, creature type, and vibe |
+| USER.md | yes | User profile and preferences |
+| HEARTBEAT.md | no | Current working state, focus, and blockers |
+| MEMORY.md | no | Memory index and summary |
+| TOOLS.md | no | Tool preferences and notes |
+| BOOTSTRAP.md | no | Setup ritual (typically deleted after first run) |
+
+The `detectExistingSetup()` function in `packages/core/src/identity.ts`
+detects existing setups from OpenClaw, Claude Code, and OpenCode.
+
+Reference Repos
+---
+
+Use these as implementation references when designing protocol handling,
+integrations, and operational safeguards.
+
+- [lossless-claw](https://github.com/Martian-Engineering/lossless-claw) — lossless context handling
+- [openclaw](https://github.com/openclaw/openclaw) — agent runtime reference
+- [acpx](https://github.com/openclaw/acpx) — agent communication protocol
+- [arscontexta](https://github.com/agenticnotetaking/arscontexta) — agentic notetaking
+- [ACAN](https://github.com/HongChuanYang/Training-by-LLM-Enhanced-Memory-Retrieval-for-Generative-Agents-via-ACAN) — LLM-enhanced memory retrieval
+- [cli](https://github.com/entireio/cli) — CLI patterns
+- [codex/cli](https://github.com/openai/codex.git)
+- [opencode](https://github.com/anomalyco/opencode.git)
 
 To run any script manually:
 

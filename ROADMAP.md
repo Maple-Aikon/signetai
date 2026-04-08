@@ -4,7 +4,7 @@ Roadmap
 This is the public roadmap for Signet, updated manually as priorities
 shift. It captures what we're actively building, what's committed next,
 and what we're still shaping. For implementation sequencing, dependency
-contracts, and status truth, see `docs/specs/INDEX.md`.
+contracts, and status truth, see [Spec Index](./docs/specs/INDEX.md).
 
 Status markers: `[done]` shipped, `[wip]` in progress, `[next]` planned,
 `[stub]` intentionally tracked but not fully planned, `[idea]` exploring.
@@ -84,5 +84,5 @@ Notes
 ---
 
 - Explicitly dropped: client-side LLM reranking (superseded by better path).
-- This roadmap is directional. `docs/specs/INDEX.md` remains the execution
+- This roadmap is directional. [Spec Index](./docs/specs/INDEX.md) remains the execution
   contract and dependency source of truth.
