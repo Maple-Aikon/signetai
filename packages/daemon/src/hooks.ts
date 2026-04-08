@@ -498,6 +498,23 @@ export function selectWithTokenBudget<T extends { content: string }>(
 	return selected;
 }
 
+const TRUNCATED_MARKER = "\n[context truncated]";
+const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
+
+/**
+ * Truncate `inject` to fit within `mainBudget` tokens.
+ * Returns an empty string when budget is zero (reserved sections exhausted it).
+ * Appends a truncation marker whose tokens are pre-subtracted from the budget.
+ */
+export function applyTokenBudget(inject: string, mainBudget: number): string {
+	if (mainBudget <= 0) return "";
+	if (countTokens(inject) <= mainBudget) return inject;
+	return (
+		truncateToTokens(inject, Math.max(1, mainBudget - TRUNCATED_MARKER_TOKENS)) +
+		TRUNCATED_MARKER
+	);
+}
+
 /** Build a brief "since your last session" summary for temporal awareness */
 function getSessionGapSummary(): string | undefined {
 	if (!existsSync(getMemoryDbPath())) return undefined;
@@ -1756,12 +1773,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			maxTokens,
 			reservedTokens,
 		});
-		inject = "";
-	} else if (countTokens(inject) > mainBudget) {
-		const TRUNCATED_MARKER = "\n[context truncated]";
-		const markerTokens = countTokens(TRUNCATED_MARKER);
-		inject = truncateToTokens(inject, Math.max(1, mainBudget - markerTokens)) + TRUNCATED_MARKER;
 	}
+	inject = applyTokenBudget(inject, mainBudget);
 	if (constraintsSection) {
 		inject += constraintsSection;
 	}
@@ -2375,6 +2388,8 @@ export async function handleUserPromptSubmit(
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const recallLimit = submitCfg.recallLimit ?? 10;
+		// userPromptSubmit.maxInjectChars already reads from config — no hardcoded fallback here.
+		// Falls back to pipelineV2.guardrails.contextBudgetChars when not set in agent.yaml.
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
 		const minScore = resolveUserPromptMinScore(submitCfg.minScore);
 		const queryTerms = vectorQuery.slice(0, 80);

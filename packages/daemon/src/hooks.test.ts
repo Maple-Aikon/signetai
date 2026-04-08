@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	applyTokenBudget,
 	buildSignetSystemPrompt,
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
@@ -366,5 +367,29 @@ describe("selectWithTokenBudget", () => {
 	it("handles negative budget the same as zero", () => {
 		const result = selectWithTokenBudget(rows, -100);
 		expect(result).toHaveLength(0);
+	});
+});
+
+describe("applyTokenBudget", () => {
+	const TEXT = "word ".repeat(500); // ~500 tokens
+
+	it("returns inject unchanged when it fits within budget", () => {
+		expect(applyTokenBudget("hello world", 1000)).toBe("hello world");
+	});
+
+	it("truncates and appends marker when inject exceeds budget", async () => {
+		const result = applyTokenBudget(TEXT, 50);
+		expect(result).toContain("[context truncated]");
+		// total tokens must not exceed budget (marker tokens pre-subtracted)
+		const { countTokens } = await import("./pipeline/tokenizer");
+		expect(countTokens(result)).toBeLessThanOrEqual(50);
+	});
+
+	it("returns empty string when mainBudget is zero (reserved sections exhausted budget)", () => {
+		expect(applyTokenBudget(TEXT, 0)).toBe("");
+	});
+
+	it("returns empty string when mainBudget is negative", () => {
+		expect(applyTokenBudget(TEXT, -1)).toBe("");
 	});
 });
