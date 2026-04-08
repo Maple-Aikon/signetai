@@ -212,7 +212,11 @@ export interface HooksConfig {
 		recencyBias?: number;
 		query?: string;
 		maxInjectTokens?: number;
-		/** @deprecated renamed to maxInjectTokens — will be ignored */
+		/**
+		 * @deprecated Renamed to `maxInjectTokens`. If set without `maxInjectTokens`,
+		 * the value is auto-migrated using `Math.round(maxInjectChars / 4)` (~4 chars/token
+		 * for ASCII; code or Unicode content may be 1–2 chars/token, so migrate explicitly.
+		 */
 		maxInjectChars?: number;
 	};
 	userPromptSubmit?: {
@@ -504,15 +508,15 @@ const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
 /**
  * Truncate `inject` to fit within `mainBudget` tokens.
  * Returns an empty string when budget is zero (reserved sections exhausted it).
- * Appends a truncation marker whose tokens are pre-subtracted from the budget.
+ * Appends a truncation marker when budget permits; omits it when the budget is
+ * too small to fit the marker itself (avoids overflow in that range).
  */
 export function applyTokenBudget(inject: string, mainBudget: number): string {
 	if (mainBudget <= 0) return "";
 	if (countTokens(inject) <= mainBudget) return inject;
-	return (
-		truncateToTokens(inject, Math.max(1, mainBudget - TRUNCATED_MARKER_TOKENS)) +
-		TRUNCATED_MARKER
-	);
+	// Budget too tight to fit content + marker — truncate without marker
+	if (mainBudget <= TRUNCATED_MARKER_TOKENS) return truncateToTokens(inject, mainBudget);
+	return truncateToTokens(inject, mainBudget - TRUNCATED_MARKER_TOKENS) + TRUNCATED_MARKER;
 }
 
 /** Build a brief "since your last session" summary for temporal awareness */

@@ -392,4 +392,14 @@ describe("applyTokenBudget", () => {
 	it("returns empty string when mainBudget is negative", () => {
 		expect(applyTokenBudget(TEXT, -1)).toBe("");
 	});
+
+	it("never exceeds budget when budget is smaller than marker token count", async () => {
+		// Regression: marker is ~5 tokens; budgets in [1, TRUNCATED_MARKER_TOKENS) must
+		// not overflow by appending the full marker after truncation.
+		const { countTokens } = await import("./pipeline/tokenizer");
+		for (const budget of [1, 2, 3, 4]) {
+			const result = applyTokenBudget(TEXT, budget);
+			expect(countTokens(result)).toBeLessThanOrEqual(budget);
+		}
+	});
 });
