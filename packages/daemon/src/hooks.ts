@@ -1455,7 +1455,13 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	const tokenBudget = config.maxInjectTokens ?? 20000;
+	const rawTokenBudget = config.maxInjectTokens ?? 20000;
+	if (rawTokenBudget <= 0) {
+		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
+			configured: rawTokenBudget,
+		});
+	}
+	const tokenBudget = Math.max(1, rawTokenBudget);
 	const memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
 
 	// Get predicted context from recent session analysis (~30% of budget)

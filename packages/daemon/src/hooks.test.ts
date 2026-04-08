@@ -9,6 +9,7 @@ import {
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript,
 	queryAnchorsMissingFromRecall,
+	selectWithTokenBudget,
 	writeMemoryMd,
 } from "./hooks";
 
@@ -330,5 +331,35 @@ describe("normalizeSessionTranscript", () => {
 			'{"role":"assistant","content":"Ship it by Friday."}',
 		].join("\n");
 		expect(normalizeSessionTranscript("opencode", json)).toBe("User: What's the plan?\nAssistant: Ship it by Friday.");
+	});
+});
+
+describe("selectWithTokenBudget", () => {
+	const rows = [
+		{ content: "alpha ".repeat(50) },   // ~50 tokens
+		{ content: "beta ".repeat(50) },    // ~50 tokens
+		{ content: "gamma ".repeat(200) },  // ~200 tokens
+	];
+
+	it("selects rows up to the token budget", () => {
+		const result = selectWithTokenBudget(rows, 120);
+		expect(result).toHaveLength(2);
+		expect(result[0]).toBe(rows[0]);
+		expect(result[1]).toBe(rows[1]);
+	});
+
+	it("returns all rows when budget is not exceeded", () => {
+		const result = selectWithTokenBudget(rows, 10000);
+		expect(result).toHaveLength(3);
+	});
+
+	it("returns empty array when budget is too small for any row", () => {
+		const result = selectWithTokenBudget(rows, 1);
+		expect(result).toHaveLength(0);
+	});
+
+	it("returns empty array for zero budget", () => {
+		const result = selectWithTokenBudget(rows, 0);
+		expect(result).toHaveLength(0);
 	});
 });
