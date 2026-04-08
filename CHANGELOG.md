@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.98.6] - 2026-04-08
+
+### Docs
+
+- **repo**: sync root-derived docs (#484)
+
+
 ## [0.98.2] - 2026-04-08
 
 ### Refactoring
