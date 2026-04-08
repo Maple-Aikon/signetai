@@ -1438,7 +1438,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	const memories = selectWithBudget(sortedCandidates, 2000);
+	const memories = selectWithBudget(sortedCandidates, config.maxInjectChars ?? 2000);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
