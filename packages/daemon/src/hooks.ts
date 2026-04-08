@@ -58,6 +58,7 @@ import {
 	traverseKnowledgeGraph,
 } from "./pipeline/graph-traversal";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
+import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import {
 	type CandidateInput,
 	type CandidateSource,
@@ -88,7 +89,6 @@ import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTra
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
-import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import { getUpdateSummary } from "./update-system";
 
 function getAgentsDir(): string {
@@ -482,10 +482,7 @@ export function selectWithBudget<T extends { content: string }>(rows: ReadonlyAr
 }
 
 /** Truncate rows to fit a token budget using BPE token counts. */
-export function selectWithTokenBudget<T extends { content: string }>(
-	rows: ReadonlyArray<T>,
-	tokenBudget: number,
-): T[] {
+export function selectWithTokenBudget<T extends { content: string }>(rows: ReadonlyArray<T>, tokenBudget: number): T[] {
 	const selected: T[] = [];
 	let used = 0;
 	for (const row of rows) {
@@ -524,7 +521,6 @@ function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<st
 		"if you need deeper history, use /recall or memory_search. if you learn something durable, save it with /remember or memory_store.",
 	);
 	return `${parts.join("\n").trimEnd()}\n`;
-}
 }
 
 /** Build a brief "since your last session" summary for temporal awareness */
@@ -1494,8 +1490,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		);
 	}
 	const rawTokenBudget =
-		config.maxInjectTokens ??
-		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
+		config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
 	if (rawTokenBudget <= 0) {
 		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
 			configured: rawTokenBudget,
@@ -1780,12 +1775,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const duration = Date.now() - start;
-	const maxTokens =
-		config.maxInjectTokens ??
-		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
+	const maxTokens = config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
 	// Pre-reserve space for constraints + recovery so they are never truncated
-	const reservedTokens =
-		countTokens(recoverySection) + countTokens(constraintsSection);
+	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
 	if (mainBudget === 0) {
