@@ -132,10 +132,6 @@ interface RecallToolPayload {
 	readonly meta?: RecallToolMeta;
 }
 
-function applyRecallToolScoreMin(value: unknown, minScore?: number): unknown {
-	return applyRecallScoreThreshold(value, minScore);
-}
-
 const BASE_TOOL_NAMES = new Set<string>([
 	"memory_search",
 	"memory_store",
@@ -616,7 +612,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
 				pinned: z.boolean().optional().describe("Only return pinned memories"),
 				importance_min: z.number().optional().describe("Minimum memory importance threshold"),
-				min_score: z.number().optional().describe("Deprecated compatibility alias for importance_min"),
+				min_score: z
+					.number()
+					.optional()
+					.describe("Deprecated compatibility alias for importance_min; ignored when importance_min is also set"),
 				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
 			}),
 		},
@@ -657,7 +656,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			return textResult(formatRecallToolResult(applyRecallToolScoreMin(result.data, score_min)));
+			return textResult(formatRecallToolResult(applyRecallScoreThreshold(result.data, score_min)));
 		},
 	);
 

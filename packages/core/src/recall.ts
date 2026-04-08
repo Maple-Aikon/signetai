@@ -24,7 +24,13 @@ export function partitionRecallRows<T extends RecallPartitionableRow>(
 }
 
 export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unknown {
-	if (typeof minScore !== "number" || typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+	if (
+		typeof minScore !== "number" ||
+		!Number.isFinite(minScore) ||
+		typeof raw !== "object" ||
+		raw === null ||
+		Array.isArray(raw)
+	) {
 		return raw;
 	}
 

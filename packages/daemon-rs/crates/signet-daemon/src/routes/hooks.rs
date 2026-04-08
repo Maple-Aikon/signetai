@@ -1173,7 +1173,7 @@ pub async fn prompt_submit(
                         }
                     }
                     picked.push(format!(
-                        "- [node {}] {} ({}, {})",
+                        "- [thread {}] {} ({}, {})",
                         id,
                         trim_for_inject(&sample, 280),
                         latest_at,
@@ -3123,6 +3123,7 @@ mod tests {
             serde_json::Value::String("temporal-fallback".to_string())
         );
         assert!(inject.contains("## Relevant Memory"));
+        assert!(inject.contains("[thread node-1]"));
         assert!(inject.contains("prompt submit observability review now uses structured recall formatting"));
         assert!(inject.contains("if you need deeper history, use /recall or memory_search"));
         assert!(!inject.contains("[signet:recall"));
