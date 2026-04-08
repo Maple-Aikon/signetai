@@ -48,38 +48,61 @@ function renderFrontmatter(meta: DocMeta): string {
 	].join("\n");
 }
 
+function maskCodeSegments(body: string): {
+	readonly masked: string;
+	readonly restore: (input: string) => string;
+} {
+	const segments: string[] = [];
+	const masked = body.replace(/```[\s\S]*?```|`[^`\n]+`/g, (match) => {
+		const index = segments.push(match) - 1;
+		return `__SIGNET_DOC_CODE_${index}__`;
+	});
+
+	return {
+		masked,
+		restore: (input: string) =>
+			input.replace(/__SIGNET_DOC_CODE_(\d+)__/g, (_full, rawIndex: string) => {
+				const index = Number(rawIndex);
+				return segments[index] ?? "";
+			}),
+	};
+}
+
 function rewriteMarkdownLinks(sourceName: string, body: string): string {
 	const sourceDir = dirname(sourceName);
 	const targetDir = posix.join("docs", posix.dirname(sourceName));
+	const { masked, restore } = maskCodeSegments(body);
 
-	return body.replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (full, text: string, href: string) => {
-		if (
-			href.startsWith("#") ||
-			href.startsWith("http://") ||
-			href.startsWith("https://") ||
-			href.startsWith("mailto:")
-		) {
-			return full;
-		}
+	return restore(
+		masked.replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (full, text: string, href: string) => {
+			if (
+				href.startsWith("#") ||
+				href.startsWith("http://") ||
+				href.startsWith("https://") ||
+				href.startsWith("mailto:")
+			) {
+				return full;
+			}
 
-		const [rawPath, hash = ""] = href.split("#", 2);
-		if (!rawPath.endsWith(".md") && !rawPath.endsWith(".mdx")) return full;
+			const [rawPath, hash = ""] = href.split("#", 2);
+			if (!rawPath.endsWith(".md") && !rawPath.endsWith(".mdx")) return full;
 
-		const sourceTarget = posix.normalize(posix.join(sourceDir, rawPath));
-		const docsTarget = sourceTarget.startsWith("docs/")
-			? sourceTarget
-			: Object.hasOwn(DUPLICATED_ROOT_DOCS, sourceTarget)
-				? posix.join("docs", sourceTarget)
-				: undefined;
+			const sourceTarget = posix.normalize(posix.join(sourceDir, rawPath));
+			const docsTarget = sourceTarget.startsWith("docs/")
+				? sourceTarget
+				: Object.hasOwn(DUPLICATED_ROOT_DOCS, sourceTarget)
+					? posix.join("docs", sourceTarget)
+					: undefined;
 
-		const suffix = hash ? `#${hash}` : "";
-		if (docsTarget) {
-			const nextHref = posix.relative(targetDir, docsTarget) || ".";
-			return `[${text}](${nextHref}${suffix})`;
-		}
+			const suffix = hash ? `#${hash}` : "";
+			if (docsTarget) {
+				const nextHref = posix.relative(targetDir, docsTarget) || ".";
+				return `[${text}](${nextHref}${suffix})`;
+			}
 
-		return `[${text}](${REPO_BLOB_BASE}/${sourceTarget}${suffix})`;
-	});
+			return `[${text}](${REPO_BLOB_BASE}/${sourceTarget}${suffix})`;
+		}),
+	);
 }
 
 function renderDerivedDoc(name: string, meta: DocMeta, body: string): string {
