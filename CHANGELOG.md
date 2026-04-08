@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.98.2] - 2026-04-08
+
+### Refactoring
+
+- align recall surfaces and validate prospective hint retrieval (#474)
+
+
 ## [0.98.1] - 2026-04-08
 
 ### Bug Fixes
