@@ -96,6 +96,90 @@ describe("SignetClient", () => {
 		});
 	});
 
+	test("recall() returns the daemon recall shape and applies minScore client-side", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/memory/recall") {
+				return {
+					results: [
+						{
+							id: "mem-low",
+							content: "Low confidence memory",
+							content_length: 21,
+							truncated: false,
+							score: 0.42,
+							source: "keyword",
+							type: "fact",
+							tags: null,
+							pinned: false,
+							importance: 0.4,
+							who: "claude-code",
+							project: null,
+							created_at: "2026-04-01T00:00:00.000Z",
+						},
+						{
+							id: "mem-high",
+							content: "High confidence memory",
+							content_length: 22,
+							truncated: false,
+							score: 0.91,
+							source: "hybrid",
+							type: "fact",
+							tags: "important",
+							pinned: false,
+							importance: 0.9,
+							who: "claude-code",
+							project: "proj-a",
+							created_at: "2026-04-02T00:00:00.000Z",
+							supplementary: true,
+						},
+					],
+					query: "confidence",
+					method: "hybrid",
+					meta: {
+						totalReturned: 2,
+						hasSupplementary: true,
+						noHits: false,
+					},
+					sources: {
+						"mem-high": "memory/abc.md",
+					},
+				};
+			}
+			return { ok: true };
+		});
+
+		const result = await client.recall("confidence", {
+			limit: 5,
+			minScore: 0.8,
+			until: "2026-04-03T00:00:00Z",
+			project: "proj-a",
+			keywordQuery: "confidence",
+			agentId: "agent-1",
+		});
+
+		const req = lastRequest();
+		expect(req.method).toBe("POST");
+		expect(req.path).toBe("/api/memory/recall");
+		expect(req.body).toEqual({
+			query: "confidence",
+			limit: 5,
+			minScore: 0.8,
+			until: "2026-04-03T00:00:00Z",
+			project: "proj-a",
+			keywordQuery: "confidence",
+			agentId: "agent-1",
+		});
+		expect(result.query).toBe("confidence");
+		expect(result.method).toBe("hybrid");
+		expect(result.meta).toEqual({
+			totalReturned: 1,
+			hasSupplementary: true,
+			noHits: false,
+		});
+		expect(result.results.map((row) => row.id)).toEqual(["mem-high"]);
+		expect(result.sources?.["mem-high"]).toBe("memory/abc.md");
+	});
+
 	test("hookRecall() forwards the hook recall filters and returns the typed recall shape", async () => {
 		const { client } = mockDaemon((req) => {
 			if (req.path === "/api/hooks/recall") {

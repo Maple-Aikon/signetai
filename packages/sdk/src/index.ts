@@ -4,7 +4,7 @@
  */
 
 import { SignetClientP2 } from "./client-p2.js";
-import { SignetClientHelpers } from "./helpers.js";
+import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
 import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyItemResult,
@@ -128,21 +128,28 @@ export class SignetClient extends SignetClientHelpers {
 	async recall(
 		query: string,
 		opts?: {
+			readonly keywordQuery?: string;
 			readonly limit?: number;
+			readonly project?: string;
 			readonly type?: string;
 			readonly tags?: string;
 			readonly who?: string;
 			readonly pinned?: boolean;
 			readonly importance_min?: number;
 			readonly since?: string;
+			readonly until?: string;
 			readonly minScore?: number;
 			readonly expand?: boolean;
+			readonly agentId?: string;
 		},
 	): Promise<RecallResponse> {
-		return this.transport.post<RecallResponse>("/api/memory/recall", {
-			query,
-			...opts,
-		});
+		return applyRecallMinScore(
+			await this.transport.post<RecallResponse>("/api/memory/recall", {
+				query,
+				...opts,
+			}),
+			opts?.minScore,
+		);
 	}
 
 	async getMemory(id: string): Promise<MemoryRecord> {
