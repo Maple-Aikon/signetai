@@ -1474,10 +1474,16 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	if (config.maxInjectChars !== undefined) {
-		logger.warn("hooks", "hooks.sessionStart.maxInjectChars is ignored — rename to maxInjectTokens in agent.yaml");
+	if (config.maxInjectChars !== undefined && config.maxInjectTokens === undefined) {
+		logger.warn(
+			"hooks",
+			"hooks.sessionStart.maxInjectChars is deprecated — migrating to maxInjectTokens automatically. Rename it in agent.yaml to silence this warning.",
+			{ maxInjectChars: config.maxInjectChars, derivedTokens: Math.round(config.maxInjectChars / 4) },
+		);
 	}
-	const rawTokenBudget = config.maxInjectTokens ?? 20000;
+	const rawTokenBudget =
+		config.maxInjectTokens ??
+		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
 	if (rawTokenBudget <= 0) {
 		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
 			configured: rawTokenBudget,
@@ -1762,7 +1768,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const duration = Date.now() - start;
-	const maxTokens = config.maxInjectTokens ?? 20000;
+	const maxTokens =
+		config.maxInjectTokens ??
+		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
 	// Pre-reserve space for constraints + recovery so they are never truncated
 	const reservedTokens =
 		countTokens(recoverySection) + countTokens(constraintsSection);
