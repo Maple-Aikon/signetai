@@ -3,9 +3,9 @@
  * No native dependencies (no SQLite, no @signet/core).
  */
 
-import { SignetTransport } from "./transport.js";
-import { SignetClientHelpers } from "./helpers.js";
 import { SignetClientP2 } from "./client-p2.js";
+import { SignetClientHelpers } from "./helpers.js";
+import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyItemResult,
 	BatchModifyResponse,
@@ -1087,7 +1087,13 @@ export class SignetClient extends SignetClientHelpers {
 }
 
 export interface SignetClient extends SignetClientP2 {}
-Object.assign(SignetClient.prototype, SignetClientP2.prototype);
+for (const key of Reflect.ownKeys(SignetClientP2.prototype)) {
+	if (key === "constructor") continue;
+	const descriptor = Object.getOwnPropertyDescriptor(SignetClientP2.prototype, key);
+	if (descriptor) {
+		Object.defineProperty(SignetClient.prototype, key, descriptor);
+	}
+}
 
 /** @deprecated Use SignetClient instead */
 export const SignetSDK = SignetClient;

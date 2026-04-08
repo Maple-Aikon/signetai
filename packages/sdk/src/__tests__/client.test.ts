@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SignetClient } from "../index.js";
 import type { Server } from "bun";
+import { SignetClient } from "../index.js";
 
 interface RecordedRequest {
 	readonly method: string;
@@ -94,6 +94,76 @@ describe("SignetClient", () => {
 			limit: 5,
 			type: "preference",
 		});
+	});
+
+	test("hookRecall() forwards the hook recall filters and returns the typed recall shape", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/hooks/recall") {
+				return {
+					results: [
+						{
+							id: "mem-1",
+							content: "User prefers dark mode",
+							content_length: 22,
+							truncated: false,
+							score: 0.91,
+							source: "hybrid",
+							type: "preference",
+							tags: "ui,theme",
+							pinned: false,
+							importance: 0.8,
+							who: "claude-code",
+							project: "proj-a",
+							created_at: "2026-04-01T00:00:00.000Z",
+						},
+					],
+					query: "dark mode",
+					method: "hybrid",
+					meta: {
+						totalReturned: 1,
+						hasSupplementary: false,
+						noHits: false,
+					},
+				};
+			}
+			return { ok: true };
+		});
+
+		const result = await client.hookRecall({
+			query: "dark mode",
+			keywordQuery: '"dark mode" OR theme',
+			project: "proj-a",
+			limit: 5,
+			type: "preference",
+			tags: "ui,theme",
+			who: "claude-code",
+			since: "2026-01-01T00:00:00Z",
+			until: "2026-04-01T00:00:00Z",
+			expand: true,
+			sessionKey: "sess-123",
+			runtimePath: "plugin",
+		});
+
+		const req = lastRequest();
+		expect(req.method).toBe("POST");
+		expect(req.path).toBe("/api/hooks/recall");
+		expect(req.body).toEqual({
+			query: "dark mode",
+			keywordQuery: '"dark mode" OR theme',
+			project: "proj-a",
+			limit: 5,
+			type: "preference",
+			tags: "ui,theme",
+			who: "claude-code",
+			since: "2026-01-01T00:00:00Z",
+			until: "2026-04-01T00:00:00Z",
+			expand: true,
+			sessionKey: "sess-123",
+			runtimePath: "plugin",
+		});
+		expect(result.meta.totalReturned).toBe(1);
+		expect(result.query).toBe("dark mode");
+		expect(result.results[0]?.project).toBe("proj-a");
 	});
 
 	test("getMemory() sends GET /api/memory/:id", async () => {

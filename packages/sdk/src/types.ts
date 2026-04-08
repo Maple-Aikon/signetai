@@ -750,6 +750,8 @@ export type {
 	SessionStartResponse,
 	UserPromptSubmitResponse,
 	SessionEndResponse,
+	HookRecallResult,
+	HookRecallResponse,
 	PreCompactionResponse,
 	CompactionCompleteResponse,
 	SynthesisConfigResponse,
