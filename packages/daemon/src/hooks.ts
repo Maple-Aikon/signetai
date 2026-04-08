@@ -481,6 +481,20 @@ export function selectWithBudget<T extends { content: string }>(rows: ReadonlyAr
 	return selected;
 }
 
+function selectWithBudgetSkippingOversized<T extends { content: string }>(
+	rows: ReadonlyArray<T>,
+	charBudget: number,
+): T[] {
+	const selected: T[] = [];
+	let used = 0;
+	for (const row of rows) {
+		if (used + row.content.length > charBudget) continue;
+		selected.push(row);
+		used += row.content.length;
+	}
+	return selected;
+}
+
 /** Truncate rows to fit a token budget using BPE token counts. */
 export function selectWithTokenBudget<T extends { content: string }>(rows: ReadonlyArray<T>, tokenBudget: number): T[] {
 	const selected: T[] = [];
@@ -2123,6 +2137,96 @@ function extractSubstantiveWords(text: string): string[] {
 	return result;
 }
 
+function countPromptTermOverlap(text: string, promptTerms: ReadonlyArray<string>): number {
+	if (promptTerms.length === 0) return 0;
+	const hay = new Set(extractSubstantiveWords(text));
+	let overlap = 0;
+	for (const term of promptTerms) {
+		if (hay.has(term)) overlap++;
+	}
+	return overlap;
+}
+
+function chooseCompactPromptSentence(content: string, promptTerms: ReadonlyArray<string>): string {
+	const normalized = content
+		.replace(/\s+/g, " ")
+		.replace(/\s*\[truncated\]\s*$/i, "")
+		.trim();
+	if (!normalized) return "";
+	const sentences = normalized
+		.split(/(?<=[.!?])\s+/)
+		.map((part) => part.trim())
+		.filter(Boolean) || [normalized];
+	const ranked = [...sentences].sort((a, b) => {
+		const overlapDelta = countPromptTermOverlap(b, promptTerms) - countPromptTermOverlap(a, promptTerms);
+		if (overlapDelta !== 0) return overlapDelta;
+		return a.length - b.length;
+	});
+	return ranked[0] ?? normalized;
+}
+
+function compactPromptMemoryLine(
+	content: string,
+	createdAt: string,
+	promptTerms: ReadonlyArray<string>,
+	maxChars = 160,
+): string {
+	const sentence = chooseCompactPromptSentence(content, promptTerms);
+	const compact = sentence.length > maxChars ? `${sentence.slice(0, maxChars - 1).trimEnd()}…` : sentence;
+	return `- [memory] ${compact} (${formatMemoryDate(createdAt)})`;
+}
+
+type PromptInjectCandidate = {
+	readonly id: string;
+	readonly content: string;
+	readonly score?: number;
+	readonly overlap: number;
+	readonly index: number;
+};
+
+function buildPromptInjectCandidates(
+	rows: ReadonlyArray<{
+		readonly id: string;
+		readonly content: string;
+		readonly created_at: string;
+		readonly score?: number;
+	}>,
+	promptTerms: ReadonlyArray<string>,
+): PromptInjectCandidate[] {
+	return rows.map((row, index) => {
+		const content = compactPromptMemoryLine(row.content, row.created_at, promptTerms);
+		return {
+			id: row.id,
+			content,
+			score: row.score,
+			overlap: countPromptTermOverlap(row.content, promptTerms),
+			index,
+		};
+	});
+}
+
+function shouldRescuePromptInjectSelection(
+	selected: ReadonlyArray<PromptInjectCandidate>,
+	all: ReadonlyArray<PromptInjectCandidate>,
+): boolean {
+	if (selected.length === 0) return true;
+	const selectedBest = Math.max(...selected.map((row) => row.overlap), 0);
+	if (selectedBest > 0) return false;
+	return all.some((row) => row.overlap > selectedBest);
+}
+
+function rerankPromptInjectCandidates(rows: ReadonlyArray<PromptInjectCandidate>): PromptInjectCandidate[] {
+	return [...rows].sort((a, b) => {
+		const overlapDelta = b.overlap - a.overlap;
+		if (overlapDelta !== 0) return overlapDelta;
+		const aScore = typeof a.score === "number" ? a.score : Number.NEGATIVE_INFINITY;
+		const bScore = typeof b.score === "number" ? b.score : Number.NEGATIVE_INFINITY;
+		if (aScore !== bScore) return bScore - aScore;
+		if (a.content.length !== b.content.length) return a.content.length - b.content.length;
+		return a.index - b.index;
+	});
+}
+
 export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
 	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
 	if (anchors.length === 0) return false;
@@ -2493,11 +2597,21 @@ export async function handleUserPromptSubmit(
 			...result,
 			pinned: result.pinned ? 1 : 0,
 		}));
-		const budgetFiltered = selectWithBudget(mapped, injectBudget);
+		const promptTerms = extractSubstantiveWords(userMessage);
+		const candidates = buildPromptInjectCandidates(mapped, promptTerms);
+		let budgetFiltered = selectWithBudgetSkippingOversized(candidates, injectBudget);
+		if (shouldRescuePromptInjectSelection(budgetFiltered, candidates)) {
+			const reranked = rerankPromptInjectCandidates(candidates);
+			const overlapFirst = reranked.filter((row) => row.overlap > 0);
+			budgetFiltered = selectWithBudgetSkippingOversized(
+				overlapFirst.length > 0 ? overlapFirst : reranked,
+				injectBudget,
+			);
+		}
 		const budgetSelected = budgetFiltered.slice(0, 5);
 		// omitted reflects only budget truncation, not the 5-item display cap,
 		// so the hint correctly directs users to raise contextBudgetChars.
-		const omitted = recall.results.length - budgetFiltered.length;
+		const omitted = Math.max(0, recall.results.length - budgetFiltered.length);
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
@@ -2531,10 +2645,7 @@ export async function handleUserPromptSubmit(
 			);
 		}
 
-		const lines = selected.map((s) => {
-			const dateStr = formatMemoryDate(s.created_at);
-			return `- [memory] ${s.content} (${dateStr})`;
-		});
+		const lines = selected.map((s) => s.content);
 		if (omitted > 0) {
 			lines.push(
 				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight (raise memory.guardrails.contextBudgetChars to include more).`,

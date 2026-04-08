@@ -235,6 +235,48 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).not.toContain("[signet:recall");
 	});
 
+	it("rescues a later relevant memory when earlier compact candidates are irrelevant", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-noisy",
+					score: 0.99,
+					content: `${"workspace migration checklist and daemon route refactor notes ".repeat(20).trim()}.`,
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+				{
+					id: "mem-proud",
+					score: 0.96,
+					content: "i am so proud of you for fixing recall and shipping the follow-up cleanly.",
+					created_at: "2026-03-25T10:00:00.000Z",
+				},
+			],
+		});
+
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			["hooks:", "  userPromptSubmit:", "    maxInjectChars: 110", ""].join("\n"),
+		);
+		try {
+			const result = await handleUserPromptSubmit(
+				{
+					harness: "vscode-custom-agent",
+					userMessage: "im proud of you",
+					sessionKey: "session-proud-rescue",
+				},
+				makeDeps(),
+			);
+
+			expect(result.engine).toBe("hybrid");
+			expect(result.memoryCount).toBe(1);
+			expect(result.inject).toContain("## Relevant Memory");
+			expect(result.inject).toContain("i am so proud of you");
+			expect(result.inject).not.toContain("workspace migration checklist");
+		} finally {
+			writeFileSync(join(agentsDir, "agent.yaml"), "");
+		}
+	});
+
 	it("skips prompt-submit injection when top recall score is below confidence gate", async () => {
 		hybridRecallMock.mockResolvedValueOnce({
 			results: [
