@@ -98,6 +98,12 @@ Prevent these proactively:
 cd packages/cli/dashboard && bun run check
 ```
 
+9. **Publish/install integrity drift**
+   - Publishable packages must not ship runtime dependencies on
+     unpublished workspace packages.
+   - Validate publish manifests after version rewriting and before npm
+     publish.
+
 ## PR checklist
 
 Before opening a PR, verify:
@@ -109,6 +115,8 @@ Before opening a PR, verify:
 - Error handling and fallback paths are tested.
 - Security checks exist on admin or mutation endpoints.
 - Docs were updated for API, spec, schema, or status changes.
+- Publish manifests were validated if the PR changes a package that gets
+  published to npm.
 - Each bug fix has a regression test.
 - Lint, typecheck, and tests pass locally.
 

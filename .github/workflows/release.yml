@@ -310,15 +310,20 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Resolve workspace protocols
+        run: bun scripts/version-sync.ts --to "$NEW_VERSION"
+
+      - name: Validate publish manifests
+        run: bun scripts/check-publish-manifests.ts
+
       - name: Publish release
-        # Undraft first so predictor assets are publicly accessible before
-        # any npm install can trigger the postinstall downloader.
+        # Undraft only after publish manifests pass, so a broken npm package
+        # cannot slip through behind a green release job.
+        # Assets must still be public before npm publish can expose any
+        # postinstall downloader paths to users.
         run: gh release edit "v${NEW_VERSION}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve workspace protocols
-        run: bun scripts/version-sync.ts --to "$NEW_VERSION"
 
       - name: Publish to npm
         run: |
