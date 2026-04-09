@@ -14,9 +14,11 @@
  *   GET  /api/os/agent-events   — SSE stream of agent commands for the dashboard
  */
 
+import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
-import { logger } from "../logger.js";
+import { getInferenceRouterOrNull } from "../inference-router.js";
 import { MissingOpenAiApiKeyError, callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
+import { logger } from "../logger.js";
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -26,6 +28,9 @@ interface AgentSessionState {
 	id: string;
 	serverId: string;
 	task: string;
+	agentId?: string;
+	taskClass?: string;
+	privacy?: RoutingPrivacyTier;
 	status: "running" | "done" | "error";
 	step: number;
 	maxSteps: number;
@@ -110,23 +115,56 @@ function buildAgentPrompt(messages: Array<{ role: "system" | "user" | "assistant
 	return `${AGENT_SYSTEM_PROMPT}\n\nConversation:\n${transcript}\n\nRespond with exactly one JSON action.`;
 }
 
-async function callAgentLlm(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): Promise<AgentAction> {
+async function callAgentLlm(
+	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+	route?: {
+		readonly agentId?: string;
+		readonly taskClass?: string;
+		readonly privacy?: RoutingPrivacyTier;
+	},
+): Promise<AgentAction> {
 	let raw: string;
-	try {
-		raw = await callLegacyOpenAiChat(messages, {
-			model: "gpt-4o",
-			maxTokens: 512,
-			temperature: 0.1,
-		});
-	} catch (error) {
-		if (!(error instanceof MissingOpenAiApiKeyError)) {
-			throw error;
+	const router = getInferenceRouterOrNull();
+	if (router && (await router.hasWorkload("interactive"))) {
+		const routed = await router.execute(
+			{
+				agentId: route?.agentId,
+				operation: "os_agent",
+				taskClass: route?.taskClass,
+				privacy: route?.privacy,
+				promptPreview: messages[messages.length - 1]?.content,
+			},
+			buildAgentPrompt(messages),
+			{ maxTokens: 512 },
+		);
+		if (routed.ok) {
+			raw = routed.value.text;
+		} else {
+			logger.warn("os-agent", "Inference router failed, falling back to legacy interactive provider", {
+				error: routed.error.message,
+			});
+			raw = "";
 		}
-		const provider = getInteractiveLlmProviderOrNull();
-		if (!provider) throw error;
-		raw = await provider.generate(buildAgentPrompt(messages), {
-			maxTokens: 512,
-		});
+	} else {
+		raw = "";
+	}
+	if (!raw) {
+		try {
+			raw = await callLegacyOpenAiChat(messages, {
+				model: "gpt-4o",
+				maxTokens: 512,
+				temperature: 0.1,
+			});
+		} catch (error) {
+			if (!(error instanceof MissingOpenAiApiKeyError)) {
+				throw error;
+			}
+			const provider = getInteractiveLlmProviderOrNull();
+			if (!provider) throw error;
+			raw = await provider.generate(buildAgentPrompt(messages), {
+				maxTokens: 512,
+			});
+		}
 	}
 
 	// Parse the action JSON
@@ -213,7 +251,11 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 
 			let action: AgentAction;
 			try {
-				action = await callAgentLlm(session.messages);
+				action = await callAgentLlm(session.messages, {
+					agentId: session.agentId,
+					taskClass: session.taskClass,
+					privacy: session.privacy,
+				});
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				logger.warn("os-agent", `LLM error at step ${step}: ${msg}`);
@@ -403,7 +445,7 @@ export function mountOsAgentRoutes(app: Hono): void {
 	 * Returns: { sessionId: string } — connect to /api/os/agent-events?session=<id> for updates
 	 */
 	app.post("/api/os/agent-execute", async (c) => {
-		let body: { serverId?: string; task?: string };
+		let body: { serverId?: string; task?: string; agentId?: string; taskClass?: string; privacy?: RoutingPrivacyTier };
 		try {
 			body = await c.req.json();
 		} catch {
@@ -431,6 +473,9 @@ export function mountOsAgentRoutes(app: Hono): void {
 			id: sessionId,
 			serverId,
 			task,
+			agentId: body.agentId?.trim() || undefined,
+			taskClass: body.taskClass?.trim() || undefined,
+			privacy: body.privacy,
 			status: "running",
 			step: 0,
 			maxSteps: 20,

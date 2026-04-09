@@ -261,6 +261,219 @@ process reads all memories and asks a model to write a coherent summary.
 | `max_tokens` | number | `4000` | Max output tokens |
 
 
+Inference Routing
+-----------------
+
+Signet's shared inference control plane is configured under the top-level
+`routing` key in `agent.yaml`.
+
+If `routing` is omitted, Signet preserves the old behavior by compiling
+`memory.pipelineV2.extraction` and `memory.pipelineV2.synthesis` into an
+implicit router profile. That keeps existing agents working without change.
+
+Use `routing` when you want Signet to choose models across harnesses,
+accounts, APIs, and local runtimes per turn or per subtask.
+
+Example:
+
+```yaml
+routing:
+  enabled: true
+  defaultPolicy: auto
+
+  accounts:
+    claude-dot:
+      kind: subscription_session
+      providerFamily: anthropic
+      label: Dot Claude Connected
+      sessionRef: CLAUDE_DOT_SESSION
+    openrouter-main:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+
+  targets:
+    opus:
+      executor: claude-code
+      account: claude-dot
+      models:
+        opus46:
+          model: opus-4.6
+          reasoning: high
+          toolUse: true
+          streaming: true
+    sonnet:
+      executor: openrouter
+      account: openrouter-main
+      privacy: remote_ok
+      endpoint: https://openrouter.ai/api/v1
+      models:
+        default:
+          model: anthropic/claude-sonnet-4-6
+          reasoning: medium
+          toolUse: true
+          streaming: true
+          costTier: medium
+    local:
+      executor: ollama
+      endpoint: http://127.0.0.1:11434
+      privacy: local_only
+      models:
+        gemma4:
+          model: gemma4
+          reasoning: medium
+          streaming: true
+          costTier: low
+
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - opus/opus46
+        - sonnet/default
+        - local/gemma4
+
+  taskClasses:
+    casual_chat:
+      reasoning: medium
+      preferredTargets:
+        - sonnet/default
+    hard_coding:
+      reasoning: high
+      toolsRequired: true
+      preferredTargets:
+        - opus/opus46
+    hipaa_sensitive:
+      privacy: local_only
+      preferredTargets:
+        - local/gemma4
+
+  workloads:
+    interactive:
+      policy: auto
+      taskClass: casual_chat
+    memoryExtraction:
+      policy: auto
+      taskClass: casual_chat
+    sessionSynthesis:
+      policy: auto
+      taskClass: casual_chat
+
+  agents:
+    rose:
+      defaultPolicy: auto
+      roster:
+        - opus/opus46
+        - sonnet/default
+        - local/gemma4
+      pinnedTargets:
+        hard_coding: opus/opus46
+```
+
+### routing.accounts
+
+Named account or credential identities used by targets.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kind` | string | `subscription_session` or `api` |
+| `providerFamily` | string | Provider family label, for example `anthropic`, `openai`, `openrouter` |
+| `label` | string | Human-readable account label |
+| `credentialRef` | string | Secret name or env var name for API-backed targets |
+| `sessionRef` | string | Session identifier for subscription-backed targets |
+| `usageTier` | string | Optional account tier label |
+
+### routing.targets
+
+Executable route targets. A target can be a local runtime, API backend,
+subscription-backed CLI session, or gateway.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `executor` | string | `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, or `openai-compatible` |
+| `kind` | string | Optional explicit target kind. Inferred when omitted |
+| `account` | string | Account id from `routing.accounts` |
+| `endpoint` | string | Optional base URL override |
+| `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
+| `models` | map | Named model entries for this target |
+
+Model fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | string | Provider-native model identifier |
+| `label` | string | Optional display label |
+| `reasoning` | string | `low`, `medium`, or `high` |
+| `contextWindow` | number | Maximum prompt tokens the model can accept |
+| `toolUse` | boolean | Whether tool use is supported |
+| `streaming` | boolean | Whether streaming is supported |
+| `multimodal` | boolean | Whether multimodal input is supported |
+| `costTier` | string | `low`, `medium`, or `high` |
+| `averageLatencyMs` | number | Optional routing latency hint |
+
+### routing.policies
+
+Named routing policies that agents and workloads reference.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | string | `strict`, `automatic`, or `hybrid` |
+| `allow` | array | Route refs allowed by the policy |
+| `deny` | array | Route refs denied by the policy |
+| `defaultTargets` | array | Ordered preferred target refs |
+| `taskTargets` | map | Task-class specific preferred target refs |
+| `fallbackTargets` | array | Explicit fallback refs |
+| `maxLatencyMs` | number | Hard latency ceiling used by routing |
+| `costCeiling` | string | Hard cost ceiling used by routing |
+
+### routing.taskClasses
+
+Task-family hints for automatic routing.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `reasoning` | string | Required reasoning depth |
+| `toolsRequired` | boolean | Require tool use support |
+| `streamingPreferred` | boolean | Prefer or require streaming support |
+| `multimodalRequired` | boolean | Require multimodal support |
+| `privacy` | string | Hard privacy tier, including `local_only` |
+| `maxLatencyMs` | number | Task latency budget |
+| `costCeiling` | string | Task cost ceiling |
+| `expectedInputTokens` | number | Prompt-size hint |
+| `expectedOutputTokens` | number | Output-size hint |
+| `preferredTargets` | array | Preferred target refs |
+| `keywords` | array | Lightweight classifier keywords |
+
+### routing.workloads
+
+Binds Signet-owned workloads to router policies or explicit targets.
+
+Supported workload keys:
+
+- `interactive`
+- `memoryExtraction`
+- `sessionSynthesis`
+
+Each workload can define:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `policy` | string | Named policy id |
+| `taskClass` | string | Default task class for this workload |
+| `target` | string | Explicit `target/model` pin |
+
+### routing.agents
+
+Per-agent routing overrides.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `defaultPolicy` | string | Default policy for that agent |
+| `roster` | array | Allowed target refs for that agent |
+| `preferredTargets` | map | Task-class target preferences |
+| `pinnedTargets` | map | Hard pins, usually managed by `signet route pin` |
+
+
 Pipeline V2 Config
 ------------------
 
@@ -268,6 +481,11 @@ The V2 [[pipeline|memory pipeline]] lives at `packages/daemon/src/pipeline/`. It
 LLM-based fact extraction against incoming conversation text, then decides
 whether to write new memories, update existing ones, or skip. Config lives
 under `memory.pipelineV2` in `agent.yaml`.
+
+Inference selection for extraction and session synthesis can also be routed
+through the top-level `routing.workloads` bindings. When explicit routing is
+enabled for `memoryExtraction` or `sessionSynthesis`, those workloads use the
+shared inference control plane instead of only the legacy provider fields.
 
 The config uses a nested structure with grouped sub-objects. Legacy flat
 keys (e.g. `extractionModel`, `workerPollMs`) are still supported for

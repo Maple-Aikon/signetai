@@ -1,3 +1,5 @@
+import { parse, stringify } from "yaml";
+
 /**
  * @signet/core - YAML utilities
  *
@@ -53,7 +55,7 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 		if (colonIdx === -1) continue;
 
 		const key = trimmedLine.slice(0, colonIdx).trim();
-		let value = trimmedLine.slice(colonIdx + 1).trim();
+		const value = trimmedLine.slice(colonIdx + 1).trim();
 
 		const parent = stack[stack.length - 1].obj;
 
@@ -73,6 +75,23 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 	}
 
 	return result;
+}
+
+/**
+ * Parse a full YAML document with the bundled `yaml` parser.
+ *
+ * Use this for richer config surfaces that need arrays, deeper nesting,
+ * or round-trippable values that exceed parseSimpleYaml's limits.
+ */
+export function parseYamlDocument(text: string): unknown {
+	return parse(text);
+}
+
+/**
+ * Stringify a full YAML document with the bundled `yaml` serializer.
+ */
+export function stringifyYamlDocument(value: unknown): string {
+	return stringify(value);
 }
 
 /**
@@ -142,10 +161,10 @@ function coerceYamlValue(value: string): unknown {
 	if (unquoted === "null" || unquoted === "~") return null;
 
 	// Integer
-	if (/^-?\d+$/.test(unquoted)) return parseInt(unquoted, 10);
+	if (/^-?\d+$/.test(unquoted)) return Number.parseInt(unquoted, 10);
 
 	// Float
-	if (/^-?\d+\.\d+$/.test(unquoted)) return parseFloat(unquoted);
+	if (/^-?\d+\.\d+$/.test(unquoted)) return Number.parseFloat(unquoted);
 
 	// String (return unquoted version)
 	return unquoted;

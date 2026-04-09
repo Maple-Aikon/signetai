@@ -141,6 +141,15 @@ silent fallback or hard-blocked extraction after boot.
       "since": "2026-03-26T06:00:00.000Z"
     }
   },
+  "routing": {
+    "enabled": true,
+    "source": "explicit",
+    "defaultPolicy": "auto",
+    "defaultAgentId": "default",
+    "targetCount": 4,
+    "policyCount": 2,
+    "explicit": true
+  },
   "health": { "score": 0.97, "status": "healthy" },
   "embedding": {
     "provider": "ollama",
@@ -157,6 +166,11 @@ Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
 states when the configured extraction provider is unavailable at startup.
 When `pipeline.extraction.overloaded` is `true`, the extraction worker is
 intentionally backing off for `overloadBackoffMs` between polls.
+The `routing` block summarizes the shared inference control plane status.
+`source` is `explicit` when a top-level `routing:` block is present in
+`agent.yaml`, `legacy-implicit` when extraction and synthesis providers are
+compiled into the router automatically, and `disabled` when no routeable
+targets exist.
 
 
 ### GET /api/features
@@ -171,6 +185,149 @@ Returns all runtime feature flags.
   "anotherFeature": false
 }
 ```
+
+
+Inference Routing
+-----------------
+
+The daemon exposes Signet's inference control plane over both native RPC-style
+routes and an OpenAI-compatible gateway. Native inference routes are intended
+for first-party harnesses and CLI tooling. The OpenAI-compatible gateway is for
+harnesses that can point at a model endpoint but cannot yet send the richer
+Signet routing metadata.
+
+### GET /api/inference/status
+
+Requires `diagnostics` permission in authenticated modes.
+
+Returns configured accounts, targets, policies, workload bindings, and the
+current runtime snapshot for each route target.
+
+**Response**
+
+```json
+{
+  "enabled": true,
+  "source": "explicit",
+  "defaultPolicy": "auto",
+  "defaultAgentId": "default",
+  "policies": ["auto", "strict-coding"],
+  "taskClasses": ["casual_chat", "hard_coding", "hipaa_sensitive"],
+  "targetRefs": ["sonnet/default", "gpt/gpt54", "local/gemma4"],
+  "workloadBindings": {
+    "interactive": "auto",
+    "memoryExtraction": "memory-pipeline",
+    "sessionSynthesis": "memory-pipeline"
+  },
+  "runtimeSnapshot": {
+    "targets": {
+      "sonnet/default": {
+        "available": true,
+        "health": "healthy",
+        "circuitOpen": false,
+        "accountState": "ready"
+      }
+    }
+  }
+}
+```
+
+### POST /api/inference/explain
+
+Requires `admin` permission in authenticated modes.
+
+Dry-runs a route decision without executing the request. This is the backend
+used by `signet route explain`.
+
+**Request body**
+
+```json
+{
+  "agentId": "rose",
+  "operation": "interactive",
+  "taskClass": "hard_coding",
+  "privacy": "restricted_remote",
+  "promptPreview": "fix this failing bun test",
+  "refresh": true
+}
+```
+
+**Response**
+
+Returns a full `RouteDecision` object, including `trace.candidates[]` with the
+ordered scoring and policy gates applied to each target.
+
+### POST /api/inference/execute
+
+Requires `admin` permission in authenticated modes.
+
+Routes and executes a prompt using the Signet inference layer.
+
+**Request body**
+
+```json
+{
+  "agentId": "miles",
+  "operation": "code_reasoning",
+  "taskClass": "hard_coding",
+  "prompt": "explain why this Rust borrow checker error happens",
+  "maxTokens": 1200
+}
+```
+
+**Response**
+
+```json
+{
+  "text": "The borrow error happens because ...",
+  "usage": {
+    "inputTokens": 322,
+    "outputTokens": 471,
+    "cacheReadTokens": null,
+    "cacheCreationTokens": null,
+    "totalCost": null,
+    "totalDurationMs": null
+  },
+  "decision": {
+    "policyId": "auto",
+    "mode": "automatic",
+    "taskClass": "hard_coding",
+    "targetRef": "gpt/gpt54"
+  },
+  "attempts": [
+    { "targetRef": "gpt/gpt54", "ok": true, "durationMs": 1840 }
+  ]
+}
+```
+
+### GET /v1/models
+
+Requires `admin` permission in authenticated modes.
+
+OpenAI-compatible model listing for the Signet gateway. Returned IDs include:
+
+- `signet:auto`
+- `policy:<policy-id>`
+- explicit target refs like `gpt/gpt54`
+
+### POST /v1/chat/completions
+
+Requires `admin` permission in authenticated modes.
+
+OpenAI-compatible chat completion endpoint. Signet routes the request before
+execution. The request body accepts standard OpenAI-style `model`, `messages`,
+and `max_tokens` fields.
+
+Signet-specific routing hints can be provided in headers:
+
+- `x-signet-agent-id`
+- `x-signet-task-class`
+- `x-signet-privacy-tier`
+- `x-signet-operation`
+- `x-signet-route-policy`
+- `x-signet-explicit-target`
+
+Streaming requests currently return `501`.
 
 
 Auth

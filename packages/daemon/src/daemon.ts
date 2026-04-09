@@ -130,6 +130,7 @@ import {
 } from "./knowledge-graph";
 import { closeLlmProvider, closeSynthesisProvider, getLlmProvider, initLlmProvider, initSynthesisProvider } from "./llm";
 import { type LogCategory, type LogEntry, logger } from "./logger";
+import { getOrCreateInferenceRouter } from "./inference-router.js";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { buildMemoryTimeline } from "./memory-timeline";
@@ -286,6 +287,10 @@ const LOG_DIR = join(DAEMON_DIR, "logs");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 
+// Keep the shared inference router available to route/status surfaces even
+// before pipeline startup has fully resolved providers.
+getOrCreateInferenceRouter(AGENTS_DIR);
+
 // Config
 function readEnvTrimmed(key: string): string | undefined {
 	const raw = process.env[key];
@@ -425,6 +430,15 @@ interface ProviderRuntimeResolution {
 	synthesis: RuntimeResolutionState<RuntimeSynthesisProviderName | null>;
 }
 
+interface InferenceRoutingRuntimeState {
+	enabled: boolean;
+	explicit: boolean;
+	extractionWorkload: boolean;
+	synthesisWorkload: boolean;
+	defaultAgentId: string;
+	lastError: string | null;
+}
+
 const providerRuntimeResolution: ProviderRuntimeResolution = {
 	extraction: {
 		configured: null,
@@ -448,6 +462,15 @@ const providerRuntimeResolution: ProviderRuntimeResolution = {
 		reason: null,
 		since: null,
 	},
+};
+
+const inferenceRoutingRuntimeState: InferenceRoutingRuntimeState = {
+	enabled: false,
+	explicit: false,
+	extractionWorkload: false,
+	synthesisWorkload: false,
+	defaultAgentId: "default",
+	lastError: null,
 };
 
 interface RuntimeStartupLogOptions<TProvider extends RuntimeResolutionProvider> {
@@ -739,7 +762,10 @@ const analyticsCollector = createAnalyticsCollector();
 const repairLimiter = createRateLimiter();
 
 function queueExtractionJob(memoryId: string): void {
-	if (providerRuntimeResolution.extraction.status === "blocked") {
+	if (
+		!inferenceRoutingRuntimeState.extractionWorkload &&
+		providerRuntimeResolution.extraction.status === "blocked"
+	) {
 		deadLetterExtractionJob(getDbAccessor(), memoryId, {
 			reason: providerRuntimeResolution.extraction.reason ?? "Configured extraction provider unavailable at startup",
 		});
@@ -2038,6 +2064,25 @@ app.use("/api/config", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	}
 	return next();
+});
+
+// Inference routing diagnostics are read-only. Executing routed prompts and
+// gateway calls can spend money or consume subscription quota, so treat them
+// as admin-level operations.
+app.use("/api/inference", async (c, next) => {
+	if (c.req.method === "GET") {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	}
+	return requirePermission("admin", authConfig)(c, next);
+});
+app.use("/api/inference/*", async (c, next) => {
+	if (c.req.method === "GET") {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	}
+	return requirePermission("admin", authConfig)(c, next);
+});
+app.use("/v1/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
 });
 
 // Per-memory PATCH and DELETE need method-specific guards + scope check
@@ -5611,6 +5656,10 @@ mountMarketplaceReviewsRoutes(app);
 import { mountChangelogRoutes } from "./routes/changelog.js";
 mountChangelogRoutes(app);
 
+// Shared inference routing + gateway routes
+import { mountInferenceRoutes } from "./routes/inference.js";
+mountInferenceRoutes(app);
+
 // OS agent chat routes (natural language → MCP tool routing)
 import { mountOsChatRoutes } from "./routes/os-chat.js";
 mountOsChatRoutes(app);
@@ -7972,7 +8021,7 @@ app.get("/api/tasks/:id/runs", (c) => {
 // Daemon Info
 // ============================================================================
 
-app.get("/api/status", (c) => {
+app.get("/api/status", async (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 	const workerStatus = getPipelineWorkerStatus();
 	const extractionWorker = workerStatus.extraction;
@@ -8007,6 +8056,13 @@ app.get("/api/status", (c) => {
 		/* ignore parse errors */
 	}
 
+	let routingStatus: Awaited<ReturnType<ReturnType<typeof getOrCreateInferenceRouter>["status"]>> | null = null;
+	try {
+		routingStatus = await getOrCreateInferenceRouter(AGENTS_DIR).status();
+	} catch {
+		routingStatus = null;
+	}
+
 	return c.json({
 		status: "running",
 		version: CURRENT_VERSION,
@@ -8032,6 +8088,27 @@ app.get("/api/status", (c) => {
 			},
 		},
 		providerResolution: providerRuntimeResolution,
+		routing:
+			routingStatus?.ok === true
+				? {
+						enabled: routingStatus.value.enabled,
+						source: routingStatus.value.source,
+						defaultPolicy: routingStatus.value.defaultPolicy ?? null,
+						defaultAgentId: routingStatus.value.defaultAgentId,
+						targetCount: routingStatus.value.targetRefs.length,
+						policyCount: routingStatus.value.policies.length,
+						explicit: routingStatus.value.source === "explicit",
+					}
+				: {
+						enabled: false,
+						source: "disabled",
+						defaultPolicy: null,
+						defaultAgentId: inferenceRoutingRuntimeState.defaultAgentId,
+						targetCount: 0,
+						policyCount: 0,
+						explicit: false,
+						error: routingStatus && !routingStatus.ok ? routingStatus.error.message : inferenceRoutingRuntimeState.lastError,
+					},
 		logging: {
 			logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
 			logFile: configuredLogFile ?? datedLogFile,
@@ -11923,6 +12000,27 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
+	const inferenceRouter = getOrCreateInferenceRouter(AGENTS_DIR);
+	const explicitRoutingEnabled = await inferenceRouter.hasExplicitRouting();
+	const extractionRoutingEnabled = await inferenceRouter.hasWorkload("memory_extraction");
+	const synthesisRoutingEnabled = await inferenceRouter.hasWorkload("session_synthesis");
+	const routingStatus = await inferenceRouter.status().catch(() => null);
+	inferenceRoutingRuntimeState.enabled = routingStatus?.ok === true && routingStatus.value.enabled;
+	inferenceRoutingRuntimeState.explicit = explicitRoutingEnabled;
+	inferenceRoutingRuntimeState.extractionWorkload = extractionRoutingEnabled;
+	inferenceRoutingRuntimeState.synthesisWorkload = synthesisRoutingEnabled;
+	inferenceRoutingRuntimeState.defaultAgentId =
+		routingStatus?.ok === true ? routingStatus.value.defaultAgentId : "default";
+	inferenceRoutingRuntimeState.lastError =
+		routingStatus && !routingStatus.ok ? routingStatus.error.message : null;
+	if (explicitRoutingEnabled) {
+		logger.info("routing", "Explicit inference routing enabled", {
+			extractionWorkload: extractionRoutingEnabled,
+			synthesisWorkload: synthesisRoutingEnabled,
+			defaultAgentId: inferenceRoutingRuntimeState.defaultAgentId,
+		});
+	}
+
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
 	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
 	const extractionEndpoints = resolveRuntimeEndpoints(
@@ -12060,7 +12158,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	const startupExtractionBlocked = extractionStatus === "blocked" && extractionReason !== null;
-	if (startupExtractionBlocked && !llmProvider) {
+	if (startupExtractionBlocked && !llmProvider && !extractionRoutingEnabled) {
 		const blockedReason = extractionReason ?? "Extraction provider unavailable during startup preflight";
 		// Startup preflight blocked extraction with no viable provider.
 		// Dead-letter any already-pending extraction jobs so they do not
@@ -12076,7 +12174,14 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			});
 		}
 	}
-	if (llmProvider) {
+	if (extractionRoutingEnabled) {
+		initLlmProvider(
+			inferenceRouter.createWorkloadProvider(
+				"memory_extraction",
+				inferenceRoutingRuntimeState.defaultAgentId,
+			),
+		);
+	} else if (llmProvider) {
 		initLlmProvider(llmProvider);
 	}
 
@@ -12095,7 +12200,14 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	const synthesisRuntime = await resolveAndLogRuntimeStartup(synthesisStartupCfg, runtimeStartupDeps);
 	const effectiveSynthesisProvider = resolveEffectiveRuntimeProvider(synthesisStartupCfg, synthesisRuntime);
-	if (!pipelinePaused && memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider !== "none") {
+	if (!pipelinePaused && synthesisRoutingEnabled) {
+		initSynthesisProvider(
+			inferenceRouter.createWorkloadProvider(
+				"session_synthesis",
+				inferenceRoutingRuntimeState.defaultAgentId,
+			),
+		);
+	} else if (!pipelinePaused && memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider !== "none") {
 		if (synthesisRuntime.provider) {
 			initSynthesisProvider(synthesisRuntime.provider);
 		} else {
@@ -12108,7 +12220,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	// Start extraction pipeline only when explicitly enabled and an LLM is available.
 	// shadowMode controls behavior inside the enabled pipeline.
-	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && effectiveExtractionProvider !== "none") {
+	if (
+		memoryCfg.pipelineV2.enabled &&
+		!pipelinePaused &&
+		(extractionRoutingEnabled || effectiveExtractionProvider !== "none")
+	) {
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,

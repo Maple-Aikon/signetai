@@ -238,7 +238,53 @@ export {
 } from "./markdown";
 
 // YAML utilities
-export { parseSimpleYaml, formatYaml } from "./yaml";
+export { parseSimpleYaml, formatYaml, parseYamlDocument, stringifyYamlDocument } from "./yaml";
+export {
+	ROUTING_ACCOUNT_KINDS,
+	ROUTING_TARGET_KINDS,
+	ROUTING_EXECUTOR_KINDS,
+	ROUTING_POLICY_MODES,
+	ROUTING_PRIVACY_TIERS,
+	ROUTING_REASONING_DEPTHS,
+	ROUTING_COST_TIERS,
+	ROUTING_OPERATION_KINDS,
+	makeRoutingTargetRef,
+	parseRoutingTargetRef,
+	compileLegacyRoutingConfig,
+	parseRoutingConfig,
+	allTargetRefs,
+	resolveRoutingDecision,
+} from "./routing";
+export type {
+	RoutingAccountKind,
+	RoutingTargetKind,
+	RoutingExecutorKind,
+	RoutingPolicyMode,
+	RoutingPrivacyTier,
+	RoutingReasoningDepth,
+	RoutingCostTier,
+	RoutingOperationKind,
+	RoutingTargetRef,
+	RoutingPolicyId,
+	RoutingAgentId,
+	RouterError,
+	RouterResult,
+	RoutingAccountConfig,
+	RoutingModelConfig,
+	RoutingTargetConfig,
+	RoutingPolicyConfig,
+	RoutingTaskClassConfig,
+	AgentRoutingConfig,
+	RoutingWorkloadBinding,
+	RoutingConfig,
+	RoutingRuntimeState,
+	RoutingRuntimeSnapshot,
+	RouteRequest,
+	RouteClassification,
+	RouteCandidateTrace,
+	RouteTrace,
+	RouteDecision,
+} from "./routing";
 export {
 	PIPELINE_CONFIG_FILES,
 	findPipelineConfigFile,

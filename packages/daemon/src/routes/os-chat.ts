@@ -6,16 +6,49 @@
  * agent responses with tool call results.
  */
 
+import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
-import { logger } from "../logger.js";
+import { getInferenceRouterOrNull } from "../inference-router.js";
 import { MissingOpenAiApiKeyError, callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
+import { logger } from "../logger.js";
 import { loadProbeResult } from "../mcp-probe.js";
 
 function buildPrompt(systemPrompt: string, userMessage: string): string {
 	return `${systemPrompt}\n\nUser message:\n${userMessage}`;
 }
 
-async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
+async function callLlm(
+	systemPrompt: string,
+	userMessage: string,
+	maxTokens = 2048,
+	route?: {
+		readonly agentId?: string;
+		readonly taskClass?: string;
+		readonly privacy?: RoutingPrivacyTier;
+	},
+): Promise<string> {
+	const router = getInferenceRouterOrNull();
+	if (router && (await router.hasWorkload("interactive"))) {
+		const routed = await router.execute(
+			{
+				agentId: route?.agentId,
+				operation: "tool_planning",
+				taskClass: route?.taskClass,
+				privacy: route?.privacy,
+				promptPreview: userMessage,
+				requireTools: true,
+			},
+			buildPrompt(systemPrompt, userMessage),
+			{ maxTokens },
+		);
+		if (routed.ok) {
+			return routed.value.text;
+		}
+		logger.warn("os-chat", "Inference router failed, falling back to legacy interactive provider", {
+			error: routed.error.message,
+		});
+	}
+
 	try {
 		return await callLegacyOpenAiChat(
 			[
@@ -36,6 +69,9 @@ async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 20
 
 interface ChatRequest {
 	message: string;
+	agentId?: string;
+	taskClass?: string;
+	privacy?: RoutingPrivacyTier;
 }
 
 interface ToolCallResult {
@@ -214,19 +250,23 @@ export function mountOsChatRoutes(app: Hono): void {
 			// Build prompt and call the shared interactive LLM provider
 			const systemPrompt = buildSystemPrompt(tools);
 
-			logger.info("os-chat", `Processing chat message`, {
+			logger.info("os-chat", "Processing chat message", {
 				message: body.message.slice(0, 100),
 				availableTools: tools.length,
 			});
 
-			const rawResponse = await callLlm(systemPrompt, body.message);
+			const rawResponse = await callLlm(systemPrompt, body.message, 2048, {
+				agentId: body.agentId,
+				taskClass: body.taskClass,
+				privacy: body.privacy,
+			});
 
 			const parsed = parseLlmResponse(rawResponse);
 
 			// If LLM decided this needs the visual agent, return immediately
 			// (no tool execution — the dashboard will handle it via agent executor)
 			if (parsed.useAgent && parsed.agentServerId) {
-				logger.info("os-chat", `Routing to visual agent`, {
+				logger.info("os-chat", "Routing to visual agent", {
 					serverId: parsed.agentServerId,
 					task: body.message.slice(0, 100),
 				});

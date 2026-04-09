@@ -992,10 +992,16 @@ linker's contract of no network calls inside the write transaction.
 Configuration Reference
 ---
 
-All pipeline config lives under `memory.pipelineV2` in `agent.yaml` (see
+Most pipeline config lives under `memory.pipelineV2` in `agent.yaml` (see
 [[configuration]]). The config uses a nested structure with grouped
 sub-objects. Legacy flat keys are also supported for backward
 compatibility (nested keys take precedence).
+
+Provider selection for extraction and session synthesis can also be bound to
+the shared inference control plane through the top-level `routing.workloads`
+config. If those workload bindings are present, the pipeline resolves its
+inference target through the router before falling back to the legacy provider
+fields.
 
 ### Top-level flags
 
