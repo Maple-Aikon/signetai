@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,21 @@ STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
     "i", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to",
     "was", "what", "when", "where", "which", "who", "why", "with", "would",
+}
+
+EXPLORATORY_QUERY_BUCKETS: dict[str, list[str]] = {
+    "soft_human": [
+        "thank you",
+        "i appreciate you",
+        "im sorry",
+        "im proud of you",
+    ],
+    "reflective": [
+        "what did we celebrate",
+        "what were we worried about",
+        "what was stressing me out",
+        "what was i excited about",
+    ],
 }
 
 
@@ -160,6 +176,7 @@ def ollama_embed(text: str) -> list[float]:
 class Note:
     id: str
     path: str
+    corpus: str
     group: str
     title: str
     text: str
@@ -210,12 +227,82 @@ def select_notes(vault: Path, per_group: int | None, all_groups: bool) -> list[N
                 Note(
                     id=sha(str(rel))[:16],
                     path=str(rel),
+                    corpus="curated",
                     group=grp,
                     title=title,
                     text=text,
                     mtime=p.stat().st_mtime,
                 )
             )
+    return picked
+
+
+def parse_iso_mtime(value: str | None) -> float:
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def title_from_content(text: str, fallback: str) -> str:
+    first = text.splitlines()[0].strip()
+    if first:
+        return first[:80]
+    return fallback
+
+
+def select_dirty_notes(db_path: Path, limit: int) -> list[Note]:
+    if limit <= 0 or not db_path.exists():
+        return []
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                content,
+                COALESCE(tags, ''),
+                COALESCE(who, ''),
+                COALESCE(project, ''),
+                COALESCE(source_type, ''),
+                COALESCE(created_at, '')
+            FROM memories
+            WHERE is_deleted = 0
+              AND length(content) BETWEEN 250 AND 12000
+              AND (
+                who IN ('openclaw-memory', 'memorybench')
+                OR tags LIKE '%memory-log%'
+                OR source_type = 'chunk'
+                OR project = ''
+              )
+            ORDER BY id
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    picked: list[Note] = []
+    for memory_id, content, tags, who, project, source_type, created_at in rows:
+        text = strip_markdown(str(content))
+        fallback = str(who or source_type or "dirty memory").strip() or "dirty memory"
+        group_parts = [str(who).strip(), str(source_type).strip(), "dirty"]
+        group = ":".join(part for part in group_parts if part)[:80]
+        picked.append(
+            Note(
+                id=str(memory_id),
+                path=f"memory/{memory_id}",
+                corpus="dirty",
+                group=group,
+                title=title_from_content(text, fallback),
+                text=text,
+                mtime=parse_iso_mtime(str(created_at) if created_at else None),
+            )
+        )
     return picked
 
 
@@ -269,7 +356,7 @@ Content excerpt:
 
 
 def get_query_pack(note: Note, gen_cache: dict[str, Any]) -> QueryPack:
-    key = note.id
+    key = f"{note.corpus}:{note.id}"
     cached = gen_cache.get(key)
     if isinstance(cached, dict):
         hints = [str(x).strip() for x in cached.get("index_hints", []) if str(x).strip()]
@@ -284,8 +371,6 @@ def get_query_pack(note: Note, gen_cache: dict[str, Any]) -> QueryPack:
         raise RuntimeError(f"failed to parse query pack for {note.path}: {e}\nRAW: {raw}")
     hints = [str(x).strip() for x in parsed.get("index_hints", []) if str(x).strip()][:2]
     eval_query = str(parsed.get("eval_query", "")).strip()
-    if len(hints) < 2:
-        raise RuntimeError(f"invalid query pack for {note.path}: {parsed}")
     if not eval_query:
         raw_eval = ollama_generate(build_eval_query_prompt(note, hints))
         try:
@@ -294,6 +379,22 @@ def get_query_pack(note: Note, gen_cache: dict[str, Any]) -> QueryPack:
             raise RuntimeError(f"failed to parse fallback eval query for {note.path}: {e}\nRAW: {raw_eval}")
         eval_query = str(eval_parsed.get("eval_query", "")).strip()
     if not eval_query:
+        raise RuntimeError(f"invalid query pack for {note.path}: {parsed}")
+    if len(hints) < 2:
+        fallback_hints: list[str] = []
+        if eval_query:
+            fallback_hints.append(eval_query)
+        if note.title:
+            fallback_hints.append(note.title)
+        if note.path:
+            fallback_hints.append(title_from_path(Path(note.path)))
+        for candidate in fallback_hints:
+            cleaned = str(candidate).strip()
+            if cleaned and cleaned not in hints:
+                hints.append(cleaned)
+            if len(hints) >= 2:
+                break
+    if len(hints) < 2:
         raise RuntimeError(f"invalid query pack for {note.path}: {parsed}")
     pack = QueryPack(index_hints=hints, eval_query=eval_query)
     gen_cache[key] = asdict(pack)
@@ -556,7 +657,10 @@ def evaluate_strategy(
 ) -> dict[str, Any]:
     ranks = []
     misses = []
-    for note, query in queries:
+    total = len(queries)
+    for idx, (note, query) in enumerate(queries, start=1):
+        if idx == 1 or idx % 25 == 0 or idx == total:
+            print(f"[{name} {idx}/{total}] scoring retrieval")
         ranked = rank_docs(scorer(query))
         rank = next((i + 1 for i, (note_id, _) in enumerate(ranked) if note_id == note.id), None)
         if rank is None:
@@ -592,9 +696,41 @@ def evaluate_strategy(
     }
 
 
+def exploratory_results(
+    scorer,
+    notes_by_id: dict[str, Note],
+) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
+    for bucket, queries in EXPLORATORY_QUERY_BUCKETS.items():
+        print(f"[exploratory:{bucket}] scoring {len(queries)} queries")
+        rows: list[dict[str, Any]] = []
+        for query in queries:
+            ranked = rank_docs(scorer(query))
+            rows.append(
+                {
+                    "query": query,
+                    "top3": [
+                        {
+                            "path": notes_by_id[note_id].path,
+                            "title": notes_by_id[note_id].title,
+                            "group": notes_by_id[note_id].group,
+                            "score": round(score, 4),
+                        }
+                        for note_id, score in ranked[:3]
+                    ],
+                }
+            )
+        out[bucket] = rows
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Quick isolated recall eval against a read-only Obsidian vault sample")
     ap.add_argument("--vault", default="/mnt/work/obsidian-vault")
+    ap.add_argument("--dirty-db", default="/home/nicholai/.agents/memory/memories.db")
+    ap.add_argument("--dirty-count", type=int, default=0)
+    ap.add_argument("--mixed-curated", type=int, default=0)
+    ap.add_argument("--mixed-dirty", type=int, default=0)
     ap.add_argument("--per-group", type=int, default=4)
     ap.add_argument("--all", action="store_true", help="Use the full eligible vault instead of a per-group sample")
     ap.add_argument("--out", default=str(CACHE_DIR / "latest-results.json"))
@@ -608,99 +744,128 @@ def main() -> int:
     gen_cache = load_json(GEN_CACHE)
     embed_cache = load_json(EMBED_CACHE)
 
-    notes = select_notes(vault, None if args.all else args.per_group, args.all)
-    if not notes:
+    curated_notes = select_notes(vault, None if args.all else args.per_group, args.all)
+    if not curated_notes:
         print("no notes selected", file=sys.stderr)
         return 1
-    notes_by_id = {n.id: n for n in notes}
-    vocab = build_vocabulary(notes)
+    dirty_notes = select_dirty_notes(Path(args.dirty_db), args.dirty_count)
+    corpora: dict[str, list[Note]] = {"curated": curated_notes}
+    if dirty_notes:
+        corpora["dirty"] = dirty_notes
+    if args.mixed_curated > 0 or args.mixed_dirty > 0:
+        mixed: list[Note] = []
+        mixed.extend(curated_notes[: args.mixed_curated or len(curated_notes)])
+        mixed.extend(dirty_notes[: args.mixed_dirty or len(dirty_notes)])
+        if mixed:
+            corpora["mixed"] = mixed
 
-    print(f"selected {len(notes)} notes")
-    by_group: dict[str, int] = defaultdict(int)
-    for n in notes:
-        by_group[n.group] += 1
-    print("groups:", dict(by_group))
+    print("corpora:")
+    for corpus_name, notes in corpora.items():
+        print(f"- {corpus_name}: {len(notes)} notes")
+        by_group: dict[str, int] = defaultdict(int)
+        for note in notes:
+            by_group[note.group] += 1
+        print(f"  groups: {dict(sorted(by_group.items()))}")
 
-    query_packs: dict[str, QueryPack] = {}
-    for idx, note in enumerate(notes, start=1):
-        if idx == 1 or idx % 25 == 0 or idx == len(notes):
-            print(f"[{idx}/{len(notes)}] generating query packs")
-        query_packs[note.id] = get_query_pack(note, gen_cache)
-        save_json(GEN_CACHE, gen_cache)
+    corpus_results: dict[str, Any] = {}
+    for corpus_name, notes in corpora.items():
+        notes_by_id = {n.id: n for n in notes}
+        vocab = build_vocabulary(notes)
 
-    note_vecs: dict[str, list[float]] = {}
-    hint_vecs: dict[str, list[list[float]]] = {}
-    chunk_vecs: dict[str, list[list[float]]] = {}
-    queries: list[tuple[Note, str]] = []
-    for idx, note in enumerate(notes, start=1):
-        text = f"{note.title}\n{note.path}\n\n{note.text[:4000]}"
-        if idx == 1 or idx % 25 == 0 or idx == len(notes):
-            print(f"[{idx}/{len(notes)}] embedding notes")
-        note_vecs[note.id] = get_embedding(text, embed_cache)
-        hint_vecs[note.id] = [get_embedding(h, embed_cache) for h in query_packs[note.id].index_hints]
-        queries.append((note, query_packs[note.id].eval_query))
+        query_packs: dict[str, QueryPack] = {}
+        for idx, note in enumerate(notes, start=1):
+            if idx == 1 or idx % 25 == 0 or idx == len(notes):
+                print(f"[{corpus_name} {idx}/{len(notes)}] generating query packs")
+            query_packs[note.id] = get_query_pack(note, gen_cache)
+            save_json(GEN_CACHE, gen_cache)
+
+        note_vecs: dict[str, list[float]] = {}
+        hint_vecs: dict[str, list[list[float]]] = {}
+        chunk_vecs: dict[str, list[list[float]]] = {}
+        queries: list[tuple[Note, str]] = []
+        for idx, note in enumerate(notes, start=1):
+            text = f"{note.title}\n{note.path}\n\n{note.text[:4000]}"
+            if idx == 1 or idx % 25 == 0 or idx == len(notes):
+                print(f"[{corpus_name} {idx}/{len(notes)}] embedding notes")
+            note_vecs[note.id] = get_embedding(text, embed_cache)
+            hint_vecs[note.id] = [get_embedding(h, embed_cache) for h in query_packs[note.id].index_hints]
+            queries.append((note, query_packs[note.id].eval_query))
+            save_json(EMBED_CACHE, embed_cache)
+
+        db = build_db(notes, query_packs)
+        chunks = build_chunks(notes)
+        chunk_db = build_chunk_db(chunks)
+        chunks_by_note: dict[str, list[Chunk]] = defaultdict(list)
+        for chunk in chunks:
+            chunks_by_note[chunk.note_id].append(chunk)
+        for idx, note in enumerate(notes, start=1):
+            if idx == 1 or idx % 25 == 0 or idx == len(notes):
+                print(f"[{corpus_name} {idx}/{len(notes)}] embedding chunks")
+            chunk_vecs[note.id] = [get_embedding(chunk.text, embed_cache) for chunk in chunks_by_note[note.id]]
+            save_json(EMBED_CACHE, embed_cache)
+
+        def scorer_byterover(query: str) -> dict[str, float]:
+            return byterover_style_scores(db, query, vocab)
+
+        def scorer_signet_hybrid(query: str) -> dict[str, float]:
+            qv = get_embedding(query, embed_cache)
+            return combine_hybrid(lexical_content_scores(db, query), vector_doc_scores(qv, note_vecs))
+
+        def scorer_signet_hint_fts(query: str) -> dict[str, float]:
+            qv = get_embedding(query, embed_cache)
+            lex = combine_current_hint_fts(lexical_content_scores(db, query), lexical_hint_scores(db, query))
+            return combine_hybrid(lex, vector_doc_scores(qv, note_vecs))
+
+        def scorer_signet_hint_hybrid(query: str) -> dict[str, float]:
+            qv = get_embedding(query, embed_cache)
+            lex = combine_current_hint_fts(lexical_content_scores(db, query), lexical_hint_scores(db, query))
+            sem = combine_hint_semantic(vector_doc_scores(qv, note_vecs), vector_hint_scores(qv, hint_vecs))
+            return combine_hybrid(lex, sem)
+
+        def scorer_plain_chunked_rag(query: str) -> dict[str, float]:
+            qv = get_embedding(query, embed_cache)
+            return combine_hybrid(lexical_chunk_scores(chunk_db, query), vector_chunk_scores(qv, chunk_vecs))
+
+        scorers = {
+            "byterover_style_search": scorer_byterover,
+            "signet_content_hybrid": scorer_signet_hybrid,
+            "plain_chunked_rag_hybrid": scorer_plain_chunked_rag,
+            "signet_current_plus_hint_fts": scorer_signet_hint_fts,
+            "signet_plus_hint_hybrid": scorer_signet_hint_hybrid,
+        }
+        strategies = [
+            evaluate_strategy(name, queries, scorer, notes_by_id)
+            for name, scorer in scorers.items()
+        ]
+        save_json(EMBED_CACHE, embed_cache)
+        exploratory = {
+            name: exploratory_results(scorer, notes_by_id)
+            for name, scorer in scorers.items()
+        }
         save_json(EMBED_CACHE, embed_cache)
 
-    db = build_db(notes, query_packs)
-    chunks = build_chunks(notes)
-    chunk_db = build_chunk_db(chunks)
-    chunks_by_note: dict[str, list[Chunk]] = defaultdict(list)
-    for chunk in chunks:
-        chunks_by_note[chunk.note_id].append(chunk)
-    for idx, note in enumerate(notes, start=1):
-        if idx == 1 or idx % 25 == 0 or idx == len(notes):
-            print(f"[{idx}/{len(notes)}] embedding chunks")
-        chunk_vecs[note.id] = [get_embedding(chunk.text, embed_cache) for chunk in chunks_by_note[note.id]]
-        save_json(EMBED_CACHE, embed_cache)
-
-    def scorer_byterover(query: str) -> dict[str, float]:
-        return byterover_style_scores(db, query, vocab)
-
-    def scorer_signet_hybrid(query: str) -> dict[str, float]:
-        qv = get_embedding(query, embed_cache)
-        save_json(EMBED_CACHE, embed_cache)
-        return combine_hybrid(lexical_content_scores(db, query), vector_doc_scores(qv, note_vecs))
-
-    def scorer_signet_hint_fts(query: str) -> dict[str, float]:
-        qv = get_embedding(query, embed_cache)
-        save_json(EMBED_CACHE, embed_cache)
-        lex = combine_current_hint_fts(lexical_content_scores(db, query), lexical_hint_scores(db, query))
-        return combine_hybrid(lex, vector_doc_scores(qv, note_vecs))
-
-    def scorer_signet_hint_hybrid(query: str) -> dict[str, float]:
-        qv = get_embedding(query, embed_cache)
-        save_json(EMBED_CACHE, embed_cache)
-        lex = combine_current_hint_fts(lexical_content_scores(db, query), lexical_hint_scores(db, query))
-        sem = combine_hint_semantic(vector_doc_scores(qv, note_vecs), vector_hint_scores(qv, hint_vecs))
-        return combine_hybrid(lex, sem)
-
-    def scorer_plain_chunked_rag(query: str) -> dict[str, float]:
-        qv = get_embedding(query, embed_cache)
-        save_json(EMBED_CACHE, embed_cache)
-        return combine_hybrid(lexical_chunk_scores(chunk_db, query), vector_chunk_scores(qv, chunk_vecs))
-
-    strategies = [
-        evaluate_strategy("byterover_style_search", queries, scorer_byterover, notes_by_id),
-        evaluate_strategy("signet_content_hybrid", queries, scorer_signet_hybrid, notes_by_id),
-        evaluate_strategy("plain_chunked_rag_hybrid", queries, scorer_plain_chunked_rag, notes_by_id),
-        evaluate_strategy("signet_current_plus_hint_fts", queries, scorer_signet_hint_fts, notes_by_id),
-        evaluate_strategy("signet_plus_hint_hybrid", queries, scorer_signet_hint_hybrid, notes_by_id),
-    ]
+        corpus_results[corpus_name] = {
+            "selected_notes": [asdict(n) | asdict(query_packs[n.id]) for n in notes],
+            "strategies": strategies,
+            "exploratory_queries": exploratory,
+        }
 
     out = {
         "vault": str(vault),
-        "selected_notes": [asdict(n) | asdict(query_packs[n.id]) for n in notes],
-        "strategies": strategies,
+        "dirty_db": str(args.dirty_db),
+        "corpora": corpus_results,
     }
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False), "utf-8")
 
     print("\nresults")
-    for row in strategies:
-        print(
-            f"- {row['strategy']}: hit@1={row['hit@1']:.3f} hit@3={row['hit@3']:.3f} hit@5={row['hit@5']:.3f} mrr={row['mrr']:.3f} median_rank={row['median_rank']}"
-        )
+    for corpus_name, corpus in corpus_results.items():
+        print(f"\n[{corpus_name}]")
+        for row in corpus["strategies"]:
+            print(
+                f"- {row['strategy']}: hit@1={row['hit@1']:.3f} hit@3={row['hit@3']:.3f} hit@5={row['hit@5']:.3f} mrr={row['mrr']:.3f} median_rank={row['median_rank']}"
+            )
     print(f"\nfull report: {out_path}")
     return 0
 

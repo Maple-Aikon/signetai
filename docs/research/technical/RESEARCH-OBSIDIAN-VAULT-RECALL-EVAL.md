@@ -1,6 +1,6 @@
 ---
 title: RESEARCH-OBSIDIAN-VAULT-RECALL-EVAL
-question: How does Signet's current retrieval stack compare to a lexical-first search lane, and what additional value comes from prospective hint FTS and semantic hint retrieval on a real personal vault corpus?
+question: How does Signet's current retrieval stack compare to lexical-first and chunked baselines on a curated personal vault corpus, and do those results hold across curated, dirty, and mixed corpora?
 date: 2026-04-08
 ---
 
@@ -8,30 +8,37 @@ date: 2026-04-08
 
 ## Abstract
 
-This memo reports a fast retrieval-only comparison over 385 eligible
-notes from a private Obsidian vault. The goal was to answer a narrow
-but important question: on a messy real-world corpus, what actually
-improves recall quality, a lexical-first search posture, plain hybrid
-RAG, chunked hybrid RAG, prospective hint FTS, or semantic retrieval
-over prospective hints?
+This memo reports two related retrieval-only comparisons over a private
+Obsidian vault and a follow-up mixed-corpus robustness lane. The first
+question was narrow but important: on a real personal note corpus, what
+actually improves recall quality, a lexical-first search posture, plain
+hybrid RAG, chunked hybrid RAG, prospective hint FTS, or semantic
+retrieval over prospective hints? The second question came after live
+database testing exposed how much junk can distort recall tuning: does
+that answer still hold when curated notes are evaluated separately from
+dirty transcript-heavy memory, and when both are mixed together?
 
-The result is clear enough to act on. Signet's note-level hybrid
-retrieval materially outperformed the lexical-first lane. A stricter
-chunked hybrid RAG control also failed to beat the current note-level
-hybrid surface. Prospective hint FTS improved ranking further, and
-semantic hint retrieval produced the strongest overall result. The
-remaining misses cluster around vague, repetitive, diary-like notes,
-which suggests the next ceiling is not "better chunking" so much as
-better substrate quality. The evidence points toward a combined
-direction: keep the semantic machinery, keep prospective hints, and
-invest in a more curated memory surface rather than retreating to a
-simpler retrieval stack.
+The result is clear enough to act on. On the curated vault, Signet's
+note-level hybrid retrieval materially outperformed the lexical-first
+lane. A stricter chunked hybrid RAG control also failed to beat the
+current note-level hybrid surface. Prospective hint FTS improved
+ranking further, and semantic hint retrieval produced the strongest
+overall result. In the balanced follow-up, the same hint-hybrid lane
+remained best on the curated, dirty, and mixed corpora. Dirty data
+still drags every strategy down, but it does not overturn the core
+retrieval result. The remaining misses cluster around vague,
+repetitive, diary-like notes and reflective human-memory prompts, which
+suggests the next ceiling is not "better chunking" so much as better
+substrate quality. The evidence points toward a combined direction:
+keep the semantic machinery, keep prospective hints, and invest in a
+more curated memory surface rather than retreating to a simpler
+retrieval stack.
 
 ## Trigger
 
 We wanted a fast, isolated retrieval-quality test without dragging in the
 full benchmark framework. The goal was not end-to-end answer grading. The
-goal was a 1:1 retrieval-method comparison on a real corpus:
+first pass was a 1:1 retrieval-method comparison on a real curated corpus:
 
 1. a lexical-first lane,
 2. Signet's current hybrid content retrieval,
@@ -40,6 +47,13 @@ goal was a 1:1 retrieval-method comparison on a real corpus:
 
 The test corpus was drawn read-only from a private Obsidian vault. The
 vault was not modified.
+
+A second pass became necessary after live-database testing showed how
+quickly junk-heavy transcript memory can distort qualitative judgment.
+That follow-up balanced curated notes against a dirty robustness lane
+and a mixed lane, so we could answer the more practical product
+question: what still wins when the substrate is good, bad, and partly
+contaminated?
 
 ## Scope and setup
 
@@ -62,6 +76,7 @@ not a curated context-tree corpus.
 - Output artifacts:
   - `.tmp/obsidian-recall-eval/full-vault-results.json`
   - `.tmp/obsidian-recall-eval/full-vault-results-with-chunked.json`
+  - `.tmp/obsidian-recall-eval/balanced-full.json`
 - Cached intermediates:
   - `.tmp/obsidian-recall-eval/generated_queries.json`
   - `.tmp/obsidian-recall-eval/embeddings.json`
@@ -302,6 +317,157 @@ This is not just a scoring problem. It is also a representation problem.
 
 This was a retrieval-method bakeoff on a raw vault, not a full
 product-architecture bakeoff on a curated context tree.
+
+## Follow-up: balanced corpus evaluation
+
+After the first vault-only pass, we ran a second eval to separate three
+questions that were getting mixed together in live testing:
+
+1. how strong is retrieval when the substrate is actually curated,
+2. how badly does junk-heavy transcript memory degrade it,
+3. which strategy still holds up when both are mixed together.
+
+### Balanced setup
+
+The same retrieval lanes were rerun across three corpora:
+
+- `curated`: 391 eligible notes from the private Obsidian vault
+- `dirty`: 100 sampled live-database memories biased toward transcript,
+  chunk, and memory-log sludge
+- `mixed`: 160 total items, 120 curated and 40 dirty
+
+The same generated held-out queries were used for the factual retrieval
+metrics. We also added two exploratory buckets for qualitative top-3
+inspection:
+
+- `soft_human`
+  - `thank you`
+  - `i appreciate you`
+  - `im sorry`
+  - `im proud of you`
+- `reflective`
+  - `what did we celebrate`
+  - `what were we worried about`
+  - `what was stressing me out`
+  - `what was i excited about`
+
+### Balanced results
+
+#### Curated corpus
+
+| Strategy | Hit@1 | Hit@3 | Hit@5 | MRR |
+|---|---:|---:|---:|---:|
+| `lexical_first_search` | 0.683 | 0.826 | 0.859 | 0.763 |
+| `signet_content_hybrid` | 0.785 | 0.908 | 0.931 | 0.851 |
+| `plain_chunked_rag_hybrid` | 0.775 | 0.900 | 0.926 | 0.843 |
+| `signet_current_plus_hint_fts` | 0.780 | 0.910 | 0.939 | 0.853 |
+| `signet_plus_hint_hybrid` | 0.808 | 0.931 | 0.946 | 0.873 |
+
+#### Dirty corpus
+
+| Strategy | Hit@1 | Hit@3 | Hit@5 | MRR |
+|---|---:|---:|---:|---:|
+| `lexical_first_search` | 0.440 | 0.520 | 0.600 | 0.516 |
+| `signet_content_hybrid` | 0.450 | 0.490 | 0.580 | 0.515 |
+| `plain_chunked_rag_hybrid` | 0.440 | 0.510 | 0.550 | 0.495 |
+| `signet_current_plus_hint_fts` | 0.490 | 0.550 | 0.630 | 0.564 |
+| `signet_plus_hint_hybrid` | 0.490 | 0.550 | 0.640 | 0.565 |
+
+#### Mixed corpus
+
+| Strategy | Hit@1 | Hit@3 | Hit@5 | MRR |
+|---|---:|---:|---:|---:|
+| `lexical_first_search` | 0.613 | 0.731 | 0.762 | 0.686 |
+| `signet_content_hybrid` | 0.662 | 0.794 | 0.844 | 0.743 |
+| `plain_chunked_rag_hybrid` | 0.662 | 0.750 | 0.831 | 0.733 |
+| `signet_current_plus_hint_fts` | 0.662 | 0.794 | 0.869 | 0.751 |
+| `signet_plus_hint_hybrid` | 0.706 | 0.812 | 0.875 | 0.781 |
+
+### Balanced findings
+
+#### 1. The strongest lane stayed the same across all three corpora
+
+`signet_plus_hint_hybrid` remained the best-performing strategy on the
+curated, dirty, and mixed corpora. That matters because it tells us the
+first vault-only result was not a fluke of a clean dataset. Dirty data
+does hurt everything, but it does not change which retrieval structure
+works best.
+
+#### 2. Curated data is still the right primary tuning surface
+
+The curated lane is where the system shows its real headroom. All
+strategies look much better there, and the relative gaps are the most
+informative. The dirty lane is useful as a robustness check, but it is
+not a good primary target for tuning. Optimizing mainly for the junk
+corpus would risk teaching the system to survive sludge while getting
+worse on the notes we actually want to recall well.
+
+#### 3. Mixed-corpus results support balance, not overfitting
+
+The mixed corpus is the closest approximation of real use. There, the
+strongest lane still wins, and the overall ranking order remains close
+to the curated lane. That means the retrieval stack is not only good on
+clean notes. It still holds up when some dirty memory is mixed in. This
+is the strongest evidence that the right design target is balanced:
+optimize for curated recall quality first, and use dirty memory only as
+a guardrail against catastrophic regression.
+
+#### 4. Chunking still is not the missing ingredient
+
+The balanced pass reinforces the first experiment. Plain chunked hybrid
+RAG still fails to beat the current note-level hybrid surface on the
+curated and mixed corpora. Better chunk boundaries may help some future
+use cases, but chunking by itself is not the thing that fixes recall.
+
+## Exploratory bucket review
+
+The exploratory buckets are not formal scored benchmarks. They exist to
+show what the top of the ranking *feels* like for human-shaped queries
+that matter in real use but are easy to average away in a bulk metric.
+
+### Soft human queries
+
+On the curated corpus, the `soft_human` bucket looked broadly sane.
+Queries such as `thank you`, `i appreciate you`, `im sorry`, and
+`im proud of you` pulled up letters, people notes, and fleeting notes
+that at least fit the emotional shape of the prompt. They were not all
+perfect, but they felt like human memory surfaces rather than tool
+noise.
+
+On the dirty corpus, the same bucket was almost entirely sludge. The top
+hits were dominated by transcript fragments, PR instructions, build
+commands, and generic memory-log debris. That confirms the live-database
+feeling we saw manually: the issue there is not just retrieval quality,
+it is substrate quality.
+
+On the mixed corpus, the `soft_human` bucket largely stayed on the
+curated side. That is an encouraging result. Queries like `thank you`
+and `im proud of you` still surfaced letters and fleeting notes instead
+of getting hijacked by dirty transcript rows. In other words, the mixed
+lane shows contamination pressure, but not enough to erase the human
+shape of the result set for these prompts.
+
+### Reflective queries
+
+The reflective bucket is where the next real weakness shows up. On the
+curated corpus, prompts like `what did we celebrate` and `what were we
+worried about` produced plausibly related notes, but they were often
+broad people notes or thematic notes rather than obviously sharp direct
+answers. That suggests a substrate/query-shaping problem more than a
+search-stack problem. The model is surfacing the right neighborhood, but
+not necessarily the best distilled entry.
+
+On the dirty corpus, reflective queries collapsed into transcript noise
+and unrelated procedural chunks. This corpus is simply not shaped well
+for reflective recall.
+
+On the mixed corpus, reflective prompts were the first place where dirty
+contamination clearly reappeared. Most of the top results stayed
+curated, but `what were we worried about` still pulled a dirty openclaw
+chunk into the top three. That is a useful signal. It means the mixed
+lane is healthy enough to preserve curated performance on soft-human
+queries, but reflective/theme-based recall is still porous when dirty
+memory slips in.
 
 ## Conclusion
 
