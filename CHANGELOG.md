@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.98.8] - 2026-04-09
+
+### Bug Fixes
+
+- **publish**: block leaked workspace deps in release (#486)
+
+
 ## [0.98.7] - 2026-04-09
 
 ### Bug Fixes
