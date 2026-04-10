@@ -232,9 +232,30 @@ current runtime snapshot for each route target.
         "accountState": "ready"
       }
     }
+  },
+  "concurrency": {
+    "active": {
+      "execute": 0,
+      "nativeStream": 1,
+      "gatewayStream": 0,
+      "total": 1
+    },
+    "limits": {
+      "execute": 8,
+      "nativeStream": 8,
+      "gatewayStream": 16,
+      "total": 24
+    }
   }
 }
 ```
+
+Inference concurrency limits can be tuned with:
+
+- `SIGNET_INFERENCE_MAX_CONCURRENT_EXECUTE`
+- `SIGNET_INFERENCE_MAX_CONCURRENT_NATIVE_STREAMS`
+- `SIGNET_INFERENCE_MAX_CONCURRENT_GATEWAY_STREAMS`
+- `SIGNET_INFERENCE_MAX_CONCURRENT_TOTAL`
 
 ### GET /api/inference/history
 

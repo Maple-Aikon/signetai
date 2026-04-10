@@ -240,6 +240,8 @@ the spec stays useful as both contract and progress tracker.
     gateway chat completion routes
   - inference execution errors now redact secret-bearing upstream details
     before they reach logs, status snapshots, route traces, or API responses
+  - bounded in-flight caps now protect native execute, native stream, gateway
+    stream, and total inference concurrency
 - Streaming and cancellation are underway:
   - OpenAI-compatible gateway streaming is live for stream-capable targets
   - native Signet SSE streaming exists at `/api/inference/stream`
@@ -311,7 +313,7 @@ adoption work like OpenClaw takeover.
   - `GET /v1/models` remains unthrottled for now, pending evidence of abuse
 - [ ] Limit by authenticated principal when auth is enabled, and by client/IP
   or trusted-local policy when it is not.
-- [ ] Add bounded concurrency or in-flight request caps for expensive routed
+- [x] Add bounded concurrency or in-flight request caps for expensive routed
   execution.
 - [x] Return explicit `429` responses with stable error shape.
 - [x] Add tests proving repeated gateway and execute abuse requests are

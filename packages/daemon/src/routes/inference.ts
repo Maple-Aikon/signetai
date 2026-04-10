@@ -27,6 +27,12 @@ const MAX_HISTORY_LIMIT = 500;
 const MAX_HISTORY_SCAN_LIMIT = 5000;
 const SAFE_HINT_PATTERN = /^[A-Za-z0-9._:/-]+$/;
 const DEFAULT_AUTH_MODE: AuthMode = "local";
+const DEFAULT_CONCURRENCY_LIMITS = {
+	execute: 8,
+	nativeStream: 8,
+	gatewayStream: 16,
+	total: 24,
+} as const;
 
 type ValidationResult<T> =
 	| { readonly ok: true; readonly value: T }
@@ -40,13 +46,35 @@ type ValidationResult<T> =
 export interface InferenceRouteOptions {
 	readonly getAuthMode?: () => AuthMode;
 	readonly getTelemetry?: () => TelemetryCollector | undefined;
+	readonly concurrency?: Partial<InferenceConcurrencyLimits>;
 }
 
 interface ActiveInferenceRequest {
 	readonly cancel: (reason?: string) => void;
 }
 
+interface InferenceConcurrencyLimits {
+	readonly execute: number;
+	readonly nativeStream: number;
+	readonly gatewayStream: number;
+	readonly total: number;
+}
+
+interface InferenceConcurrencyActive {
+	readonly execute: number;
+	readonly nativeStream: number;
+	readonly gatewayStream: number;
+	readonly total: number;
+}
+
+type InferenceConcurrencyKind = "execute" | "nativeStream" | "gatewayStream";
+
 const activeInferenceRequests = new Map<string, ActiveInferenceRequest>();
+const concurrencyActive: Record<InferenceConcurrencyKind, number> = {
+	execute: 0,
+	nativeStream: 0,
+	gatewayStream: 0,
+};
 const SSE_KEEPALIVE_MS = 15_000;
 
 function valid<T>(value: T): ValidationResult<T> {
@@ -112,6 +140,17 @@ function parseBoundedIntegerQuery(value: string | undefined, fallback: number, m
 	const parsed = Number.parseInt(value, 10);
 	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
 	return Math.min(parsed, max);
+}
+
+function parsePositiveEnvInt(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (typeof raw !== "string") return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeLimit(value: number | undefined, fallback: number): number {
+	return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback;
 }
 
 function parsePrompt(value: unknown): ValidationResult<string> {
@@ -347,10 +386,80 @@ function getTelemetry(opts: InferenceRouteOptions): TelemetryCollector | undefin
 	return opts.getTelemetry?.();
 }
 
+function concurrencyLimits(opts: InferenceRouteOptions): InferenceConcurrencyLimits {
+	const env = {
+		execute: parsePositiveEnvInt("SIGNET_INFERENCE_MAX_CONCURRENT_EXECUTE", DEFAULT_CONCURRENCY_LIMITS.execute),
+		nativeStream: parsePositiveEnvInt(
+			"SIGNET_INFERENCE_MAX_CONCURRENT_NATIVE_STREAMS",
+			DEFAULT_CONCURRENCY_LIMITS.nativeStream,
+		),
+		gatewayStream: parsePositiveEnvInt(
+			"SIGNET_INFERENCE_MAX_CONCURRENT_GATEWAY_STREAMS",
+			DEFAULT_CONCURRENCY_LIMITS.gatewayStream,
+		),
+		total: parsePositiveEnvInt("SIGNET_INFERENCE_MAX_CONCURRENT_TOTAL", DEFAULT_CONCURRENCY_LIMITS.total),
+	};
+	return {
+		execute: normalizeLimit(opts.concurrency?.execute, env.execute),
+		nativeStream: normalizeLimit(opts.concurrency?.nativeStream, env.nativeStream),
+		gatewayStream: normalizeLimit(opts.concurrency?.gatewayStream, env.gatewayStream),
+		total: normalizeLimit(opts.concurrency?.total, env.total),
+	};
+}
+
+function activeConcurrency(): InferenceConcurrencyActive {
+	return {
+		execute: concurrencyActive.execute,
+		nativeStream: concurrencyActive.nativeStream,
+		gatewayStream: concurrencyActive.gatewayStream,
+		total: concurrencyActive.execute + concurrencyActive.nativeStream + concurrencyActive.gatewayStream,
+	};
+}
+
+function concurrencyStatus(opts: InferenceRouteOptions): {
+	readonly active: InferenceConcurrencyActive;
+	readonly limits: InferenceConcurrencyLimits;
+} {
+	return {
+		active: activeConcurrency(),
+		limits: concurrencyLimits(opts),
+	};
+}
+
+function acquireConcurrencySlot(
+	kind: InferenceConcurrencyKind,
+	opts: InferenceRouteOptions,
+): ValidationResult<() => void> {
+	const limits = concurrencyLimits(opts);
+	const active = activeConcurrency();
+	if (active.total >= limits.total) {
+		return invalid("inference concurrency limit reached", 429, {
+			kind,
+			active,
+			limits,
+		});
+	}
+	if (concurrencyActive[kind] >= limits[kind]) {
+		return invalid(`${kind} inference concurrency limit reached`, 429, {
+			kind,
+			active,
+			limits,
+		});
+	}
+	concurrencyActive[kind]++;
+	let released = false;
+	return valid(() => {
+		if (released) return;
+		released = true;
+		concurrencyActive[kind] = Math.max(0, concurrencyActive[kind] - 1);
+	});
+}
+
 function classifyInferenceErrorCode(value: string | undefined): string {
 	const lower = (value ?? "").toLowerCase();
 	if (lower.includes("timeout")) return "TIMEOUT";
 	if (lower.includes("cancel")) return "CANCELLED";
+	if (lower.includes("concurrency limit")) return "CONCURRENCY_LIMIT";
 	if (lower.includes("rate limit") || lower.includes("http 429") || lower.includes("quota")) return "RATE_LIMITED";
 	if (
 		lower.includes("http 401") ||
@@ -677,7 +786,10 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		if (!router) return c.json({ error: "inference router not initialized" }, 503);
 		const result = await router.status(c.req.query("refresh") === "1");
 		if (!result.ok) return c.json({ error: result.error.message, details: result.error.details ?? null }, 400);
-		return c.json(result.value);
+		return c.json({
+			...result.value,
+			concurrency: concurrencyStatus(opts),
+		});
 	});
 
 	app.get("/api/inference/history", (c) => {
@@ -754,12 +866,20 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			return c.json({ error: maxTokens.message, details: maxTokens.details ?? null }, maxTokens.status);
 		const refresh = parseBoolean(body.value.refresh, "refresh");
 		if (!refresh.ok) return c.json({ error: refresh.message, details: refresh.details ?? null }, refresh.status);
+		const slot = acquireConcurrencySlot("execute", opts);
+		if (!slot.ok) return c.json({ error: slot.message, details: slot.details ?? null }, slot.status);
 		const startedAt = Date.now();
-		const result = await router.execute(scoped.value, prompt.value, {
-			timeoutMs: timeoutMs.value,
-			maxTokens: maxTokens.value,
-			refresh: refresh.value === true,
-		});
+		const result = await (async () => {
+			try {
+				return await router.execute(scoped.value, prompt.value, {
+					timeoutMs: timeoutMs.value,
+					maxTokens: maxTokens.value,
+					refresh: refresh.value === true,
+				});
+			} finally {
+				slot.value();
+			}
+		})();
 		if (!result.ok) {
 			recordInferenceExecutionTelemetry(
 				telemetry,
@@ -820,15 +940,25 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			return c.json({ error: maxTokens.message, details: maxTokens.details ?? null }, maxTokens.status);
 		const refresh = parseBoolean(body.value.refresh, "refresh");
 		if (!refresh.ok) return c.json({ error: refresh.message, details: refresh.details ?? null }, refresh.status);
+		const slot = acquireConcurrencySlot("nativeStream", opts);
+		if (!slot.ok) return c.json({ error: slot.message, details: slot.details ?? null }, slot.status);
 		const startedAt = Date.now();
 
-		const result = await router.stream(scoped.value, prompt.value, {
-			timeoutMs: timeoutMs.value,
-			maxTokens: maxTokens.value,
-			refresh: refresh.value === true,
-			abortSignal: c.req.raw.signal,
-		});
+		const result = await (async () => {
+			try {
+				return await router.stream(scoped.value, prompt.value, {
+					timeoutMs: timeoutMs.value,
+					maxTokens: maxTokens.value,
+					refresh: refresh.value === true,
+					abortSignal: c.req.raw.signal,
+				});
+			} catch (error) {
+				slot.value();
+				throw error;
+			}
+		})();
 		if (!result.ok) {
+			slot.value();
 			recordInferenceExecutionTelemetry(
 				telemetry,
 				"inference.stream",
@@ -859,6 +989,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 					if (closed) return;
 					closed = true;
 					release();
+					slot.value();
 					try {
 						controller.close();
 					} catch {}
@@ -1066,19 +1197,29 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			return c.json({ error: { message: maxTokens.message, details: maxTokens.details ?? null } }, maxTokens.status);
 		const prompt = router.buildGatewayPrompt(messages.value);
 		if (stream.value === true) {
+			const slot = acquireConcurrencySlot("gatewayStream", opts);
+			if (!slot.ok) return c.json({ error: { message: slot.message, details: slot.details ?? null } }, slot.status);
 			const startedAt = Date.now();
-			const streaming = await router.stream(
-				{
-					...scoped.value,
-					requireStreaming: true,
-				},
-				prompt,
-				{
-					maxTokens: maxTokens.value,
-					abortSignal: c.req.raw.signal,
-				},
-			);
+			const streaming = await (async () => {
+				try {
+					return await router.stream(
+						{
+							...scoped.value,
+							requireStreaming: true,
+						},
+						prompt,
+						{
+							maxTokens: maxTokens.value,
+							abortSignal: c.req.raw.signal,
+						},
+					);
+				} catch (error) {
+					slot.value();
+					throw error;
+				}
+			})();
 			if (!streaming.ok) {
+				slot.value();
 				recordInferenceExecutionTelemetry(
 					telemetry,
 					"inference.stream",
@@ -1122,6 +1263,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 						if (closed) return;
 						closed = true;
 						release();
+						slot.value();
 						try {
 							controller.enqueue(sseFrame("[DONE]"));
 						} catch {}
@@ -1284,10 +1426,18 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			});
 		}
 
+		const slot = acquireConcurrencySlot("execute", opts);
+		if (!slot.ok) return c.json({ error: { message: slot.message, details: slot.details ?? null } }, slot.status);
 		const startedAt = Date.now();
-		const result = await router.execute(scoped.value, prompt, {
-			maxTokens: maxTokens.value,
-		});
+		const result = await (async () => {
+			try {
+				return await router.execute(scoped.value, prompt, {
+					maxTokens: maxTokens.value,
+				});
+			} finally {
+				slot.value();
+			}
+		})();
 		if (!result.ok) {
 			recordInferenceExecutionTelemetry(
 				telemetry,

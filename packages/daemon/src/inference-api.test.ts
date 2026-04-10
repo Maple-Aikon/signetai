@@ -190,7 +190,7 @@ interface FakeOpenAiServer {
 }
 
 function startFakeOpenAiServer(
-	mode: "success" | "error" | "rate_limit" | "unauthorized" | "secret_error",
+	mode: "success" | "slow_success" | "slow_stream" | "error" | "rate_limit" | "unauthorized" | "secret_error",
 ): FakeOpenAiServer {
 	const server = Bun.serve({
 		port: 0,
@@ -204,7 +204,7 @@ function startFakeOpenAiServer(
 			}
 
 			if (url.pathname === "/chat/completions") {
-				return req.json().then((body: unknown) => {
+				return req.json().then(async (body: unknown) => {
 					const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
 					if (mode === "rate_limit") {
 						return new Response("rate limited", { status: 429 });
@@ -217,6 +217,9 @@ function startFakeOpenAiServer(
 							'{"prompt":"super secret prompt","content":"super secret prompt","api_key":"sk-test-123456","sessionRef":"sess-raw-123","authorization":"Bearer top-secret-token"}',
 							{ status: 401 },
 						);
+					}
+					if (mode === "slow_success" && payload.stream !== true) {
+						await new Promise((resolve) => setTimeout(resolve, 100));
 					}
 					if (payload.stream === true) {
 						const encoder = new TextEncoder();
@@ -248,29 +251,32 @@ function startFakeOpenAiServer(
 										choices: [{ index: 0, delta: { content: "hel" }, finish_reason: null }],
 									})}\n\n`,
 								);
-								setTimeout(() => {
-									if (mode === "error") {
+								setTimeout(
+									() => {
+										if (mode === "error") {
+											safeClose();
+											return;
+										}
+										safeEnqueue(
+											`data: ${JSON.stringify({
+												id: "fake-stream",
+												object: "chat.completion.chunk",
+												choices: [{ index: 0, delta: { content: "lo" }, finish_reason: null }],
+											})}\n\n`,
+										);
+										safeEnqueue(
+											`data: ${JSON.stringify({
+												id: "fake-stream",
+												object: "chat.completion.chunk",
+												choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+												usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+											})}\n\n`,
+										);
+										safeEnqueue("data: [DONE]\n\n");
 										safeClose();
-										return;
-									}
-									safeEnqueue(
-										`data: ${JSON.stringify({
-											id: "fake-stream",
-											object: "chat.completion.chunk",
-											choices: [{ index: 0, delta: { content: "lo" }, finish_reason: null }],
-										})}\n\n`,
-									);
-									safeEnqueue(
-										`data: ${JSON.stringify({
-											id: "fake-stream",
-											object: "chat.completion.chunk",
-											choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-											usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
-										})}\n\n`,
-									);
-									safeEnqueue("data: [DONE]\n\n");
-									safeClose();
-								}, 20);
+									},
+									mode === "slow_stream" ? 250 : 20,
+								);
 							},
 						});
 						return new Response(stream, {
@@ -309,6 +315,12 @@ function createInferenceTestApp(
 		readonly inferenceExecuteMax?: number;
 		readonly inferenceGatewayMax?: number;
 		readonly telemetry?: TelemetryCollector;
+		readonly concurrency?: {
+			readonly execute?: number;
+			readonly nativeStream?: number;
+			readonly gatewayStream?: number;
+			readonly total?: number;
+		};
 	},
 ): {
 	readonly app: Hono;
@@ -375,7 +387,11 @@ function createInferenceTestApp(
 		);
 	}
 
-	mountInferenceRoutes(app, { getAuthMode: () => cfg.mode, getTelemetry: () => opts?.telemetry });
+	mountInferenceRoutes(app, {
+		getAuthMode: () => cfg.mode,
+		getTelemetry: () => opts?.telemetry,
+		concurrency: opts?.concurrency,
+	});
 	return { app, secret };
 }
 
@@ -1033,7 +1049,7 @@ describe("inference redaction", () => {
 describe("inference telemetry", () => {
 	it("records route explain telemetry without prompt leakage", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-inference-telemetry-route-"));
-		const fake = startFakeOpenAiServer("success");
+		const fake = startFakeOpenAiServer("slow_stream");
 		writeStreamingRoutingFixture(root, fake.url);
 		const telemetry = createTelemetryRecorder();
 		try {
@@ -1131,6 +1147,129 @@ describe("inference telemetry", () => {
 			primary.stop();
 			secondary.stop();
 			backup.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("inference concurrency", () => {
+	it("rejects execute calls when the in-flight execute cap is saturated", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-execute-concurrency-"));
+		const fake = startFakeOpenAiServer("slow_success");
+		writeStreamingRoutingFixture(root, fake.url);
+		try {
+			const { app, secret } = createInferenceTestApp(root, {
+				concurrency: { execute: 1, nativeStream: 10, gatewayStream: 10, total: 10 },
+			});
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const first = app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "hold the slot",
+					}),
+				}),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			const second = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "should be rejected",
+					}),
+				}),
+			);
+			expect(second.status).toBe(429);
+			const secondBody = (await second.json()) as { error?: string; details?: { kind?: string } };
+			expect(secondBody.error).toContain("execute inference concurrency limit reached");
+			expect(secondBody.details?.kind).toBe("execute");
+
+			const firstRes = await first;
+			expect(firstRes.status).toBe(200);
+		} finally {
+			resetInferenceRouterForTests();
+			fake.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects native streams when stream capacity is saturated and reports active counts", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-stream-concurrency-"));
+		const fake = startFakeOpenAiServer("slow_stream");
+		writeStreamingRoutingFixture(root, fake.url);
+		try {
+			const { app, secret } = createInferenceTestApp(root, {
+				concurrency: { execute: 10, nativeStream: 1, gatewayStream: 10, total: 10 },
+			});
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const first = await app.request(
+				new Request("http://localhost/api/inference/stream", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "hold the stream",
+					}),
+				}),
+			);
+			expect(first.status).toBe(200);
+			const reader = first.body?.getReader();
+			expect(reader).toBeTruthy();
+			if (!reader) return;
+			const buffer = { value: "" };
+			const meta = await readNextSseEvent(reader, buffer);
+			expect(meta?.event).toBe("meta");
+
+			const status = await app.request(
+				new Request("http://localhost/api/inference/status", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(status.status).toBe(200);
+			const statusBody = (await status.json()) as {
+				concurrency?: {
+					active?: { nativeStream?: number; total?: number };
+					limits?: { nativeStream?: number };
+				};
+			};
+			expect(statusBody.concurrency?.active?.nativeStream).toBe(1);
+			expect(statusBody.concurrency?.limits?.nativeStream).toBe(1);
+
+			const second = await app.request(
+				new Request("http://localhost/api/inference/stream", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "should be rejected",
+					}),
+				}),
+			);
+			expect(second.status).toBe(429);
+			const secondBody = (await second.json()) as { error?: string; details?: { kind?: string } };
+			expect(secondBody.error).toContain("nativeStream inference concurrency limit reached");
+			expect(secondBody.details?.kind).toBe("nativeStream");
+			await reader.cancel();
+		} finally {
+			resetInferenceRouterForTests();
+			fake.stop();
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
