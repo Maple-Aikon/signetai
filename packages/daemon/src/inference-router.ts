@@ -45,6 +45,7 @@ const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
 const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
 const OBSERVED_AUTH_TTL_MS = 5 * 60_000;
 const OBSERVED_MISSING_TTL_MS = 60_000;
+const REDACTED_UPSTREAM_DETAIL = "[redacted upstream detail]";
 
 export interface InferenceExecutionAttempt {
 	readonly targetRef: string;
@@ -173,7 +174,45 @@ function defaultAgentIdForConfig(config: RoutingConfig): string {
 }
 
 function formatExecutionError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	return sanitizeErrorText(error instanceof Error ? error.message : String(error));
+}
+
+function sanitizeErrorText(value: string): string {
+	let next = value.trim();
+	const httpDetail = next.match(/^(.*\bHTTP \d{3}:\s*)([\s\S]+)$/);
+	if (httpDetail) {
+		const prefix = httpDetail[1] ?? "";
+		const detail = httpDetail[2] ?? "";
+		next = `${prefix}${sanitizeUpstreamDetail(detail)}`;
+	}
+	return sanitizeInlineSecrets(next);
+}
+
+function sanitizeInlineSecrets(value: string): string {
+	let next = value;
+	next = next.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+\b/gi, "Bearer [redacted]");
+	next = next.replace(/([?&](?:api[_-]?key|access[_-]?token|token|session(?:[_-]?ref)?)=)[^&\s]+/gi, "$1[redacted]");
+	next = next.replace(
+		/((?:api[_-]?key|access[_-]?token|token|session(?:[_-]?ref)?|authorization)\s*["'=:\s]+\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gi,
+		"$1[redacted]",
+	);
+	next = next.replace(/"prompt"\s*:\s*"[^"]*"/gi, '"prompt":"[redacted]"');
+	next = next.replace(/"content"\s*:\s*"[^"]*"/gi, '"content":"[redacted]"');
+	next = next.replace(/"session(?:[_-]?ref)"\s*:\s*"[^"]*"/gi, '"sessionRef":"[redacted]"');
+	next = next.replace(/"authorization"\s*:\s*"[^"]*"/gi, '"authorization":"[redacted]"');
+	return next;
+}
+
+function sanitizeUpstreamDetail(detail: string): string {
+	const trimmed = detail.trim();
+	if (trimmed.length === 0) return "";
+	if (
+		/[{[]/.test(trimmed) &&
+		/"prompt"|"content"|"messages"|"api[_-]?key"|"session(?:[_-]?ref)"|Bearer\s+/i.test(trimmed)
+	) {
+		return REDACTED_UPSTREAM_DETAIL;
+	}
+	return sanitizeInlineSecrets(trimmed);
 }
 
 function isAbortLikeError(error: unknown): boolean {

@@ -229,6 +229,8 @@ the spec stays useful as both contract and progress tracker.
   - inference routes now validate and clamp body/header inputs
   - dedicated inference rate-limit buckets exist for explain, execute, and
     gateway chat completion routes
+  - inference execution errors now redact secret-bearing upstream details
+    before they reach logs, status snapshots, route traces, or API responses
 - Streaming and cancellation are underway:
   - OpenAI-compatible gateway streaming is live for stream-capable targets
   - native Signet SSE streaming exists at `/api/inference/stream`
@@ -333,9 +335,9 @@ adoption work like OpenClaw takeover.
 - [x] Reject malformed or unsupported gateway routing hints cleanly.
 - [x] Ensure `local_only` privacy requests cannot be widened or bypassed by
   gateway model aliases, explicit targets, or malformed headers.
-- [ ] Redact secrets, session references, and raw sensitive prompt bodies from
+- [x] Redact secrets, session references, and raw sensitive prompt bodies from
   logs, traces, and error payloads.
-- [ ] Ensure route traces exposed to users/operators contain decision context
+- [x] Ensure route traces exposed to users/operators contain decision context
   without leaking secret-bearing configuration.
 - [x] Add tests for:
   - oversized prompt rejection

@@ -173,12 +173,24 @@ routing:
 	);
 }
 
+function containsSecretLeak(value: string): boolean {
+	return [
+		"super secret prompt",
+		"sk-test-123456",
+		"sess-raw-123",
+		"Bearer top-secret-token",
+		'"prompt":"super secret prompt"',
+	].some((needle) => value.includes(needle));
+}
+
 interface FakeOpenAiServer {
 	readonly url: string;
 	stop(): void;
 }
 
-function startFakeOpenAiServer(mode: "success" | "error" | "rate_limit" | "unauthorized"): FakeOpenAiServer {
+function startFakeOpenAiServer(
+	mode: "success" | "error" | "rate_limit" | "unauthorized" | "secret_error",
+): FakeOpenAiServer {
 	const server = Bun.serve({
 		port: 0,
 		fetch(req) {
@@ -198,6 +210,12 @@ function startFakeOpenAiServer(mode: "success" | "error" | "rate_limit" | "unaut
 					}
 					if (mode === "unauthorized") {
 						return new Response("unauthorized", { status: 401 });
+					}
+					if (mode === "secret_error") {
+						return new Response(
+							'{"prompt":"super secret prompt","content":"super secret prompt","api_key":"sk-test-123456","sessionRef":"sess-raw-123","authorization":"Bearer top-secret-token"}',
+							{ status: 401 },
+						);
 					}
 					if (payload.stream === true) {
 						const encoder = new TextEncoder();
@@ -872,6 +890,98 @@ describe("inference session and quota state", () => {
 			);
 			expect(JSON.stringify(blocked["primary/fast"])).toContain("expired");
 			expect(JSON.stringify(blocked["secondary/deep"])).toContain("expired");
+		} finally {
+			resetInferenceRouterForTests();
+			primary.stop();
+			secondary.stop();
+			backup.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("inference redaction", () => {
+	it("redacts secret-bearing upstream error details from execute, status, and explain surfaces", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-redaction-"));
+		const primary = startFakeOpenAiServer("secret_error");
+		const secondary = startFakeOpenAiServer("success");
+		const backup = startFakeOpenAiServer("success");
+		writeAccountFallbackRoutingFixture(root, {
+			primary: primary.url,
+			secondary: secondary.url,
+			backup: backup.url,
+		});
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+
+			const executeRes = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "hello there",
+					}),
+				}),
+			);
+			expect(executeRes.status).toBe(200);
+			const executeBody = (await executeRes.json()) as {
+				attempts?: Array<{ targetRef?: string; error?: string }>;
+			};
+			const executeError = executeBody.attempts?.[0]?.error ?? "";
+			expect(executeError).toContain("[redacted");
+			expect(containsSecretLeak(executeError)).toBe(false);
+
+			const statusRes = await app.request(
+				new Request("http://localhost/api/inference/status", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(statusRes.status).toBe(200);
+			const statusBody = (await statusRes.json()) as {
+				runtimeSnapshot?: {
+					targets?: Record<string, { unavailableReason?: string }>;
+				};
+			};
+			const primaryReason = statusBody.runtimeSnapshot?.targets?.["primary/fast"]?.unavailableReason ?? "";
+			const secondaryReason = statusBody.runtimeSnapshot?.targets?.["secondary/deep"]?.unavailableReason ?? "";
+			expect(primaryReason).toContain("[redacted");
+			expect(secondaryReason).toContain("[redacted");
+			expect(containsSecretLeak(primaryReason)).toBe(false);
+			expect(containsSecretLeak(secondaryReason)).toBe(false);
+
+			const explainRes = await app.request(
+				new Request("http://localhost/api/inference/explain", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ operation: "interactive" }),
+				}),
+			);
+			expect(explainRes.status).toBe(200);
+			const explainBody = (await explainRes.json()) as {
+				trace?: {
+					candidates?: Array<{ targetRef?: string; blockedBy?: string[] }>;
+				};
+			};
+			const blocked = Object.fromEntries(
+				(explainBody.trace?.candidates ?? []).map((candidate) => [
+					candidate.targetRef ?? "",
+					candidate.blockedBy ?? [],
+				]),
+			);
+			const primaryBlocked = JSON.stringify(blocked["primary/fast"] ?? []);
+			const secondaryBlocked = JSON.stringify(blocked["secondary/deep"] ?? []);
+			expect(primaryBlocked).toContain("[redacted");
+			expect(secondaryBlocked).toContain("[redacted");
+			expect(containsSecretLeak(primaryBlocked)).toBe(false);
+			expect(containsSecretLeak(secondaryBlocked)).toBe(false);
 		} finally {
 			resetInferenceRouterForTests();
 			primary.stop();
