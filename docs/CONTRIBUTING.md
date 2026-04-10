@@ -280,8 +280,10 @@ or the push only changes non-code files (markdown, images, etc.).
    compares with remote, computes bump level from commit messages, and increments
    accordingly. All `package.json` files (except `packages/cli/dashboard/package.json`)
    are updated to the new version.
-3. **Changelog** — `bun scripts/changelog.ts` generates a new entry in `CHANGELOG.md`
-   from conventional commit subjects since the last tag.
+3. **Changelog** — `bun scripts/changelog.ts --bump-only` computes the bump level from
+   conventional commit subjects since the last tag, then
+   `bun scripts/changelog.ts --version <new-version>` writes the matching
+   `CHANGELOG.md` entry for the actual release version.
 4. **npm publish** — Publishes `signetai` and `@signetai/signet-memory-openclaw`
    to npm with the `next` tag, then promotes to `latest` (unless it's a major bump).
 5. **Commit and tag** — Commits the version bump and changelog as `chore: release <version>`,
@@ -307,7 +309,7 @@ All scripts live in `scripts/` and are written in TypeScript (run via
 
 | Script | Description |
 |--------|-------------|
-| `changelog.ts` | Generates a CHANGELOG.md entry from conventional commits since the last git tag. Groups commits by type (`feat`, `fix`, `perf`, `refactor`, `docs`). Also writes a `.bump-level` file used by CI to determine the semver bump. Called automatically during the release workflow. |
+| `changelog.ts` | Computes the semver bump from conventional commits since the last git tag, can prepend a CHANGELOG.md entry for an explicit release version, and can rebuild the full changelog from git tags. Generated entries include a short release summary, optional tag range, and grouped sections (`feat`, `fix`, `perf`, `refactor`, `docs`). Writes a `.bump-level` file used by CI to determine the semver bump. Called automatically during the release workflow. |
 | `bump-level.ts` | Exports `computeBumpLevel()` — scans commit subjects for `BREAKING CHANGE:` (→ major), `feat:` (→ minor), or defaults to patch. Used by `changelog.ts`. |
 | `version-sync.ts` | Aligns the `version` field in all workspace `package.json` files to match the reference version in `packages/signetai/package.json`. Run manually with `bun run version:sync` or pass `--to <version>` to set an explicit version. |
 | `extract-changelog-section.ts` | Extracts a single version's section from CHANGELOG.md. Used by CI to populate GitHub release notes. |
@@ -351,7 +353,9 @@ integrations, and operational safeguards.
 To run any script manually:
 
 ```bash
-bun scripts/changelog.ts
+bun scripts/changelog.ts --bump-only
+bun scripts/changelog.ts --version 1.2.3
+bun scripts/changelog.ts --rebuild
 bun scripts/version-sync.ts --to 1.2.3
 bun scripts/extract-changelog-section.ts 0.14.5
 bun scripts/check-install-guide.ts
