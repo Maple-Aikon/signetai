@@ -209,6 +209,14 @@ the spec stays useful as both contract and progress tracker.
 - Subscription/session-backed accounts are modeled in schema, but not yet
   implemented as first-class persisted session/quota entities with refresh
   lifecycle
+- Runtime state now observes and remembers recent account-scoped auth and
+  quota failures in memory:
+  - 401/403-style auth failures degrade matching account routes as `expired`
+  - 429/quota-style failures degrade matching account routes as
+    `rate_limited`
+  - subsequent route explanations and executions respect that observed state
+    until it expires or a later success clears it
+  - this state is not yet persisted across daemon restarts
 - Routing decisions use task class, policy, privacy, capability, and basic
   heuristics, but the request contract is not yet as rich as the target
   end state for harness/runtime metadata and subtask semantics
@@ -350,8 +358,9 @@ adoption work like OpenClaw takeover.
   - expired session auth
   - missing API key
   - observed provider 429 / quota exhaustion
-- [ ] Feed this state back into routing penalties and hard blocks.
-- [ ] Add tests for session expiry and quota-exhaustion fallback behavior.
+- [x] Feed observed auth/rate-limit state back into routing penalties and
+  hard blocks for later requests in the same daemon lifetime.
+- [x] Add tests for auth-failure and quota-exhaustion fallback behavior.
 
 ### 6. Observability and auditability
 

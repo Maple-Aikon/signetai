@@ -42,6 +42,9 @@ const SNAPSHOT_TTL_MS = 15_000;
 const DEFAULT_OPENCODE_BASE_URL = "http://127.0.0.1:4096";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
+const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
+const OBSERVED_AUTH_TTL_MS = 5 * 60_000;
+const OBSERVED_MISSING_TTL_MS = 60_000;
 
 export interface InferenceExecutionAttempt {
 	readonly targetRef: string;
@@ -135,6 +138,11 @@ interface SnapshotCacheEntry {
 	readonly snapshot: RoutingRuntimeSnapshot;
 }
 
+interface ObservedRuntimeOverride {
+	readonly state: RoutingRuntimeState;
+	readonly expiresAt: number;
+}
+
 function isLocalBaseUrl(value: string | undefined): boolean {
 	if (!value) return true;
 	try {
@@ -182,6 +190,17 @@ function cloneAttempts(attempts: readonly InferenceExecutionAttempt[]): readonly
 	return attempts.map((attempt) => ({ ...attempt }));
 }
 
+function isRuntimeBlocked(state: RoutingRuntimeState): boolean {
+	return (
+		!state.available ||
+		state.circuitOpen ||
+		state.health === "blocked" ||
+		state.accountState === "missing" ||
+		state.accountState === "expired" ||
+		state.accountState === "rate_limited"
+	);
+}
+
 function buildPromptFromMessages(
 	messages: readonly Array<{ readonly role: string; readonly content: string }>,
 ): string {
@@ -191,6 +210,8 @@ function buildPromptFromMessages(
 export class InferenceRouter {
 	private snapshotCache: SnapshotCacheEntry | null = null;
 	private readonly providerCache = new Map<string, Promise<StreamCapableLlmProvider>>();
+	private readonly observedTargetState = new Map<string, ObservedRuntimeOverride>();
+	private readonly observedAccountState = new Map<string, ObservedRuntimeOverride>();
 	private providerCacheSignature: string | null = null;
 
 	constructor(private readonly agentsDir: string) {}
@@ -237,8 +258,10 @@ export class InferenceRouter {
 
 		if (this.providerCacheSignature !== signature) {
 			this.providerCache.clear();
+			this.observedTargetState.clear();
+			this.observedAccountState.clear();
 			this.providerCacheSignature = signature;
-			this.snapshotCache = null;
+			this.resetRuntimeCaches();
 		}
 
 		return {
@@ -249,6 +272,127 @@ export class InferenceRouter {
 				path,
 			},
 		};
+	}
+
+	private resetRuntimeCaches(): void {
+		this.snapshotCache = null;
+	}
+
+	private pruneObservedState(now = Date.now()): void {
+		for (const [targetRef, entry] of this.observedTargetState.entries()) {
+			if (entry.expiresAt <= now) this.observedTargetState.delete(targetRef);
+		}
+		for (const [accountId, entry] of this.observedAccountState.entries()) {
+			if (entry.expiresAt <= now) this.observedAccountState.delete(accountId);
+		}
+	}
+
+	private observedRuntimeStateForTarget(
+		loaded: LoadedRoutingConfig,
+		targetRef: string,
+	): RoutingRuntimeState | undefined {
+		this.pruneObservedState();
+		const direct = this.observedTargetState.get(targetRef);
+		if (direct) return direct.state;
+		const parsed = parseRoutingTargetRef(targetRef);
+		if (!parsed.ok) return undefined;
+		const target = loaded.config.targets[parsed.value.targetId];
+		if (!target?.account) return undefined;
+		return this.observedAccountState.get(target.account)?.state;
+	}
+
+	private clearObservedRuntimeState(loaded: LoadedRoutingConfig, targetRef: string): void {
+		let changed = this.observedTargetState.delete(targetRef);
+		const parsed = parseRoutingTargetRef(targetRef);
+		if (!parsed.ok) {
+			if (changed) this.resetRuntimeCaches();
+			return;
+		}
+		const target = loaded.config.targets[parsed.value.targetId];
+		if (target?.account) {
+			changed = this.observedAccountState.delete(target.account) || changed;
+		}
+		if (changed) this.resetRuntimeCaches();
+	}
+
+	private classifyObservedFailure(
+		message: string,
+		hasAccount: boolean,
+	): { readonly state: RoutingRuntimeState; readonly ttlMs: number; readonly scope: "target" | "account" } | null {
+		const lower = message.toLowerCase();
+		if (
+			lower.includes("http 429") ||
+			lower.includes("rate limit") ||
+			lower.includes("rate-limit") ||
+			lower.includes("too many requests") ||
+			lower.includes("quota") ||
+			lower.includes("usage limit")
+		) {
+			return {
+				state: {
+					available: false,
+					health: "degraded",
+					circuitOpen: false,
+					accountState: "rate_limited",
+					unavailableReason: message,
+				},
+				ttlMs: OBSERVED_RATE_LIMIT_TTL_MS,
+				scope: hasAccount ? "account" : "target",
+			};
+		}
+		if (
+			lower.includes("http 401") ||
+			lower.includes("http 403") ||
+			lower.includes("unauthorized") ||
+			lower.includes("forbidden") ||
+			lower.includes("invalid api key") ||
+			lower.includes("invalid key") ||
+			lower.includes("expired session") ||
+			lower.includes("authentication") ||
+			lower.includes("auth failed")
+		) {
+			return {
+				state: {
+					available: false,
+					health: "blocked",
+					circuitOpen: false,
+					accountState: "expired",
+					unavailableReason: message,
+				},
+				ttlMs: OBSERVED_AUTH_TTL_MS,
+				scope: hasAccount ? "account" : "target",
+			};
+		}
+		if (lower.includes("missing credential") || lower.includes("api key") || lower.includes("credential")) {
+			return {
+				state: {
+					available: false,
+					health: "blocked",
+					circuitOpen: false,
+					accountState: "missing",
+					unavailableReason: message,
+				},
+				ttlMs: OBSERVED_MISSING_TTL_MS,
+				scope: hasAccount ? "account" : "target",
+			};
+		}
+		return null;
+	}
+
+	private observeExecutionFailure(loaded: LoadedRoutingConfig, targetRef: string, error: string): void {
+		const parsed = parseRoutingTargetRef(targetRef);
+		if (!parsed.ok) return;
+		const target = loaded.config.targets[parsed.value.targetId];
+		if (!target) return;
+		const classified = this.classifyObservedFailure(error, Boolean(target.account));
+		if (!classified) return;
+		const expiresAt = Date.now() + classified.ttlMs;
+		if (classified.scope === "account" && target.account) {
+			this.observedAccountState.set(target.account, { state: classified.state, expiresAt });
+		} else {
+			this.observedTargetState.set(targetRef, { state: classified.state, expiresAt });
+		}
+		this.resetRuntimeCaches();
 	}
 
 	async hasExplicitRouting(): Promise<boolean> {
@@ -349,6 +493,8 @@ export class InferenceRouter {
 	}
 
 	private async runtimeStateForTarget(loaded: LoadedRoutingConfig, targetRef: string): Promise<RoutingRuntimeState> {
+		const observed = this.observedRuntimeStateForTarget(loaded, targetRef);
+		if (observed) return observed;
 		const parsed = parseRoutingTargetRef(targetRef);
 		if (!parsed.ok) {
 			return {
@@ -480,12 +626,23 @@ export class InferenceRouter {
 				continue;
 			}
 			const startedAt = Date.now();
+			const observed = this.observedRuntimeStateForTarget(loaded.value, targetRef);
+			if (observed && isRuntimeBlocked(observed)) {
+				attempts.push({
+					targetRef,
+					ok: false,
+					durationMs: 0,
+					error: observed.unavailableReason ?? `account state ${observed.accountState}`,
+				});
+				continue;
+			}
 			try {
 				const provider = await this.createProvider(loaded.value, parsed.value.targetId, parsed.value.modelId);
 				const result = await generateWithTracking(provider, prompt, {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,
 				});
+				this.clearObservedRuntimeState(loaded.value, targetRef);
 				attempts.push({
 					targetRef,
 					ok: true,
@@ -507,6 +664,7 @@ export class InferenceRouter {
 					targetRef,
 					error: message.slice(0, 200),
 				});
+				this.observeExecutionFailure(loaded.value, targetRef, message);
 				attempts.push({
 					targetRef,
 					ok: false,
@@ -560,6 +718,16 @@ export class InferenceRouter {
 			}
 
 			const startedAt = Date.now();
+			const observed = this.observedRuntimeStateForTarget(loaded.value, targetRef);
+			if (observed && isRuntimeBlocked(observed)) {
+				attempts.push({
+					targetRef,
+					ok: false,
+					durationMs: 0,
+					error: observed.unavailableReason ?? `account state ${observed.accountState}`,
+				});
+				continue;
+			}
 			try {
 				const provider = await this.createProvider(loaded.value, parsed.value.targetId, parsed.value.modelId);
 				if (!provider.streamWithUsage) {
@@ -578,6 +746,7 @@ export class InferenceRouter {
 					abortSignal: opts?.abortSignal,
 				});
 
+				const router = this;
 				const stream = new ReadableStream<InferenceStreamEvent>({
 					start(controller) {
 						let partialText = "";
@@ -605,6 +774,7 @@ export class InferenceRouter {
 								while (true) {
 									const next = await reader.read();
 									if (next.done) {
+										router.clearObservedRuntimeState(loaded.value, targetRef);
 										attempts.push({
 											targetRef,
 											ok: true,
@@ -628,6 +798,7 @@ export class InferenceRouter {
 										continue;
 									}
 
+									router.clearObservedRuntimeState(loaded.value, targetRef);
 									attempts.push({
 										targetRef,
 										ok: true,
@@ -660,6 +831,7 @@ export class InferenceRouter {
 									targetRef,
 									error: message.slice(0, 200),
 								});
+								router.observeExecutionFailure(loaded.value, targetRef, message);
 								failAttempt(message);
 								closeWith({
 									type: "error",
@@ -696,6 +868,7 @@ export class InferenceRouter {
 					targetRef,
 					error: message.slice(0, 200),
 				});
+				this.observeExecutionFailure(loaded.value, targetRef, message);
 				attempts.push({
 					targetRef,
 					ok: false,

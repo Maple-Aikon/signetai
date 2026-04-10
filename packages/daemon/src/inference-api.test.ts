@@ -102,12 +102,83 @@ routing:
 	);
 }
 
+function writeAccountFallbackRoutingFixture(
+	root: string,
+	endpoints: {
+		readonly primary: string;
+		readonly secondary: string;
+		readonly backup: string;
+	},
+): void {
+	mkdirSync(join(root, "memory"), { recursive: true });
+	writeFileSync(
+		join(root, "agent.yaml"),
+		`memory:
+  pipelineV2:
+    extraction:
+      provider: none
+routing:
+  defaultPolicy: auto
+  accounts:
+    shared:
+      kind: api
+      providerFamily: openai-compatible
+      label: Shared account
+    backup:
+      kind: api
+      providerFamily: openai-compatible
+      label: Backup account
+  targets:
+    primary:
+      executor: openai-compatible
+      account: shared
+      endpoint: ${endpoints.primary}
+      models:
+        fast:
+          model: primary-fast
+          reasoning: medium
+          streaming: true
+    secondary:
+      executor: openai-compatible
+      account: shared
+      endpoint: ${endpoints.secondary}
+      models:
+        deep:
+          model: secondary-deep
+          reasoning: medium
+          streaming: true
+    backup:
+      executor: openai-compatible
+      account: backup
+      endpoint: ${endpoints.backup}
+      models:
+        safe:
+          model: backup-safe
+          reasoning: medium
+          streaming: true
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - primary/fast
+        - secondary/deep
+        - backup/safe
+      fallbackTargets:
+        - secondary/deep
+        - backup/safe
+  workloads:
+    interactive:
+      policy: auto
+`,
+	);
+}
+
 interface FakeOpenAiServer {
 	readonly url: string;
 	stop(): void;
 }
 
-function startFakeOpenAiServer(mode: "success" | "error"): FakeOpenAiServer {
+function startFakeOpenAiServer(mode: "success" | "error" | "rate_limit" | "unauthorized"): FakeOpenAiServer {
 	const server = Bun.serve({
 		port: 0,
 		fetch(req) {
@@ -122,6 +193,12 @@ function startFakeOpenAiServer(mode: "success" | "error"): FakeOpenAiServer {
 			if (url.pathname === "/chat/completions") {
 				return req.json().then((body: unknown) => {
 					const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+					if (mode === "rate_limit") {
+						return new Response("rate limited", { status: 429 });
+					}
+					if (mode === "unauthorized") {
+						return new Response("unauthorized", { status: 401 });
+					}
 					if (payload.stream === true) {
 						const encoder = new TextEncoder();
 						const stream = new ReadableStream<Uint8Array>({
@@ -615,6 +692,191 @@ describe("inference route hardening", () => {
 			expect(body.error).toContain("Explicit target overrides are not allowed");
 		} finally {
 			resetInferenceRouterForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("inference session and quota state", () => {
+	it("marks shared-account routes as rate limited after a 429 and reroutes future calls", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-rate-state-"));
+		const primary = startFakeOpenAiServer("rate_limit");
+		const secondary = startFakeOpenAiServer("success");
+		const backup = startFakeOpenAiServer("success");
+		writeAccountFallbackRoutingFixture(root, {
+			primary: primary.url,
+			secondary: secondary.url,
+			backup: backup.url,
+		});
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+
+			const executeRes = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "hello there",
+					}),
+				}),
+			);
+			expect(executeRes.status).toBe(200);
+			const executeBody = (await executeRes.json()) as {
+				text?: string;
+				attempts?: Array<{ targetRef?: string; ok?: boolean; error?: string }>;
+			};
+			expect(executeBody.text).toBe("hello");
+			expect(executeBody.attempts?.map((attempt) => attempt.targetRef)).toEqual([
+				"primary/fast",
+				"secondary/deep",
+				"backup/safe",
+			]);
+			expect(executeBody.attempts?.[0]?.ok).toBe(false);
+			expect(executeBody.attempts?.[0]?.error).toContain("429");
+			expect(executeBody.attempts?.[1]?.ok).toBe(false);
+			expect(executeBody.attempts?.[2]?.ok).toBe(true);
+
+			const statusRes = await app.request(
+				new Request("http://localhost/api/inference/status", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(statusRes.status).toBe(200);
+			const statusBody = (await statusRes.json()) as {
+				runtimeSnapshot?: {
+					targets?: Record<string, { accountState?: string; health?: string; available?: boolean }>;
+				};
+			};
+			expect(statusBody.runtimeSnapshot?.targets?.["primary/fast"]?.accountState).toBe("rate_limited");
+			expect(statusBody.runtimeSnapshot?.targets?.["secondary/deep"]?.accountState).toBe("rate_limited");
+			expect(statusBody.runtimeSnapshot?.targets?.["backup/safe"]?.accountState).toBe("ready");
+
+			const explainRes = await app.request(
+				new Request("http://localhost/api/inference/explain", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ operation: "interactive" }),
+				}),
+			);
+			expect(explainRes.status).toBe(200);
+			const explainBody = (await explainRes.json()) as {
+				targetRef?: string;
+				trace?: {
+					candidates?: Array<{ targetRef?: string; blockedBy?: string[] }>;
+				};
+			};
+			expect(explainBody.targetRef).toBe("backup/safe");
+			const blocked = Object.fromEntries(
+				(explainBody.trace?.candidates ?? []).map((candidate) => [
+					candidate.targetRef ?? "",
+					candidate.blockedBy ?? [],
+				]),
+			);
+			expect(JSON.stringify(blocked["primary/fast"])).toContain("rate_limited");
+			expect(JSON.stringify(blocked["secondary/deep"])).toContain("rate_limited");
+		} finally {
+			resetInferenceRouterForTests();
+			primary.stop();
+			secondary.stop();
+			backup.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("marks auth failures as expired and reroutes future calls", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-auth-state-"));
+		const primary = startFakeOpenAiServer("unauthorized");
+		const secondary = startFakeOpenAiServer("success");
+		const backup = startFakeOpenAiServer("success");
+		writeAccountFallbackRoutingFixture(root, {
+			primary: primary.url,
+			secondary: secondary.url,
+			backup: backup.url,
+		});
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+
+			const executeRes = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "hello there",
+					}),
+				}),
+			);
+			expect(executeRes.status).toBe(200);
+			const executeBody = (await executeRes.json()) as {
+				attempts?: Array<{ targetRef?: string; ok?: boolean; error?: string }>;
+			};
+			expect(executeBody.attempts?.map((attempt) => attempt.targetRef)).toEqual([
+				"primary/fast",
+				"secondary/deep",
+				"backup/safe",
+			]);
+			expect(executeBody.attempts?.[0]?.error).toContain("401");
+			expect(executeBody.attempts?.[1]?.ok).toBe(false);
+			expect(executeBody.attempts?.[2]?.ok).toBe(true);
+
+			const statusRes = await app.request(
+				new Request("http://localhost/api/inference/status", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(statusRes.status).toBe(200);
+			const statusBody = (await statusRes.json()) as {
+				runtimeSnapshot?: {
+					targets?: Record<string, { accountState?: string }>;
+				};
+			};
+			expect(statusBody.runtimeSnapshot?.targets?.["primary/fast"]?.accountState).toBe("expired");
+			expect(statusBody.runtimeSnapshot?.targets?.["secondary/deep"]?.accountState).toBe("expired");
+			expect(statusBody.runtimeSnapshot?.targets?.["backup/safe"]?.accountState).toBe("ready");
+
+			const explainRes = await app.request(
+				new Request("http://localhost/api/inference/explain", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ operation: "interactive" }),
+				}),
+			);
+			expect(explainRes.status).toBe(200);
+			const explainBody = (await explainRes.json()) as {
+				targetRef?: string;
+				trace?: {
+					candidates?: Array<{ targetRef?: string; blockedBy?: string[] }>;
+				};
+			};
+			expect(explainBody.targetRef).toBe("backup/safe");
+			const blocked = Object.fromEntries(
+				(explainBody.trace?.candidates ?? []).map((candidate) => [
+					candidate.targetRef ?? "",
+					candidate.blockedBy ?? [],
+				]),
+			);
+			expect(JSON.stringify(blocked["primary/fast"])).toContain("expired");
+			expect(JSON.stringify(blocked["secondary/deep"])).toContain("expired");
+		} finally {
+			resetInferenceRouterForTests();
+			primary.stop();
+			secondary.stop();
+			backup.stop();
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
