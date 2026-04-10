@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-10
+- Bug fixes: rebuild changelog with readable highlights.
+
 ### 2026-04-09
 - Bug fixes: block leaked workspace deps in release; improve docs search and docs navigation.
 
@@ -26,6 +29,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: scope sub-agent memory dedupe and synthesis; prevent summary-worker retries on shared session-end keys.
 
 ## Release Ledger
+
+## [0.98.11] - 2026-04-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.10..v0.98.11`.
+
+### Bug Fixes
+
+- **release**: rebuild changelog with readable highlights (#487)
 
 ## [0.98.10] - 2026-04-10
 
