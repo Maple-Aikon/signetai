@@ -399,8 +399,17 @@ function createTelemetryRecorder(): {
 			async flush(): Promise<void> {},
 			start(): void {},
 			async stop(): Promise<void> {},
-			query(): readonly TelemetryEvent[] {
-				return events;
+			query(opts?: {
+				event?: TelemetryEventType;
+				since?: string;
+				until?: string;
+				limit?: number;
+			}): readonly TelemetryEvent[] {
+				return events
+					.filter((event) => !opts?.event || event.event === opts.event)
+					.filter((event) => !opts?.since || event.timestamp >= opts.since)
+					.filter((event) => !opts?.until || event.timestamp <= opts.until)
+					.slice(0, opts?.limit ?? events.length);
 			},
 		},
 	};
@@ -1100,6 +1109,23 @@ describe("inference telemetry", () => {
 			expect(fallbackEvent?.properties.failedTargets).toBe("primary/fast,secondary/deep");
 			expect(JSON.stringify(executeEvent)).not.toContain("super secret prompt");
 			expect(JSON.stringify(fallbackEvent)).not.toContain("super secret prompt");
+
+			const historyRes = await app.request(
+				new Request("http://localhost/api/inference/history?failures=1&limit=10", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(historyRes.status).toBe(200);
+			const historyBody = (await historyRes.json()) as {
+				enabled?: boolean;
+				events?: Array<{ event?: string; attemptPath?: string; failedTargets?: string | null }>;
+				summary?: { total?: number; fallbacks?: number };
+			};
+			expect(historyBody.enabled).toBe(true);
+			expect(historyBody.summary?.fallbacks).toBeGreaterThanOrEqual(1);
+			expect(historyBody.events?.some((event) => event.event === "inference.fallback")).toBe(true);
+			expect(JSON.stringify(historyBody)).toContain("primary/fast -> secondary/deep -> backup/safe");
+			expect(JSON.stringify(historyBody)).not.toContain("super secret prompt");
 		} finally {
 			resetInferenceRouterForTests();
 			primary.stop();

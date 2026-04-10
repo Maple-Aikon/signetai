@@ -229,6 +229,8 @@ the spec stays useful as both contract and progress tracker.
   - `inference.stream`
   - `inference.fallback`
   - prompt bodies, responses, secrets, and session refs are excluded
+- `/api/inference/history` exposes recent redacted inference route/fallback
+  history for diagnostics users when telemetry is enabled
 - CLI support is functional, but still lacks the full override surface
   described in the original plan, especially richer request-shaping flags
 - Security hardening is underway:
@@ -384,7 +386,7 @@ adoption work like OpenClaw takeover.
   - latency
   - token usage
   - privacy gate result
-- [ ] Expose recent routing failures and fallback history in daemon status or
+- [x] Expose recent routing failures and fallback history in daemon status or
   diagnostics surfaces.
 - [x] Keep external telemetry opt-in only and redact prompt contents by
   default.

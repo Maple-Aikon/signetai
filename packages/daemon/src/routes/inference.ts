@@ -9,7 +9,7 @@ import type { Hono } from "hono";
 import type { AuthMode } from "../auth/index.js";
 import { checkScope } from "../auth/index.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
-import type { TelemetryCollector } from "../telemetry.js";
+import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
 
 const MAX_EXPLAIN_BYTES = 128 * 1024;
 const MAX_EXECUTE_BYTES = 512 * 1024;
@@ -23,6 +23,8 @@ const MAX_LATENCY_BUDGET_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_RESPONSE_TOKENS = 100_000;
 const MAX_GATEWAY_MESSAGES = 128;
+const MAX_HISTORY_LIMIT = 500;
+const MAX_HISTORY_SCAN_LIMIT = 5000;
 const SAFE_HINT_PATTERN = /^[A-Za-z0-9._:/-]+$/;
 const DEFAULT_AUTH_MODE: AuthMode = "local";
 
@@ -103,6 +105,13 @@ function parseBoundedNumber(value: unknown, field: string, max: number): Validat
 	if (typeof value !== "number" || !Number.isFinite(value)) return invalid(`${field} must be a finite number`);
 	if (value < 0) return invalid(`${field} must be non-negative`);
 	return valid(Math.min(Math.floor(value), max));
+}
+
+function parseBoundedIntegerQuery(value: string | undefined, fallback: number, max: number): number {
+	if (value === undefined) return fallback;
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+	return Math.min(parsed, max);
 }
 
 function parsePrompt(value: unknown): ValidationResult<string> {
@@ -534,6 +543,102 @@ function recordInferenceExecutionTelemetry(
 	}
 }
 
+function isInferenceTelemetryEvent(event: string): boolean {
+	return (
+		event === "inference.route" ||
+		event === "inference.execute" ||
+		event === "inference.stream" ||
+		event === "inference.fallback"
+	);
+}
+
+function asTelemetryString(props: TelemetryProperties, key: string): string | null {
+	const value = props[key];
+	return typeof value === "string" ? value : null;
+}
+
+function asTelemetryNumber(props: TelemetryProperties, key: string): number | null {
+	const value = props[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asTelemetryBoolean(props: TelemetryProperties, key: string): boolean | null {
+	const value = props[key];
+	return typeof value === "boolean" ? value : null;
+}
+
+function summarizeInferenceHistory(events: readonly TelemetryEvent[]): {
+	readonly total: number;
+	readonly failures: number;
+	readonly fallbacks: number;
+	readonly cancelled: number;
+} {
+	let failures = 0;
+	let fallbacks = 0;
+	let cancelled = 0;
+	for (const event of events) {
+		const props = event.properties;
+		if (
+			props.success === false ||
+			classifyInferenceErrorCode(asTelemetryString(props, "errorCode") ?? "") !== "UNKNOWN"
+		) {
+			failures++;
+		}
+		if (event.event === "inference.fallback" || (asTelemetryNumber(props, "failedCount") ?? 0) > 0) {
+			fallbacks++;
+		}
+		if (props.cancelled === true) cancelled++;
+	}
+	return {
+		total: events.length,
+		failures,
+		fallbacks,
+		cancelled,
+	};
+}
+
+function inferenceHistoryEvent(event: TelemetryEvent): Record<string, string | number | boolean | null> {
+	const props = event.properties;
+	return {
+		id: event.id,
+		event: event.event,
+		timestamp: event.timestamp,
+		surface: asTelemetryString(props, "surface"),
+		agentId: asTelemetryString(props, "agentId"),
+		operation: asTelemetryString(props, "operation"),
+		taskClass: asTelemetryString(props, "taskClass"),
+		policyId: asTelemetryString(props, "policyId"),
+		selectedTarget: asTelemetryString(props, "selectedTarget"),
+		finalTarget: asTelemetryString(props, "finalTarget"),
+		attemptPath: asTelemetryString(props, "attemptPath"),
+		failedTargets: asTelemetryString(props, "failedTargets"),
+		attemptCount: asTelemetryNumber(props, "attemptCount"),
+		failedCount: asTelemetryNumber(props, "failedCount"),
+		fallbackCount: asTelemetryNumber(props, "fallbackCount"),
+		candidateCount: asTelemetryNumber(props, "candidateCount"),
+		blockedCount: asTelemetryNumber(props, "blockedCount"),
+		allowedCount: asTelemetryNumber(props, "allowedCount"),
+		privacy: asTelemetryString(props, "privacy"),
+		durationMs: asTelemetryNumber(props, "durationMs"),
+		inputTokens: asTelemetryNumber(props, "inputTokens"),
+		outputTokens: asTelemetryNumber(props, "outputTokens"),
+		success: asTelemetryBoolean(props, "success"),
+		cancelled: asTelemetryBoolean(props, "cancelled"),
+		errorCode: asTelemetryString(props, "errorCode"),
+	};
+}
+
+function isFailureOrFallback(event: TelemetryEvent): boolean {
+	const props = event.properties;
+	return (
+		props.success === false ||
+		props.cancelled === true ||
+		event.event === "inference.fallback" ||
+		(asTelemetryNumber(props, "failedCount") ?? 0) > 0 ||
+		asTelemetryString(props, "errorCode") !== null
+	);
+}
+
 function registerActiveInferenceRequest(requestId: string, cancel: (reason?: string) => void): () => void {
 	activeInferenceRequests.set(requestId, { cancel });
 	let released = false;
@@ -573,6 +678,38 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		const result = await router.status(c.req.query("refresh") === "1");
 		if (!result.ok) return c.json({ error: result.error.message, details: result.error.details ?? null }, 400);
 		return c.json(result.value);
+	});
+
+	app.get("/api/inference/history", (c) => {
+		const telemetry = getTelemetry(opts);
+		if (!telemetry?.enabled) {
+			return c.json({ enabled: false, events: [], summary: { total: 0, failures: 0, fallbacks: 0, cancelled: 0 } });
+		}
+		const limit = parseBoundedIntegerQuery(c.req.query("limit"), 50, MAX_HISTORY_LIMIT);
+		const eventFilter = c.req.query("event");
+		if (eventFilter && !isInferenceTelemetryEvent(eventFilter)) {
+			return c.json(
+				{ error: "event must be one of: inference.route, inference.execute, inference.stream, inference.fallback" },
+				400,
+			);
+		}
+		const onlyProblems = c.req.query("failures") === "1" || c.req.query("problems") === "1";
+		const rows = telemetry
+			.query({
+				since: c.req.query("since"),
+				until: c.req.query("until"),
+				limit: Math.min(Math.max(limit * 10, limit), MAX_HISTORY_SCAN_LIMIT),
+			})
+			.filter((event) => isInferenceTelemetryEvent(event.event))
+			.filter((event) => !eventFilter || event.event === eventFilter)
+			.filter((event) => !onlyProblems || isFailureOrFallback(event))
+			.slice(0, limit);
+
+		return c.json({
+			enabled: true,
+			events: rows.map(inferenceHistoryEvent),
+			summary: summarizeInferenceHistory(rows),
+		});
 	});
 
 	app.post("/api/inference/explain", async (c) => {

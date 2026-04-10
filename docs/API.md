@@ -236,6 +236,57 @@ current runtime snapshot for each route target.
 }
 ```
 
+### GET /api/inference/history
+
+Requires `diagnostics` permission in authenticated modes.
+
+Returns recent local inference telemetry in a redacted, operator-friendly
+shape. The endpoint only returns events when telemetry is enabled.
+
+**Query parameters**
+
+| Parameter  | Type    | Description                                      |
+|------------|---------|--------------------------------------------------|
+| `limit`    | integer | Max events, default `50`, max `500`              |
+| `since`    | string  | ISO timestamp lower bound                        |
+| `until`    | string  | ISO timestamp upper bound                        |
+| `event`    | string  | One inference event type to include              |
+| `failures` | `1`     | Include only failed, cancelled, or fallback rows |
+
+**Response**
+
+```json
+{
+  "enabled": true,
+  "events": [
+    {
+      "event": "inference.fallback",
+      "timestamp": "2026-04-10T18:12:00.000Z",
+      "surface": "native",
+      "agentId": "rose",
+      "operation": "interactive",
+      "taskClass": "interactive",
+      "policyId": "auto",
+      "selectedTarget": "primary/fast",
+      "finalTarget": "backup/safe",
+      "attemptPath": "primary/fast -> secondary/deep -> backup/safe",
+      "failedTargets": "primary/fast,secondary/deep",
+      "fallbackCount": 2,
+      "errorCode": "RATE_LIMITED"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "failures": 1,
+    "fallbacks": 1,
+    "cancelled": 0
+  }
+}
+```
+
+Inference history excludes raw prompts, response text, credentials, and session
+references.
+
 ### POST /api/inference/explain
 
 Requires `admin` permission in authenticated modes.
