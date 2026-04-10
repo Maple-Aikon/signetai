@@ -272,6 +272,26 @@ specs:
       - "Evaluation shows semantic hint retrieval is a measurable improvement over hint FTS alone on Signet's retrieval-quality suite"
     decision: null
 
+  - id: transcript-surface-separation
+    status: planning
+    path: docs/specs/planning/transcript-surface-separation.md
+    hard_depends_on:
+      - session-continuity-protocol
+      - lossless-working-memory-runtime
+      - lossless-working-memory-closure
+      - explicit-recall-surface-alignment
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OBSIDIAN-VAULT-RECALL-EVAL.md
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+    success_criteria:
+      - "Raw session transcripts remain lossless, canonical, and drill-downable, but prompt-submit and explicit recall no longer surface raw harness metadata as first-class memory results"
+      - "Transcript fallback queries a derived retrieval layer that strips or classifies harness-side noise without destroying the underlying source-of-truth transcript"
+      - "Recall weighting and rendering treat raw transcript material as a lower-priority fallback surface than structured memories, summaries, and curated artifacts"
+      - "Balanced evals show soft-human queries keep curated-quality behavior in mixed corpora and reflective queries reduce dirty-transcript contamination without regressing factual recall"
+    decision: null
+
   - id: openclaw-legacy-plugin-migration
     status: planning
     path: docs/specs/planning/openclaw-legacy-plugin-migration.md
