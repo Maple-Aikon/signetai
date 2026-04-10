@@ -216,6 +216,17 @@ the spec stays useful as both contract and progress tracker.
   but does not yet persist route history, quota state, or fallback analytics
 - CLI support is functional, but still lacks the full override surface
   described in the original plan, especially richer request-shaping flags
+- Security hardening is underway:
+  - explicit target overrides can no longer escape agent rosters
+  - inference routes now validate and clamp body/header inputs
+  - dedicated inference rate-limit buckets exist for explain, execute, and
+    gateway chat completion routes
+- Streaming and cancellation are underway:
+  - OpenAI-compatible gateway streaming is live for stream-capable targets
+  - native Signet SSE streaming exists at `/api/inference/stream`
+  - active streams can be cancelled via `/api/inference/requests/:id`
+  - mid-stream upstream failure now returns partial output plus degraded
+    metadata instead of silently truncating
 
 ### Not done
 
@@ -229,15 +240,6 @@ the spec stays useful as both contract and progress tracker.
   - circuit breaking
   - cooldown / recovery logic
   - durable degraded-state tracking
-- Streaming and cancellation:
-  - gateway streaming
-  - native streaming session lifecycle
-  - cancellation surface
-  - mid-stream degradation / restart policy
-- Dedicated security and abuse controls for inference routes:
-  - route-specific rate limiting
-  - stricter request/body/header ceilings
-  - hardened permission/scope coverage for route and gateway entry points
 - Persisted telemetry for routing decisions, fallback hops, costs, and
   session/quota state
 - Harness adoption outside Signet-owned daemon routes:
@@ -251,3 +253,133 @@ the spec stays useful as both contract and progress tracker.
   - local backend loss
   - mid-stream provider failure
   - strict fallback chains under real failure
+
+## Phase 2 hardening checklist
+
+This is the next implementation wave. It is the gate before broad harness
+adoption work like OpenClaw takeover.
+
+### 1. Permissions and scope hardening
+
+- [x] Verify `/api/inference/status` remains diagnostics-only in authenticated
+  modes.
+- [x] Verify `/api/inference/explain`, `/api/inference/execute`, and `/v1/*`
+  require explicit admin permission in authenticated modes.
+- [x] Enforce agent scope on route requests so scoped tokens cannot route work
+  for another agent via body fields or gateway headers.
+- [x] Reject policy or explicit target overrides that fall outside the scoped
+  agent roster.
+- [x] Clamp request fields at the boundary:
+  - `maxTokens`
+  - latency hints
+  - expected token hints
+  - explicit target counts
+  - prompt preview length
+- [x] Add regression tests for:
+  - admin-required route execution
+  - diagnostics-only status access
+  - scoped-agent denial on mismatched `agentId`
+  - explicit target override denial when out of policy/scope
+
+### 2. Rate limiting and abuse control
+
+- [x] Add dedicated inference route limiters, separate from existing memory and
+  auth mutation limiters.
+- [x] Rate-limit these surfaces independently:
+  - `/api/inference/explain`
+  - `/api/inference/execute`
+  - `/v1/chat/completions`
+  - `GET /v1/models` remains unthrottled for now, pending evidence of abuse
+- [ ] Limit by authenticated principal when auth is enabled, and by client/IP
+  or trusted-local policy when it is not.
+- [ ] Add bounded concurrency or in-flight request caps for expensive routed
+  execution.
+- [x] Return explicit `429` responses with stable error shape.
+- [x] Add tests proving repeated gateway and execute abuse requests are
+  throttled while local diagnostics still work.
+
+### 3. Streaming and cancellation
+
+- [x] Add streaming support to `POST /v1/chat/completions` when the selected
+  executor supports streaming.
+- [x] Add native streaming support on the Signet RPC side for first-party
+  consumers.
+- [x] Add a cancellation surface so long-running routed requests can be
+  stopped.
+- [ ] Define restartability rules for streamed requests:
+  - safe to restart on another backend
+  - unsafe to restart, return partial + degraded metadata
+- [x] Preserve privacy and policy gates for streamed execution exactly as for
+  non-streamed execution.
+- [x] Add tests for:
+  - successful streamed response
+  - cancellation during stream
+  - provider death mid-stream
+  - degraded partial response behavior
+
+### 4. Security hardening
+
+- [x] Enforce request size ceilings for routed prompt bodies and message lists.
+- [x] Enforce header size and value normalization for Signet-specific gateway
+  headers.
+- [x] Reject malformed or unsupported gateway routing hints cleanly.
+- [x] Ensure `local_only` privacy requests cannot be widened or bypassed by
+  gateway model aliases, explicit targets, or malformed headers.
+- [ ] Redact secrets, session references, and raw sensitive prompt bodies from
+  logs, traces, and error payloads.
+- [ ] Ensure route traces exposed to users/operators contain decision context
+  without leaking secret-bearing configuration.
+- [x] Add tests for:
+  - oversized prompt rejection
+  - malformed header rejection
+  - local-only privacy enforcement under hostile override attempts
+  - trace redaction
+
+### 5. Session and quota state
+
+- [ ] Promote account/session state from schema-only metadata into runtime
+  state with explicit health transitions.
+- [ ] Track and surface:
+  - `ready`
+  - `missing`
+  - `expired`
+  - `rate_limited`
+  - degraded but recoverable
+- [ ] Add structured handling for:
+  - disconnected CLI auth
+  - expired session auth
+  - missing API key
+  - observed provider 429 / quota exhaustion
+- [ ] Feed this state back into routing penalties and hard blocks.
+- [ ] Add tests for session expiry and quota-exhaustion fallback behavior.
+
+### 6. Observability and auditability
+
+- [ ] Persist routed attempt telemetry locally, at minimum:
+  - agent id
+  - operation
+  - task class
+  - effective policy
+  - selected target
+  - fallback hops
+  - failure classification
+  - latency
+  - token usage
+  - privacy gate result
+- [ ] Expose recent routing failures and fallback history in daemon status or
+  diagnostics surfaces.
+- [ ] Keep external telemetry opt-in only and redact prompt contents by
+  default.
+- [ ] Add tests proving trace and telemetry redaction rules hold.
+
+### Phase 2 exit criteria
+
+Phase 2 is complete when all of the following are true:
+
+- Inference endpoints and gateway routes are scope-safe and rate-limited.
+- Streamed and non-streamed calls honor the same routing and privacy rules.
+- Session/quota state can block or degrade routing without relying on ad hoc
+  executor failures.
+- Operators can inspect recent routed failures and fallback behavior locally.
+- The router is hardened enough that broader harness adoption does not widen
+  the daemon's attack surface by default.

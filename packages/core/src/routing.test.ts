@@ -179,4 +179,71 @@ describe("routing config + decision engine", () => {
 		expect(parsed.value.enabled).toBe(true);
 		expect(parsed.value.defaultPolicy).toBe("legacy-default");
 	});
+
+	it("does not allow explicit target overrides outside the agent roster", () => {
+		const parsed = parseRoutingConfig({
+			routing: {
+				defaultPolicy: "auto",
+				targets: {
+					remote: {
+						executor: "openrouter",
+						endpoint: "https://openrouter.ai/api/v1",
+						models: {
+							sonnet: {
+								model: "anthropic/claude-sonnet-4-6",
+								reasoning: "medium",
+								toolUse: true,
+								streaming: true,
+							},
+						},
+					},
+					local: {
+						executor: "ollama",
+						endpoint: "http://127.0.0.1:11434",
+						models: {
+							gemma: {
+								model: "gemma4",
+								reasoning: "medium",
+								streaming: true,
+							},
+						},
+					},
+				},
+				policies: {
+					auto: {
+						mode: "automatic",
+						defaultTargets: [makeRoutingTargetRef("remote", "sonnet"), makeRoutingTargetRef("local", "gemma")],
+					},
+				},
+				agents: {
+					rose: {
+						defaultPolicy: "auto",
+						roster: [makeRoutingTargetRef("local", "gemma")],
+					},
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{
+				agentId: "rose",
+				operation: "interactive",
+				explicitTargets: [makeRoutingTargetRef("remote", "sonnet")],
+			},
+			{
+				targets: {
+					[makeRoutingTargetRef("remote", "sonnet")]: ready,
+					[makeRoutingTargetRef("local", "gemma")]: ready,
+				},
+			},
+		);
+		expect(decision.ok).toBe(false);
+		if (!("error" in decision)) {
+			throw new Error("expected explicit target override outside roster to be rejected");
+		}
+		expect(decision.error.code).toBe("no-candidates");
+	});
 });

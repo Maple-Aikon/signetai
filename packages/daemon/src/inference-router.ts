@@ -23,10 +23,14 @@ import {
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import {
+	type LlmProviderStreamEvent,
+	type LlmProviderStreamResult,
+	type StreamCapableLlmProvider,
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
 	createOllamaProvider,
+	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
 	generateWithTracking,
@@ -52,6 +56,38 @@ export interface InferenceExecutionResult {
 	readonly usage: LlmUsage | null;
 	readonly decision: RouteDecision;
 	readonly attempts: readonly InferenceExecutionAttempt[];
+}
+
+export type InferenceStreamEvent =
+	| {
+			readonly type: "delta";
+			readonly text: string;
+	  }
+	| {
+			readonly type: "done";
+			readonly text: string;
+			readonly usage: LlmUsage | null;
+			readonly decision: RouteDecision;
+			readonly attempts: readonly InferenceExecutionAttempt[];
+	  }
+	| {
+			readonly type: "error";
+			readonly error: string;
+			readonly partialText: string;
+			readonly decision: RouteDecision;
+			readonly attempts: readonly InferenceExecutionAttempt[];
+	  }
+	| {
+			readonly type: "cancelled";
+			readonly partialText: string;
+			readonly decision: RouteDecision;
+			readonly attempts: readonly InferenceExecutionAttempt[];
+	  };
+
+export interface InferenceStreamResult {
+	readonly decision: RouteDecision;
+	readonly stream: ReadableStream<InferenceStreamEvent>;
+	cancel(reason?: string): void;
 }
 
 export interface InferenceAccountSummary {
@@ -99,94 +135,6 @@ interface SnapshotCacheEntry {
 	readonly snapshot: RoutingRuntimeSnapshot;
 }
 
-interface OpenAiCompatibleProviderConfig {
-	readonly name: string;
-	readonly model: string;
-	readonly baseUrl: string;
-	readonly apiKey?: string;
-	readonly defaultTimeoutMs: number;
-}
-
-function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderConfig): LlmProvider {
-	const baseUrl = config.baseUrl.replace(/\/+$/, "");
-	const headers = (): Record<string, string> => ({
-		"Content-Type": "application/json",
-		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
-	});
-
-	async function call(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<LlmGenerateResult> {
-		const res = await fetch(`${baseUrl}/chat/completions`, {
-			method: "POST",
-			headers: headers(),
-			body: JSON.stringify({
-				model: config.model,
-				messages: [{ role: "user", content: prompt }],
-				max_tokens: opts?.maxTokens ?? 4096,
-			}),
-			signal: AbortSignal.timeout(opts?.timeoutMs ?? config.defaultTimeoutMs),
-		});
-		if (!res.ok) {
-			const detail = (await res.text().catch(() => "")).slice(0, 300);
-			throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
-		}
-		const body = (await res.json()) as {
-			choices?: Array<{ message?: { content?: string | Array<{ text?: string; type?: string }> } }>;
-			usage?: {
-				prompt_tokens?: number;
-				completion_tokens?: number;
-				total_tokens?: number;
-			};
-		};
-		const content = body.choices?.[0]?.message?.content;
-		const text =
-			typeof content === "string"
-				? content
-				: Array.isArray(content)
-					? content
-							.flatMap((part) => (part?.type === "text" && typeof part.text === "string" ? [part.text] : []))
-							.join("\n")
-					: "";
-		if (!text.trim()) {
-			throw new Error(`${config.name} returned empty response`);
-		}
-		return {
-			text,
-			usage: body.usage
-				? {
-						inputTokens: body.usage.prompt_tokens ?? null,
-						outputTokens: body.usage.completion_tokens ?? null,
-						cacheReadTokens: null,
-						cacheCreationTokens: null,
-						totalCost: null,
-						totalDurationMs: null,
-					}
-				: null,
-		};
-	}
-
-	return {
-		name: config.name,
-		async generate(prompt, opts): Promise<string> {
-			const result = await call(prompt, opts);
-			return result.text;
-		},
-		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
-			return call(prompt, opts);
-		},
-		async available(): Promise<boolean> {
-			try {
-				const res = await fetch(`${baseUrl}/models`, {
-					headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
-					signal: AbortSignal.timeout(5_000),
-				});
-				return res.ok;
-			} catch {
-				return false;
-			}
-		},
-	};
-}
-
 function isLocalBaseUrl(value: string | undefined): boolean {
 	if (!value) return true;
 	try {
@@ -220,6 +168,20 @@ function formatExecutionError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function isAbortLikeError(error: unknown): boolean {
+	return (
+		error instanceof DOMException ||
+		(error instanceof Error &&
+			(error.name === "AbortError" ||
+				error.message.toLowerCase().includes("aborted") ||
+				error.message.toLowerCase().includes("cancelled")))
+	);
+}
+
+function cloneAttempts(attempts: readonly InferenceExecutionAttempt[]): readonly InferenceExecutionAttempt[] {
+	return attempts.map((attempt) => ({ ...attempt }));
+}
+
 function buildPromptFromMessages(
 	messages: readonly Array<{ readonly role: string; readonly content: string }>,
 ): string {
@@ -228,7 +190,7 @@ function buildPromptFromMessages(
 
 export class InferenceRouter {
 	private snapshotCache: SnapshotCacheEntry | null = null;
-	private readonly providerCache = new Map<string, Promise<LlmProvider>>();
+	private readonly providerCache = new Map<string, Promise<StreamCapableLlmProvider>>();
 	private providerCacheSignature: string | null = null;
 
 	constructor(private readonly agentsDir: string) {}
@@ -321,12 +283,16 @@ export class InferenceRouter {
 		}
 	}
 
-	private async createProvider(loaded: LoadedRoutingConfig, targetId: string, modelId: string): Promise<LlmProvider> {
+	private async createProvider(
+		loaded: LoadedRoutingConfig,
+		targetId: string,
+		modelId: string,
+	): Promise<StreamCapableLlmProvider> {
 		const cacheKey = `${loaded.signature}:${targetId}/${modelId}`;
 		const cached = this.providerCache.get(cacheKey);
 		if (cached) return cached;
 
-		const build = (async (): Promise<LlmProvider> => {
+		const build = (async (): Promise<StreamCapableLlmProvider> => {
 			const target = loaded.config.targets[targetId];
 			const model = target?.models[modelId];
 			if (!target || !model) {
@@ -554,6 +520,196 @@ export class InferenceRouter {
 			error: {
 				code: "execution-failed",
 				message: "All routed targets failed.",
+				details: { attempts },
+			},
+		};
+	}
+
+	async stream(
+		request: RouteRequest,
+		prompt: string,
+		opts?: {
+			readonly timeoutMs?: number;
+			readonly maxTokens?: number;
+			readonly refresh?: boolean;
+			readonly abortSignal?: AbortSignal;
+		},
+	): Promise<RouterResult<InferenceStreamResult>> {
+		const loaded = await this.loadConfig();
+		if (!loaded.ok) return loaded;
+		const decision = await this.explain(
+			{
+				...request,
+				requireStreaming: true,
+			},
+			opts?.refresh ?? false,
+		);
+		if (!decision.ok) return decision;
+
+		const attempts: InferenceExecutionAttempt[] = [];
+		for (const targetRef of [decision.value.targetRef, ...decision.value.fallbackTargetRefs]) {
+			const parsed = parseRoutingTargetRef(targetRef);
+			if (!parsed.ok) {
+				attempts.push({
+					targetRef,
+					ok: false,
+					durationMs: 0,
+					error: parsed.error.message,
+				});
+				continue;
+			}
+
+			const startedAt = Date.now();
+			try {
+				const provider = await this.createProvider(loaded.value, parsed.value.targetId, parsed.value.modelId);
+				if (!provider.streamWithUsage) {
+					attempts.push({
+						targetRef,
+						ok: false,
+						durationMs: Date.now() - startedAt,
+						error: "target does not support streaming execution",
+					});
+					continue;
+				}
+
+				const upstream = await provider.streamWithUsage(prompt, {
+					timeoutMs: opts?.timeoutMs,
+					maxTokens: opts?.maxTokens,
+					abortSignal: opts?.abortSignal,
+				});
+
+				const stream = new ReadableStream<InferenceStreamEvent>({
+					start(controller) {
+						let partialText = "";
+						let finished = false;
+						const reader = upstream.stream.getReader();
+
+						const closeWith = (event: InferenceStreamEvent): void => {
+							if (finished) return;
+							finished = true;
+							controller.enqueue(event);
+							controller.close();
+						};
+
+						const failAttempt = (error: string): void => {
+							attempts.push({
+								targetRef,
+								ok: false,
+								durationMs: Date.now() - startedAt,
+								error,
+							});
+						};
+
+						const pump = async (): Promise<void> => {
+							try {
+								while (true) {
+									const next = await reader.read();
+									if (next.done) {
+										attempts.push({
+											targetRef,
+											ok: true,
+											durationMs: Date.now() - startedAt,
+											usage: null,
+										});
+										closeWith({
+											type: "done",
+											text: partialText,
+											usage: null,
+											decision: decision.value,
+											attempts: cloneAttempts(attempts),
+										});
+										return;
+									}
+
+									const event = next.value as LlmProviderStreamEvent;
+									if (event.type === "text-delta") {
+										partialText += event.text;
+										controller.enqueue({ type: "delta", text: event.text });
+										continue;
+									}
+
+									attempts.push({
+										targetRef,
+										ok: true,
+										durationMs: Date.now() - startedAt,
+										usage: event.usage,
+									});
+									closeWith({
+										type: "done",
+										text: event.text,
+										usage: event.usage,
+										decision: decision.value,
+										attempts: cloneAttempts(attempts),
+									});
+									return;
+								}
+							} catch (error) {
+								const message = formatExecutionError(error);
+								if (isAbortLikeError(error) || opts?.abortSignal?.aborted) {
+									failAttempt(message || "stream cancelled");
+									closeWith({
+										type: "cancelled",
+										partialText,
+										decision: decision.value,
+										attempts: cloneAttempts(attempts),
+									});
+									return;
+								}
+
+								logger.warn("routing", `Inference target ${targetRef} stream failed`, {
+									targetRef,
+									error: message.slice(0, 200),
+								});
+								failAttempt(message);
+								closeWith({
+									type: "error",
+									error: message,
+									partialText,
+									decision: decision.value,
+									attempts: cloneAttempts(attempts),
+								});
+							} finally {
+								reader.releaseLock();
+							}
+						};
+
+						void pump();
+					},
+					cancel(reason) {
+						upstream.cancel(typeof reason === "string" ? reason : "client disconnected");
+					},
+				});
+
+				return {
+					ok: true,
+					value: {
+						decision: decision.value,
+						stream,
+						cancel(reason?: string) {
+							upstream.cancel(reason);
+						},
+					},
+				};
+			} catch (error) {
+				const message = formatExecutionError(error);
+				logger.warn("routing", `Inference target ${targetRef} failed to start stream`, {
+					targetRef,
+					error: message.slice(0, 200),
+				});
+				attempts.push({
+					targetRef,
+					ok: false,
+					durationMs: Date.now() - startedAt,
+					error: message,
+				});
+			}
+		}
+
+		return {
+			ok: false,
+			error: {
+				code: "execution-failed",
+				message: "All routed streaming targets failed.",
 				details: { attempts },
 			},
 		};

@@ -885,6 +885,15 @@ auth:
     modify:
       windowMs: 60000
       max: 60
+    inferenceExplain:
+      windowMs: 60000
+      max: 120
+    inferenceExecute:
+      windowMs: 60000
+      max: 20
+    inferenceGateway:
+      windowMs: 60000
+      max: 30
 ```
 
 | Field | Default | Description |
@@ -911,6 +920,10 @@ Each key controls a category of potentially destructive operations.
 | `batchForget` | 60 s | 5 | Bulk soft-delete |
 | `forceDelete` | 60 s | 3 | Hard-delete (bypasses tombstone) |
 | `admin` | 60 s | 10 | Admin API operations |
+| `inferenceExplain` | 60 s | 120 | Dry-run route decisions |
+| `inferenceExecute` | 60 s | 20 | Native routed prompt execution |
+| `inferenceGateway` | 60 s | 30 | OpenAI-compatible gateway completions |
+| `recallLlm` | 60 s | 60 | LLM-backed recall summarization |
 
 Override any limit under `auth.rateLimits.<operation>`:
 

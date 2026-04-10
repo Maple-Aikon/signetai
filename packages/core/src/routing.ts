@@ -828,7 +828,20 @@ function orderedPreferenceLists(
 		};
 	}
 
+	const allowedTargets = new Set(targetRefsAllowedByPolicy(config, request, policy));
 	const explicitTargets = request.explicitTargets ?? [];
+	const disallowedExplicitTargets = explicitTargets.filter((targetRef) => !allowedTargets.has(targetRef));
+	if (disallowedExplicitTargets.length > 0) {
+		return {
+			code: "no-candidates",
+			message: "Explicit target overrides are not allowed by the active agent roster or policy.",
+			details: {
+				policyId,
+				agentId: request.agentId,
+				explicitTargets: disallowedExplicitTargets,
+			},
+		};
+	}
 	const pinnedTarget = agentConfig?.pinnedTargets?.[classification.taskClass] ?? agentConfig?.pinnedTargets?.default;
 	const orderedTargets = mergeUnique(
 		explicitTargets,
@@ -845,14 +858,33 @@ function orderedPreferenceLists(
 				),
 			),
 		),
-	);
+	).filter((targetRef) => allowedTargets.has(targetRef));
 
 	return {
 		policyId,
 		mode: policy.mode,
 		orderedTargets,
-		fallbackTargets: policy.fallbackTargets ?? [],
+		fallbackTargets: (policy.fallbackTargets ?? []).filter((targetRef) => allowedTargets.has(targetRef)),
 	};
+}
+
+function targetRefsAllowedByPolicy(
+	config: RoutingConfig,
+	request: RouteRequest,
+	policy: RoutingPolicyConfig,
+): readonly string[] {
+	const agentConfig = request.agentId ? config.agents[request.agentId] : undefined;
+	const roster = agentConfig?.roster && agentConfig.roster.length > 0 ? agentConfig.roster : allTargetRefs(config);
+	let candidates = [...roster];
+	if (policy.allow && policy.allow.length > 0) {
+		const allowed = new Set(policy.allow);
+		candidates = candidates.filter((candidate) => allowed.has(candidate));
+	}
+	if (policy.deny && policy.deny.length > 0) {
+		const denied = new Set(policy.deny);
+		candidates = candidates.filter((candidate) => !denied.has(candidate));
+	}
+	return candidates;
 }
 
 function targetRefsForRoster(
@@ -861,21 +893,7 @@ function targetRefsForRoster(
 	classification: RouteClassification,
 	policy: RoutingPolicyConfig,
 ): readonly string[] {
-	const agentConfig = request.agentId ? config.agents[request.agentId] : undefined;
-	const roster = agentConfig?.roster && agentConfig.roster.length > 0 ? agentConfig.roster : allTargetRefs(config);
-	let candidates = [...roster];
-	if (policy.mode === "hybrid" && policy.allow && policy.allow.length > 0) {
-		const allowed = new Set(policy.allow);
-		candidates = candidates.filter((candidate) => allowed.has(candidate));
-	}
-	if (policy.allow && policy.mode === "strict") {
-		const allowed = new Set(policy.allow);
-		candidates = candidates.filter((candidate) => allowed.has(candidate));
-	}
-	if (policy.deny && policy.deny.length > 0) {
-		const denied = new Set(policy.deny);
-		candidates = candidates.filter((candidate) => !denied.has(candidate));
-	}
+	let candidates = [...targetRefsAllowedByPolicy(config, request, policy)];
 	if (request.explicitTargets && request.explicitTargets.length > 0) {
 		const explicit = new Set(request.explicitTargets);
 		candidates = candidates.filter((candidate) => explicit.has(candidate));

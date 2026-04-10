@@ -113,6 +113,7 @@ import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { walkImpact } from "./graph-impact";
 import { syncAgentWorkspaces } from "./identity-sync";
+import { getOrCreateInferenceRouter } from "./inference-router.js";
 import { linkMemoryToEntities } from "./inline-entity-linker";
 import {
 	getAttributesForAspectFiltered,
@@ -128,9 +129,14 @@ import {
 	resolveNamedEntity,
 	unpinEntity,
 } from "./knowledge-graph";
-import { closeLlmProvider, closeSynthesisProvider, getLlmProvider, initLlmProvider, initSynthesisProvider } from "./llm";
+import {
+	closeLlmProvider,
+	closeSynthesisProvider,
+	getLlmProvider,
+	initLlmProvider,
+	initSynthesisProvider,
+} from "./llm";
 import { type LogCategory, type LogEntry, logger } from "./logger";
-import { getOrCreateInferenceRouter } from "./inference-router.js";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { buildMemoryTimeline } from "./memory-timeline";
@@ -152,9 +158,9 @@ import {
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
-import { AlreadyRunningError, type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { clusterEntities } from "./pipeline/community-detection";
+import { AlreadyRunningError, type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import {
@@ -823,6 +829,9 @@ let authModifyLimiter = new AuthRateLimiter(60_000, 60);
 let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
 let authAdminLimiter = new AuthRateLimiter(60_000, 10);
 let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
+let authInferenceExplainLimiter = new AuthRateLimiter(60_000, 120);
+let authInferenceExecuteLimiter = new AuthRateLimiter(60_000, 20);
+let authInferenceGatewayLimiter = new AuthRateLimiter(60_000, 30);
 const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 
 function hasMemoriesSessionIdColumn(db: Database): boolean {
@@ -2083,6 +2092,21 @@ app.use("/api/inference/*", async (c, next) => {
 });
 app.use("/v1/*", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
+});
+app.use("/api/inference/explain", async (c, next) => {
+	if (c.req.method !== "POST") return next();
+	return requireRateLimit("inferenceExplain", authInferenceExplainLimiter, authConfig)(c, next);
+});
+app.use("/api/inference/execute", async (c, next) => {
+	if (c.req.method !== "POST") return next();
+	return requireRateLimit("inferenceExecute", authInferenceExecuteLimiter, authConfig)(c, next);
+});
+app.use("/api/inference/stream", async (c, next) => {
+	if (c.req.method !== "POST") return next();
+	return requireRateLimit("inferenceExecute", authInferenceExecuteLimiter, authConfig)(c, next);
+});
+app.use("/v1/chat/completions", async (c, next) => {
+	return requireRateLimit("inferenceGateway", authInferenceGatewayLimiter, authConfig)(c, next);
 });
 
 // Per-memory PATCH and DELETE need method-specific guards + scope check
@@ -5658,7 +5682,7 @@ mountChangelogRoutes(app);
 
 // Shared inference routing + gateway routes
 import { mountInferenceRoutes } from "./routes/inference.js";
-mountInferenceRoutes(app);
+mountInferenceRoutes(app, { getAuthMode: () => authConfig.mode });
 
 // OS agent chat routes (natural language → MCP tool routing)
 import { mountOsChatRoutes } from "./routes/os-chat.js";
@@ -11185,6 +11209,15 @@ function startFileWatcher() {
 				authAdminLimiter = rl.admin
 					? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max)
 					: new AuthRateLimiter(60_000, 10);
+				authInferenceExplainLimiter = rl.inferenceExplain
+					? new AuthRateLimiter(rl.inferenceExplain.windowMs, rl.inferenceExplain.max)
+					: new AuthRateLimiter(60_000, 120);
+				authInferenceExecuteLimiter = rl.inferenceExecute
+					? new AuthRateLimiter(rl.inferenceExecute.windowMs, rl.inferenceExecute.max)
+					: new AuthRateLimiter(60_000, 20);
+				authInferenceGatewayLimiter = rl.inferenceGateway
+					? new AuthRateLimiter(rl.inferenceGateway.windowMs, rl.inferenceGateway.max)
+					: new AuthRateLimiter(60_000, 30);
 				authRecallLlmLimiter = rl.recallLlm
 					? new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max)
 					: new AuthRateLimiter(60_000, 60);
@@ -11999,7 +12032,16 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (rl.modify) authModifyLimiter = new AuthRateLimiter(rl.modify.windowMs, rl.modify.max);
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
-
+	if (rl.inferenceExplain) {
+		authInferenceExplainLimiter = new AuthRateLimiter(rl.inferenceExplain.windowMs, rl.inferenceExplain.max);
+	}
+	if (rl.inferenceExecute) {
+		authInferenceExecuteLimiter = new AuthRateLimiter(rl.inferenceExecute.windowMs, rl.inferenceExecute.max);
+	}
+	if (rl.inferenceGateway) {
+		authInferenceGatewayLimiter = new AuthRateLimiter(rl.inferenceGateway.windowMs, rl.inferenceGateway.max);
+	}
+	if (rl.recallLlm) authRecallLlmLimiter = new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max);
 	const inferenceRouter = getOrCreateInferenceRouter(AGENTS_DIR);
 	const explicitRoutingEnabled = await inferenceRouter.hasExplicitRouting();
 	const extractionRoutingEnabled = await inferenceRouter.hasWorkload("memory_extraction");

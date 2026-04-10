@@ -12,7 +12,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "n
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { LlmGenerateResult, LlmProvider } from "@signet/core";
+import type { LlmGenerateResult, LlmProvider, LlmUsage } from "@signet/core";
 import { logger } from "../logger";
 import { trimTrailingSlash } from "./url";
 
@@ -241,6 +241,195 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 
 export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 
+export type LlmProviderCallOptions = {
+	readonly timeoutMs?: number;
+	readonly maxTokens?: number;
+	readonly abortSignal?: AbortSignal;
+};
+
+export type LlmProviderStreamEvent =
+	| { readonly type: "text-delta"; readonly text: string }
+	| { readonly type: "done"; readonly text: string; readonly usage: LlmUsage | null };
+
+export interface LlmProviderStreamResult {
+	readonly stream: ReadableStream<LlmProviderStreamEvent>;
+	cancel(reason?: string): void;
+}
+
+export interface StreamCapableLlmProvider extends LlmProvider {
+	streamWithUsage?(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmProviderStreamResult>;
+}
+
+interface AbortBundle {
+	readonly signal: AbortSignal;
+	readonly timedOut: () => boolean;
+	abort(reason?: string): void;
+	cleanup(): void;
+}
+
+function createAbortBundle(timeoutMs: number, abortSignal?: AbortSignal): AbortBundle {
+	const controller = new AbortController();
+	let timedOut = false;
+	let timeout: ReturnType<typeof setTimeout> | null = null;
+	const onAbort = () => {
+		controller.abort();
+	};
+
+	if (timeoutMs > 0) {
+		timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, timeoutMs);
+	}
+
+	if (abortSignal) {
+		if (abortSignal.aborted) {
+			controller.abort();
+		} else {
+			abortSignal.addEventListener("abort", onAbort, { once: true });
+		}
+	}
+
+	return {
+		signal: controller.signal,
+		timedOut: () => timedOut,
+		abort(_reason?: string) {
+			controller.abort();
+		},
+		cleanup() {
+			if (timeout) clearTimeout(timeout);
+			if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+		},
+	};
+}
+
+function extractOpenAiLikeText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.flatMap((part) =>
+			typeof part === "object" &&
+			part !== null &&
+			"type" in part &&
+			part.type === "text" &&
+			"text" in part &&
+			typeof part.text === "string"
+				? [part.text]
+				: [],
+		)
+		.join("");
+}
+
+function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmProviderStreamResult {
+	if (!res.body) {
+		throw new Error("streaming response body was missing");
+	}
+
+	let finished = false;
+	let fullText = "";
+	let usage: LlmUsage | null = null;
+
+	const stream = new ReadableStream<LlmProviderStreamEvent>({
+		async start(controller) {
+			const reader = res.body?.getReader();
+			if (!reader) {
+				controller.error(new Error("streaming response body was missing"));
+				return;
+			}
+
+			const decoder = new TextDecoder();
+			let buffer = "";
+
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					buffer += decoder.decode(next.value, { stream: true });
+
+					while (true) {
+						const boundary = buffer.indexOf("\n\n");
+						if (boundary < 0) break;
+						const block = buffer.slice(0, boundary);
+						buffer = buffer.slice(boundary + 2);
+
+						const dataLines = block
+							.split(/\r?\n/)
+							.flatMap((line) => (line.startsWith("data:") ? [line.slice("data:".length).trimStart()] : []));
+						if (dataLines.length === 0) continue;
+
+						const payload = dataLines.join("\n");
+						if (payload === "[DONE]") {
+							finished = true;
+							controller.enqueue({ type: "done", text: fullText, usage });
+							controller.close();
+							return;
+						}
+
+						let parsed: unknown;
+						try {
+							parsed = JSON.parse(payload);
+						} catch {
+							continue;
+						}
+
+						if (typeof parsed !== "object" || parsed === null) continue;
+						const record = parsed as Record<string, unknown>;
+						const choices = Array.isArray(record.choices) ? record.choices : [];
+						const first = choices[0];
+						if (typeof first === "object" && first !== null && "delta" in first) {
+							const delta = first.delta;
+							if (typeof delta === "object" && delta !== null && "content" in delta) {
+								const text = extractOpenAiLikeText(delta.content);
+								if (text.length > 0) {
+									fullText += text;
+									controller.enqueue({ type: "text-delta", text });
+								}
+							}
+						}
+
+						if ("usage" in record && typeof record.usage === "object" && record.usage !== null) {
+							const rawUsage = record.usage as Record<string, unknown>;
+							usage = {
+								inputTokens: typeof rawUsage.prompt_tokens === "number" ? rawUsage.prompt_tokens : null,
+								outputTokens: typeof rawUsage.completion_tokens === "number" ? rawUsage.completion_tokens : null,
+								cacheReadTokens:
+									typeof rawUsage.cached_tokens === "number"
+										? rawUsage.cached_tokens
+										: typeof rawUsage.cache_read_tokens === "number"
+											? rawUsage.cache_read_tokens
+											: null,
+								cacheCreationTokens:
+									typeof rawUsage.cache_creation_tokens === "number" ? rawUsage.cache_creation_tokens : null,
+								totalCost: typeof rawUsage.cost === "number" ? rawUsage.cost : null,
+								totalDurationMs: null,
+							};
+						}
+					}
+				}
+
+				if (!finished) {
+					controller.error(new Error("upstream stream ended unexpectedly"));
+				}
+			} catch (error) {
+				controller.error(error);
+			} finally {
+				reader.releaseLock();
+			}
+		},
+		cancel() {
+			cancel();
+		},
+	});
+
+	return {
+		stream,
+		cancel(reason?: string) {
+			logger.debug("pipeline", "Cancelling streaming provider call", { reason: reason ?? "unspecified" });
+			cancel();
+		},
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Helper: call generateWithUsage if available, fall back to generate
 // ---------------------------------------------------------------------------
@@ -255,6 +444,153 @@ export async function generateWithTracking(
 	}
 	const text = await provider.generate(prompt, opts);
 	return { text, usage: null };
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible via HTTP API
+// ---------------------------------------------------------------------------
+
+export interface OpenAiCompatibleProviderConfig {
+	readonly name: string;
+	readonly model: string;
+	readonly baseUrl: string;
+	readonly apiKey?: string;
+	readonly defaultTimeoutMs: number;
+}
+
+export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderConfig): StreamCapableLlmProvider {
+	const baseUrl = trimTrailingSlash(config.baseUrl);
+	const headers = (): Record<string, string> => ({
+		"Content-Type": "application/json",
+		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+	});
+
+	async function call(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmGenerateResult> {
+		const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+		const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+		try {
+			const res = await fetch(`${baseUrl}/chat/completions`, {
+				method: "POST",
+				headers: headers(),
+				body: JSON.stringify({
+					model: config.model,
+					messages: [{ role: "user", content: prompt }],
+					max_tokens: opts?.maxTokens ?? 4096,
+				}),
+				signal: abort.signal,
+			});
+			if (!res.ok) {
+				const detail = (await res.text().catch(() => "")).slice(0, 300);
+				throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+			}
+			const body = (await res.json()) as {
+				choices?: Array<{ message?: { content?: string | Array<{ text?: string; type?: string }> } }>;
+				usage?: {
+					prompt_tokens?: number;
+					completion_tokens?: number;
+					total_tokens?: number;
+					cached_tokens?: number;
+				};
+			};
+			const content = body.choices?.[0]?.message?.content;
+			const text =
+				typeof content === "string"
+					? content
+					: Array.isArray(content)
+						? content
+								.flatMap((part) => (part?.type === "text" && typeof part.text === "string" ? [part.text] : []))
+								.join("\n")
+						: "";
+			if (!text.trim()) {
+				throw new Error(`${config.name} returned empty response`);
+			}
+			return {
+				text,
+				usage: body.usage
+					? {
+							inputTokens: body.usage.prompt_tokens ?? null,
+							outputTokens: body.usage.completion_tokens ?? null,
+							cacheReadTokens: body.usage.cached_tokens ?? null,
+							cacheCreationTokens: null,
+							totalCost: null,
+							totalDurationMs: null,
+						}
+					: null,
+			};
+		} catch (error) {
+			if (abort.timedOut()) {
+				throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+			}
+			throw error;
+		} finally {
+			abort.cleanup();
+		}
+	}
+
+	return {
+		name: config.name,
+		async generate(prompt, opts): Promise<string> {
+			const result = await call(prompt, opts);
+			return result.text;
+		},
+		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
+			return call(prompt, opts);
+		},
+		async streamWithUsage(prompt, opts): Promise<LlmProviderStreamResult> {
+			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+			const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+			try {
+				const res = await fetch(`${baseUrl}/chat/completions`, {
+					method: "POST",
+					headers: headers(),
+					body: JSON.stringify({
+						model: config.model,
+						messages: [{ role: "user", content: prompt }],
+						max_tokens: opts?.maxTokens ?? 4096,
+						stream: true,
+						stream_options: { include_usage: true },
+					}),
+					signal: abort.signal,
+				});
+				if (!res.ok) {
+					const detail = (await res.text().catch(() => "")).slice(0, 300);
+					throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+				}
+				const result = createOpenAiLikeStreamResult(res, () => {
+					abort.abort("stream cancelled");
+					abort.cleanup();
+				});
+				return {
+					stream: result.stream,
+					cancel(reason?: string) {
+						logger.debug("pipeline", "Cancelling openai-compatible stream", {
+							provider: config.name,
+							reason: reason ?? "unspecified",
+						});
+						abort.abort(reason);
+						abort.cleanup();
+					},
+				};
+			} catch (error) {
+				abort.cleanup();
+				if (abort.timedOut()) {
+					throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+				}
+				throw error;
+			}
+		},
+		async available(): Promise<boolean> {
+			try {
+				const res = await fetch(`${baseUrl}/models`, {
+					headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
+					signal: AbortSignal.timeout(5_000),
+				});
+				return res.ok;
+			} catch {
+				return false;
+			}
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -331,14 +667,9 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 		model,
 	};
 
-	async function callOllama(
-		prompt: string,
-		opts?: { timeoutMs?: number; maxTokens?: number },
-	): Promise<OllamaGenerateResponse> {
+	async function callOllama(prompt: string, opts?: LlmProviderCallOptions): Promise<OllamaGenerateResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
-
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
 
 		try {
 			const options: Record<string, number> = {};
@@ -355,7 +686,7 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 					stream: false,
 					...(Object.keys(options).length > 0 ? { options } : {}),
 				}),
-				signal: controller.signal,
+				signal: abort.signal,
 			});
 
 			if (!res.ok) {
@@ -370,12 +701,12 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 
 			return data;
 		} catch (e) {
-			if (e instanceof DOMException && e.name === "AbortError") {
+			if (abort.timedOut()) {
 				throw new Error(`Ollama timeout after ${timeoutMs}ms`);
 			}
 			throw e;
 		} finally {
-			clearTimeout(timer);
+			abort.cleanup();
 		}
 	}
 
@@ -408,6 +739,122 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 					totalDurationMs: nsToMs(data.total_duration),
 				},
 			};
+		},
+
+		async streamWithUsage(prompt, opts): Promise<LlmProviderStreamResult> {
+			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+			const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+			const options: Record<string, number> = {};
+			if (opts?.maxTokens) options.num_predict = opts.maxTokens;
+			if (cfg.maxContextTokens !== undefined) {
+				options.num_ctx = cfg.maxContextTokens;
+			}
+
+			try {
+				const res = await fetch(`${cfg.baseUrl}/api/generate`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						model: cfg.model,
+						prompt,
+						stream: true,
+						...(Object.keys(options).length > 0 ? { options } : {}),
+					}),
+					signal: abort.signal,
+				});
+
+				if (!res.ok) {
+					const body = await res.text().catch(() => "");
+					throw new Error(`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`);
+				}
+				if (!res.body) {
+					throw new Error("Ollama streaming response body was missing");
+				}
+
+				let fullText = "";
+				const stream = new ReadableStream<LlmProviderStreamEvent>({
+					async start(controller) {
+						const reader = res.body?.getReader();
+						if (!reader) {
+							controller.error(new Error("Ollama streaming response body was missing"));
+							return;
+						}
+						const decoder = new TextDecoder();
+						let buffer = "";
+
+						try {
+							while (true) {
+								const next = await reader.read();
+								if (next.done) break;
+								buffer += decoder.decode(next.value, { stream: true });
+
+								while (true) {
+									const lineBreak = buffer.indexOf("\n");
+									if (lineBreak < 0) break;
+									const line = buffer.slice(0, lineBreak).trim();
+									buffer = buffer.slice(lineBreak + 1);
+									if (!line) continue;
+
+									const parsed = JSON.parse(line) as OllamaGenerateResponse & {
+										readonly done?: boolean;
+									};
+									const text = typeof parsed.response === "string" ? parsed.response : "";
+									if (text.length > 0) {
+										fullText += text;
+										controller.enqueue({ type: "text-delta", text });
+									}
+									if (parsed.done === true) {
+										const nsToMs = (ns: number | undefined): number | null =>
+											typeof ns === "number" ? Math.round(ns / 1_000_000) : null;
+										controller.enqueue({
+											type: "done",
+											text: fullText.length > 0 ? fullText : (parsed.thinking ?? "").trim(),
+											usage: {
+												inputTokens: parsed.prompt_eval_count ?? null,
+												outputTokens: parsed.eval_count ?? null,
+												cacheReadTokens: null,
+												cacheCreationTokens: null,
+												totalCost: null,
+												totalDurationMs: nsToMs(parsed.total_duration),
+											},
+										});
+										controller.close();
+										return;
+									}
+								}
+							}
+
+							controller.error(new Error("upstream stream ended unexpectedly"));
+						} catch (error) {
+							controller.error(error);
+						} finally {
+							reader.releaseLock();
+						}
+					},
+					cancel() {
+						abort.abort("stream cancelled");
+						abort.cleanup();
+					},
+				});
+
+				return {
+					stream,
+					cancel(reason?: string) {
+						logger.debug("pipeline", "Cancelling ollama stream", {
+							model: cfg.model,
+							reason: reason ?? "unspecified",
+						});
+						abort.abort(reason);
+						abort.cleanup();
+					},
+				};
+			} catch (error) {
+				abort.cleanup();
+				if (abort.timedOut()) {
+					throw new Error(`Ollama timeout after ${timeoutMs}ms`);
+				}
+				throw error;
+			}
 		},
 
 		async available(): Promise<boolean> {
@@ -682,6 +1129,147 @@ function isRetryableStatus(status: number): boolean {
 	return status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529;
 }
 
+function createAnthropicStreamResult(res: Response, cancel: () => void): LlmProviderStreamResult {
+	if (!res.body) {
+		throw new Error("Anthropic streaming response body was missing");
+	}
+
+	let fullText = "";
+	let usage: LlmUsage | null = null;
+	let finished = false;
+
+	const stream = new ReadableStream<LlmProviderStreamEvent>({
+		async start(controller) {
+			const reader = res.body?.getReader();
+			if (!reader) {
+				controller.error(new Error("Anthropic streaming response body was missing"));
+				return;
+			}
+			const decoder = new TextDecoder();
+			let buffer = "";
+
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					buffer += decoder.decode(next.value, { stream: true });
+
+					while (true) {
+						const boundary = buffer.indexOf("\n\n");
+						if (boundary < 0) break;
+						const block = buffer.slice(0, boundary);
+						buffer = buffer.slice(boundary + 2);
+
+						let eventType = "message";
+						const dataLines: string[] = [];
+						for (const line of block.split(/\r?\n/)) {
+							if (line.startsWith("event:")) {
+								eventType = line.slice("event:".length).trim();
+							}
+							if (line.startsWith("data:")) {
+								dataLines.push(line.slice("data:".length).trimStart());
+							}
+						}
+						if (dataLines.length === 0) continue;
+						const payload = dataLines.join("\n");
+						if (payload === "[DONE]") {
+							finished = true;
+							controller.enqueue({ type: "done", text: fullText, usage });
+							controller.close();
+							return;
+						}
+
+						let parsed: unknown;
+						try {
+							parsed = JSON.parse(payload);
+						} catch {
+							continue;
+						}
+						if (typeof parsed !== "object" || parsed === null) continue;
+						const record = parsed as Record<string, unknown>;
+
+						if (eventType === "message_start") {
+							const message = typeof record.message === "object" && record.message !== null ? record.message : null;
+							const rawUsage = message && typeof message === "object" && "usage" in message ? message.usage : null;
+							if (typeof rawUsage === "object" && rawUsage !== null) {
+								const usageRecord = rawUsage as Record<string, unknown>;
+								usage = {
+									inputTokens: typeof usageRecord.input_tokens === "number" ? usageRecord.input_tokens : null,
+									outputTokens: typeof usageRecord.output_tokens === "number" ? usageRecord.output_tokens : null,
+									cacheReadTokens:
+										typeof usageRecord.cache_read_input_tokens === "number"
+											? usageRecord.cache_read_input_tokens
+											: null,
+									cacheCreationTokens:
+										typeof usageRecord.cache_creation_input_tokens === "number"
+											? usageRecord.cache_creation_input_tokens
+											: null,
+									totalCost: null,
+									totalDurationMs: null,
+								};
+							}
+						}
+
+						if (eventType === "content_block_delta") {
+							const delta = typeof record.delta === "object" && record.delta !== null ? record.delta : null;
+							if (delta && delta.type === "text_delta" && typeof delta.text === "string") {
+								fullText += delta.text;
+								controller.enqueue({ type: "text-delta", text: delta.text });
+							}
+						}
+
+						if (eventType === "message_delta") {
+							const rawUsage = typeof record.usage === "object" && record.usage !== null ? record.usage : null;
+							if (rawUsage) {
+								const usageRecord = rawUsage as Record<string, unknown>;
+								usage = {
+									inputTokens: usage?.inputTokens ?? null,
+									outputTokens:
+										typeof usageRecord.output_tokens === "number"
+											? usageRecord.output_tokens
+											: (usage?.outputTokens ?? null),
+									cacheReadTokens: usage?.cacheReadTokens ?? null,
+									cacheCreationTokens: usage?.cacheCreationTokens ?? null,
+									totalCost: null,
+									totalDurationMs: null,
+								};
+							}
+						}
+
+						if (eventType === "message_stop") {
+							finished = true;
+							controller.enqueue({ type: "done", text: fullText, usage });
+							controller.close();
+							return;
+						}
+					}
+				}
+
+				if (!finished) {
+					controller.error(new Error("upstream stream ended unexpectedly"));
+				}
+			} catch (error) {
+				controller.error(error);
+			} finally {
+				reader.releaseLock();
+			}
+		},
+		cancel() {
+			cancel();
+		},
+	});
+
+	return {
+		stream,
+		cancel(reason?: string) {
+			logger.debug("pipeline", "Cancelling anthropic stream", {
+				reason: reason ?? "unspecified",
+			});
+			cancel();
+		},
+	};
+}
+
 export function createAnthropicProvider(config?: Partial<AnthropicProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_ANTHROPIC_CONFIG, ...config };
 	const resolvedModel = resolveAnthropicModel(cfg.model);
@@ -868,6 +1456,64 @@ export function createAnthropicProvider(config?: Partial<AnthropicProviderConfig
 						}
 					: null,
 			};
+		},
+
+		async streamWithUsage(prompt, opts): Promise<LlmProviderStreamResult> {
+			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+			const maxTokens = opts?.maxTokens || 4096;
+			const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+			try {
+				const res = await fetch(`${cfg.baseUrl}/v1/messages`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-api-key": cfg.apiKey,
+						"anthropic-version": ANTHROPIC_API_VERSION,
+					},
+					body: JSON.stringify({
+						model: resolvedModel,
+						max_tokens: maxTokens,
+						stream: true,
+						messages: [{ role: "user", content: prompt }],
+					}),
+					signal: abort.signal,
+				});
+				if (!res.ok) {
+					const rawBody = await res.text().catch(() => "");
+					let errorDetail = rawBody.slice(0, 300);
+					try {
+						const parsed = JSON.parse(rawBody) as AnthropicErrorBody;
+						if (parsed.error?.message) {
+							errorDetail = `${parsed.error.type ?? "error"}: ${parsed.error.message}`;
+						}
+					} catch {
+						// use raw body
+					}
+					throw new Error(`Anthropic HTTP ${res.status}: ${errorDetail}`);
+				}
+
+				const result = createAnthropicStreamResult(res, () => {
+					abort.abort("stream cancelled");
+					abort.cleanup();
+				});
+				return {
+					stream: result.stream,
+					cancel(reason?: string) {
+						logger.debug("pipeline", "Cancelling anthropic stream", {
+							model: resolvedModel,
+							reason: reason ?? "unspecified",
+						});
+						abort.abort(reason);
+						abort.cleanup();
+					},
+				};
+			} catch (error) {
+				abort.cleanup();
+				if (abort.timedOut()) {
+					throw new Error(`Anthropic timeout after ${timeoutMs}ms`);
+				}
+				throw error;
+			}
 		},
 
 		async available(): Promise<boolean> {
@@ -1135,6 +1781,60 @@ export function createOpenRouterProvider(config?: Partial<OpenRouterProviderConf
 						}
 					: null,
 			};
+		},
+
+		async streamWithUsage(prompt, opts): Promise<LlmProviderStreamResult> {
+			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+			const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+			try {
+				const headers: Record<string, string> = {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${cfg.apiKey}`,
+				};
+				if (cfg.referer) headers["HTTP-Referer"] = cfg.referer;
+				if (cfg.title) {
+					headers["X-OpenRouter-Title"] = cfg.title;
+					headers["X-Title"] = cfg.title;
+				}
+
+				const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({
+						model: cfg.model,
+						messages: [{ role: "user", content: prompt }],
+						max_tokens: opts?.maxTokens ?? 4096,
+						stream: true,
+						stream_options: { include_usage: true },
+					}),
+					signal: abort.signal,
+				});
+				if (!res.ok) {
+					const detail = (await res.text().catch(() => "")).slice(0, 300);
+					throw new Error(`OpenRouter HTTP ${res.status}: ${detail}`);
+				}
+				const result = createOpenAiLikeStreamResult(res, () => {
+					abort.abort("stream cancelled");
+					abort.cleanup();
+				});
+				return {
+					stream: result.stream,
+					cancel(reason?: string) {
+						logger.debug("pipeline", "Cancelling openrouter stream", {
+							model: cfg.model,
+							reason: reason ?? "unspecified",
+						});
+						abort.abort(reason);
+						abort.cleanup();
+					},
+				};
+			} catch (error) {
+				abort.cleanup();
+				if (abort.timedOut()) {
+					throw new Error(`OpenRouter timeout after ${timeoutMs}ms`);
+				}
+				throw error;
+			}
 		},
 
 		async available(): Promise<boolean> {

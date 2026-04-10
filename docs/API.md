@@ -56,6 +56,10 @@ Rate limits apply in `team` and `hybrid` modes:
 | modify         | 60 / min    |
 | batchForget    | 5 / min     |
 | admin actions  | 10 / min    |
+| inferenceExplain | 120 / min |
+| inferenceExecute | 20 / min  |
+| inferenceGateway | 30 / min  |
+| recallLlm      | 60 / min    |
 
 Errors follow a consistent shape:
 
@@ -252,6 +256,14 @@ used by `signet route explain`.
 }
 ```
 
+Boundary guards:
+
+- `explicitTargets` may contain at most 8 entries.
+- `expectedInputTokens`, `expectedOutputTokens`, and `latencyBudgetMs` are
+  clamped to sane non-negative bounds.
+- `promptPreview` is truncated to 4,000 characters.
+- Oversized request bodies return `413`.
+
 **Response**
 
 Returns a full `RouteDecision` object, including `trace.candidates[]` with the
@@ -274,6 +286,13 @@ Routes and executes a prompt using the Signet inference layer.
   "maxTokens": 1200
 }
 ```
+
+Boundary guards:
+
+- Request bodies over 512 KiB return `413`.
+- `prompt` is capped at 200,000 characters.
+- `maxTokens` and `timeoutMs` are clamped to sane non-negative bounds.
+- `explicitTargets` may contain at most 8 entries.
 
 **Response**
 
@@ -299,6 +318,31 @@ Routes and executes a prompt using the Signet inference layer.
   ]
 }
 ```
+
+### POST /api/inference/stream
+
+Requires `admin` permission in authenticated modes.
+
+Streams a routed inference request over Server-Sent Events for first-party
+Signet consumers. The request body matches `POST /api/inference/execute`.
+
+**SSE events**
+
+- `meta` — includes `requestId` and the selected route decision
+- `delta` — streamed text chunks
+- `done` — final text, usage, and attempt metadata
+- `cancelled` — emitted when the stream is cancelled explicitly or by
+  disconnect
+- `error` — emitted when a provider dies mid-stream, including partial text
+
+The response also includes `x-signet-request-id`, which can be used with the
+cancellation endpoint below.
+
+### DELETE /api/inference/requests/:id
+
+Requires `admin` permission in authenticated modes.
+
+Cancels an active native or gateway inference stream by request id.
 
 ### GET /v1/models
 
@@ -327,7 +371,16 @@ Signet-specific routing hints can be provided in headers:
 - `x-signet-route-policy`
 - `x-signet-explicit-target`
 
-Streaming requests currently return `501`.
+Boundary guards:
+
+- Request bodies over 512 KiB return `413`.
+- `messages` may contain at most 128 entries and 200,000 total characters of
+  string content.
+- Signet routing headers are normalized and invalid hint values return `400`.
+
+When `stream: true`, the gateway returns OpenAI-style SSE chunks and includes
+`x-signet-request-id` in the response headers so operators can cancel the
+stream through `DELETE /api/inference/requests/:id`.
 
 
 Auth
