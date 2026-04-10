@@ -67,6 +67,10 @@ function makeTaggedReleaseRepo(): string {
 	return dir;
 }
 
+function countOccurrences(value: string, needle: string): number {
+	return value.split(needle).length - 1;
+}
+
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { force: true, recursive: true });
@@ -123,5 +127,30 @@ describe("scripts/changelog.ts", () => {
 			"Release summary: internal maintenance release with no conventional commit entries captured.",
 		);
 		expect(changelog.indexOf("## [0.1.1] - ")).toBeLessThan(changelog.indexOf("## [0.1.0] - "));
+	});
+
+	test("prepends a release to an existing structured changelog without duplicating document sections", () => {
+		const dir = makePendingReleaseRepo();
+
+		run(["bun", changelogScript, "--version", "0.1.1", "--date", "2026-04-09"], dir);
+		run(["git", "add", "CHANGELOG.md", ".bump-level"], dir);
+		run(["git", "commit", "-m", "chore: release 0.1.1"], dir);
+		run(["git", "tag", "v0.1.1"], dir);
+
+		writeFileSync(join(dir, "API.md"), "api notes\n");
+		run(["git", "add", "API.md"], dir);
+		run(["git", "commit", "-m", "docs(api): document steady-state release flow"], dir);
+
+		run(["bun", changelogScript, "--version", "0.1.2", "--date", "2026-04-10"], dir);
+
+		const changelog = readFileSync(join(dir, "CHANGELOG.md"), "utf8");
+		expect(countOccurrences(changelog, "## Recent Highlights")).toBe(1);
+		expect(countOccurrences(changelog, "## Release Ledger")).toBe(1);
+		expect(changelog.indexOf("## [0.1.2] - 2026-04-10")).toBeLessThan(changelog.indexOf("## [0.1.1] - 2026-04-09"));
+		expect(changelog).toContain("Release summary: 1 docs update.");
+		expect(changelog).toContain("Tag range: `v0.1.1..v0.1.2`.");
+		expect(changelog).toContain("- **api**: document steady-state release flow");
+		expect(changelog).toContain("Tag range: `v0.1.0..v0.1.1`.");
+		expect(changelog).toContain("- **cli**: repair release notes ordering");
 	});
 });

@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-09
-- Bug fixes: improve docs search and docs navigation.
+- Bug fixes: block leaked workspace deps in release; improve docs search and docs navigation.
 
 ### 2026-04-08
 - Bug fixes: honour maxInjectChars config in session-start hook.
@@ -25,11 +25,23 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-04
 - Bug fixes: scope sub-agent memory dedupe and synthesis; prevent summary-worker retries on shared session-end keys.
 
-### 2026-04-03
-- Features: add ForgeCode connector.
-- Bug fixes: auto-migrate legacy-only OpenClaw runtime; ignore generated MEMORY backup markdown files.
-
 ## Release Ledger
+
+## [0.98.10] - 2026-04-10
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.98.9..v0.98.10`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.98.9] - 2026-04-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.8..v0.98.9`.
+
+### Bug Fixes
+
+- **publish**: block leaked workspace deps in release (#486)
 
 ## [0.98.8] - 2026-04-09
 

@@ -138,6 +138,9 @@ jobs:
         run: |
           NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION")
           if [ -z "$NOTES" ] || [ "$NOTES" = "No changelog section found for v$NEW_VERSION" ]; then
+            # This runs after the version bump commit and tag are pushed. If it
+            # fails, recover by creating the draft release manually with
+            # `gh release create "v$NEW_VERSION" --draft --notes-file <notes>`.
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
