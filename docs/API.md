@@ -3061,6 +3061,16 @@ Query raw telemetry events.
 }
 ```
 
+Inference routing emits additional local-first telemetry events:
+
+- `inference.route`
+- `inference.execute`
+- `inference.stream`
+- `inference.fallback`
+
+These events intentionally exclude raw prompts, response text, secrets,
+credentials, and session references.
+
 ### GET /api/telemetry/stats
 
 Aggregated telemetry statistics since daemon start or since a given timestamp.
@@ -3085,6 +3095,16 @@ Aggregated telemetry statistics since daemon start or since a given timestamp.
     "totalCost": 0.45,
     "p50": 800,
     "p95": 2400
+  },
+  "inference": {
+    "routes": 40,
+    "executes": 18,
+    "streams": 4,
+    "errors": 3,
+    "cancelled": 1,
+    "fallbacks": 5,
+    "p50": 120,
+    "p95": 900
   },
   "pipelineErrors": 3
 }

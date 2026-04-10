@@ -13,6 +13,7 @@ import {
 } from "./auth";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
 import { mountInferenceRoutes } from "./routes/inference";
+import type { TelemetryCollector, TelemetryEvent, TelemetryEventType, TelemetryProperties } from "./telemetry";
 
 let app: {
 	request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -307,6 +308,7 @@ function createInferenceTestApp(
 		readonly inferenceExplainMax?: number;
 		readonly inferenceExecuteMax?: number;
 		readonly inferenceGatewayMax?: number;
+		readonly telemetry?: TelemetryCollector;
 	},
 ): {
 	readonly app: Hono;
@@ -373,8 +375,35 @@ function createInferenceTestApp(
 		);
 	}
 
-	mountInferenceRoutes(app, { getAuthMode: () => cfg.mode });
+	mountInferenceRoutes(app, { getAuthMode: () => cfg.mode, getTelemetry: () => opts?.telemetry });
 	return { app, secret };
+}
+
+function createTelemetryRecorder(): {
+	readonly collector: TelemetryCollector;
+	readonly events: TelemetryEvent[];
+} {
+	const events: TelemetryEvent[] = [];
+	return {
+		events,
+		collector: {
+			enabled: true,
+			record(event: TelemetryEventType, properties: TelemetryProperties): void {
+				events.push({
+					id: `evt_${events.length + 1}`,
+					event,
+					timestamp: new Date().toISOString(),
+					properties,
+				});
+			},
+			async flush(): Promise<void> {},
+			start(): void {},
+			async stop(): Promise<void> {},
+			query(): readonly TelemetryEvent[] {
+				return events;
+			},
+		},
+	};
 }
 
 async function readNextSseEvent(
@@ -982,6 +1011,95 @@ describe("inference redaction", () => {
 			expect(secondaryBlocked).toContain("[redacted");
 			expect(containsSecretLeak(primaryBlocked)).toBe(false);
 			expect(containsSecretLeak(secondaryBlocked)).toBe(false);
+		} finally {
+			resetInferenceRouterForTests();
+			primary.stop();
+			secondary.stop();
+			backup.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("inference telemetry", () => {
+	it("records route explain telemetry without prompt leakage", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-telemetry-route-"));
+		const fake = startFakeOpenAiServer("success");
+		writeStreamingRoutingFixture(root, fake.url);
+		const telemetry = createTelemetryRecorder();
+		try {
+			const { app, secret } = createInferenceTestApp(root, { telemetry: telemetry.collector });
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const res = await app.request(
+				new Request("http://localhost/api/inference/explain", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						promptPreview: "super secret prompt that should never hit telemetry",
+					}),
+				}),
+			);
+			expect(res.status).toBe(200);
+			const routeEvent = telemetry.events.find((event) => event.event === "inference.route");
+			expect(routeEvent).toBeTruthy();
+			expect(routeEvent?.properties.surface).toBe("native");
+			expect(routeEvent?.properties.operation).toBe("interactive");
+			expect(routeEvent?.properties.success).toBe(true);
+			expect(routeEvent?.properties.selectedTarget).toBe("fake/stream");
+			expect(JSON.stringify(routeEvent)).not.toContain("super secret prompt");
+		} finally {
+			resetInferenceRouterForTests();
+			fake.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("records execution and fallback telemetry for routed retries", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-telemetry-execute-"));
+		const primary = startFakeOpenAiServer("rate_limit");
+		const secondary = startFakeOpenAiServer("success");
+		const backup = startFakeOpenAiServer("success");
+		const telemetry = createTelemetryRecorder();
+		writeAccountFallbackRoutingFixture(root, {
+			primary: primary.url,
+			secondary: secondary.url,
+			backup: backup.url,
+		});
+		try {
+			const { app, secret } = createInferenceTestApp(root, { telemetry: telemetry.collector });
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const res = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "super secret prompt that should never hit telemetry",
+					}),
+				}),
+			);
+			expect(res.status).toBe(200);
+			const executeEvent = telemetry.events.find((event) => event.event === "inference.execute");
+			const fallbackEvent = telemetry.events.find((event) => event.event === "inference.fallback");
+			expect(executeEvent).toBeTruthy();
+			expect(fallbackEvent).toBeTruthy();
+			expect(executeEvent?.properties.surface).toBe("native");
+			expect(executeEvent?.properties.success).toBe(true);
+			expect(executeEvent?.properties.selectedTarget).toBe("primary/fast");
+			expect(executeEvent?.properties.finalTarget).toBe("backup/safe");
+			expect(executeEvent?.properties.fallbackCount).toBe(2);
+			expect(executeEvent?.properties.failedCount).toBe(2);
+			expect(executeEvent?.properties.errorCode).toBe("RATE_LIMITED");
+			expect(fallbackEvent?.properties.failedTargets).toBe("primary/fast,secondary/deep");
+			expect(JSON.stringify(executeEvent)).not.toContain("super secret prompt");
+			expect(JSON.stringify(fallbackEvent)).not.toContain("super secret prompt");
 		} finally {
 			resetInferenceRouterForTests();
 			primary.stop();

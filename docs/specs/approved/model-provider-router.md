@@ -222,6 +222,13 @@ the spec stays useful as both contract and progress tracker.
   end state for harness/runtime metadata and subtask semantics
 - Observability exists per call through route traces and execution attempts,
   but does not yet persist route history, quota state, or fallback analytics
+- Local inference telemetry now persists safe routing history through the
+  existing opt-in telemetry collector:
+  - `inference.route`
+  - `inference.execute`
+  - `inference.stream`
+  - `inference.fallback`
+  - prompt bodies, responses, secrets, and session refs are excluded
 - CLI support is functional, but still lacks the full override surface
   described in the original plan, especially richer request-shaping flags
 - Security hardening is underway:
@@ -251,7 +258,7 @@ the spec stays useful as both contract and progress tracker.
   - cooldown / recovery logic
   - durable degraded-state tracking
 - Persisted telemetry for routing decisions, fallback hops, costs, and
-  session/quota state
+  session/quota state beyond the current local event stream and summary stats
 - Harness adoption outside Signet-owned daemon routes:
   - OpenClaw
   - Hermes
@@ -366,7 +373,7 @@ adoption work like OpenClaw takeover.
 
 ### 6. Observability and auditability
 
-- [ ] Persist routed attempt telemetry locally, at minimum:
+- [x] Persist routed attempt telemetry locally, at minimum:
   - agent id
   - operation
   - task class
@@ -379,7 +386,7 @@ adoption work like OpenClaw takeover.
   - privacy gate result
 - [ ] Expose recent routing failures and fallback history in daemon status or
   diagnostics surfaces.
-- [ ] Keep external telemetry opt-in only and redact prompt contents by
+- [x] Keep external telemetry opt-in only and redact prompt contents by
   default.
 - [ ] Add tests proving trace and telemetry redaction rules hold.
 

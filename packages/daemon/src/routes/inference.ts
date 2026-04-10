@@ -9,6 +9,7 @@ import type { Hono } from "hono";
 import type { AuthMode } from "../auth/index.js";
 import { checkScope } from "../auth/index.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
+import type { TelemetryCollector } from "../telemetry.js";
 
 const MAX_EXPLAIN_BYTES = 128 * 1024;
 const MAX_EXECUTE_BYTES = 512 * 1024;
@@ -36,6 +37,7 @@ type ValidationResult<T> =
 
 export interface InferenceRouteOptions {
 	readonly getAuthMode?: () => AuthMode;
+	readonly getTelemetry?: () => TelemetryCollector | undefined;
 }
 
 interface ActiveInferenceRequest {
@@ -332,6 +334,206 @@ function getAuthMode(opts: InferenceRouteOptions): AuthMode {
 	return opts.getAuthMode?.() ?? DEFAULT_AUTH_MODE;
 }
 
+function getTelemetry(opts: InferenceRouteOptions): TelemetryCollector | undefined {
+	return opts.getTelemetry?.();
+}
+
+function classifyInferenceErrorCode(value: string | undefined): string {
+	const lower = (value ?? "").toLowerCase();
+	if (lower.includes("timeout")) return "TIMEOUT";
+	if (lower.includes("cancel")) return "CANCELLED";
+	if (lower.includes("rate limit") || lower.includes("http 429") || lower.includes("quota")) return "RATE_LIMITED";
+	if (
+		lower.includes("http 401") ||
+		lower.includes("http 403") ||
+		lower.includes("unauthorized") ||
+		lower.includes("forbidden") ||
+		lower.includes("auth")
+	) {
+		return "AUTH";
+	}
+	if (lower.includes("invalid-config")) return "INVALID_CONFIG";
+	if (lower.includes("no-candidates")) return "NO_CANDIDATES";
+	if (lower.length === 0) return "UNKNOWN";
+	return "ERROR";
+}
+
+function summarizeAttempts(
+	attempts: readonly Array<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }>,
+): {
+	readonly finalTargetRef: string | null;
+	readonly attemptPath: string | null;
+	readonly failedTargets: string | null;
+	readonly attemptCount: number;
+	readonly failedCount: number;
+	readonly fallbackCount: number;
+	readonly errorCode: string | null;
+} {
+	const final = [...attempts].reverse().find((attempt) => attempt.ok) ?? null;
+	const failed = attempts.filter((attempt) => !attempt.ok);
+	return {
+		finalTargetRef: final?.targetRef ?? null,
+		attemptPath: attempts.length > 0 ? attempts.map((attempt) => attempt.targetRef).join(" -> ") : null,
+		failedTargets: failed.length > 0 ? failed.map((attempt) => attempt.targetRef).join(",") : null,
+		attemptCount: attempts.length,
+		failedCount: failed.length,
+		fallbackCount: Math.max(0, attempts.length - 1),
+		errorCode: failed.length > 0 ? classifyInferenceErrorCode(failed.at(-1)?.error) : null,
+	};
+}
+
+function extractAttemptRecords(
+	details: unknown,
+): readonly Array<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }> {
+	if (!isRecord(details) || !Array.isArray(details.attempts)) return [];
+	return details.attempts.flatMap((attempt) => {
+		if (!isRecord(attempt) || typeof attempt.targetRef !== "string" || typeof attempt.ok !== "boolean") return [];
+		return [
+			{
+				targetRef: attempt.targetRef,
+				ok: attempt.ok,
+				...(typeof attempt.error === "string" ? { error: attempt.error } : {}),
+			},
+		];
+	});
+}
+
+function traceCounts(details: unknown): {
+	readonly candidateCount: number | null;
+	readonly blockedCount: number | null;
+	readonly allowedCount: number | null;
+} {
+	if (!isRecord(details) || !isRecord(details.trace) || !Array.isArray(details.trace.candidates)) {
+		return { candidateCount: null, blockedCount: null, allowedCount: null };
+	}
+	const candidates = details.trace.candidates.filter(isRecord);
+	const blockedCount = candidates.filter(
+		(candidate) => Array.isArray(candidate.blockedBy) && candidate.blockedBy.length > 0,
+	).length;
+	return {
+		candidateCount: candidates.length,
+		blockedCount,
+		allowedCount: candidates.length - blockedCount,
+	};
+}
+
+function recordInferenceRouteTelemetry(
+	telemetry: TelemetryCollector | undefined,
+	surface: "native" | "gateway",
+	request: RouteRequest,
+	durationMs: number,
+	result:
+		| {
+				readonly ok: true;
+				readonly value: {
+					readonly policyId: string;
+					readonly taskClass: string;
+					readonly targetRef: string;
+					readonly trace: { readonly candidates: readonly unknown[] };
+				};
+		  }
+		| { readonly ok: false; readonly error: { readonly code: string; readonly details?: unknown } },
+): void {
+	if (!telemetry?.enabled) return;
+	if (result.ok) {
+		const blockedCount = result.value.trace.candidates.filter(
+			(candidate) => isRecord(candidate) && Array.isArray(candidate.blockedBy) && candidate.blockedBy.length > 0,
+		).length;
+		telemetry.record("inference.route", {
+			surface,
+			agentId: request.agentId ?? "default",
+			operation: request.operation,
+			taskClass: result.value.taskClass,
+			policyId: result.value.policyId,
+			selectedTarget: result.value.targetRef,
+			candidateCount: result.value.trace.candidates.length,
+			blockedCount,
+			allowedCount: result.value.trace.candidates.length - blockedCount,
+			privacy: request.privacy ?? null,
+			durationMs,
+			success: true,
+			errorCode: null,
+		});
+		return;
+	}
+	const counts = traceCounts(result.error.details);
+	telemetry.record("inference.route", {
+		surface,
+		agentId: request.agentId ?? "default",
+		operation: request.operation,
+		taskClass: request.taskClass ?? null,
+		policyId: request.explicitPolicy ?? null,
+		selectedTarget: null,
+		candidateCount: counts.candidateCount,
+		blockedCount: counts.blockedCount,
+		allowedCount: counts.allowedCount,
+		privacy: request.privacy ?? null,
+		durationMs,
+		success: false,
+		errorCode: result.error.code,
+	});
+}
+
+function recordInferenceExecutionTelemetry(
+	telemetry: TelemetryCollector | undefined,
+	event: "inference.execute" | "inference.stream",
+	surface: "native" | "gateway",
+	request: RouteRequest,
+	durationMs: number,
+	status: "success" | "cancelled" | "error",
+	payload: {
+		readonly decision: { readonly policyId: string; readonly taskClass: string; readonly targetRef: string };
+		readonly attempts: readonly Array<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }>;
+		readonly usage?: { readonly inputTokens: number | null; readonly outputTokens: number | null } | null;
+		readonly errorCode?: string | null;
+	},
+): void {
+	if (!telemetry?.enabled) return;
+	const summary = summarizeAttempts(payload.attempts);
+	telemetry.record(event, {
+		surface,
+		agentId: request.agentId ?? "default",
+		operation: request.operation,
+		taskClass: payload.decision.taskClass,
+		policyId: payload.decision.policyId,
+		selectedTarget: payload.decision.targetRef,
+		finalTarget: summary.finalTargetRef,
+		attemptPath: summary.attemptPath,
+		failedTargets: summary.failedTargets,
+		attemptCount: summary.attemptCount,
+		failedCount: summary.failedCount,
+		fallbackCount: summary.fallbackCount,
+		privacy: request.privacy ?? null,
+		durationMs,
+		inputTokens: payload.usage?.inputTokens ?? null,
+		outputTokens: payload.usage?.outputTokens ?? null,
+		success: status === "success",
+		cancelled: status === "cancelled",
+		errorCode: payload.errorCode ?? summary.errorCode,
+	});
+	if (summary.failedCount > 0) {
+		telemetry.record("inference.fallback", {
+			surface,
+			agentId: request.agentId ?? "default",
+			operation: request.operation,
+			taskClass: payload.decision.taskClass,
+			policyId: payload.decision.policyId,
+			selectedTarget: payload.decision.targetRef,
+			finalTarget: summary.finalTargetRef,
+			attemptPath: summary.attemptPath,
+			failedTargets: summary.failedTargets,
+			attemptCount: summary.attemptCount,
+			failedCount: summary.failedCount,
+			fallbackCount: summary.fallbackCount,
+			privacy: request.privacy ?? null,
+			durationMs,
+			success: status === "success",
+			cancelled: status === "cancelled",
+			errorCode: payload.errorCode ?? summary.errorCode,
+		});
+	}
+}
+
 function registerActiveInferenceRequest(requestId: string, cancel: (reason?: string) => void): () => void {
 	activeInferenceRequests.set(requestId, { cancel });
 	let released = false;
@@ -376,6 +578,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 	app.post("/api/inference/explain", async (c) => {
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: "inference router not initialized" }, 503);
+		const telemetry = getTelemetry(opts);
 		const body = await readJsonObject(c, MAX_EXPLAIN_BYTES);
 		if (!body.ok) return c.json({ error: body.message, details: body.details ?? null }, body.status);
 		const request = buildRouteRequest(body.value);
@@ -384,7 +587,9 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		if (!scoped.ok) return c.json({ error: scoped.message, details: scoped.details ?? null }, scoped.status);
 		const refresh = parseBoolean(body.value.refresh, "refresh");
 		if (!refresh.ok) return c.json({ error: refresh.message, details: refresh.details ?? null }, refresh.status);
+		const startedAt = Date.now();
 		const result = await router.explain(scoped.value, refresh.value === true);
+		recordInferenceRouteTelemetry(telemetry, "native", scoped.value, Date.now() - startedAt, result);
 		if (!result.ok) return c.json({ error: result.error.message, details: result.error.details ?? null }, 400);
 		return c.json(result.value);
 	});
@@ -392,6 +597,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 	app.post("/api/inference/execute", async (c) => {
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: "inference router not initialized" }, 503);
+		const telemetry = getTelemetry(opts);
 		const body = await readJsonObject(c, MAX_EXECUTE_BYTES);
 		if (!body.ok) return c.json({ error: body.message, details: body.details ?? null }, body.status);
 		const prompt = parsePrompt(body.value.prompt);
@@ -411,20 +617,52 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			return c.json({ error: maxTokens.message, details: maxTokens.details ?? null }, maxTokens.status);
 		const refresh = parseBoolean(body.value.refresh, "refresh");
 		if (!refresh.ok) return c.json({ error: refresh.message, details: refresh.details ?? null }, refresh.status);
+		const startedAt = Date.now();
 		const result = await router.execute(scoped.value, prompt.value, {
 			timeoutMs: timeoutMs.value,
 			maxTokens: maxTokens.value,
 			refresh: refresh.value === true,
 		});
 		if (!result.ok) {
+			recordInferenceExecutionTelemetry(
+				telemetry,
+				"inference.execute",
+				"native",
+				scoped.value,
+				Date.now() - startedAt,
+				"error",
+				{
+					decision: {
+						policyId: scoped.value.explicitPolicy ?? "unknown",
+						taskClass: scoped.value.taskClass ?? "interactive",
+						targetRef: "unresolved",
+					},
+					attempts: extractAttemptRecords(result.error.details),
+					errorCode: result.error.code,
+				},
+			);
 			return c.json({ error: result.error.message, details: result.error.details ?? null }, 502);
 		}
+		recordInferenceExecutionTelemetry(
+			telemetry,
+			"inference.execute",
+			"native",
+			scoped.value,
+			Date.now() - startedAt,
+			"success",
+			{
+				decision: result.value.decision,
+				attempts: result.value.attempts,
+				usage: result.value.usage,
+			},
+		);
 		return c.json(result.value);
 	});
 
 	app.post("/api/inference/stream", async (c) => {
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: "inference router not initialized" }, 503);
+		const telemetry = getTelemetry(opts);
 		const body = await readJsonObject(c, MAX_EXECUTE_BYTES);
 		if (!body.ok) return c.json({ error: body.message, details: body.details ?? null }, body.status);
 		const prompt = parsePrompt(body.value.prompt);
@@ -445,6 +683,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			return c.json({ error: maxTokens.message, details: maxTokens.details ?? null }, maxTokens.status);
 		const refresh = parseBoolean(body.value.refresh, "refresh");
 		if (!refresh.ok) return c.json({ error: refresh.message, details: refresh.details ?? null }, refresh.status);
+		const startedAt = Date.now();
 
 		const result = await router.stream(scoped.value, prompt.value, {
 			timeoutMs: timeoutMs.value,
@@ -453,6 +692,23 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			abortSignal: c.req.raw.signal,
 		});
 		if (!result.ok) {
+			recordInferenceExecutionTelemetry(
+				telemetry,
+				"inference.stream",
+				"native",
+				scoped.value,
+				Date.now() - startedAt,
+				"error",
+				{
+					decision: {
+						policyId: scoped.value.explicitPolicy ?? "unknown",
+						taskClass: scoped.value.taskClass ?? "interactive",
+						targetRef: "unresolved",
+					},
+					attempts: extractAttemptRecords(result.error.details),
+					errorCode: result.error.code,
+				},
+			);
 			return c.json({ error: result.error.message, details: result.error.details ?? null }, 502);
 		}
 
@@ -516,6 +772,19 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									write("delta", { requestId, text: event.text });
 									break;
 								case "done":
+									recordInferenceExecutionTelemetry(
+										telemetry,
+										"inference.stream",
+										"native",
+										scoped.value,
+										Date.now() - startedAt,
+										"success",
+										{
+											decision: event.decision,
+											attempts: event.attempts,
+											usage: event.usage,
+										},
+									);
 									write("done", {
 										requestId,
 										text: event.text,
@@ -526,6 +795,19 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									cleanup();
 									return;
 								case "cancelled":
+									recordInferenceExecutionTelemetry(
+										telemetry,
+										"inference.stream",
+										"native",
+										scoped.value,
+										Date.now() - startedAt,
+										"cancelled",
+										{
+											decision: event.decision,
+											attempts: event.attempts,
+											errorCode: "CANCELLED",
+										},
+									);
 									write("cancelled", {
 										requestId,
 										partialText: event.partialText,
@@ -535,6 +817,19 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									cleanup();
 									return;
 								case "error":
+									recordInferenceExecutionTelemetry(
+										telemetry,
+										"inference.stream",
+										"native",
+										scoped.value,
+										Date.now() - startedAt,
+										"error",
+										{
+											decision: event.decision,
+											attempts: event.attempts,
+											errorCode: classifyInferenceErrorCode(event.error),
+										},
+									);
 									write("error", {
 										requestId,
 										error: event.error,
@@ -603,6 +898,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 	app.post("/v1/chat/completions", async (c) => {
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: { message: "inference router not initialized" } }, 503);
+		const telemetry = getTelemetry(opts);
 		const body = await readJsonObject(c, MAX_GATEWAY_BYTES);
 		if (!body.ok) return c.json({ error: { message: body.message, details: body.details ?? null } }, body.status);
 		const stream = parseBoolean(body.value.stream, "stream");
@@ -633,6 +929,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			return c.json({ error: { message: maxTokens.message, details: maxTokens.details ?? null } }, maxTokens.status);
 		const prompt = router.buildGatewayPrompt(messages.value);
 		if (stream.value === true) {
+			const startedAt = Date.now();
 			const streaming = await router.stream(
 				{
 					...scoped.value,
@@ -645,6 +942,23 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 				},
 			);
 			if (!streaming.ok) {
+				recordInferenceExecutionTelemetry(
+					telemetry,
+					"inference.stream",
+					"gateway",
+					scoped.value,
+					Date.now() - startedAt,
+					"error",
+					{
+						decision: {
+							policyId: scoped.value.explicitPolicy ?? "unknown",
+							taskClass: scoped.value.taskClass ?? "interactive",
+							targetRef: "unresolved",
+						},
+						attempts: extractAttemptRecords(streaming.error.details),
+						errorCode: streaming.error.code,
+					},
+				);
 				return c.json({ error: { message: streaming.error.message, details: streaming.error.details ?? null } }, 502);
 			}
 
@@ -715,6 +1029,19 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 										sentRole = true;
 										break;
 									case "done":
+										recordInferenceExecutionTelemetry(
+											telemetry,
+											"inference.stream",
+											"gateway",
+											scoped.value,
+											Date.now() - startedAt,
+											"success",
+											{
+												decision: event.decision,
+												attempts: event.attempts,
+												usage: event.usage,
+											},
+										);
 										writeChunk({
 											id: requestId,
 											object: "chat.completion.chunk",
@@ -730,6 +1057,19 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 										close();
 										return;
 									case "cancelled":
+										recordInferenceExecutionTelemetry(
+											telemetry,
+											"inference.stream",
+											"gateway",
+											scoped.value,
+											Date.now() - startedAt,
+											"cancelled",
+											{
+												decision: event.decision,
+												attempts: event.attempts,
+												errorCode: "CANCELLED",
+											},
+										);
 										writeChunk({
 											id: requestId,
 											object: "chat.completion.chunk",
@@ -745,6 +1085,19 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 										close();
 										return;
 									case "error":
+										recordInferenceExecutionTelemetry(
+											telemetry,
+											"inference.stream",
+											"gateway",
+											scoped.value,
+											Date.now() - startedAt,
+											"error",
+											{
+												decision: event.decision,
+												attempts: event.attempts,
+												errorCode: classifyInferenceErrorCode(event.error),
+											},
+										);
 										writeChunk({
 											id: requestId,
 											object: "chat.completion.chunk",
@@ -794,12 +1147,43 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			});
 		}
 
+		const startedAt = Date.now();
 		const result = await router.execute(scoped.value, prompt, {
 			maxTokens: maxTokens.value,
 		});
 		if (!result.ok) {
+			recordInferenceExecutionTelemetry(
+				telemetry,
+				"inference.execute",
+				"gateway",
+				scoped.value,
+				Date.now() - startedAt,
+				"error",
+				{
+					decision: {
+						policyId: scoped.value.explicitPolicy ?? "unknown",
+						taskClass: scoped.value.taskClass ?? "interactive",
+						targetRef: "unresolved",
+					},
+					attempts: extractAttemptRecords(result.error.details),
+					errorCode: result.error.code,
+				},
+			);
 			return c.json({ error: { message: result.error.message, details: result.error.details ?? null } }, 502);
 		}
+		recordInferenceExecutionTelemetry(
+			telemetry,
+			"inference.execute",
+			"gateway",
+			scoped.value,
+			Date.now() - startedAt,
+			"success",
+			{
+				decision: result.value.decision,
+				attempts: result.value.attempts,
+				usage: result.value.usage,
+			},
+		);
 		return c.json({
 			id: `chatcmpl_${Date.now()}`,
 			object: "chat.completion",

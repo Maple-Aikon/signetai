@@ -611,10 +611,7 @@ function createRuntimeResolutionState<TProvider extends RuntimeResolutionProvide
 	readonly resolved: TProvider;
 	readonly effective: TProvider;
 	readonly fallbackProvider: RuntimeFallbackProvider;
-	readonly runtime: Pick<
-		RuntimeStartupResult,
-		"status" | "degraded" | "fallbackApplied" | "reason" | "since"
-	>;
+	readonly runtime: Pick<RuntimeStartupResult, "status" | "degraded" | "fallbackApplied" | "reason" | "since">;
 }): RuntimeResolutionState<TProvider> {
 	return {
 		configured: opts.configured,
@@ -768,10 +765,7 @@ const analyticsCollector = createAnalyticsCollector();
 const repairLimiter = createRateLimiter();
 
 function queueExtractionJob(memoryId: string): void {
-	if (
-		!inferenceRoutingRuntimeState.extractionWorkload &&
-		providerRuntimeResolution.extraction.status === "blocked"
-	) {
+	if (!inferenceRoutingRuntimeState.extractionWorkload && providerRuntimeResolution.extraction.status === "blocked") {
 		deadLetterExtractionJob(getDbAccessor(), memoryId, {
 			reason: providerRuntimeResolution.extraction.reason ?? "Configured extraction provider unavailable at startup",
 		});
@@ -5682,7 +5676,10 @@ mountChangelogRoutes(app);
 
 // Shared inference routing + gateway routes
 import { mountInferenceRoutes } from "./routes/inference.js";
-mountInferenceRoutes(app, { getAuthMode: () => authConfig.mode });
+mountInferenceRoutes(app, {
+	getAuthMode: () => authConfig.mode,
+	getTelemetry: () => telemetryRef,
+});
 
 // OS agent chat routes (natural language → MCP tool routing)
 import { mountOsChatRoutes } from "./routes/os-chat.js";
@@ -8131,7 +8128,8 @@ app.get("/api/status", async (c) => {
 						targetCount: 0,
 						policyCount: 0,
 						explicit: false,
-						error: routingStatus && !routingStatus.ok ? routingStatus.error.message : inferenceRoutingRuntimeState.lastError,
+						error:
+							routingStatus && !routingStatus.ok ? routingStatus.error.message : inferenceRoutingRuntimeState.lastError,
 					},
 		logging: {
 			logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
@@ -10029,6 +10027,13 @@ app.get("/api/telemetry/stats", (c) => {
 	let llmErrors = 0;
 	let pipelineErrors = 0;
 	const latencies: number[] = [];
+	let inferenceRoutes = 0;
+	let inferenceExecutes = 0;
+	let inferenceStreams = 0;
+	let inferenceErrors = 0;
+	let inferenceCancelled = 0;
+	let inferenceFallbacks = 0;
+	const inferenceLatencies: number[] = [];
 
 	for (const e of events) {
 		if (e.event === "llm.generate") {
@@ -10040,16 +10045,42 @@ app.get("/api/telemetry/stats", (c) => {
 			if (typeof e.properties.durationMs === "number") latencies.push(e.properties.durationMs);
 		}
 		if (e.event === "pipeline.error") pipelineErrors++;
+		if (e.event === "inference.route") {
+			inferenceRoutes++;
+			if (e.properties.success === false) inferenceErrors++;
+			if (typeof e.properties.durationMs === "number") inferenceLatencies.push(e.properties.durationMs);
+		}
+		if (e.event === "inference.execute" || e.event === "inference.stream") {
+			if (e.event === "inference.execute") inferenceExecutes++;
+			if (e.event === "inference.stream") inferenceStreams++;
+			if (e.properties.success === false) inferenceErrors++;
+			if (e.properties.cancelled === true) inferenceCancelled++;
+			if (typeof e.properties.durationMs === "number") inferenceLatencies.push(e.properties.durationMs);
+		}
+		if (e.event === "inference.fallback") inferenceFallbacks++;
 	}
 
 	latencies.sort((a, b) => a - b);
 	const p50 = latencies[Math.floor(latencies.length * 0.5)] ?? 0;
 	const p95 = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
+	inferenceLatencies.sort((a, b) => a - b);
+	const inferenceP50 = inferenceLatencies[Math.floor(inferenceLatencies.length * 0.5)] ?? 0;
+	const inferenceP95 = inferenceLatencies[Math.floor(inferenceLatencies.length * 0.95)] ?? 0;
 
 	return c.json({
 		enabled: true,
 		totalEvents: events.length,
 		llm: { calls: llmCalls, errors: llmErrors, totalInputTokens, totalOutputTokens, totalCost, p50, p95 },
+		inference: {
+			routes: inferenceRoutes,
+			executes: inferenceExecutes,
+			streams: inferenceStreams,
+			errors: inferenceErrors,
+			cancelled: inferenceCancelled,
+			fallbacks: inferenceFallbacks,
+			p50: inferenceP50,
+			p95: inferenceP95,
+		},
 		pipelineErrors,
 	});
 });
@@ -11641,9 +11672,10 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		// Skip chunks with insufficient non-header content.
 		// chunk.text is always constructed as `${header}\n\n${body}` when a
 		// header exists (see chunkMarkdownHierarchically), so startsWith holds.
-		const body = chunk.header && chunk.text.startsWith(chunk.header)
-			? chunk.text.slice(chunk.header.length).trim()
-			: chunk.text.trim();
+		const body =
+			chunk.header && chunk.text.startsWith(chunk.header)
+				? chunk.text.slice(chunk.header.length).trim()
+				: chunk.text.trim();
 		if (body.length < 80) continue;
 
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
@@ -12053,8 +12085,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	inferenceRoutingRuntimeState.synthesisWorkload = synthesisRoutingEnabled;
 	inferenceRoutingRuntimeState.defaultAgentId =
 		routingStatus?.ok === true ? routingStatus.value.defaultAgentId : "default";
-	inferenceRoutingRuntimeState.lastError =
-		routingStatus && !routingStatus.ok ? routingStatus.error.message : null;
+	inferenceRoutingRuntimeState.lastError = routingStatus && !routingStatus.ok ? routingStatus.error.message : null;
 	if (explicitRoutingEnabled) {
 		logger.info("routing", "Explicit inference routing enabled", {
 			extractionWorkload: extractionRoutingEnabled,
@@ -12083,8 +12114,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		fallbackProvider: extractionFallbackProvider,
 		endpoints: extractionEndpoints,
 		disabledMessage: "Extraction provider set to 'none', pipeline LLM disabled",
-		commandMessage:
-			"Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command",
+		commandMessage: "Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command",
 	};
 	const synthesisStartupCfg: SynthesisRuntimeStartupConfig = {
 		role: "synthesis",
@@ -12218,10 +12248,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 	if (extractionRoutingEnabled) {
 		initLlmProvider(
-			inferenceRouter.createWorkloadProvider(
-				"memory_extraction",
-				inferenceRoutingRuntimeState.defaultAgentId,
-			),
+			inferenceRouter.createWorkloadProvider("memory_extraction", inferenceRoutingRuntimeState.defaultAgentId),
 		);
 	} else if (llmProvider) {
 		initLlmProvider(llmProvider);
@@ -12244,12 +12271,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const effectiveSynthesisProvider = resolveEffectiveRuntimeProvider(synthesisStartupCfg, synthesisRuntime);
 	if (!pipelinePaused && synthesisRoutingEnabled) {
 		initSynthesisProvider(
-			inferenceRouter.createWorkloadProvider(
-				"session_synthesis",
-				inferenceRoutingRuntimeState.defaultAgentId,
-			),
+			inferenceRouter.createWorkloadProvider("session_synthesis", inferenceRoutingRuntimeState.defaultAgentId),
 		);
-	} else if (!pipelinePaused && memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider !== "none") {
+	} else if (
+		!pipelinePaused &&
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		memoryCfg.pipelineV2.synthesis.provider !== "none"
+	) {
 		if (synthesisRuntime.provider) {
 			initSynthesisProvider(synthesisRuntime.provider);
 		} else {
@@ -12301,12 +12329,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// per agent (Phase 2 / dreaming-as-session work).
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
-			dreamingWorkerHandle = startDreamingWorker(
-				getDbAccessor(),
-				memoryCfg.dreaming,
-				AGENTS_DIR,
-				resolveAgentId({}),
-			);
+			dreamingWorkerHandle = startDreamingWorker(getDbAccessor(), memoryCfg.dreaming, AGENTS_DIR, resolveAgentId({}));
 			setDreamingWorker(dreamingWorkerHandle);
 		} catch (err) {
 			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
