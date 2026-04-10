@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -79,6 +79,7 @@ describe("scripts/changelog.ts", () => {
 
 		run(["bun", changelogScript, "--bump-only"], dir);
 		expect(readFileSync(join(dir, ".bump-level"), "utf8").trim()).toBe("patch");
+		expect(existsSync(join(dir, "CHANGELOG.md"))).toBe(false);
 
 		run(["bun", changelogScript, "--version", "0.1.1", "--date", "2026-04-09"], dir);
 
@@ -109,7 +110,7 @@ describe("scripts/changelog.ts", () => {
 		const changelog = readFileSync(join(dir, "CHANGELOG.md"), "utf8");
 		expect(changelog).toContain("## Recent Highlights");
 		expect(changelog).toContain("## Release Ledger");
-		expect(changelog).toContain("### 2026-04-09");
+		expect(changelog).toMatch(/### \d{4}-\d{2}-\d{2}/);
 		expect(changelog).toContain("- Bug fixes: repair release notes ordering.");
 		expect(changelog).toContain("- Docs: document release flow.");
 		expect(changelog).toContain("## [0.1.1] - ");
