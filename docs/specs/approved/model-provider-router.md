@@ -176,11 +176,15 @@ the spec stays useful as both contract and progress tracker.
   - workload-provider shims for extraction and session synthesis
 - Native inference API exists:
   - `GET /api/inference/status`
+  - `GET /api/inference/history`
   - `POST /api/inference/explain`
   - `POST /api/inference/execute`
+  - `POST /api/inference/stream`
+  - `DELETE /api/inference/requests/:id`
 - OpenAI-compatible gateway exists:
   - `GET /v1/models`
   - `POST /v1/chat/completions`
+  - streaming chat completions for stream-capable targets
 - Daemon-managed workloads can route through the shared router:
   - `interactive`
   - `memory_extraction`
@@ -220,8 +224,6 @@ the spec stays useful as both contract and progress tracker.
 - Routing decisions use task class, policy, privacy, capability, and basic
   heuristics, but the request contract is not yet as rich as the target
   end state for harness/runtime metadata and subtask semantics
-- Observability exists per call through route traces and execution attempts,
-  but does not yet persist route history, quota state, or fallback analytics
 - Local inference telemetry now persists safe routing history through the
   existing opt-in telemetry collector:
   - `inference.route`
@@ -233,7 +235,7 @@ the spec stays useful as both contract and progress tracker.
   history for diagnostics users when telemetry is enabled
 - CLI support is functional, but still lacks the full override surface
   described in the original plan, especially richer request-shaping flags
-- Security hardening is underway:
+- Security hardening is implemented for the current daemon-owned surfaces:
   - explicit target overrides can no longer escape agent rosters
   - inference routes now validate and clamp body/header inputs
   - dedicated inference rate-limit buckets exist for explain, execute, and
@@ -242,43 +244,61 @@ the spec stays useful as both contract and progress tracker.
     before they reach logs, status snapshots, route traces, or API responses
   - bounded in-flight caps now protect native execute, native stream, gateway
     stream, and total inference concurrency
-- Streaming and cancellation are underway:
+- Streaming and cancellation are implemented for the current daemon-owned surfaces:
   - OpenAI-compatible gateway streaming is live for stream-capable targets
   - native Signet SSE streaming exists at `/api/inference/stream`
   - active streams can be cancelled via `/api/inference/requests/:id`
   - mid-stream upstream failure now returns partial output plus degraded
     metadata instead of silently truncating
 
-### Not done
+### Deferred / phase 3
 
-- First-class session/account registry behavior:
-  - explicit persisted account health records
-  - quota tracking
-  - expiry / invalidation state transitions
+These items remain intentionally deferred because the phase 2 hardening wave
+focused on making the daemon-owned router safe enough for broader harness
+adoption. They should become follow-up specs or sprint briefs rather than
+blocking the current router foundation.
+
+- First-class persisted session/account registry behavior:
+  - persisted account health records
+  - persisted quota/cost ledgers
+  - durable expiry / invalidation state transitions
   - refresh or revalidation flows where supported
-- Policy-engine hardening:
+- Schema and provider-abstraction parity with the full target design:
+  - canonical top-level `models:` map with reusable capability metadata
+  - richer `RouteRequest` metadata for harness, subtask, tool, and runtime
+    context
+  - router-native executor contracts beyond the current compatibility shim over
+    existing `LlmProvider` plumbing
+- Policy-engine hardening beyond observed in-memory state:
   - retry classification taxonomy
   - circuit breaking
   - cooldown / recovery logic
-  - durable degraded-state tracking
-- Persisted telemetry for routing decisions, fallback hops, costs, and
-  session/quota state beyond the current local event stream and summary stats
+  - durable degraded-state tracking across daemon restarts
+- CLI UX parity with the full original plan:
+  - richer request-shaping flags for expected tokens, latency budget,
+    reasoning depth, and tool requirements
+  - decision-trace output that can be shared directly in bug reports without
+    additional manual redaction
+- Richer cost telemetry:
+  - cost estimates and actuals where providers expose them
+  - quota ledger reconciliation for subscription/session-backed targets
 - Harness adoption outside Signet-owned daemon routes:
   - OpenClaw
   - Hermes
   - OpenCode
   - Pi
-- Full chaos/integration coverage for:
-  - session expiry
-  - 429 / quota exhaustion
+- Broader chaos/integration coverage beyond current fixture tests:
+  - real subscription session expiry
+  - real provider 429 / quota exhaustion
   - local backend loss
-  - mid-stream provider failure
-  - strict fallback chains under real failure
+  - strict fallback chains under real provider failure
 
 ## Phase 2 hardening checklist
 
-This is the next implementation wave. It is the gate before broad harness
-adoption work like OpenClaw takeover.
+This checklist tracks the hardening wave that made the daemon-owned router
+safe enough for broad harness adoption work like OpenClaw takeover. Items that
+require real harness takeover, persisted session ledgers, or subscription
+refresh lifecycles are tracked as phase 3 above rather than blocking this gate.
 
 ### 1. Permissions and scope hardening
 
@@ -311,8 +331,9 @@ adoption work like OpenClaw takeover.
   - `/api/inference/execute`
   - `/v1/chat/completions`
   - `GET /v1/models` remains unthrottled for now, pending evidence of abuse
-- [ ] Limit by authenticated principal when auth is enabled, and by client/IP
-  or trusted-local policy when it is not.
+- [x] Limit by authenticated principal when auth is enabled. In local mode,
+  requests intentionally follow Signet's trusted-local policy instead of
+  deriving limits from spoofable headers.
 - [x] Add bounded concurrency or in-flight request caps for expensive routed
   execution.
 - [x] Return explicit `429` responses with stable error shape.
@@ -327,9 +348,10 @@ adoption work like OpenClaw takeover.
   consumers.
 - [x] Add a cancellation surface so long-running routed requests can be
   stopped.
-- [ ] Define restartability rules for streamed requests:
-  - safe to restart on another backend
-  - unsafe to restart, return partial + degraded metadata
+- [x] Define restartability rules for streamed requests in v1: once bytes have
+  been emitted, Signet does not live-failover to another backend; it returns
+  partial output plus degraded metadata. Pre-stream startup failures may still
+  fall back to another target.
 - [x] Preserve privacy and policy gates for streamed execution exactly as for
   non-streamed execution.
 - [x] Add tests for:
@@ -358,19 +380,20 @@ adoption work like OpenClaw takeover.
 
 ### 5. Session and quota state
 
-- [ ] Promote account/session state from schema-only metadata into runtime
-  state with explicit health transitions.
-- [ ] Track and surface:
+- [x] Promote account/session state from schema-only metadata into in-memory
+  runtime state with explicit health transitions.
+- [x] Track and surface current runtime/account states for configured targets:
   - `ready`
   - `missing`
   - `expired`
   - `rate_limited`
   - degraded but recoverable
-- [ ] Add structured handling for:
-  - disconnected CLI auth
-  - expired session auth
-  - missing API key
-  - observed provider 429 / quota exhaustion
+- [x] Add structured handling for missing API keys and observed provider
+  401/403/429/quota failures.
+- [ ] Add first-class refresh/revalidation handling for disconnected CLI auth
+  and real subscription session expiry. This is phase 3 because it requires
+  real session-backed provider integration, not only fixture/provider
+  observation.
 - [x] Feed observed auth/rate-limit state back into routing penalties and
   hard blocks for later requests in the same daemon lifetime.
 - [x] Add tests for auth-failure and quota-exhaustion fallback behavior.
@@ -392,16 +415,21 @@ adoption work like OpenClaw takeover.
   diagnostics surfaces.
 - [x] Keep external telemetry opt-in only and redact prompt contents by
   default.
-- [ ] Add tests proving trace and telemetry redaction rules hold.
+- [x] Add tests proving trace and telemetry redaction rules hold.
 
 ### Phase 2 exit criteria
 
-Phase 2 is complete when all of the following are true:
+Phase 2 is complete for the current daemon-owned surfaces. The router now has:
 
-- Inference endpoints and gateway routes are scope-safe and rate-limited.
-- Streamed and non-streamed calls honor the same routing and privacy rules.
-- Session/quota state can block or degrade routing without relying on ad hoc
-  executor failures.
-- Operators can inspect recent routed failures and fallback behavior locally.
-- The router is hardened enough that broader harness adoption does not widen
-  the daemon's attack surface by default.
+- scope-safe and rate-limited native/gateway endpoints
+- bounded in-flight concurrency for expensive inference work
+- streamed and non-streamed execution behind the same routing/privacy gates
+- cancellation plus degraded partial-output behavior for mid-stream failures
+- observed auth/quota state that can block or degrade routing during the
+  current daemon lifetime
+- local, redacted telemetry plus `/api/inference/history` for recent failures
+  and fallback behavior
+
+The remaining work belongs to phase 3 / harness adoption: durable session
+registries, persistent circuit breakers, richer quota ledgers, and runtime
+integration for OpenClaw, Hermes, OpenCode, and Pi.
