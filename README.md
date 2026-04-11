@@ -366,7 +366,7 @@ Connectors
 | [`@signet/extension`](./packages/extension) | Browser extension for Chrome and Firefox |
 | [`@signet/tray`](./packages/tray) | Desktop system tray application |
 | [`@signet/native`](./packages/native) | Native accelerators |
-| [`predictor`](./packages/predictor) | Predictive memory scorer sidecar (Rust) |
+| [`predictor`](./packages/predictor) | Experimental Rust sidecar for learned relevance ranking |
 | [`signetai`](./packages/signetai) | Meta-package (`signet` binary) |
 
 ## Documentation
