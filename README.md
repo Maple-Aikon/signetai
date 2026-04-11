@@ -4,7 +4,7 @@
 
 # S I G N E T   A I
 
-**Local-first persistent memory for AI agents**
+**Local-first identity, memory, and secrets for AI agents**
 
 <a href="https://github.com/Signet-AI/signetai/actions"><img src="https://img.shields.io/github/actions/workflow/status/Signet-AI/signetai/release.yml?branch=main&style=for-the-badge" alt="CI status"></a>
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
@@ -21,25 +21,25 @@
 
 ---
 
-**Persistent memory for AI agents, across sessions, tools, and environments.**
+**Portable AI agent state, across sessions, models, and harnesses.**
 
 **TL;DR**
-- Installs under your existing harness, not instead of it
+- Works beneath your existing harness
 - Captures and injects relevant memory automatically between sessions
 - Runs local-first, with inspectable storage and no vendor lock-in
 
-Most agents only remember when explicitly told to.
+Signet keeps an agent's identity, memory, secrets, and skills outside
+any single model or harness. The harness can change. The model can
+change. The agent keeps its state.
 
-That is not memory, that's a filing cabinet.
+Memory is ambient. Signet extracts and injects relevant context
+automatically, between sessions, before the next prompt starts. Your
+agent wakes up with the continuity it needs instead of asking you to
+rebuild the room by hand.
 
-Signet makes memory ambient. It extracts and injects context
-automatically, between sessions, before the next prompt starts.
-Your agent just has memory.
-
-Structured memory, graph traversal, and hybrid retrieval matter, but
-they are not the point. They are substrate for the larger job Signet is
-building toward: deciding what should enter the model's context window
-right now, with enough precision to help instead of distract.
+Structured memory, graph traversal, and hybrid retrieval are the
+substrate. The larger job is behavioral context portability: keeping the
+agent's accumulated understanding under the user's control.
 
 Why teams adopt it:
 - less prompt re-explaining between sessions
@@ -59,8 +59,8 @@ signet status              # confirm daemon + pipeline health
 signet dashboard           # open memory + retrieval inspector
 ```
 
-If you already use Claude Code, OpenCode, OpenClaw, Codex, or Hermes Agent, keep your
-existing harness. Signet installs under it.
+If you already use Claude Code, OpenCode, OpenClaw, Codex, or Hermes
+Agent, keep your existing harness. Signet installs under it.
 
 ### Docker self-hosting
 
@@ -105,7 +105,7 @@ These are the product surface areas Signet is optimized around:
 | Core | What it does |
 |---|---|
 | 🧠 Ambient memory extraction | Sessions are distilled automatically, no memory tool calls required |
-| 🎯 Predictive context selection | Structured memory and session feedback build toward a scorer that learns what context is actually useful |
+| 🎯 Structured context selection | Graph traversal, hybrid search, provenance, and scoped ranking surface useful context without flooding the window |
 | 💾 Session continuity | Checkpoint and transcript-backed context carried across sessions |
 | 🏠 Local-first storage | Data lives on your machine in SQLite and markdown, portable by default |
 | 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, Pi, one shared memory substrate |
@@ -136,7 +136,7 @@ These systems improve quality and reliability of the core memory loop:
 |---|---|
 | 📜 Lossless transcripts | Raw session history preserved alongside extracted memories |
 | 🕸️ Structured retrieval substrate | Graph traversal + FTS5 + vector search produce bounded candidate context |
-| 🎯 Predictive scorer | Wired into the system as a maturing path toward learned reranking from session outcomes, including regret signals |
+| 🎯 Feedback-aware ranking | Recency, provenance, importance, and dampening signals help separate useful context from repeated noise |
 | 🔬 Noise filtering | Hub and similarity controls reduce low-signal memory surfacing |
 | 📄 Document ingestion | Pull PDFs, markdown, and URLs into the same retrieval pipeline |
 | 🖥️ CLI + Dashboard | Operate and inspect the system from terminal or web UI |
@@ -291,9 +291,8 @@ session ends
   → raw transcript is preserved and distilled into structured memory
   → entities, constraints, and relations are linked into a navigable graph
   → traversal + flat search build a bounded candidate pool
-  → predictive scorer reranks candidates against your interaction patterns
-  → fail-open guards keep baseline ordering if the model is cold or unavailable
-  → post-fusion dampening separates signal from noise
+  → scoped ranking and provenance checks keep retrieval inspectable
+  → dampening and feedback signals separate signal from repeated noise
   → right context injected before the next prompt starts
 ```
 
@@ -320,8 +319,8 @@ Daemon (@signet/daemon, localhost:3850)
   |     prospective indexing -> FTS5 index
   |-- Inline Entity Linker
   |     write-time entity extraction (no LLM), decision auto-protection
-  |-- Predictive Scorer
-  |     learned relevance model over structured candidates
+  |-- Ranking + Feedback
+  |     bounded candidate ordering, dampening, and provenance signals
   |-- Document Worker
   |     ingest -> chunk -> embed -> index
   |-- MCP Server
@@ -367,7 +366,7 @@ Connectors
 | [`@signet/extension`](./packages/extension) | Browser extension for Chrome and Firefox |
 | [`@signet/tray`](./packages/tray) | Desktop system tray application |
 | [`@signet/native`](./packages/native) | Native accelerators |
-| [`predictor`](./packages/predictor) | Predictive memory scorer sidecar (Rust) |
+| [`predictor`](./packages/predictor) | Experimental Rust sidecar for learned relevance ranking |
 | [`signetai`](./packages/signetai) | Meta-package (`signet` binary) |
 
 ## Documentation
