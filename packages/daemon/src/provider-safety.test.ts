@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,7 +7,6 @@ import {
 	applyProviderRollback,
 	detectProviderTransitions,
 	executeProviderRollback,
-	isRollbackInFlight,
 	readProviderTransitions,
 	validateProviderSafety,
 } from "./provider-safety";
@@ -77,6 +76,12 @@ describe("provider safety", () => {
 		expect(result).toEqual({ ok: false, error: "Invalid YAML config" });
 	});
 
+	it("allows valid YAML without pipelineV2 section", () => {
+		const result = validateProviderSafety("name: test\nversion: 1\n");
+
+		expect(result).toEqual({ ok: true });
+	});
+
 	it("records transitions and rolls back the latest provider", () => {
 		const agentsDir = makeTempDir();
 		const entries = detectProviderTransitions(
@@ -122,25 +127,9 @@ describe("provider safety", () => {
 		expect(stored[0].rolledBack).toBe(true);
 	});
 
-	it("sets rollback in-flight flag during execution", () => {
-		const agentsDir = makeTempDir();
-		const configDir = makeTempDir();
-
-		writeFileSync(join(configDir, "agent.yaml"), "memory:\n  pipelineV2:\n    extractionProvider: none\n", "utf-8");
-		const entries = detectProviderTransitions(
-			"memory:\n  pipelineV2:\n    extractionProvider: none\n",
-			"memory:\n  pipelineV2:\n    extractionProvider: codex\n",
-			"test",
-		);
-		appendProviderTransitions(agentsDir, entries);
-
-		expect(isRollbackInFlight()).toBe(false);
-	});
-
 	it("skips corrupted entries in audit file", () => {
 		const agentsDir = makeTempDir();
 		const auditPath = join(agentsDir, ".daemon");
-		const { mkdirSync } = require("node:fs");
 		mkdirSync(auditPath, { recursive: true });
 		writeFileSync(
 			join(auditPath, "provider-transitions.json"),
@@ -179,7 +168,6 @@ describe("provider safety", () => {
 	it("returns empty array for non-array audit file content", () => {
 		const agentsDir = makeTempDir();
 		const auditPath = join(agentsDir, ".daemon");
-		const { mkdirSync } = require("node:fs");
 		mkdirSync(auditPath, { recursive: true });
 		writeFileSync(join(auditPath, "provider-transitions.json"), JSON.stringify({ not: "an array" }), "utf-8");
 

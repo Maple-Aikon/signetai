@@ -4,6 +4,7 @@ import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import {
+	RollbackError,
 	appendProviderTransitions,
 	detectProviderTransitions,
 	executeProviderRollback,
@@ -216,15 +217,8 @@ export function registerMiscRoutes(app: Hono): void {
 			});
 			return c.json(result);
 		} catch (e) {
-			const msg = (e as Error).message;
-			if (msg.includes("No provider transition") || msg.includes("rollback target")) {
-				return c.json({ error: msg }, 404);
-			}
-			if (msg.includes("allowRemoteProviders") || msg.includes("refusing")) {
-				return c.json({ error: msg }, 400);
-			}
-			if (msg.includes("already in progress")) {
-				return c.json({ error: msg }, 409);
+			if (e instanceof RollbackError) {
+				return c.json({ error: e.message }, e.status);
 			}
 			logger.error("api", "Provider rollback failed", e as Error);
 			return c.json({ error: "Provider rollback failed" }, 500);

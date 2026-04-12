@@ -312,8 +312,7 @@ Pass `role: "extraction"` or `role: "synthesis"` to restrict the rollback;
 omit it to roll back the most recent provider transition of either role.
 
 Each transition can only be rolled back once — consumed entries are marked
-`rolledBack: true` and skipped by subsequent calls. Concurrent rollback
-requests are rejected with `409 Conflict`.
+`rolledBack: true` and skipped by subsequent calls.
 
 > **Note:** This endpoint round-trips `agent.yaml` through a YAML parser
 > and serializer, which strips comments. Any hand-written comments in the
