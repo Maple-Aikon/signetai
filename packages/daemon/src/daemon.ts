@@ -557,7 +557,11 @@ app.use("/api/config", async (c, next) => {
 });
 app.use("/api/config/*", async (c, next) => {
 	if (c.req.method !== "GET") {
-		return requirePermission("admin", authConfig)(c, next);
+		const perm = requirePermission("admin", authConfig);
+		const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
+		return perm(c, async () => {
+			await rate(c, next);
+		});
 	}
 	return next();
 });
