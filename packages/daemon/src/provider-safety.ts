@@ -227,7 +227,7 @@ export function executeProviderRollback(
 	rolledBack: ProviderTransitionAuditEntry;
 	providerTransitions: ProviderTransitionAuditEntry[];
 } {
-	const transitions = priorTransitions ?? readProviderTransitions(agentsDir);
+	const transitions = [...(priorTransitions ?? readProviderTransitions(agentsDir))];
 	const reversed = [...transitions].reverse();
 	const matchIdx = reversed.findIndex(
 		(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),

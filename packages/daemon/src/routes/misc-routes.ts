@@ -187,7 +187,7 @@ export function registerMiscRoutes(app: Hono): void {
 			} else {
 				logger.info("api", "Config file updated", { file });
 			}
-			return c.json({ success: true, providerTransitions: transitions });
+			return c.json({ success: true, providerTransitions: transitions.map(({ actor: _, ...rest }) => rest) });
 		} catch (e) {
 			logger.error("api", "Error saving config file", e as Error);
 			return c.json({ error: "Failed to save file" }, 500);
@@ -195,9 +195,7 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.get("/api/config/provider-safety", (c) => {
-		const configPath = ["agent.yaml", "AGENT.yaml", "config.yaml"]
-			.map((name) => join(AGENTS_DIR, name))
-			.find((path) => existsSync(path));
+		const configPath = CONFIG_FILE_CANDIDATES.map((name) => join(AGENTS_DIR, name)).find((path) => existsSync(path));
 		let snapshot = null;
 		let snapshotError: string | undefined;
 		if (configPath) {
