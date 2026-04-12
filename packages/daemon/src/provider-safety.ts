@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
-import { tmpdir } from "node:os";
 import { type PipelineProviderChoice, isPipelineProvider } from "@signet/core";
 import { logger } from "./logger.js";
 import { parse, stringify } from "yaml";
@@ -172,7 +171,7 @@ export function readProviderTransitions(agentsDir: string): ProviderTransitionAu
 }
 
 function atomicWriteJson(targetPath: string, data: string): void {
-	const tmpPath = join(tmpdir(), `signet-audit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+	const tmpPath = join(dirname(targetPath), `.audit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
 	writeFileSync(tmpPath, data, "utf-8");
 	renameSync(tmpPath, targetPath);
 }

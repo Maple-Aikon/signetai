@@ -227,12 +227,16 @@ export function registerMiscRoutes(app: Hono): void {
 			const file = candidates.find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
 			const filePath = join(AGENTS_DIR, file);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c));
+			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
 			logger.warn("api", "Provider configuration rolled back", {
 				file,
-				transition: result.rolledBack,
+				transition: strippedRolledBack,
 				rollbackEntries: result.providerTransitions,
 			});
-			return c.json(result);
+			return c.json({
+				...result,
+				rolledBack: strippedRolledBack,
+			});
 		} catch (e) {
 			if (e instanceof RollbackError) {
 				return c.json({ error: e.message }, e.status);
