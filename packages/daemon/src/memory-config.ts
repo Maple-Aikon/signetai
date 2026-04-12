@@ -469,21 +469,15 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
 		d.extraction.fallbackProvider ?? "ollama",
 	);
-	const allowRemoteProviders =
-		typeof raw.allowRemoteProviders === "boolean"
-			? raw.allowRemoteProviders
-			: typeof extractionRaw?.allowRemoteProviders === "boolean"
-				? extractionRaw.allowRemoteProviders
-				: d.allowRemoteProviders;
-	if (
-		typeof raw.allowRemoteProviders === "boolean" &&
-		typeof extractionRaw?.allowRemoteProviders === "boolean" &&
-		raw.allowRemoteProviders !== extractionRaw.allowRemoteProviders
-	) {
+	const topLevelRemote = typeof raw.allowRemoteProviders === "boolean" ? raw.allowRemoteProviders : undefined;
+	const extractionRemote =
+		typeof extractionRaw?.allowRemoteProviders === "boolean" ? extractionRaw.allowRemoteProviders : undefined;
+	const allowRemoteProviders = topLevelRemote ?? extractionRemote ?? d.allowRemoteProviders;
+	if (topLevelRemote !== undefined && extractionRemote !== undefined && topLevelRemote !== extractionRemote) {
 		logger.warn(
 			"config",
 			"pipelineV2.allowRemoteProviders and extraction.allowRemoteProviders conflict; top-level takes precedence",
-			{ topLevel: raw.allowRemoteProviders, extraction: extractionRaw.allowRemoteProviders },
+			{ topLevel: topLevelRemote, extraction: extractionRemote },
 		);
 	}
 	const effectiveProvider =

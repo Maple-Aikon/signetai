@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Context, Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import {
+	CONFIG_FILE_CANDIDATES,
 	RollbackError,
 	appendProviderTransitions,
 	detectProviderTransitions,
@@ -36,7 +37,7 @@ import {
 import { AGENTS_DIR } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
-const GUARDED_CONFIG_FILES = new Set(["agent.yaml", "AGENT.yaml", "config.yaml"]);
+const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
 
 function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
@@ -224,8 +225,8 @@ export function registerMiscRoutes(app: Hono): void {
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
-			const { filePath, transitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
-			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), transitions);
+			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
+			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
 			logger.warn("api", "Provider configuration rolled back", {
 				file: basename(filePath),

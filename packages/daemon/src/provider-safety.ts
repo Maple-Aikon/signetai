@@ -186,7 +186,7 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 	atomicWriteJson(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
-const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"];
+export const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"] as const;
 
 export function resolveRollbackFilePath(
 	agentsDir: string,
