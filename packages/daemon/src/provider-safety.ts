@@ -247,8 +247,9 @@ export function executeProviderRollback(
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
 	// Config-first: if audit write fails after config, the entry is
-	// unconsumed. On retry, applyProviderRollback rewrites agent.yaml
-	// (stripping any YAML comments added since), then marks consumed.
+	// unconsumed. On retry, applyProviderRollback re-serializes and
+	// rewrites agent.yaml (provider is already correct but YAML comments
+	// added since the failed rollback are stripped), then marks consumed.
 	// Duplicate audit entries may accumulate on repeated failures.
 	writeFileSync(filePath, nextContent, "utf-8");
 	try {
