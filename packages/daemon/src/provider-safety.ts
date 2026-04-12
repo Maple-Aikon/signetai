@@ -86,7 +86,7 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 		? (pipeline?.allowRemoteProviders ?? extraction?.allowRemoteProviders ?? true)
 		: true;
 	return {
-		extractionProvider: nestedExtraction ?? flatExtraction,
+		extractionProvider: flatExtraction ?? nestedExtraction,
 		synthesisProvider,
 		allowRemoteProviders,
 		allowRemoteProvidersExplicit: explicitAllowRemote,
@@ -317,14 +317,11 @@ export function applyProviderRollback(content: string, entry: ProviderTransition
 	if (entry.role === "extraction") {
 		pipeline.extractionProvider = previous;
 		roleBlock.provider = previous;
-		root.extractionModel = undefined;
-		root.extractionEndpoint = undefined;
-		root.extractionBaseUrl = undefined;
+		pipeline.extractionModel = undefined;
+		pipeline.extractionEndpoint = undefined;
+		pipeline.extractionBaseUrl = undefined;
 	} else {
 		roleBlock.provider = previous;
-		root.synthesisModel = undefined;
-		root.synthesisEndpoint = undefined;
-		root.synthesisBaseUrl = undefined;
 	}
 	roleBlock.model = undefined;
 	roleBlock.endpoint = undefined;

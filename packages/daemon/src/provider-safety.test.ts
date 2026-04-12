@@ -120,6 +120,26 @@ describe("provider safety", () => {
 		expect(next).not.toContain("provider: anthropic");
 	});
 
+	it("clears flat pipelineV2 extraction keys on rollback", () => {
+		const agentsDir = makeTempDir();
+		const entries = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extractionModel: claude-3-haiku\n    extractionEndpoint: https://api.anthropic.com\n",
+			"test",
+		);
+		appendProviderTransitions(agentsDir, entries);
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored).toHaveLength(1);
+
+		const next = applyProviderRollback(
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extractionModel: claude-3-haiku\n    extractionEndpoint: https://api.anthropic.com\n",
+			stored[0],
+		);
+		expect(next).not.toContain("claude-3-haiku");
+		expect(next).not.toContain("anthropic.com");
+		expect(next).toContain("extractionProvider: ollama");
+	});
+
 	it("prevents rollback ping-pong by marking consumed entries", () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
