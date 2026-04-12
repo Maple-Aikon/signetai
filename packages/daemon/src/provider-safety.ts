@@ -176,6 +176,7 @@ export function executeProviderRollback(
 	agentsDir: string,
 	filePath: string,
 	requestedRole?: ProviderSafetyRole,
+	actor?: string,
 ): {
 	success: true;
 	file: string;
@@ -194,17 +195,16 @@ export function executeProviderRollback(
 	const nextContent = applyProviderRollback(beforeContent, entry);
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);
-	const rollbackEntries = detectProviderTransitions(beforeContent, nextContent, "api/config/provider-safety/rollback");
-	writeFileSync(filePath, nextContent, "utf-8");
-	const currentTransitions = readProviderTransitions(agentsDir);
-	currentTransitions[originalIndex] = {
-		...currentTransitions[originalIndex],
+	const rollbackEntries = detectProviderTransitions(beforeContent, nextContent, "api/config/provider-safety/rollback", actor);
+	transitions[originalIndex] = {
+		...transitions[originalIndex],
 		rolledBack: true,
 	} as ProviderTransitionAuditEntry;
-	const merged = [...currentTransitions, ...rollbackEntries].slice(-100);
+	const merged = [...transitions, ...rollbackEntries].slice(-100);
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
 	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
+	writeFileSync(filePath, nextContent, "utf-8");
 	return { success: true, file: filePath, rolledBack: entry, providerTransitions: rollbackEntries };
 }
 

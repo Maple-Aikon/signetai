@@ -158,12 +158,13 @@ export function registerMiscRoutes(app: Hono): void {
 
 			const filePath = join(AGENTS_DIR, file);
 			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
-			if (file.endsWith(".yaml")) {
+			const isAgentYaml = file === "agent.yaml" || file === "AGENT.yaml";
+			if (isAgentYaml) {
 				const safety = validateProviderSafety(content);
 				if (!safety.ok) return c.json({ error: safety.error }, 400);
 			}
-			const transitions = file.endsWith(".yaml")
-				? detectProviderTransitions(beforeContent, content, `api/config:${file}`)
+			const transitions = isAgentYaml
+				? detectProviderTransitions(beforeContent, content, `api/config:${file}`, c.get("auth")?.claims?.sub as string | undefined)
 				: [];
 
 			writeFileSync(filePath, content, "utf-8");
@@ -209,7 +210,7 @@ export function registerMiscRoutes(app: Hono): void {
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
 			const file = ["agent.yaml", "AGENT.yaml"].find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
 			const filePath = join(AGENTS_DIR, file);
-			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole);
+			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, c.get("auth")?.claims?.sub as string | undefined);
 			logger.warn("api", "Provider configuration rolled back", {
 				file,
 				transition: result.rolledBack,
