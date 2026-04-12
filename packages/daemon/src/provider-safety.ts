@@ -154,7 +154,9 @@ function isValidTransitionEntry(raw: unknown): raw is ProviderTransitionAuditEnt
 		typeof rec.timestamp === "string" &&
 		rec.timestamp.length > 0 &&
 		typeof rec.source === "string" &&
-		rec.source.length > 0
+		rec.source.length > 0 &&
+		typeof rec.risky === "boolean" &&
+		(rec.rolledBack === undefined || typeof rec.rolledBack === "boolean")
 	);
 }
 
@@ -182,6 +184,25 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 	mkdirSync(dirname(path), { recursive: true });
 	const next = [...readProviderTransitions(agentsDir), ...entries].slice(-100);
 	atomicWriteJson(path, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"];
+
+export function resolveRollbackFilePath(agentsDir: string, requestedRole?: ProviderSafetyRole): string {
+	const transitions = readProviderTransitions(agentsDir);
+	const reversed = [...transitions].reverse();
+	const match = reversed.find(
+		(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),
+	);
+	if (match) {
+		const fromSource = CONFIG_FILE_CANDIDATES.find((c) => match.source.endsWith(c));
+		if (fromSource) {
+			const resolved = join(agentsDir, fromSource);
+			if (existsSync(resolved)) return resolved;
+		}
+	}
+	const fallback = CONFIG_FILE_CANDIDATES.find((name) => existsSync(join(agentsDir, name))) ?? "agent.yaml";
+	return join(agentsDir, fallback);
 }
 
 export function executeProviderRollback(

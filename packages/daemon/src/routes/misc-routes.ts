@@ -10,6 +10,7 @@ import {
 	executeProviderRollback,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
+	resolveRollbackFilePath,
 	validateProviderSafety,
 } from "../provider-safety.js";
 import {
@@ -223,13 +224,11 @@ export function registerMiscRoutes(app: Hono): void {
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
-			const candidates = ["agent.yaml", "AGENT.yaml", "config.yaml"];
-			const file = candidates.find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
-			const filePath = join(AGENTS_DIR, file);
+			const filePath = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c));
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
 			logger.warn("api", "Provider configuration rolled back", {
-				file,
+				file: basename(filePath),
 				transition: strippedRolledBack,
 				rollbackEntries: result.providerTransitions,
 			});

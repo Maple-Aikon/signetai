@@ -320,7 +320,7 @@ export interface PipelineV2Config {
 	readonly semanticContradictionEnabled: boolean;
 	readonly semanticContradictionTimeoutMs: number;
 	readonly telemetryEnabled: boolean;
-	readonly allowRemoteProviders?: boolean;
+	readonly allowRemoteProviders: boolean;
 
 	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;
