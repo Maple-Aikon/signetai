@@ -196,21 +196,8 @@ export function readProviderTransitions(agentsDir: string): ProviderTransitionAu
 	}
 }
 
-function atomicWriteJson(targetPath: string, data: string): void {
-	const tmpPath = join(dirname(targetPath), `.audit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
-	try {
-		writeFileSync(tmpPath, data, "utf-8");
-		renameSync(tmpPath, targetPath);
-	} catch (e) {
-		try {
-			unlinkSync(tmpPath);
-		} catch {}
-		throw e;
-	}
-}
-
-function atomicWriteText(targetPath: string, content: string): void {
-	const tmpPath = join(dirname(targetPath), `.rollback-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+function atomicWrite(targetPath: string, content: string, prefix = ".atomic-"): void {
+	const tmpPath = join(dirname(targetPath), `${prefix}${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
 	try {
 		writeFileSync(tmpPath, content, "utf-8");
 		renameSync(tmpPath, targetPath);
@@ -241,7 +228,7 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 			total: next.length,
 		});
 	}
-	atomicWriteJson(path, `${JSON.stringify(next, null, 2)}\n`);
+	atomicWrite(path, `${JSON.stringify(next, null, 2)}\n`, ".audit-");
 }
 
 export const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"] as const;
@@ -328,9 +315,9 @@ export function executeProviderRollback(
 	// rewrites agent.yaml (provider is already correct but YAML comments
 	// added since the failed rollback are stripped), then marks consumed.
 	// Atomic write (temp+rename) prevents partial content on crash.
-	atomicWriteText(filePath, nextContent);
+	atomicWrite(filePath, nextContent, ".rollback-");
 	try {
-		atomicWriteJson(auditPath, `${JSON.stringify(merged, null, 2)}\n`);
+		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
 	} catch (e) {
 		// Config is correct but audit is stale — on retry, the same entry
 		// is found again; applyProviderRollback is effectively a no-op but
@@ -339,7 +326,13 @@ export function executeProviderRollback(
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
-	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
+	return {
+		success: true,
+		file: basename(filePath),
+		rolledBack: markRolledBack(entry),
+		providerTransitions: rollbackEntries,
+		isRetry: rollbackEntries.length === 0,
+	};
 }
 
 function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {

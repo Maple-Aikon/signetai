@@ -41,7 +41,7 @@ import {
 import { AGENTS_DIR, authConfig } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
-const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
+const GUARDED_CONFIG_FILES_CI = new Set(CONFIG_FILE_CANDIDATES.map((f) => f.toLowerCase()));
 
 function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
@@ -173,7 +173,7 @@ export function registerMiscRoutes(app: Hono): void {
 
 			const filePath = join(AGENTS_DIR, file);
 			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
-			const isGuardedConfig = GUARDED_CONFIG_FILES.has(file);
+			const isGuardedConfig = GUARDED_CONFIG_FILES_CI.has(file.toLowerCase());
 			let lockPreservedCommentsStripped = false;
 			if (isGuardedConfig) {
 				const guardAuth = c.get("auth");
@@ -305,6 +305,7 @@ export function registerMiscRoutes(app: Hono): void {
 			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
+			const isRetry = result.isRetry;
 			logger.warn("api", "Provider configuration rolled back", {
 				file: basename(filePath),
 				transition: strippedRolledBack,
@@ -314,6 +315,7 @@ export function registerMiscRoutes(app: Hono): void {
 				...result,
 				rolledBack: strippedRolledBack,
 				providerTransitions: result.providerTransitions.map(({ actor: _, ...rest }) => rest),
+				...(isRetry ? { commentsStripped: true } : {}),
 			});
 		} catch (e) {
 			if (e instanceof RollbackError) {
