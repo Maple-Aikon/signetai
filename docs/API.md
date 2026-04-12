@@ -361,6 +361,12 @@ Each transition can only be rolled back once — consumed entries are marked
 }
 ```
 
+Returns `400` if the rolled-back config would violate `allowRemoteProviders`.
+Returns `404` if no un-rolled-back transition exists, or if the source config
+file referenced by the transition has been deleted or renamed.
+
+The audit log retains the most recent 100 transitions. Older entries are
+silently dropped — a rollback targeting a truncated entry returns `404`.
 
 Identity
 --------

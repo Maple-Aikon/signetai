@@ -191,7 +191,14 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 	if (entries.length === 0) return;
 	const path = providerAuditPath(agentsDir);
 	mkdirSync(dirname(path), { recursive: true });
-	const next = [...readProviderTransitions(agentsDir), ...entries].slice(-100);
+	const existing = readProviderTransitions(agentsDir);
+	const next = [...existing, ...entries].slice(-100);
+	if (next.length < existing.length + entries.length) {
+		logger.warn("provider-safety", "Audit log truncated to 100 entries — oldest transitions dropped", {
+			dropped: existing.length + entries.length - next.length,
+			total: next.length,
+		});
+	}
 	atomicWriteJson(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
@@ -211,6 +218,10 @@ export function resolveRollbackFilePath(
 		if (fromSource) {
 			const resolved = join(agentsDir, fromSource);
 			if (existsSync(resolved)) return { filePath: resolved, transitions };
+			throw new RollbackError(
+				`Source config file '${fromSource}' not found — it may have been renamed or deleted since the transition was recorded`,
+				404,
+			);
 		}
 	}
 	const fallback = CONFIG_FILE_CANDIDATES.find((name) => existsSync(join(agentsDir, name))) ?? "agent.yaml";
