@@ -271,6 +271,7 @@ export function executeProviderRollback(
 	file: string;
 	rolledBack: ProviderTransitionAuditEntry;
 	providerTransitions: ProviderTransitionAuditEntry[];
+	isRetry: boolean;
 } {
 	const transitions = [...(priorTransitions ?? readProviderTransitions(agentsDir))];
 	const reversed = [...transitions].reverse();
