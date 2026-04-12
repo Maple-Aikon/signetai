@@ -40,6 +40,8 @@ import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRe
 
 const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
 
+let _rollbackSignal: { resolve: () => void; promise: Promise<void> } | null = null;
+
 function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
 	return typeof sub === "string" ? sub : undefined;
@@ -236,6 +238,14 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.post("/api/config/provider-safety/rollback", async (c) => {
+		if (_rollbackSignal) await _rollbackSignal.promise;
+		let resolve!: () => void;
+		_rollbackSignal = {
+			resolve,
+			promise: new Promise<void>((r) => {
+				resolve = r;
+			}),
+		};
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
@@ -258,6 +268,9 @@ export function registerMiscRoutes(app: Hono): void {
 			}
 			logger.error("api", "Provider rollback failed", e as Error);
 			return c.json({ error: "Provider rollback failed" }, 500);
+		} finally {
+			_rollbackSignal = null;
+			resolve();
 		}
 	});
 

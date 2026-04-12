@@ -311,11 +311,8 @@ export function applyProviderRollback(content: string, entry: ProviderTransition
 	const roleBlock =
 		entry.role === "extraction" ? ensureRecord(pipeline, "extraction") : ensureRecord(pipeline, "synthesis");
 	if (entry.role === "extraction") {
-		if (readString(pipeline.extractionProvider)) {
-			pipeline.extractionProvider = previous;
-		} else {
-			roleBlock.provider = previous;
-		}
+		pipeline.extractionProvider = previous;
+		roleBlock.provider = previous;
 		root.extractionModel = undefined;
 		root.extractionEndpoint = undefined;
 		root.extractionBaseUrl = undefined;

@@ -117,6 +117,7 @@ describe("provider safety", () => {
 		expect(next).not.toContain("claude-3-haiku");
 		expect(next).not.toContain("anthropic.com");
 		expect(next).toContain("extractionProvider: ollama");
+		expect(next).not.toContain("provider: anthropic");
 	});
 
 	it("prevents rollback ping-pong by marking consumed entries", () => {
