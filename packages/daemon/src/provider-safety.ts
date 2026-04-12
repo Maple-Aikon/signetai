@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, basename, join } from "node:path";
 import { type PipelineProviderChoice, isPipelineProvider } from "@signet/core";
 import { parse, stringify } from "yaml";
 
@@ -148,7 +148,8 @@ function isValidTransitionEntry(raw: unknown): raw is ProviderTransitionAuditEnt
 		typeof rec.role === "string" &&
 		(rec.role === "extraction" || rec.role === "synthesis") &&
 		typeof rec.to === "string" &&
-		rec.to.length > 0
+		rec.to.length > 0 &&
+		(rec.from === null || typeof rec.from === "string")
 	);
 }
 
@@ -203,9 +204,9 @@ export function executeProviderRollback(
 	const merged = [...transitions, ...rollbackEntries].slice(-100);
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
-	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
 	writeFileSync(filePath, nextContent, "utf-8");
-	return { success: true, file: filePath, rolledBack: entry, providerTransitions: rollbackEntries };
+	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
+	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
 }
 
 function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
