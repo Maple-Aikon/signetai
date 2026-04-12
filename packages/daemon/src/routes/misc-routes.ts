@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Context, Hono } from "hono";
+import { parse, stringify } from "yaml";
+import { checkPermission } from "../auth/policy";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import {
@@ -36,7 +38,7 @@ import {
 	runUpdate as runUpdateImpl,
 	setUpdateConfig,
 } from "../update-system.js";
-import { AGENTS_DIR } from "./state.js";
+import { AGENTS_DIR, authConfig } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
 const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
@@ -44,6 +46,18 @@ const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
 function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
 	return typeof sub === "string" ? sub : undefined;
+}
+
+function preserveLockInYaml(content: string): string {
+	const doc = parse(content) as Record<string, unknown>;
+	const memory = (doc.memory as Record<string, unknown>) ?? {};
+	const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
+	if (pipeline.allowRemoteProviders !== false) {
+		pipeline.allowRemoteProviders = false;
+	}
+	memory.pipelineV2 = pipeline;
+	doc.memory = memory;
+	return stringify(doc);
 }
 
 const MAX_CONFIG_BYTES = 1_048_576;
@@ -59,6 +73,10 @@ interface AgentRow {
 
 export function registerMiscRoutes(app: Hono): void {
 	let _rollbackSignal: { promise: Promise<void> } | null = null;
+	// Single-flight serialization: the microtask that resolves the current
+	// signal always runs before the event loop can accept a new request, so
+	// the first waiter is guaranteed to install the next signal before any
+	// concurrent POST can observe _rollbackSignal === null.
 	app.get("/api/logs", (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
@@ -150,7 +168,8 @@ export function registerMiscRoutes(app: Hono): void {
 
 	app.post("/api/config", async (c) => {
 		try {
-			const { file, content } = await c.req.json();
+			const { file, content: rawContent } = await c.req.json();
+			let content = rawContent;
 
 			if (!file || typeof content !== "string") {
 				return c.json({ error: "Invalid request" }, 400);
@@ -193,7 +212,10 @@ export function registerMiscRoutes(app: Hono): void {
 									400,
 								);
 							}
-							logger.warn("api", "Config save omits allowRemoteProviders while lock is active", { file });
+							content = preserveLockInYaml(content);
+							logger.warn("api", "Config save omits allowRemoteProviders while lock is active; lock preserved", {
+								file,
+							});
 						}
 					}
 				}
@@ -257,6 +279,12 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.post("/api/config/provider-safety/rollback", async (c) => {
+		const auth = c.get("auth");
+		const decision = checkPermission(auth?.claims ?? null, "admin", authConfig.mode);
+		if (!decision.allowed) {
+			c.status(403);
+			return c.json({ error: decision.reason ?? "forbidden" });
+		}
 		if (_rollbackSignal) await _rollbackSignal.promise;
 		let resolve!: () => void;
 		_rollbackSignal = {

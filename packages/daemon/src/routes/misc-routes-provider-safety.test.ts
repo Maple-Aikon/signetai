@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse, stringify } from "yaml";
 import {
 	appendProviderTransitions,
 	detectProviderTransitions,
@@ -186,5 +187,62 @@ describe("provider safety guard — route serialization integration", () => {
 		expect(lockImplicitlyLiftedExplicit).toBe(false);
 		expect(incomingExplicitSnap?.allowRemoteProvidersExplicit).toBe(true);
 		expect(isRemotePipelineProvider(incomingOmittedSnap?.extractionProvider)).toBe(true);
+	});
+});
+
+describe("provider safety guard — lock preservation on config save", () => {
+	function preserveLockInYaml(content: string): string {
+		const doc = parse(content) as Record<string, unknown>;
+		const memory = (doc.memory as Record<string, unknown>) ?? {};
+		const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
+		if (pipeline.allowRemoteProviders !== false) {
+			pipeline.allowRemoteProviders = false;
+		}
+		memory.pipelineV2 = pipeline;
+		doc.memory = memory;
+		return stringify(doc);
+	}
+
+	it("re-injects allowRemoteProviders: false when incoming omits it and prior has lock", () => {
+		const priorYaml = yamlWithExtraction("ollama", false);
+		const incomingYaml = [
+			"memory:",
+			"  pipelineV2:",
+			"    extraction:",
+			"      provider: ollama",
+			"    extractionTimeout: 30000",
+			"",
+		].join("\n");
+		const prior = tryReadProviderSafetySnapshot(priorYaml);
+		const incoming = tryReadProviderSafetySnapshot(incomingYaml);
+		expect(prior?.allowRemoteProviders).toBe(false);
+		expect(incoming?.allowRemoteProviders).toBe(true);
+		expect(incoming?.allowRemoteProvidersExplicit).toBe(false);
+		const lockImplicitlyLifted = incoming && !incoming.allowRemoteProvidersExplicit && incoming.allowRemoteProviders;
+		expect(lockImplicitlyLifted).toBe(true);
+		const blocked = [
+			["extraction", incoming.extractionProvider],
+			["synthesis", incoming.synthesisProvider],
+		].filter(([, p]) => isRemotePipelineProvider(p));
+		expect(blocked.length).toBe(0);
+		const preserved = preserveLockInYaml(incomingYaml);
+		const snap = readProviderSafetySnapshot(preserved);
+		expect(snap.allowRemoteProviders).toBe(false);
+		expect(snap.allowRemoteProvidersExplicit).toBe(true);
+	});
+
+	it("preserves the lock when called (unconditional within its narrow scope)", () => {
+		const incomingYaml = yamlWithExtraction("anthropic", true);
+		const preserved = preserveLockInYaml(incomingYaml);
+		const snap = readProviderSafetySnapshot(preserved);
+		expect(snap.allowRemoteProviders).toBe(false);
+		expect(snap.allowRemoteProvidersExplicit).toBe(true);
+	});
+
+	it("does not re-inject when lock is already present", () => {
+		const incomingYaml = yamlWithExtraction("ollama", false);
+		const preserved = preserveLockInYaml(incomingYaml);
+		const snap = readProviderSafetySnapshot(preserved);
+		expect(snap.allowRemoteProviders).toBe(false);
 	});
 });
