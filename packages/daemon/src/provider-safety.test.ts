@@ -144,7 +144,7 @@ describe("provider safety", () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
-		writeFileSync(join(configDir, "agent.yaml"), "memory:\n  pipelineV2:\n    extractionProvider: ollama\n", "utf-8");
+		writeFileSync(join(configDir, "agent.yaml"), "memory:\n  pipelineV2:\n    extractionProvider: anthropic\n", "utf-8");
 
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
@@ -159,10 +159,6 @@ describe("provider safety", () => {
 
 		const afterFirst = readFileSync(join(configDir, "agent.yaml"), "utf-8");
 		expect(afterFirst).toContain("extractionProvider: ollama");
-
-		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
-			"No provider transition with rollback target found",
-		);
 
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored[0].rolledBack).toBe(true);
@@ -317,5 +313,31 @@ describe("provider safety", () => {
 		const result = applyProviderRollback(configNoSynthesis, stored[0]);
 		expect(result).not.toContain("synthesis:");
 		expect(result).toContain("extractionProvider: ollama");
+	});
+
+	it("throws 400 when synthesis rollback would produce no change", () => {
+		const agentsDir = makeTempDir();
+		const configDir = makeTempDir();
+
+		writeFileSync(
+			join(configDir, "agent.yaml"),
+			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+			"utf-8",
+		);
+
+		const entries = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: claude-code\n",
+			"test",
+		);
+		expect(entries).toHaveLength(1);
+		appendProviderTransitions(agentsDir, entries);
+
+		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
+			"would produce no change",
+		);
+
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored[0].rolledBack).toBeUndefined();
 	});
 });

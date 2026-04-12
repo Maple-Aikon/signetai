@@ -120,8 +120,10 @@ export function validateProviderSafety(content: string): { ok: true } | { ok: fa
 
 export function preserveLockInYaml(content: string): string {
 	const doc = asRecord(parse(content)) ?? {};
-	const memory = asRecord(doc.memory) ?? {};
-	const pipeline = asRecord(memory.pipelineV2) ?? {};
+	const memory = asRecord(doc.memory);
+	if (!memory) return content;
+	const pipeline = asRecord(memory.pipelineV2);
+	if (!pipeline) return content;
 	if (pipeline.allowRemoteProviders !== false) {
 		pipeline.allowRemoteProviders = false;
 	}
@@ -292,6 +294,12 @@ export function executeProviderRollback(
 	}
 	const beforeContent = readFileSync(filePath, "utf-8");
 	const nextContent = applyProviderRollback(beforeContent, entry);
+	if (nextContent === beforeContent) {
+		throw new RollbackError(
+			`Rollback for ${entry.role} would produce no change — the current config has no ${entry.role} provider to revert. The audit entry is not consumed.`,
+			400,
+		);
+	}
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);
 	function markRolledBack(target: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {

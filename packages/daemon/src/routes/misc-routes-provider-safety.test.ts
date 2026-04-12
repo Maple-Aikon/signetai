@@ -232,4 +232,18 @@ describe("provider safety guard — lock preservation on config save", () => {
 		const snap = readProviderSafetySnapshot(preserved);
 		expect(snap.allowRemoteProviders).toBe(false);
 	});
+
+	it("does not create pipelineV2 section when incoming config has none", () => {
+		const incomingYaml = "name: test\nversion: 1\n";
+		const preserved = preserveLockInYaml(incomingYaml);
+		expect(preserved).toBe(incomingYaml);
+		expect(preserved).not.toContain("pipelineV2");
+		expect(preserved).not.toContain("allowRemoteProviders");
+	});
+
+	it("does not create memory section when incoming config has none", () => {
+		const incomingYaml = "name: test\n";
+		const preserved = preserveLockInYaml(incomingYaml);
+		expect(preserved).toBe(incomingYaml);
+	});
 });
