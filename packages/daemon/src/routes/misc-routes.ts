@@ -243,8 +243,13 @@ export function registerMiscRoutes(app: Hono): void {
 			const { actor: _, ...rest } = e;
 			return rest;
 		};
+		const stripInternal = (s: typeof snapshot) => {
+			if (!s) return null;
+			const { allowRemoteProvidersExplicit: _, ...rest } = s;
+			return rest;
+		};
 		return c.json({
-			snapshot,
+			snapshot: stripInternal(snapshot),
 			snapshotError,
 			transitions: transitions.map(stripActor),
 			latestRiskyTransition: latestRiskyTransition ? stripActor(latestRiskyTransition) : null,

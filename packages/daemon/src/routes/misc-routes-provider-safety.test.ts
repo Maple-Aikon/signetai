@@ -7,8 +7,11 @@ import {
 	appendProviderTransitions,
 	detectProviderTransitions,
 	executeProviderRollback,
+	isRemotePipelineProvider,
+	readProviderSafetySnapshot,
 	readProviderTransitions,
 	resolveRollbackFilePath,
+	tryReadProviderSafetySnapshot,
 	validateProviderSafety,
 } from "../provider-safety";
 
@@ -141,5 +144,47 @@ describe("provider safety guard — audit write resilience", () => {
 		expect(read.length).toBe(1);
 		expect(read[0].to).toBe("anthropic");
 		expect(read[0].risky).toBe(true);
+	});
+});
+
+describe("provider safety guard — route serialization integration", () => {
+	it("GET snapshot strips allowRemoteProvidersExplicit", () => {
+		const yaml = yamlWithExtraction("anthropic", true);
+		const snapshot = readProviderSafetySnapshot(yaml);
+		const { allowRemoteProvidersExplicit: _, ...publicSnapshot } = snapshot;
+		expect(publicSnapshot.allowRemoteProviders).toBe(true);
+		expect((publicSnapshot as Record<string, unknown>).allowRemoteProvidersExplicit).toBeUndefined();
+	});
+
+	it("POST lock-bypass check: explicit vs implicit allowRemoteProviders", () => {
+		const prior = yamlWithExtraction("ollama", false);
+		const incomingOmitted = ["memory:", "  pipelineV2:", "    extraction:", "      provider: anthropic", ""].join("\n");
+		const incomingExplicit = [
+			"memory:",
+			"  pipelineV2:",
+			"    allowRemoteProviders: true",
+			"    extraction:",
+			"      provider: anthropic",
+			"",
+		].join("\n");
+		const priorSnap = tryReadProviderSafetySnapshot(prior);
+		expect(priorSnap).not.toBeNull();
+		expect(priorSnap?.allowRemoteProviders).toBe(false);
+		const incomingOmittedSnap = tryReadProviderSafetySnapshot(incomingOmitted);
+		const incomingExplicitSnap = tryReadProviderSafetySnapshot(incomingExplicit);
+		expect(incomingOmittedSnap).not.toBeNull();
+		expect(incomingExplicitSnap).not.toBeNull();
+		const lockImplicitlyLiftedOmitted =
+			incomingOmittedSnap &&
+			!incomingOmittedSnap.allowRemoteProvidersExplicit &&
+			incomingOmittedSnap.allowRemoteProviders;
+		const lockImplicitlyLiftedExplicit =
+			incomingExplicitSnap &&
+			!incomingExplicitSnap.allowRemoteProvidersExplicit &&
+			incomingExplicitSnap.allowRemoteProviders;
+		expect(lockImplicitlyLiftedOmitted).toBe(true);
+		expect(lockImplicitlyLiftedExplicit).toBe(false);
+		expect(incomingExplicitSnap?.allowRemoteProvidersExplicit).toBe(true);
+		expect(isRemotePipelineProvider(incomingOmittedSnap?.extractionProvider)).toBe(true);
 	});
 });

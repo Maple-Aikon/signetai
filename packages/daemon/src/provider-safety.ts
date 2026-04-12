@@ -256,15 +256,15 @@ export function executeProviderRollback(
 	const nextContent = applyProviderRollback(beforeContent, entry);
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);
-	function markRolledBack(entry: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {
+	function markRolledBack(target: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {
 		return {
-			role: entry.role,
-			from: entry.from,
-			to: entry.to,
-			timestamp: entry.timestamp,
-			source: entry.source,
-			actor: entry.actor,
-			risky: entry.risky,
+			role: target.role,
+			from: target.from,
+			to: target.to,
+			timestamp: target.timestamp,
+			source: target.source,
+			actor: target.actor,
+			risky: target.risky,
 			rolledBack: true,
 		};
 	}
