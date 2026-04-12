@@ -494,12 +494,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		);
 	}
 
-	const synthesisProviderWon = isSynthesisProvider(synthesisRaw?.provider);
-	const requestedSynthesisProvider: SynthesisProviderKind = synthesisProviderWon
-		? (synthesisRaw.provider as SynthesisProviderKind)
-		: effectiveProvider === "command"
-			? d.synthesis.provider
-			: effectiveProvider;
+	const synthesisRawProvider = synthesisRaw?.provider;
+	const synthesisProviderWon = isSynthesisProvider(synthesisRawProvider);
+	const resolveSynthesisProvider = (): SynthesisProviderKind => {
+		if (isSynthesisProvider(synthesisRawProvider)) return synthesisRawProvider;
+		return effectiveProvider === "command" ? d.synthesis.provider : effectiveProvider;
+	};
+	const requestedSynthesisProvider: SynthesisProviderKind = resolveSynthesisProvider();
 	const resolvedSynthesisProvider: SynthesisProviderKind =
 		!allowRemoteProviders && isRemotePipelineProvider(requestedSynthesisProvider)
 			? (providerFallbackForLock(requestedSynthesisProvider, resolvedFallbackProvider) as SynthesisProviderKind)

@@ -212,7 +212,13 @@ export function executeProviderRollback(
 	// unconsumed (retryable, benign duplicate). If config write fails
 	// after audit, the entry is consumed but config unchanged (stuck).
 	writeFileSync(filePath, nextContent, "utf-8");
-	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
+	try {
+		writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
+	} catch (e) {
+		// Config is correct but audit is stale — the entry is still
+		// unconsumed and a retry will produce a benign no-op duplicate.
+		console.error(`[provider-safety] Audit write failed after config rollback: ${e instanceof Error ? e.message : String(e)}`);
+	}
 	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
 }
 
