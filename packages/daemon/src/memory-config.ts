@@ -524,10 +524,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				: effectiveProvider === "command"
 					? d.synthesis.model
 					: effectiveModel;
-	const resolvedSynthesisEndpoint =
-		parseOptionalUrl(synthesisRaw?.endpoint) ??
-		parseOptionalUrl(synthesisRaw?.base_url) ??
-		(synthesisProviderWon || effectiveProvider === "command" ? undefined : effectiveEndpoint);
+	const resolvedSynthesisEndpoint = synthesisProviderChangedForLock
+		? undefined
+		: (parseOptionalUrl(synthesisRaw?.endpoint) ??
+			parseOptionalUrl(synthesisRaw?.base_url) ??
+			(synthesisProviderWon || effectiveProvider === "command" ? undefined : effectiveEndpoint));
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,

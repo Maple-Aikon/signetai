@@ -156,7 +156,8 @@ function isValidTransitionEntry(raw: unknown): raw is ProviderTransitionAuditEnt
 		typeof rec.source === "string" &&
 		rec.source.length > 0 &&
 		typeof rec.risky === "boolean" &&
-		(rec.rolledBack === undefined || typeof rec.rolledBack === "boolean")
+		(rec.rolledBack === undefined || typeof rec.rolledBack === "boolean") &&
+		(rec.actor === undefined || typeof rec.actor === "string")
 	);
 }
 

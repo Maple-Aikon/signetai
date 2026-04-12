@@ -336,7 +336,11 @@ Each transition can only be rolled back once — consumed entries are marked
   "rolledBack": {
     "role": "extraction",
     "from": "ollama",
-    "to": "anthropic"
+    "to": "anthropic",
+    "timestamp": "2026-04-12T00:00:00.000Z",
+    "source": "api/config",
+    "risky": true,
+    "rolledBack": true
   },
   "providerTransitions": [
     {
