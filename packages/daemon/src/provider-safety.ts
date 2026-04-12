@@ -86,7 +86,7 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 				? extraction.allowRemoteProviders
 				: true;
 	return {
-		extractionProvider: flatExtraction ?? nestedExtraction,
+		extractionProvider: nestedExtraction ?? flatExtraction,
 		synthesisProvider,
 		allowRemoteProviders,
 	};
