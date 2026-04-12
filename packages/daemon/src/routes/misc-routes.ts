@@ -215,7 +215,7 @@ export function registerMiscRoutes(app: Hono): void {
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
-			const file = ["agent.yaml", "AGENT.yaml"].find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
+			const file = ["agent.yaml", "AGENT.yaml", "config.yaml"].find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
 			const filePath = join(AGENTS_DIR, file);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c));
 			logger.warn("api", "Provider configuration rolled back", {
