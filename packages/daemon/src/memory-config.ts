@@ -501,10 +501,14 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		return effectiveProvider === "command" ? d.synthesis.provider : effectiveProvider;
 	};
 	const requestedSynthesisProvider: SynthesisProviderKind = resolveSynthesisProvider();
-	const resolvedSynthesisProvider: SynthesisProviderKind =
-		!allowRemoteProviders && isRemotePipelineProvider(requestedSynthesisProvider)
-			? (providerFallbackForLock(requestedSynthesisProvider, resolvedFallbackProvider) as SynthesisProviderKind)
-			: requestedSynthesisProvider;
+	const resolveLockedSynthesisProvider = (): SynthesisProviderKind => {
+		if (!allowRemoteProviders && isRemotePipelineProvider(requestedSynthesisProvider)) {
+			const fallback = providerFallbackForLock(requestedSynthesisProvider, resolvedFallbackProvider);
+			if (isSynthesisProvider(fallback)) return fallback;
+		}
+		return requestedSynthesisProvider;
+	};
+	const resolvedSynthesisProvider: SynthesisProviderKind = resolveLockedSynthesisProvider();
 	const synthesisProviderChangedForLock = resolvedSynthesisProvider !== requestedSynthesisProvider;
 	const resolvedSynthesisModel = synthesisProviderChangedForLock
 		? defaultPipelineModel(resolvedSynthesisProvider)

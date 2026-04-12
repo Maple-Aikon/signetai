@@ -215,8 +215,9 @@ export function executeProviderRollback(
 	try {
 		writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
 	} catch (e) {
-		// Config is correct but audit is stale — the entry is still
-		// unconsumed and a retry will produce a benign no-op duplicate.
+		// Config is correct but audit is stale — on retry, the same entry
+		// is found again; applyProviderRollback is effectively a no-op but
+		// rewrites agent.yaml (stripping comments), then marks consumed.
 		console.error(`[provider-safety] Audit write failed after config rollback: ${e instanceof Error ? e.message : String(e)}`);
 	}
 	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
