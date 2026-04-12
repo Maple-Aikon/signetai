@@ -200,6 +200,19 @@ function atomicWriteJson(targetPath: string, data: string): void {
 	}
 }
 
+function atomicWriteText(targetPath: string, content: string): void {
+	const tmpPath = join(dirname(targetPath), `.rollback-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+	try {
+		writeFileSync(tmpPath, content, "utf-8");
+		renameSync(tmpPath, targetPath);
+	} catch (e) {
+		try {
+			unlinkSync(tmpPath);
+		} catch {}
+		throw e;
+	}
+}
+
 export function appendProviderTransitions(agentsDir: string, entries: readonly ProviderTransitionAuditEntry[]): void {
 	if (entries.length === 0) return;
 	const path = providerAuditPath(agentsDir);
@@ -298,8 +311,8 @@ export function executeProviderRollback(
 	// unconsumed. On retry, applyProviderRollback re-serializes and
 	// rewrites agent.yaml (provider is already correct but YAML comments
 	// added since the failed rollback are stripped), then marks consumed.
-	// Duplicate audit entries may accumulate on repeated failures.
-	writeFileSync(filePath, nextContent, "utf-8");
+	// Atomic write (temp+rename) prevents partial content on crash.
+	atomicWriteText(filePath, nextContent);
 	try {
 		atomicWriteJson(auditPath, `${JSON.stringify(merged, null, 2)}\n`);
 	} catch (e) {

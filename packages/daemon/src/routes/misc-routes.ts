@@ -268,10 +268,9 @@ export function registerMiscRoutes(app: Hono): void {
 		});
 	});
 
-	// Single-flight serialization: the microtask that resolves the current
-	// signal always runs before the event loop can accept a new request, so
-	// the first waiter is guaranteed to install the next signal before any
-	// concurrent POST can observe _rollbackSignal === null.
+	// Single-flight serialization: a while loop (not if) is required because
+	// when the active handler resolves, multiple waiters resume as microtasks
+	// in the same tick; each must re-check before proceeding.
 	app.post("/api/config/provider-safety/rollback", async (c) => {
 		const auth = c.get("auth");
 		const decision = checkPermission(auth?.claims ?? null, "admin", authConfig.mode);
@@ -279,7 +278,10 @@ export function registerMiscRoutes(app: Hono): void {
 			c.status(403);
 			return c.json({ error: decision.reason ?? "forbidden" });
 		}
-		if (_rollbackSignal) await _rollbackSignal.promise;
+		const acquire = async (): Promise<void> => {
+			while (_rollbackSignal) await _rollbackSignal.promise;
+		};
+		await acquire();
 		let resolve!: () => void;
 		_rollbackSignal = {
 			promise: new Promise<void>((r) => {
