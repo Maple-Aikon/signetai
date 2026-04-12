@@ -300,10 +300,13 @@ provider transitions recorded from config saves and rollbacks.
     "synthesisProvider": "ollama",
     "allowRemoteProviders": true
   },
+  "snapshotError": "Invalid YAML config",
   "transitions": [],
   "latestRiskyTransition": null
 }
 ```
+
+`snapshotError` is present when the config YAML could not be parsed; `snapshot` will be `null` in that case.
 
 ### POST /api/config/provider-safety/rollback
 

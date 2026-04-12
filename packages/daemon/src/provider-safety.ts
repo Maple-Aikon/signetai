@@ -200,11 +200,21 @@ export function executeProviderRollback(
 	const nextContent = applyProviderRollback(beforeContent, entry);
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);
+	function markRolledBack(entry: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {
+		return {
+			role: entry.role,
+			from: entry.from,
+			to: entry.to,
+			timestamp: entry.timestamp,
+			source: entry.source,
+			actor: entry.actor,
+			risky: entry.risky,
+			rolledBack: true,
+		};
+	}
+
 	const rollbackEntries = detectProviderTransitions(beforeContent, nextContent, "api/config/provider-safety/rollback", actor);
-	transitions[originalIndex] = {
-		...transitions[originalIndex],
-		rolledBack: true,
-	} as ProviderTransitionAuditEntry;
+	transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
 	const merged = [...transitions, ...rollbackEntries].slice(-100);
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
