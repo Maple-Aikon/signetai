@@ -191,7 +191,13 @@ export function readProviderTransitions(agentsDir: string): ProviderTransitionAu
 		const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
 		if (!Array.isArray(parsed)) return [];
 		return parsed.filter(isValidTransitionEntry) as ProviderTransitionAuditEntry[];
-	} catch {
+	} catch (e) {
+		const code = e instanceof Error && "code" in e ? (e as { code?: string }).code : undefined;
+		if (code === "ENOENT") return [];
+		logger.error("provider-safety", "Failed to read audit file", {
+			path,
+			error: e instanceof Error ? e.message : String(e),
+		});
 		return [];
 	}
 }
@@ -336,33 +342,35 @@ export function executeProviderRollback(
 	};
 }
 
-function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-	const current = asRecord(parent[key]);
-	if (current) return current;
-	const next: Record<string, unknown> = {};
-	parent[key] = next;
-	return next;
-}
-
 export function applyProviderRollback(content: string, entry: ProviderTransitionAuditEntry): string {
 	const previous = readString(entry.from);
 	if (!previous) throw new Error("No previous provider recorded for rollback");
 	const root = asRecord(parse(content)) ?? {};
-	const memory = ensureRecord(root, "memory");
-	const pipeline = ensureRecord(memory, "pipelineV2");
-	const roleBlock =
-		entry.role === "extraction" ? ensureRecord(pipeline, "extraction") : ensureRecord(pipeline, "synthesis");
+	const memory = asRecord(root.memory);
+	const pipeline = memory ? asRecord(memory.pipelineV2) : undefined;
+	if (!pipeline) throw new Error("No pipelineV2 section found in config");
+	const roleKey = entry.role === "extraction" ? "extraction" : "synthesis";
+	const roleBlock = asRecord(pipeline[roleKey]);
 	if (entry.role === "extraction") {
 		pipeline.extractionProvider = previous;
-		roleBlock.provider = previous;
+		if (roleBlock) {
+			roleBlock.provider = previous;
+			roleBlock.model = undefined;
+			roleBlock.endpoint = undefined;
+			roleBlock.base_url = undefined;
+		}
 		pipeline.extractionModel = undefined;
 		pipeline.extractionEndpoint = undefined;
 		pipeline.extractionBaseUrl = undefined;
 	} else {
-		roleBlock.provider = previous;
+		if (roleBlock) {
+			roleBlock.provider = previous;
+			roleBlock.model = undefined;
+			roleBlock.endpoint = undefined;
+			roleBlock.base_url = undefined;
+		} else {
+			pipeline[roleKey] = { provider: previous };
+		}
 	}
-	roleBlock.model = undefined;
-	roleBlock.endpoint = undefined;
-	roleBlock.base_url = undefined;
 	return stringify(root);
 }

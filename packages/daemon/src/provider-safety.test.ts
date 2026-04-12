@@ -229,4 +229,75 @@ describe("provider safety", () => {
 			"No provider transition with rollback target found",
 		);
 	});
+
+	it("rolls back synthesis provider transition end-to-end", () => {
+		const agentsDir = makeTempDir();
+		const configDir = makeTempDir();
+
+		writeFileSync(
+			join(configDir, "agent.yaml"),
+			[
+				"memory:",
+				"  pipelineV2:",
+				"    synthesis:",
+				"      provider: claude-code",
+				"      model: claude-sonnet-4-20250514",
+				"      endpoint: https://api.anthropic.com",
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const entries = detectProviderTransitions(
+			[
+				"memory:",
+				"  pipelineV2:",
+				"    synthesis:",
+				"      provider: ollama",
+				"",
+			].join("\n"),
+			[
+				"memory:",
+				"  pipelineV2:",
+				"    synthesis:",
+				"      provider: claude-code",
+				"      model: claude-sonnet-4-20250514",
+				"      endpoint: https://api.anthropic.com",
+				"",
+			].join("\n"),
+			"agent.yaml",
+		);
+		expect(entries).toHaveLength(1);
+		expect(entries[0].role).toBe("synthesis");
+		expect(entries[0].from).toBe("ollama");
+		expect(entries[0].to).toBe("claude-code");
+		appendProviderTransitions(agentsDir, entries);
+
+		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		expect(result.success).toBe(true);
+		expect(result.rolledBack.role).toBe("synthesis");
+		expect(result.rolledBack.from).toBe("ollama");
+		expect(result.rolledBack.to).toBe("claude-code");
+
+		const after = readFileSync(join(configDir, "agent.yaml"), "utf-8");
+		expect(after).toContain("provider: ollama");
+		expect(after).not.toContain("claude-sonnet-4-20250514");
+		expect(after).not.toContain("anthropic.com");
+	});
+
+	it("does not create empty extraction sub-block when only flat keys are used", () => {
+		const agentsDir = makeTempDir();
+		const entries = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
+			"test",
+		);
+		appendProviderTransitions(agentsDir, entries);
+		const stored = readProviderTransitions(agentsDir);
+
+		const configWithOnlyFlatKeys = "memory:\n  pipelineV2:\n    extractionProvider: anthropic\n";
+		const result = applyProviderRollback(configWithOnlyFlatKeys, stored[0]);
+		expect(result).toContain("extractionProvider: ollama");
+		expect(result).not.toContain("extraction:");
+	});
 });
