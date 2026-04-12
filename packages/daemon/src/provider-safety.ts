@@ -297,14 +297,25 @@ export function applyProviderRollback(content: string, entry: ProviderTransition
 	const root = asRecord(parse(content)) ?? {};
 	const memory = ensureRecord(root, "memory");
 	const pipeline = ensureRecord(memory, "pipelineV2");
+	const roleBlock =
+		entry.role === "extraction" ? ensureRecord(pipeline, "extraction") : ensureRecord(pipeline, "synthesis");
 	if (entry.role === "extraction") {
 		if (readString(pipeline.extractionProvider)) {
 			pipeline.extractionProvider = previous;
 		} else {
-			ensureRecord(pipeline, "extraction").provider = previous;
+			roleBlock.provider = previous;
 		}
+		root.extractionModel = undefined;
+		root.extractionEndpoint = undefined;
+		root.extractionBaseUrl = undefined;
 	} else {
-		ensureRecord(pipeline, "synthesis").provider = previous;
+		roleBlock.provider = previous;
+		root.synthesisModel = undefined;
+		root.synthesisEndpoint = undefined;
+		root.synthesisBaseUrl = undefined;
 	}
+	roleBlock.model = undefined;
+	roleBlock.endpoint = undefined;
+	roleBlock.base_url = undefined;
 	return stringify(root);
 }

@@ -268,6 +268,7 @@ contain path separators.
 ```json
 {
   "success": true,
+  "auditError": "<error string when audit write fails, absent otherwise>",
   "providerTransitions": [
     {
       "role": "extraction",
@@ -280,6 +281,11 @@ contain path separators.
   ]
 }
 ```
+
+`auditError` is present when the config was saved successfully but the
+provider-transition audit file could not be written. The config is correct but
+rollback via the audit trail will not be available for the transition.
+`success: true` can coexist with a non-empty `auditError`.
 
 Returns `400` for invalid file names, path traversal attempts, or wrong file
 types. YAML saves also return `400` when

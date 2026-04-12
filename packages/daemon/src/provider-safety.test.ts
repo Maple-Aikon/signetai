@@ -99,6 +99,26 @@ describe("provider safety", () => {
 		expect(readFileSync(join(agentsDir, "agent.yaml"), "utf-8")).toContain("extractionProvider: none");
 	});
 
+	it("clears model and endpoint fields on extraction rollback", () => {
+		const agentsDir = makeTempDir();
+		const entries = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n    extraction:\n      provider: ollama\n      model: qwen3:4b\n",
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extraction:\n      provider: anthropic\n      model: claude-3-haiku\n      endpoint: https://api.anthropic.com\n",
+			"test",
+		);
+		appendProviderTransitions(agentsDir, entries);
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored).toHaveLength(1);
+
+		const next = applyProviderRollback(
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extraction:\n      provider: anthropic\n      model: claude-3-haiku\n      endpoint: https://api.anthropic.com\n",
+			stored[0],
+		);
+		expect(next).not.toContain("claude-3-haiku");
+		expect(next).not.toContain("anthropic.com");
+		expect(next).toContain("extractionProvider: ollama");
+	});
+
 	it("prevents rollback ping-pong by marking consumed entries", () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
