@@ -1,0 +1,145 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	appendProviderTransitions,
+	detectProviderTransitions,
+	executeProviderRollback,
+	readProviderTransitions,
+	resolveRollbackFilePath,
+	validateProviderSafety,
+} from "../provider-safety";
+
+let agentsDir: string | undefined;
+
+afterEach(() => {
+	if (agentsDir) {
+		rmSync(agentsDir, { recursive: true, force: true });
+		agentsDir = undefined;
+	}
+});
+
+function makeAgentsDir(): string {
+	agentsDir = mkdtempSync(join(tmpdir(), "signet-provider-safety-route-"));
+	return agentsDir;
+}
+
+function yamlWithExtraction(provider: string, allowRemote = true): string {
+	return [
+		"memory:",
+		"  pipelineV2:",
+		`    allowRemoteProviders: ${allowRemote}`,
+		"    extraction:",
+		`      provider: ${provider}`,
+		"",
+	].join("\n");
+}
+
+describe("provider safety guard — config save validation", () => {
+	it("validateProviderSafety rejects remote provider when allowRemoteProviders is false", () => {
+		const yaml = yamlWithExtraction("anthropic", false);
+		const result = validateProviderSafety(yaml);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("allowRemoteProviders is false");
+			expect(result.error).toContain("anthropic");
+		}
+	});
+
+	it("validateProviderSafety accepts local provider when allowRemoteProviders is false", () => {
+		const yaml = yamlWithExtraction("ollama", false);
+		const result = validateProviderSafety(yaml);
+		expect(result.ok).toBe(true);
+	});
+
+	it("validateProviderSafety accepts remote provider when allowRemoteProviders is true", () => {
+		const yaml = yamlWithExtraction("anthropic", true);
+		const result = validateProviderSafety(yaml);
+		expect(result.ok).toBe(true);
+	});
+
+	it("detectProviderTransitions records local-to-remote transitions as risky", () => {
+		const before = yamlWithExtraction("ollama", true);
+		const after = yamlWithExtraction("anthropic", true);
+		const transitions = detectProviderTransitions(before, after, "agent.yaml");
+		expect(transitions.length).toBe(1);
+		expect(transitions[0].from).toBe("ollama");
+		expect(transitions[0].to).toBe("anthropic");
+		expect(transitions[0].risky).toBe(true);
+	});
+
+	it("detectProviderTransitions records remote-to-local as not risky", () => {
+		const before = yamlWithExtraction("anthropic", true);
+		const after = yamlWithExtraction("ollama", true);
+		const transitions = detectProviderTransitions(before, after, "agent.yaml");
+		expect(transitions.length).toBe(1);
+		expect(transitions[0].risky).toBe(false);
+	});
+});
+
+describe("provider safety guard — rollback path", () => {
+	it("resolveRollbackFilePath returns transitions to avoid double-read", () => {
+		const dir = makeAgentsDir();
+		mkdirSync(dir, { recursive: true });
+		const agentYaml = join(dir, "agent.yaml");
+		writeFileSync(agentYaml, yamlWithExtraction("anthropic", true));
+
+		appendProviderTransitions(
+			dir,
+			detectProviderTransitions(
+				yamlWithExtraction("ollama", true),
+				yamlWithExtraction("anthropic", true),
+				"agent.yaml",
+			),
+		);
+
+		const { filePath, transitions } = resolveRollbackFilePath(dir);
+		expect(filePath).toBe(agentYaml);
+		expect(transitions.length).toBe(1);
+
+		const result = executeProviderRollback(dir, filePath, undefined, undefined, transitions);
+		expect(result.success).toBe(true);
+		expect(result.rolledBack.from).toBe("ollama");
+		expect(result.rolledBack.to).toBe("anthropic");
+		expect(result.providerTransitions.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("executeProviderRollback still works without priorTransitions (backward compat)", () => {
+		const dir = makeAgentsDir();
+		mkdirSync(dir, { recursive: true });
+		const agentYaml = join(dir, "agent.yaml");
+		writeFileSync(agentYaml, yamlWithExtraction("anthropic", true));
+
+		appendProviderTransitions(
+			dir,
+			detectProviderTransitions(
+				yamlWithExtraction("ollama", true),
+				yamlWithExtraction("anthropic", true),
+				"agent.yaml",
+			),
+		);
+
+		const { filePath } = resolveRollbackFilePath(dir);
+		const result = executeProviderRollback(dir, filePath);
+		expect(result.success).toBe(true);
+	});
+});
+
+describe("provider safety guard — audit write resilience", () => {
+	it("transitions persist and are readable after append", () => {
+		const dir = makeAgentsDir();
+		mkdirSync(dir, { recursive: true });
+
+		const before = yamlWithExtraction("ollama", true);
+		const after = yamlWithExtraction("anthropic", true);
+		const entries = detectProviderTransitions(before, after, "agent.yaml");
+		appendProviderTransitions(dir, entries);
+
+		const read = readProviderTransitions(dir);
+		expect(read.length).toBe(1);
+		expect(read[0].to).toBe("anthropic");
+		expect(read[0].risky).toBe(true);
+	});
+});

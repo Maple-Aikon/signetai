@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, basename, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { type PipelineProviderChoice, isPipelineProvider } from "@signet/core";
-import { logger } from "./logger.js";
 import { parse, stringify } from "yaml";
+import { logger } from "./logger.js";
 
 export class RollbackError extends Error {
 	constructor(
@@ -188,7 +188,10 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 
 const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"];
 
-export function resolveRollbackFilePath(agentsDir: string, requestedRole?: ProviderSafetyRole): string {
+export function resolveRollbackFilePath(
+	agentsDir: string,
+	requestedRole?: ProviderSafetyRole,
+): { filePath: string; transitions: ProviderTransitionAuditEntry[] } {
 	const transitions = readProviderTransitions(agentsDir);
 	const reversed = [...transitions].reverse();
 	const match = reversed.find(
@@ -198,11 +201,11 @@ export function resolveRollbackFilePath(agentsDir: string, requestedRole?: Provi
 		const fromSource = CONFIG_FILE_CANDIDATES.find((c) => match.source.endsWith(c));
 		if (fromSource) {
 			const resolved = join(agentsDir, fromSource);
-			if (existsSync(resolved)) return resolved;
+			if (existsSync(resolved)) return { filePath: resolved, transitions };
 		}
 	}
 	const fallback = CONFIG_FILE_CANDIDATES.find((name) => existsSync(join(agentsDir, name))) ?? "agent.yaml";
-	return join(agentsDir, fallback);
+	return { filePath: join(agentsDir, fallback), transitions };
 }
 
 export function executeProviderRollback(
@@ -210,13 +213,14 @@ export function executeProviderRollback(
 	filePath: string,
 	requestedRole?: ProviderSafetyRole,
 	actor?: string,
+	priorTransitions?: ProviderTransitionAuditEntry[],
 ): {
 	success: true;
 	file: string;
 	rolledBack: ProviderTransitionAuditEntry;
 	providerTransitions: ProviderTransitionAuditEntry[];
 } {
-	const transitions = readProviderTransitions(agentsDir);
+	const transitions = priorTransitions ?? readProviderTransitions(agentsDir);
 	const reversed = [...transitions].reverse();
 	const matchIdx = reversed.findIndex(
 		(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),
@@ -241,7 +245,12 @@ export function executeProviderRollback(
 		};
 	}
 
-	const rollbackEntries = detectProviderTransitions(beforeContent, nextContent, "api/config/provider-safety/rollback", actor);
+	const rollbackEntries = detectProviderTransitions(
+		beforeContent,
+		nextContent,
+		"api/config/provider-safety/rollback",
+		actor,
+	);
 	transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
 	const merged = [...transitions, ...rollbackEntries].slice(-100);
 	const auditPath = providerAuditPath(agentsDir);
@@ -258,7 +267,9 @@ export function executeProviderRollback(
 		// Config is correct but audit is stale — on retry, the same entry
 		// is found again; applyProviderRollback is effectively a no-op but
 		// rewrites agent.yaml (stripping comments), then marks consumed.
-		logger.error("provider-safety", "Audit write failed after config rollback", { error: e instanceof Error ? e.message : String(e) });
+		logger.error("provider-safety", "Audit write failed after config rollback", {
+			error: e instanceof Error ? e.message : String(e),
+		});
 	}
 	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
 }

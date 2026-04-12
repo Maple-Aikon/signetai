@@ -208,7 +208,7 @@ export function registerMiscRoutes(app: Hono): void {
 		}
 		const transitions = readProviderTransitions(AGENTS_DIR);
 		const latestRiskyTransition = [...transitions].reverse().find((entry) => entry.risky) ?? null;
-		const stripActor = (e: typeof transitions[number]) => {
+		const stripActor = (e: (typeof transitions)[number]) => {
 			const { actor: _, ...rest } = e;
 			return rest;
 		};
@@ -224,8 +224,8 @@ export function registerMiscRoutes(app: Hono): void {
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
-			const filePath = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
-			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c));
+			const { filePath, transitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
+			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), transitions);
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
 			logger.warn("api", "Provider configuration rolled back", {
 				file: basename(filePath),

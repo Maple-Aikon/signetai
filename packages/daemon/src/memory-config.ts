@@ -475,6 +475,17 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			: typeof extractionRaw?.allowRemoteProviders === "boolean"
 				? extractionRaw.allowRemoteProviders
 				: d.allowRemoteProviders;
+	if (
+		typeof raw.allowRemoteProviders === "boolean" &&
+		typeof extractionRaw?.allowRemoteProviders === "boolean" &&
+		raw.allowRemoteProviders !== extractionRaw.allowRemoteProviders
+	) {
+		logger.warn(
+			"config",
+			"pipelineV2.allowRemoteProviders and extraction.allowRemoteProviders conflict; top-level takes precedence",
+			{ topLevel: raw.allowRemoteProviders, extraction: extractionRaw.allowRemoteProviders },
+		);
+	}
 	const effectiveProvider =
 		!allowRemoteProviders && isRemotePipelineProvider(resolvedProvider)
 			? providerFallbackForLock(resolvedProvider, resolvedFallbackProvider)
