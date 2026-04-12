@@ -175,7 +175,11 @@ export function registerMiscRoutes(app: Hono): void {
 				: [];
 
 			writeFileSync(filePath, content, "utf-8");
-			appendProviderTransitions(AGENTS_DIR, transitions);
+			try {
+				appendProviderTransitions(AGENTS_DIR, transitions);
+			} catch (auditErr) {
+				logger.warn("api", "Audit write failed after config save", { file, error: String(auditErr) });
+			}
 			if (transitions.some((entry) => entry.risky)) {
 				logger.warn("api", "Remote provider enabled in config", { file, transitions });
 			} else {

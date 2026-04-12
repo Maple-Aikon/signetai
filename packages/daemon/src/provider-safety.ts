@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import { type PipelineProviderChoice, isPipelineProvider } from "@signet/core";
+import { logger } from "./logger.js";
 import { parse, stringify } from "yaml";
 
 export class RollbackError extends Error {
@@ -169,12 +171,18 @@ export function readProviderTransitions(agentsDir: string): ProviderTransitionAu
 	}
 }
 
+function atomicWriteJson(targetPath: string, data: string): void {
+	const tmpPath = join(tmpdir(), `signet-audit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+	writeFileSync(tmpPath, data, "utf-8");
+	renameSync(tmpPath, targetPath);
+}
+
 export function appendProviderTransitions(agentsDir: string, entries: readonly ProviderTransitionAuditEntry[]): void {
 	if (entries.length === 0) return;
 	const path = providerAuditPath(agentsDir);
 	mkdirSync(dirname(path), { recursive: true });
 	const next = [...readProviderTransitions(agentsDir), ...entries].slice(-100);
-	writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+	atomicWriteJson(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
 export function executeProviderRollback(
@@ -221,14 +229,15 @@ export function executeProviderRollback(
 	// Config-first: if audit write fails after config, the entry is
 	// unconsumed. On retry, applyProviderRollback rewrites agent.yaml
 	// (stripping any YAML comments added since), then marks consumed.
+	// Duplicate audit entries may accumulate on repeated failures.
 	writeFileSync(filePath, nextContent, "utf-8");
 	try {
-		writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
+		atomicWriteJson(auditPath, `${JSON.stringify(merged, null, 2)}\n`);
 	} catch (e) {
 		// Config is correct but audit is stale — on retry, the same entry
 		// is found again; applyProviderRollback is effectively a no-op but
 		// rewrites agent.yaml (stripping comments), then marks consumed.
-		console.error(`[provider-safety] Audit write failed after config rollback: ${e instanceof Error ? e.message : String(e)}`);
+		logger.error("provider-safety", "Audit write failed after config rollback", { error: e instanceof Error ? e.message : String(e) });
 	}
 	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
 }
