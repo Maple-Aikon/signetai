@@ -7,8 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-12
-- Bug fixes: expose pinned param in memory_store and memory_modify.
-- Docs: align generated site metadata.
+- Bug fixes: emit valid Codex hooks.json schema; gate dependency synthesis on extraction progress; expose pinned param in memory_store and memory_modify.
+- Docs: add Ostico as contributor; align generated site metadata.
 
 ### 2026-04-11
 - Docs: refresh public Signet positioning.
@@ -33,6 +33,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Hermes Agent memory provider integration; OpenClaw adapter request normalization.
 
 ## Release Ledger
+
+## [0.98.14] - 2026-04-12
+
+Release summary: 2 bug fixes and 1 docs update.
+Tag range: `v0.98.13..v0.98.14`.
+
+### Bug Fixes
+
+- **connector-codex**: emit valid Codex hooks.json schema (#495)
+- gate dependency synthesis on extraction progress (#492)
+
+### Docs
+
+- **readme**: add Ostico as contributor (#494)
 
 ## [0.98.13] - 2026-04-12
 
