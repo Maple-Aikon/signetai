@@ -305,7 +305,6 @@ export function registerMiscRoutes(app: Hono): void {
 			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
-			const isRetry = result.isRetry;
 			logger.warn("api", "Provider configuration rolled back", {
 				file: basename(filePath),
 				transition: strippedRolledBack,
@@ -315,7 +314,6 @@ export function registerMiscRoutes(app: Hono): void {
 				...result,
 				rolledBack: strippedRolledBack,
 				providerTransitions: result.providerTransitions.map(({ actor: _, ...rest }) => rest),
-				...(isRetry ? { commentsStripped: true } : {}),
 			});
 		} catch (e) {
 			if (e instanceof RollbackError) {

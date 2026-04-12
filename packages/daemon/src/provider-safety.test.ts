@@ -300,4 +300,22 @@ describe("provider safety", () => {
 		expect(result).toContain("extractionProvider: ollama");
 		expect(result).not.toContain("extraction:");
 	});
+
+	it("does not create synthesis sub-block when one does not exist in current config", () => {
+		const agentsDir = makeTempDir();
+		const entries = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: claude-code\n      model: claude-sonnet-4-20250514\n",
+			"test",
+		);
+		expect(entries).toHaveLength(1);
+		expect(entries[0].role).toBe("synthesis");
+		appendProviderTransitions(agentsDir, entries);
+		const stored = readProviderTransitions(agentsDir);
+
+		const configNoSynthesis = "memory:\n  pipelineV2:\n    extractionProvider: ollama\n";
+		const result = applyProviderRollback(configNoSynthesis, stored[0]);
+		expect(result).not.toContain("synthesis:");
+		expect(result).toContain("extractionProvider: ollama");
+	});
 });

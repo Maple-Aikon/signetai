@@ -368,8 +368,6 @@ export function applyProviderRollback(content: string, entry: ProviderTransition
 			roleBlock.model = undefined;
 			roleBlock.endpoint = undefined;
 			roleBlock.base_url = undefined;
-		} else {
-			pipeline[roleKey] = { provider: previous };
 		}
 	}
 	return stringify(root);

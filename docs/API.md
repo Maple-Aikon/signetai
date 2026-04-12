@@ -366,9 +366,15 @@ Each transition can only be rolled back once — consumed entries are marked
       "source": "api/config/provider-safety/rollback",
       "risky": false
     }
-  ]
+  ],
+  "isRetry": false
 }
 ```
+
+`isRetry` is `true` when the transition was already rolled back in a prior
+request (audit write failed after config was written). In that case the
+config is re-serialized (comments stripped again) and the audit is marked
+consumed.
 
 Returns `400` if the rolled-back config would violate `allowRemoteProviders`.
 Returns `404` if no un-rolled-back transition exists, or if the source config

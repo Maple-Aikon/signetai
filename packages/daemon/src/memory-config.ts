@@ -475,7 +475,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	);
 	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
 		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
-		d.extraction.fallbackProvider ?? "ollama",
+		d.extraction.fallbackProvider,
 	);
 	const topLevelRemote = typeof raw.allowRemoteProviders === "boolean" ? raw.allowRemoteProviders : undefined;
 	const extractionRemote =
