@@ -61,10 +61,6 @@ interface AgentRow {
 
 export function registerMiscRoutes(app: Hono): void {
 	let _rollbackSignal: { promise: Promise<void> } | null = null;
-	// Single-flight serialization: the microtask that resolves the current
-	// signal always runs before the event loop can accept a new request, so
-	// the first waiter is guaranteed to install the next signal before any
-	// concurrent POST can observe _rollbackSignal === null.
 	app.get("/api/logs", (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
@@ -236,7 +232,13 @@ export function registerMiscRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/config/provider-safety", (c) => {
+	app.get("/api/config/provider-safety", async (c) => {
+		const auth = c.get("auth");
+		const decision = checkPermission(auth?.claims ?? null, "recall", authConfig.mode);
+		if (!decision.allowed) {
+			c.status(403);
+			return c.json({ error: decision.reason ?? "forbidden" });
+		}
 		const configPath = CONFIG_FILE_CANDIDATES.map((name) => join(AGENTS_DIR, name)).find((path) => existsSync(path));
 		let snapshot = null;
 		let snapshotError: string | undefined;
@@ -266,6 +268,10 @@ export function registerMiscRoutes(app: Hono): void {
 		});
 	});
 
+	// Single-flight serialization: the microtask that resolves the current
+	// signal always runs before the event loop can accept a new request, so
+	// the first waiter is guaranteed to install the next signal before any
+	// concurrent POST can observe _rollbackSignal === null.
 	app.post("/api/config/provider-safety/rollback", async (c) => {
 		const auth = c.get("auth");
 		const decision = checkPermission(auth?.claims ?? null, "admin", authConfig.mode);

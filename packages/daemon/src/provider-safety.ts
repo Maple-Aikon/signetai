@@ -110,7 +110,7 @@ export function validateProviderSafety(content: string): { ok: true } | { ok: fa
 }
 
 export function preserveLockInYaml(content: string): string {
-	const doc = parse(content) as Record<string, unknown>;
+	const doc = asRecord(parse(content)) ?? {};
 	const memory = (doc.memory as Record<string, unknown>) ?? {};
 	const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
 	if (pipeline.allowRemoteProviders !== false) {
