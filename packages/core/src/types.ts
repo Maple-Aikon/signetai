@@ -206,8 +206,8 @@ export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
 
 export interface PipelineExtractionConfig {
 	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
-	readonly fallbackProvider: "ollama" | "none";
-	readonly allowRemoteProviders: boolean;
+	readonly fallbackProvider?: "ollama" | "none";
+	readonly allowRemoteProviders?: boolean;
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;

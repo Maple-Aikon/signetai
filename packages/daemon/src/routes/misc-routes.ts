@@ -3,14 +3,7 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import {
-	appendProviderTransitions,
-	applyProviderRollback,
-	detectProviderTransitions,
-	readProviderSafetySnapshot,
-	readProviderTransitions,
-	validateProviderSafety,
-} from "../provider-safety.js";
+import { executeProviderRollback, readProviderSafetySnapshot, readProviderTransitions } from "../provider-safety.js";
 import {
 	CRON_PRESETS,
 	computeNextRun,
@@ -206,27 +199,26 @@ export function registerMiscRoutes(app: Hono): void {
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
-			const transitions = readProviderTransitions(AGENTS_DIR);
-			const entry = [...transitions]
-				.reverse()
-				.find((candidate) => candidate.from && (!requestedRole || candidate.role === requestedRole));
-			if (!entry) return c.json({ error: "No provider transition with rollback target found" }, 404);
 			const file = ["agent.yaml", "AGENT.yaml"].find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
 			const filePath = join(AGENTS_DIR, file);
-			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : "";
-			const nextContent = applyProviderRollback(beforeContent, entry);
-			const safety = validateProviderSafety(nextContent);
-			if (!safety.ok) return c.json({ error: safety.error }, 400);
-			const rollbackEntries = detectProviderTransitions(
-				beforeContent,
-				nextContent,
-				"api/config/provider-safety/rollback",
-			);
-			writeFileSync(filePath, nextContent, "utf-8");
-			appendProviderTransitions(AGENTS_DIR, rollbackEntries);
-			logger.warn("api", "Provider configuration rolled back", { file, transition: entry, rollbackEntries });
-			return c.json({ success: true, file, rolledBack: entry, providerTransitions: rollbackEntries });
+			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole);
+			logger.warn("api", "Provider configuration rolled back", {
+				file,
+				transition: result.rolledBack,
+				rollbackEntries: result.providerTransitions,
+			});
+			return c.json(result);
 		} catch (e) {
+			const msg = (e as Error).message;
+			if (msg.includes("No provider transition") || msg.includes("rollback target")) {
+				return c.json({ error: msg }, 404);
+			}
+			if (msg.includes("allowRemoteProviders") || msg.includes("refusing")) {
+				return c.json({ error: msg }, 400);
+			}
+			if (msg.includes("already in progress")) {
+				return c.json({ error: msg }, 409);
+			}
 			logger.error("api", "Provider rollback failed", e as Error);
 			return c.json({ error: "Provider rollback failed" }, 500);
 		}

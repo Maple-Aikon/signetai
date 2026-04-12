@@ -348,6 +348,12 @@ the dashboard/API are also recorded in
 see when extraction or synthesis moved between providers and roll back
 the latest recorded change.
 
+> **Note:** The rollback API round-trips `agent.yaml` through a YAML
+> parser and serializer, which does not preserve comments. Any
+> hand-written comments in the file will be lost on rollback. Edit the
+> file directly instead of using the rollback endpoint if comment
+> preservation matters.
+
 `rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
 provider's existing behavior with no throughput throttling. When
 configured, it applies only to remote or paid providers

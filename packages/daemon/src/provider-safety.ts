@@ -13,6 +13,7 @@ export interface ProviderTransitionAuditEntry {
 	readonly source: string;
 	readonly actor?: string;
 	readonly risky: boolean;
+	readonly rolledBack?: boolean;
 }
 
 export interface ProviderSafetySnapshot {
@@ -64,7 +65,7 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 	const pipeline = asRecord(memory?.pipelineV2);
 	const extraction = asRecord(pipeline?.extraction);
 	const synthesis = asRecord(pipeline?.synthesis);
-	const flatExtraction = readProvider(pipeline?.extractionProvider);
+	const flatExtraction = readProvider(pipeline.extractionProvider);
 	const nestedExtraction = readProvider(extraction?.provider);
 	const synthesisProvider = readProvider(synthesis?.provider);
 	const allowRemoteProviders =
@@ -130,12 +131,24 @@ export function providerAuditPath(agentsDir: string): string {
 	return join(agentsDir, AUDIT_FILE);
 }
 
+function isValidTransitionEntry(raw: unknown): raw is ProviderTransitionAuditEntry {
+	if (typeof raw !== "object" || raw === null) return false;
+	const rec = raw as Record<string, unknown>;
+	return (
+		typeof rec.role === "string" &&
+		(rec.role === "extraction" || rec.role === "synthesis") &&
+		typeof rec.to === "string" &&
+		rec.to.length > 0
+	);
+}
+
 export function readProviderTransitions(agentsDir: string): ProviderTransitionAuditEntry[] {
 	const path = providerAuditPath(agentsDir);
 	if (!existsSync(path)) return [];
 	try {
 		const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		return Array.isArray(parsed) ? (parsed as ProviderTransitionAuditEntry[]) : [];
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(isValidTransitionEntry) as ProviderTransitionAuditEntry[];
 	} catch {
 		return [];
 	}
@@ -147,6 +160,67 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 	mkdirSync(dirname(path), { recursive: true });
 	const next = [...readProviderTransitions(agentsDir), ...entries].slice(-100);
 	writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+}
+
+export function markTransitionRolledBack(agentsDir: string, index: number): void {
+	const path = providerAuditPath(agentsDir);
+	if (!existsSync(path)) return;
+	const transitions = readProviderTransitions(agentsDir);
+	if (index < 0 || index >= transitions.length) return;
+	const rec = transitions[index] as Record<string, unknown>;
+	rec.rolledBack = true;
+	writeFileSync(path, `${JSON.stringify(transitions, null, 2)}\n`, "utf-8");
+}
+
+let rollbackInFlight = false;
+
+export function isRollbackInFlight(): boolean {
+	return rollbackInFlight;
+}
+
+function withRollbackLock<T>(fn: () => T): T {
+	if (rollbackInFlight) throw new Error("Rollback already in progress");
+	rollbackInFlight = true;
+	try {
+		return fn();
+	} finally {
+		rollbackInFlight = false;
+	}
+}
+
+export function executeProviderRollback(
+	agentsDir: string,
+	filePath: string,
+	requestedRole?: ProviderSafetyRole,
+): {
+	success: true;
+	file: string;
+	rolledBack: ProviderTransitionAuditEntry;
+	providerTransitions: ProviderTransitionAuditEntry[];
+} {
+	return withRollbackLock(() => {
+		const transitions = readProviderTransitions(agentsDir);
+		const reversed = [...transitions].reverse();
+		const matchIdx = reversed.findIndex(
+			(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),
+		);
+		if (matchIdx < 0) throw new Error("No provider transition with rollback target found");
+		const entry = reversed[matchIdx];
+		const originalIndex = transitions.length - 1 - matchIdx;
+		const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : "";
+		const nextContent = applyProviderRollback(beforeContent, entry);
+		const safety = validateProviderSafety(nextContent);
+		if (!safety.ok) throw new Error(safety.error);
+		const rollbackEntries = detectProviderTransitions(
+			beforeContent,
+			nextContent,
+			"api/config/provider-safety/rollback",
+		);
+		writeFileSync(filePath, nextContent, "utf-8");
+		appendProviderTransitions(agentsDir, rollbackEntries);
+		markTransitionRolledBack(agentsDir, originalIndex);
+		return { success: true, file: filePath, rolledBack: entry, providerTransitions: rollbackEntries };
+	});
 }
 
 function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {

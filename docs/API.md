@@ -311,6 +311,14 @@ Roll back the latest recorded provider transition with a previous provider.
 Pass `role: "extraction"` or `role: "synthesis"` to restrict the rollback;
 omit it to roll back the most recent provider transition of either role.
 
+Each transition can only be rolled back once — consumed entries are marked
+`rolledBack: true` and skipped by subsequent calls. Concurrent rollback
+requests are rejected with `409 Conflict`.
+
+> **Note:** This endpoint round-trips `agent.yaml` through a YAML parser
+> and serializer, which strips comments. Any hand-written comments in the
+> file will be lost. Edit the file directly if comment preservation matters.
+
 **Request body**
 
 ```json
@@ -327,18 +335,18 @@ omit it to roll back the most recent provider transition of either role.
     "role": "extraction",
     "from": "ollama",
     "to": "anthropic"
-	  },
-	  "providerTransitions": [
-	    {
-	      "role": "extraction",
-	      "from": "anthropic",
-	      "to": "ollama",
-	      "source": "api/config/provider-safety/rollback",
-	      "risky": false
-	    }
-	  ]
-	}
-	```
+  },
+  "providerTransitions": [
+    {
+      "role": "extraction",
+      "from": "anthropic",
+      "to": "ollama",
+      "source": "api/config/provider-safety/rollback",
+      "risky": false
+    }
+  ]
+}
+```
 
 
 Identity
