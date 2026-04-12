@@ -51,7 +51,7 @@ function readProvider(value: unknown): PipelineProviderChoice | undefined {
 	return isPipelineProvider(value) ? value : undefined;
 }
 
-function tryReadProviderSafetySnapshot(content: string): ProviderSafetySnapshot | undefined {
+export function tryReadProviderSafetySnapshot(content: string): ProviderSafetySnapshot | undefined {
 	try {
 		return readProviderSafetySnapshot(content);
 	} catch {
@@ -99,11 +99,12 @@ export function validateProviderSafety(content: string): { ok: true } | { ok: fa
 	const blocked = [
 		["extraction", snapshot.extractionProvider],
 		["synthesis", snapshot.synthesisProvider],
-	].find(([, provider]) => isRemotePipelineProvider(provider));
-	if (!blocked) return { ok: true };
+	].filter(([, provider]) => isRemotePipelineProvider(provider));
+	if (blocked.length === 0) return { ok: true };
+	const parts = blocked.map(([role, provider]) => `${role} provider '${provider}'`);
 	return {
 		ok: false,
-		error: `memory.pipelineV2.allowRemoteProviders is false; refusing ${blocked[0]} provider '${blocked[1]}'. Set allowRemoteProviders: true before enabling paid or remote providers.`,
+		error: `memory.pipelineV2.allowRemoteProviders is false; refusing: ${parts.join(", ")}. Set allowRemoteProviders: true before enabling paid or remote providers.`,
 	};
 }
 

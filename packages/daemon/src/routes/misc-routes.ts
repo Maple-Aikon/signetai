@@ -12,6 +12,7 @@ import {
 	readProviderSafetySnapshot,
 	readProviderTransitions,
 	resolveRollbackFilePath,
+	tryReadProviderSafetySnapshot,
 	validateProviderSafety,
 } from "../provider-safety.js";
 import {
@@ -171,23 +172,38 @@ export function registerMiscRoutes(app: Hono): void {
 			if (isGuardedConfig) {
 				const safety = validateProviderSafety(content);
 				if (!safety.ok) return c.json({ error: safety.error }, 400);
+				if (beforeContent) {
+					const prior = tryReadProviderSafetySnapshot(beforeContent);
+					if (prior && !prior.allowRemoteProviders) {
+						const incoming = tryReadProviderSafetySnapshot(content);
+						if (incoming?.allowRemoteProviders) {
+							logger.warn("api", "Config save implicitly lifts allowRemoteProviders lock", { file });
+						}
+					}
+				}
 			}
 			const transitions = isGuardedConfig
 				? detectProviderTransitions(beforeContent, content, `api/config:${file}`, actorFrom(c))
 				: [];
 
 			writeFileSync(filePath, content, "utf-8");
+			let auditError: string | undefined;
 			try {
 				appendProviderTransitions(AGENTS_DIR, transitions);
 			} catch (auditErr) {
-				logger.warn("api", "Audit write failed after config save", { file, error: String(auditErr) });
+				auditError = String(auditErr);
+				logger.warn("api", "Audit write failed after config save", { file, error: auditError });
 			}
 			if (transitions.some((entry) => entry.risky)) {
 				logger.warn("api", "Remote provider enabled in config", { file, transitions });
 			} else {
 				logger.info("api", "Config file updated", { file });
 			}
-			return c.json({ success: true, providerTransitions: transitions.map(({ actor: _, ...rest }) => rest) });
+			return c.json({
+				success: true,
+				providerTransitions: transitions.map(({ actor: _, ...rest }) => rest),
+				...(auditError ? { auditError } : {}),
+			});
 		} catch (e) {
 			logger.error("api", "Error saving config file", e as Error);
 			return c.json({ error: "Failed to save file" }, 500);
