@@ -82,9 +82,18 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 	const synthesisProvider = readProvider(synthesis?.provider);
 	const explicitAllowRemote =
 		typeof pipeline?.allowRemoteProviders === "boolean" || typeof extraction?.allowRemoteProviders === "boolean";
-	const allowRemoteProviders = explicitAllowRemote
-		? (pipeline?.allowRemoteProviders ?? extraction?.allowRemoteProviders ?? true)
-		: true;
+	const topLevelRemote =
+		typeof pipeline?.allowRemoteProviders === "boolean" ? pipeline?.allowRemoteProviders : undefined;
+	const extractionRemote =
+		typeof extraction?.allowRemoteProviders === "boolean" ? extraction?.allowRemoteProviders : undefined;
+	if (topLevelRemote !== undefined && extractionRemote !== undefined && topLevelRemote !== extractionRemote) {
+		logger.warn(
+			"provider-safety",
+			"pipelineV2.allowRemoteProviders and extraction.allowRemoteProviders conflict; top-level takes precedence",
+			{ topLevel: topLevelRemote, extraction: extractionRemote },
+		);
+	}
+	const allowRemoteProviders = topLevelRemote ?? extractionRemote ?? true;
 	return {
 		extractionProvider: flatExtraction ?? nestedExtraction,
 		synthesisProvider,

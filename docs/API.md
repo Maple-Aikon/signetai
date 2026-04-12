@@ -287,10 +287,19 @@ provider-transition audit file could not be written. The config is correct but
 rollback via the audit trail will not be available for the transition.
 `success: true` can coexist with a non-empty `auditError`.
 
+`commentsStripped: true` is present when the `allowRemoteProviders: false` lock
+was active and the submitted config omitted the flag with only local providers
+selected. The lock is re-injected into the YAML, which strips YAML comments as a
+side effect of the parse→stringify round-trip. Callers should warn users that
+hand-written comments in the config file may be lost when this field is present.
+
 Returns `400` for invalid file names, path traversal attempts, or wrong file
 types. YAML saves also return `400` when
 `memory.pipelineV2.allowRemoteProviders: false` and the submitted config
 selects a paid or remote extraction/synthesis provider.
+
+Returns `403` when saving a guarded config file (`agent.yaml`, `AGENT.yaml`,
+`config.yaml`) without `admin` permission in team or hybrid auth mode.
 
 ### GET /api/config/provider-safety
 
