@@ -371,17 +371,23 @@ Each transition can only be rolled back once — consumed entries are marked
 }
 ```
 
-`isRetry` is `true` when the transition was already rolled back in a prior
-request (audit write failed after config was written). In that case the
-config is re-serialized (comments stripped again) and the audit is marked
-consumed.
+`isRetry` is `true` when no provider transition was detected during the
+rollback. This covers two cases: (1) the transition was already rolled back
+in a prior request (audit write failed after config was written, so the
+config is re-serialized and comments stripped again), or (2) the current
+config already has the target provider (e.g. manually restored) but stale
+model/endpoint fields were cleared. In both cases `providerTransitions`
+is empty.
 
-Returns `400` if the rolled-back config would violate `allowRemoteProviders`.
+Returns `400` if the rolled-back config would violate `allowRemoteProviders`,
+or if the rollback would produce no content change (e.g. synthesis rollback
+on a config with no synthesis block — the audit entry is not consumed).
 Returns `404` if no un-rolled-back transition exists, or if the source config
 file referenced by the transition has been deleted or renamed.
 
 The audit log retains the most recent 100 transitions. Older entries are
-silently dropped — a rollback targeting a truncated entry returns `404`.
+dropped with a logged warning — a rollback targeting a truncated entry
+returns `404`.
 
 Identity
 --------

@@ -352,11 +352,11 @@ export function executeProviderRollback(
 
 export function applyProviderRollback(content: string, entry: ProviderTransitionAuditEntry): string {
 	const previous = readString(entry.from);
-	if (!previous) throw new Error("No previous provider recorded for rollback");
+	if (!previous) throw new RollbackError("No previous provider recorded for rollback", 400);
 	const root = asRecord(parse(content)) ?? {};
 	const memory = asRecord(root.memory);
 	const pipeline = memory ? asRecord(memory.pipelineV2) : undefined;
-	if (!pipeline) throw new Error("No pipelineV2 section found in config");
+	if (!pipeline) throw new RollbackError("No pipelineV2 section found in config", 400);
 	const roleKey = entry.role === "extraction" ? "extraction" : "synthesis";
 	const roleBlock = asRecord(pipeline[roleKey]);
 	if (entry.role === "extraction") {
