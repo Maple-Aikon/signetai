@@ -149,7 +149,11 @@ function isValidTransitionEntry(raw: unknown): raw is ProviderTransitionAuditEnt
 		(rec.role === "extraction" || rec.role === "synthesis") &&
 		typeof rec.to === "string" &&
 		rec.to.length > 0 &&
-		(rec.from === null || typeof rec.from === "string")
+		(rec.from === null || typeof rec.from === "string") &&
+		typeof rec.timestamp === "string" &&
+		rec.timestamp.length > 0 &&
+		typeof rec.source === "string" &&
+		rec.source.length > 0
 	);
 }
 
@@ -204,8 +208,8 @@ export function executeProviderRollback(
 	const merged = [...transitions, ...rollbackEntries].slice(-100);
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
-	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
 	writeFileSync(filePath, nextContent, "utf-8");
+	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
 	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
 }
 

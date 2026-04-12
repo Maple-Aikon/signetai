@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import {
@@ -33,12 +33,14 @@ import {
 	setUpdateConfig,
 } from "../update-system.js";
 import { AGENTS_DIR } from "./state.js";
+import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
-function actorFrom(c: Parameters<Parameters<typeof import("hono").Hono.prototype.get>[0]>[0]): string | undefined {
+const GUARDED_CONFIG_FILES = new Set(["agent.yaml", "AGENT.yaml", "config.yaml"]);
+
+function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
 	return typeof sub === "string" ? sub : undefined;
 }
-import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
 const MAX_CONFIG_BYTES = 1_048_576;
 
@@ -163,12 +165,12 @@ export function registerMiscRoutes(app: Hono): void {
 
 			const filePath = join(AGENTS_DIR, file);
 			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
-			const isAgentYaml = file === "agent.yaml" || file === "AGENT.yaml";
-			if (isAgentYaml) {
+			const isGuardedConfig = GUARDED_CONFIG_FILES.has(file);
+			if (isGuardedConfig) {
 				const safety = validateProviderSafety(content);
 				if (!safety.ok) return c.json({ error: safety.error }, 400);
 			}
-			const transitions = isAgentYaml
+			const transitions = isGuardedConfig
 				? detectProviderTransitions(beforeContent, content, `api/config:${file}`, actorFrom(c))
 				: [];
 
