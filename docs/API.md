@@ -338,7 +338,7 @@ Each transition can only be rolled back once — consumed entries are marked
     "from": "ollama",
     "to": "anthropic",
     "timestamp": "2026-04-12T00:00:00.000Z",
-    "source": "api/config",
+    "source": "api/config:agent.yaml",
     "risky": true,
     "rolledBack": true
   },
@@ -347,6 +347,7 @@ Each transition can only be rolled back once — consumed entries are marked
       "role": "extraction",
       "from": "anthropic",
       "to": "ollama",
+      "timestamp": "2026-04-12T00:01:00.000Z",
       "source": "api/config/provider-safety/rollback",
       "risky": false
     }
