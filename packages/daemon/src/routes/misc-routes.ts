@@ -1,9 +1,29 @@
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Hono } from "hono";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import type { Context, Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, resolveTaskModel, validateCron } from "../scheduler";
+import {
+	CONFIG_FILE_CANDIDATES,
+	RollbackError,
+	appendProviderTransitions,
+	detectProviderTransitions,
+	executeProviderRollback,
+	isRemotePipelineProvider,
+	readProviderSafetySnapshot,
+	readProviderTransitions,
+	resolveRollbackFilePath,
+	tryReadProviderSafetySnapshot,
+	validateProviderSafety,
+} from "../provider-safety.js";
+import {
+	CRON_PRESETS,
+	computeNextRun,
+	isHarnessAvailable,
+	resolveSkillPrompt,
+	resolveTaskModel,
+	validateCron,
+} from "../scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "../scheduler/task-stream.js";
 import { readScopedTask, readTaskAgentId } from "../task-scope.js";
 import {
@@ -19,6 +39,13 @@ import {
 import { AGENTS_DIR } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
+const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
+
+function actorFrom(c: Context): string | undefined {
+	const sub = c.get("auth")?.claims?.sub;
+	return typeof sub === "string" ? sub : undefined;
+}
+
 const MAX_CONFIG_BYTES = 1_048_576;
 
 interface AgentRow {
@@ -31,6 +58,7 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
+	let _rollbackSignal: { promise: Promise<void> } | null = null;
 	app.get("/api/logs", (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
@@ -140,12 +168,127 @@ export function registerMiscRoutes(app: Hono): void {
 				return c.json({ error: "Invalid file type" }, 400);
 			}
 
-			writeFileSync(join(AGENTS_DIR, file), content, "utf-8");
-			logger.info("api", "Config file updated", { file });
-			return c.json({ success: true });
+			const filePath = join(AGENTS_DIR, file);
+			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
+			const isGuardedConfig = GUARDED_CONFIG_FILES.has(file);
+			if (isGuardedConfig) {
+				const safety = validateProviderSafety(content);
+				if (!safety.ok) return c.json({ error: safety.error }, 400);
+				if (beforeContent) {
+					const prior = tryReadProviderSafetySnapshot(beforeContent);
+					if (prior && !prior.allowRemoteProviders) {
+						const incoming = tryReadProviderSafetySnapshot(content);
+						const lockImplicitlyLifted =
+							incoming && !incoming.allowRemoteProvidersExplicit && incoming.allowRemoteProviders;
+						if (lockImplicitlyLifted) {
+							const blocked = [
+								["extraction", incoming.extractionProvider],
+								["synthesis", incoming.synthesisProvider],
+							].filter(([, p]) => isRemotePipelineProvider(p));
+							if (blocked.length > 0) {
+								return c.json(
+									{
+										error: `memory.pipelineV2.allowRemoteProviders is false on disk; refusing: ${blocked.map(([r, p]) => `${r} provider '${p}'`).join(", ")}. Include allowRemoteProviders: true in the submitted config to lift the lock.`,
+									},
+									400,
+								);
+							}
+							logger.warn("api", "Config save omits allowRemoteProviders while lock is active", { file });
+						}
+					}
+				}
+			}
+			const transitions = isGuardedConfig
+				? detectProviderTransitions(beforeContent, content, `api/config:${file}`, actorFrom(c))
+				: [];
+
+			writeFileSync(filePath, content, "utf-8");
+			let auditError: string | undefined;
+			try {
+				appendProviderTransitions(AGENTS_DIR, transitions);
+			} catch (auditErr) {
+				auditError = String(auditErr);
+				logger.warn("api", "Audit write failed after config save", { file, error: auditError });
+			}
+			if (transitions.some((entry) => entry.risky)) {
+				logger.warn("api", "Remote provider enabled in config", { file, transitions });
+			} else {
+				logger.info("api", "Config file updated", { file });
+			}
+			return c.json({
+				success: true,
+				providerTransitions: transitions.map(({ actor: _, ...rest }) => rest),
+				...(auditError ? { auditError } : {}),
+			});
 		} catch (e) {
 			logger.error("api", "Error saving config file", e as Error);
 			return c.json({ error: "Failed to save file" }, 500);
+		}
+	});
+
+	app.get("/api/config/provider-safety", (c) => {
+		const configPath = CONFIG_FILE_CANDIDATES.map((name) => join(AGENTS_DIR, name)).find((path) => existsSync(path));
+		let snapshot = null;
+		let snapshotError: string | undefined;
+		if (configPath) {
+			try {
+				snapshot = readProviderSafetySnapshot(readFileSync(configPath, "utf-8"));
+			} catch {
+				snapshotError = "Invalid YAML config";
+			}
+		}
+		const transitions = readProviderTransitions(AGENTS_DIR);
+		const latestRiskyTransition = [...transitions].reverse().find((entry) => entry.risky) ?? null;
+		const stripActor = (e: (typeof transitions)[number]) => {
+			const { actor: _, ...rest } = e;
+			return rest;
+		};
+		const stripInternal = (s: typeof snapshot) => {
+			if (!s) return null;
+			const { allowRemoteProvidersExplicit: _, ...rest } = s;
+			return rest;
+		};
+		return c.json({
+			snapshot: stripInternal(snapshot),
+			snapshotError,
+			transitions: transitions.map(stripActor),
+			latestRiskyTransition: latestRiskyTransition ? stripActor(latestRiskyTransition) : null,
+		});
+	});
+
+	app.post("/api/config/provider-safety/rollback", async (c) => {
+		if (_rollbackSignal) await _rollbackSignal.promise;
+		let resolve!: () => void;
+		_rollbackSignal = {
+			promise: new Promise<void>((r) => {
+				resolve = r;
+			}),
+		};
+		try {
+			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
+			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
+			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
+			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
+			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
+			logger.warn("api", "Provider configuration rolled back", {
+				file: basename(filePath),
+				transition: strippedRolledBack,
+				rollbackEntries: result.providerTransitions,
+			});
+			return c.json({
+				...result,
+				rolledBack: strippedRolledBack,
+				providerTransitions: result.providerTransitions.map(({ actor: _, ...rest }) => rest),
+			});
+		} catch (e) {
+			if (e instanceof RollbackError) {
+				return c.json({ error: e.message }, e.status);
+			}
+			logger.error("api", "Provider rollback failed", e as Error);
+			return c.json({ error: "Provider rollback failed" }, 500);
+		} finally {
+			_rollbackSignal = null;
+			resolve();
 		}
 	});
 
@@ -707,7 +850,8 @@ export function registerMiscRoutes(app: Hono): void {
 		const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 		const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
 		const taskAgentId = readTaskAgentId(task, scoped.agentId);
-		const taskModel = taskHarness === "claude-code" || taskHarness === "codex" ? resolveTaskModel(taskHarness) : undefined;
+		const taskModel =
+			taskHarness === "claude-code" || taskHarness === "codex" ? resolveTaskModel(taskHarness) : undefined;
 
 		const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
 		const startedMs = Date.now();

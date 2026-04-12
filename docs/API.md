@@ -266,12 +266,107 @@ contain path separators.
 **Response**
 
 ```json
-{ "success": true }
+{
+  "success": true,
+  "auditError": "<error string when audit write fails, absent otherwise>",
+  "providerTransitions": [
+    {
+      "role": "extraction",
+      "from": "ollama",
+      "to": "anthropic",
+      "timestamp": "2026-04-12T00:00:00.000Z",
+      "source": "api/config:agent.yaml",
+      "risky": true
+    }
+  ]
+}
 ```
 
-Returns `400` for invalid file names, path traversal attempts, or wrong file
-types.
+`auditError` is present when the config was saved successfully but the
+provider-transition audit file could not be written. The config is correct but
+rollback via the audit trail will not be available for the transition.
+`success: true` can coexist with a non-empty `auditError`.
 
+Returns `400` for invalid file names, path traversal attempts, or wrong file
+types. YAML saves also return `400` when
+`memory.pipelineV2.allowRemoteProviders: false` and the submitted config
+selects a paid or remote extraction/synthesis provider.
+
+### GET /api/config/provider-safety
+
+Returns the currently configured provider-safety snapshot plus recent
+provider transitions recorded from config saves and rollbacks.
+
+**Response**
+
+```json
+{
+  "snapshot": {
+    "extractionProvider": "ollama",
+    "synthesisProvider": "ollama",
+    "allowRemoteProviders": true
+  },
+  "snapshotError": "Invalid YAML config",
+  "transitions": [],
+  "latestRiskyTransition": null
+}
+```
+
+`snapshotError` is present when the config YAML could not be parsed; `snapshot` will be `null` in that case.
+
+### POST /api/config/provider-safety/rollback
+
+Roll back the latest recorded provider transition with a previous provider.
+Pass `role: "extraction"` or `role: "synthesis"` to restrict the rollback;
+omit it to roll back the most recent provider transition of either role.
+
+Each transition can only be rolled back once — consumed entries are marked
+`rolledBack: true` and skipped by subsequent calls.
+
+> **Note:** This endpoint round-trips `agent.yaml` through a YAML parser
+> and serializer, which strips comments. Any hand-written comments in the
+> file will be lost. Edit the file directly if comment preservation matters.
+
+**Request body**
+
+```json
+{ "role": "extraction" }
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "file": "agent.yaml",
+  "rolledBack": {
+    "role": "extraction",
+    "from": "ollama",
+    "to": "anthropic",
+    "timestamp": "2026-04-12T00:00:00.000Z",
+    "source": "api/config:agent.yaml",
+    "risky": true,
+    "rolledBack": true
+  },
+  "providerTransitions": [
+    {
+      "role": "extraction",
+      "from": "anthropic",
+      "to": "ollama",
+      "timestamp": "2026-04-12T00:01:00.000Z",
+      "source": "api/config/provider-safety/rollback",
+      "risky": false
+    }
+  ]
+}
+```
+
+Returns `400` if the rolled-back config would violate `allowRemoteProviders`.
+Returns `404` if no un-rolled-back transition exists, or if the source config
+file referenced by the transition has been deleted or renamed.
+
+The audit log retains the most recent 100 transitions. Older entries are
+silently dropped — a rollback targeting a truncated entry returns `404`.
 
 Identity
 --------
