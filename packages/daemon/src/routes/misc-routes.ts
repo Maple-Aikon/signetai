@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Context, Hono } from "hono";
-import { parse, stringify } from "yaml";
 import { checkPermission } from "../auth/policy";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
@@ -12,6 +11,7 @@ import {
 	detectProviderTransitions,
 	executeProviderRollback,
 	isRemotePipelineProvider,
+	preserveLockInYaml,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
 	resolveRollbackFilePath,
@@ -46,18 +46,6 @@ const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
 function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
 	return typeof sub === "string" ? sub : undefined;
-}
-
-function preserveLockInYaml(content: string): string {
-	const doc = parse(content) as Record<string, unknown>;
-	const memory = (doc.memory as Record<string, unknown>) ?? {};
-	const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
-	if (pipeline.allowRemoteProviders !== false) {
-		pipeline.allowRemoteProviders = false;
-	}
-	memory.pipelineV2 = pipeline;
-	doc.memory = memory;
-	return stringify(doc);
 }
 
 const MAX_CONFIG_BYTES = 1_048_576;

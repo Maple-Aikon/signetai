@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parse, stringify } from "yaml";
 import {
 	appendProviderTransitions,
 	detectProviderTransitions,
 	executeProviderRollback,
 	isRemotePipelineProvider,
+	preserveLockInYaml,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
 	resolveRollbackFilePath,
@@ -191,18 +190,6 @@ describe("provider safety guard — route serialization integration", () => {
 });
 
 describe("provider safety guard — lock preservation on config save", () => {
-	function preserveLockInYaml(content: string): string {
-		const doc = parse(content) as Record<string, unknown>;
-		const memory = (doc.memory as Record<string, unknown>) ?? {};
-		const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
-		if (pipeline.allowRemoteProviders !== false) {
-			pipeline.allowRemoteProviders = false;
-		}
-		memory.pipelineV2 = pipeline;
-		doc.memory = memory;
-		return stringify(doc);
-	}
-
 	it("re-injects allowRemoteProviders: false when incoming omits it and prior has lock", () => {
 		const priorYaml = yamlWithExtraction("ollama", false);
 		const incomingYaml = [

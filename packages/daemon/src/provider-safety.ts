@@ -109,6 +109,18 @@ export function validateProviderSafety(content: string): { ok: true } | { ok: fa
 	};
 }
 
+export function preserveLockInYaml(content: string): string {
+	const doc = parse(content) as Record<string, unknown>;
+	const memory = (doc.memory as Record<string, unknown>) ?? {};
+	const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
+	if (pipeline.allowRemoteProviders !== false) {
+		pipeline.allowRemoteProviders = false;
+	}
+	memory.pipelineV2 = pipeline;
+	doc.memory = memory;
+	return stringify(doc);
+}
+
 export function detectProviderTransitions(
 	beforeContent: string | undefined,
 	afterContent: string,
