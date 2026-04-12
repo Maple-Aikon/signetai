@@ -7,6 +7,7 @@ import {
 	applyProviderRollback,
 	detectProviderTransitions,
 	executeProviderRollback,
+	isRollbackInFlight,
 	readProviderTransitions,
 	validateProviderSafety,
 } from "./provider-safety";
@@ -121,7 +122,7 @@ describe("provider safety", () => {
 		expect(stored[0].rolledBack).toBe(true);
 	});
 
-	it("reports rollback in-flight status during execution", () => {
+	it("sets rollback in-flight flag during execution", () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -133,7 +134,6 @@ describe("provider safety", () => {
 		);
 		appendProviderTransitions(agentsDir, entries);
 
-		const { isRollbackInFlight } = require("./provider-safety");
 		expect(isRollbackInFlight()).toBe(false);
 	});
 

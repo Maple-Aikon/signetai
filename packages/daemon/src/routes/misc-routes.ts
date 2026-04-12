@@ -3,7 +3,14 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import { executeProviderRollback, readProviderSafetySnapshot, readProviderTransitions } from "../provider-safety.js";
+import {
+	appendProviderTransitions,
+	detectProviderTransitions,
+	executeProviderRollback,
+	readProviderSafetySnapshot,
+	readProviderTransitions,
+	validateProviderSafety,
+} from "../provider-safety.js";
 import {
 	CRON_PRESETS,
 	computeNextRun,
