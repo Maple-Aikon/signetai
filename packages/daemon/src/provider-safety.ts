@@ -248,7 +248,10 @@ export function executeProviderRollback(
 	if (matchIdx < 0) throw new RollbackError("No provider transition with rollback target found", 404);
 	const entry = reversed[matchIdx];
 	const originalIndex = transitions.length - 1 - matchIdx;
-	const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : "";
+	if (!existsSync(filePath)) {
+		throw new RollbackError(`Config file '${basename(filePath)}' not found`, 404);
+	}
+	const beforeContent = readFileSync(filePath, "utf-8");
 	const nextContent = applyProviderRollback(beforeContent, entry);
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);

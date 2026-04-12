@@ -9,6 +9,7 @@ import {
 	appendProviderTransitions,
 	detectProviderTransitions,
 	executeProviderRollback,
+	isRemotePipelineProvider,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
 	resolveRollbackFilePath,
@@ -40,8 +41,6 @@ import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRe
 
 const GUARDED_CONFIG_FILES = new Set<string>(CONFIG_FILE_CANDIDATES);
 
-let _rollbackSignal: { resolve: () => void; promise: Promise<void> } | null = null;
-
 function actorFrom(c: Context): string | undefined {
 	const sub = c.get("auth")?.claims?.sub;
 	return typeof sub === "string" ? sub : undefined;
@@ -59,6 +58,7 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
+	let _rollbackSignal: { promise: Promise<void> } | null = null;
 	app.get("/api/logs", (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
@@ -178,8 +178,23 @@ export function registerMiscRoutes(app: Hono): void {
 					const prior = tryReadProviderSafetySnapshot(beforeContent);
 					if (prior && !prior.allowRemoteProviders) {
 						const incoming = tryReadProviderSafetySnapshot(content);
-						if (incoming?.allowRemoteProviders) {
-							logger.warn("api", "Config save implicitly lifts allowRemoteProviders lock", { file });
+						const lockLifted = incoming?.allowRemoteProviders !== false;
+						if (lockLifted && incoming) {
+							const blocked = [
+								["extraction", incoming.extractionProvider],
+								["synthesis", incoming.synthesisProvider],
+							].filter(([, p]) => isRemotePipelineProvider(p));
+							if (blocked.length > 0) {
+								return c.json(
+									{
+										error: `memory.pipelineV2.allowRemoteProviders is false; refusing: ${blocked.map(([r, p]) => `${r} provider '${p}'`).join(", ")}. Set allowRemoteProviders: true before enabling paid or remote providers.`,
+									},
+									400,
+								);
+							}
+							logger.warn("api", "Config save lifts allowRemoteProviders lock without remote provider change", {
+								file,
+							});
 						}
 					}
 				}
