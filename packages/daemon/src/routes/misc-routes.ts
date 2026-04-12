@@ -241,7 +241,6 @@ export function registerMiscRoutes(app: Hono): void {
 		if (_rollbackSignal) await _rollbackSignal.promise;
 		let resolve!: () => void;
 		_rollbackSignal = {
-			resolve,
 			promise: new Promise<void>((r) => {
 				resolve = r;
 			}),
