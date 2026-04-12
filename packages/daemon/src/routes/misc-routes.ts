@@ -178,8 +178,9 @@ export function registerMiscRoutes(app: Hono): void {
 					const prior = tryReadProviderSafetySnapshot(beforeContent);
 					if (prior && !prior.allowRemoteProviders) {
 						const incoming = tryReadProviderSafetySnapshot(content);
-						const lockLifted = incoming?.allowRemoteProviders !== false;
-						if (lockLifted && incoming) {
+						const lockImplicitlyLifted =
+							incoming && !incoming.allowRemoteProvidersExplicit && incoming.allowRemoteProviders;
+						if (lockImplicitlyLifted) {
 							const blocked = [
 								["extraction", incoming.extractionProvider],
 								["synthesis", incoming.synthesisProvider],
@@ -187,14 +188,12 @@ export function registerMiscRoutes(app: Hono): void {
 							if (blocked.length > 0) {
 								return c.json(
 									{
-										error: `memory.pipelineV2.allowRemoteProviders is false; refusing: ${blocked.map(([r, p]) => `${r} provider '${p}'`).join(", ")}. Set allowRemoteProviders: true before enabling paid or remote providers.`,
+										error: `memory.pipelineV2.allowRemoteProviders is false on disk; refusing: ${blocked.map(([r, p]) => `${r} provider '${p}'`).join(", ")}. Include allowRemoteProviders: true in the submitted config to lift the lock.`,
 									},
 									400,
 								);
 							}
-							logger.warn("api", "Config save lifts allowRemoteProviders lock without remote provider change", {
-								file,
-							});
+							logger.warn("api", "Config save omits allowRemoteProviders while lock is active", { file });
 						}
 					}
 				}

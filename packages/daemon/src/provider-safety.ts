@@ -31,6 +31,7 @@ export interface ProviderSafetySnapshot {
 	readonly extractionProvider?: string;
 	readonly synthesisProvider?: string;
 	readonly allowRemoteProviders: boolean;
+	readonly allowRemoteProvidersExplicit: boolean;
 }
 
 const REMOTE_PROVIDERS = new Set(["claude-code", "codex", "opencode", "anthropic", "openrouter"]);
@@ -79,16 +80,16 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 	const flatExtraction = readProvider(pipeline?.extractionProvider);
 	const nestedExtraction = readProvider(extraction?.provider);
 	const synthesisProvider = readProvider(synthesis?.provider);
-	const allowRemoteProviders =
-		typeof pipeline?.allowRemoteProviders === "boolean"
-			? pipeline.allowRemoteProviders
-			: typeof extraction?.allowRemoteProviders === "boolean"
-				? extraction.allowRemoteProviders
-				: true;
+	const explicitAllowRemote =
+		typeof pipeline?.allowRemoteProviders === "boolean" || typeof extraction?.allowRemoteProviders === "boolean";
+	const allowRemoteProviders = explicitAllowRemote
+		? (pipeline?.allowRemoteProviders ?? extraction?.allowRemoteProviders ?? true)
+		: true;
 	return {
 		extractionProvider: nestedExtraction ?? flatExtraction,
 		synthesisProvider,
 		allowRemoteProviders,
+		allowRemoteProvidersExplicit: explicitAllowRemote,
 	};
 }
 
