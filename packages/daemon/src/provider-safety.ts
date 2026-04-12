@@ -111,8 +111,8 @@ export function validateProviderSafety(content: string): { ok: true } | { ok: fa
 
 export function preserveLockInYaml(content: string): string {
 	const doc = asRecord(parse(content)) ?? {};
-	const memory = (doc.memory as Record<string, unknown>) ?? {};
-	const pipeline = (memory.pipelineV2 as Record<string, unknown>) ?? {};
+	const memory = asRecord(doc.memory) ?? {};
+	const pipeline = asRecord(memory.pipelineV2) ?? {};
 	if (pipeline.allowRemoteProviders !== false) {
 		pipeline.allowRemoteProviders = false;
 	}
@@ -215,6 +215,13 @@ function atomicWriteText(targetPath: string, content: string): void {
 
 export function appendProviderTransitions(agentsDir: string, entries: readonly ProviderTransitionAuditEntry[]): void {
 	if (entries.length === 0) return;
+	// NOTE: This is a read-modify-write without write-side serialisation. Two
+	// concurrent POST /api/config calls that both trigger provider transitions
+	// can race on the audit file — one write silently clobbers the other's
+	// new entry. This is a pre-existing architectural limitation (the audit
+	// file predates this PR). The single-flight guard on rollback is an
+	// improvement but does not cover this cross-endpoint race. Fixing this
+	// requires a per-file mutex or write queue scoped to the audit path.
 	const path = providerAuditPath(agentsDir);
 	mkdirSync(dirname(path), { recursive: true });
 	const existing = readProviderTransitions(agentsDir);

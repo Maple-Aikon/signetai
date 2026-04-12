@@ -175,6 +175,14 @@ export function registerMiscRoutes(app: Hono): void {
 			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
 			const isGuardedConfig = GUARDED_CONFIG_FILES.has(file);
 			if (isGuardedConfig) {
+				const guardAuth = c.get("auth");
+				const guardDecision = checkPermission(guardAuth?.claims ?? null, "admin", authConfig.mode);
+				if (!guardDecision.allowed) {
+					c.status(403);
+					return c.json({
+						error: `${guardDecision.reason ?? "forbidden"} — guarded config files require admin permission`,
+					});
+				}
 				const safety = validateProviderSafety(content);
 				if (!safety.ok) return c.json({ error: safety.error }, 400);
 				if (beforeContent) {
@@ -282,7 +290,7 @@ export function registerMiscRoutes(app: Hono): void {
 			while (_rollbackSignal) await _rollbackSignal.promise;
 		};
 		await acquire();
-		let resolve!: () => void;
+		let resolve: (() => void) | undefined;
 		_rollbackSignal = {
 			promise: new Promise<void>((r) => {
 				resolve = r;
@@ -312,7 +320,7 @@ export function registerMiscRoutes(app: Hono): void {
 			return c.json({ error: "Provider rollback failed" }, 500);
 		} finally {
 			_rollbackSignal = null;
-			resolve();
+			resolve?.();
 		}
 	});
 
