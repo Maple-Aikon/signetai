@@ -148,8 +148,8 @@ function isValidTransitionEntry(raw: unknown): raw is ProviderTransitionAuditEnt
 		typeof rec.role === "string" &&
 		(rec.role === "extraction" || rec.role === "synthesis") &&
 		typeof rec.to === "string" &&
-		rec.to.length > 0 &&
-		(rec.from === null || typeof rec.from === "string") &&
+		isPipelineProvider(rec.to) &&
+		(rec.from === null || (typeof rec.from === "string" && isPipelineProvider(rec.from))) &&
 		typeof rec.timestamp === "string" &&
 		rec.timestamp.length > 0 &&
 		typeof rec.source === "string" &&
@@ -209,8 +209,8 @@ export function executeProviderRollback(
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
 	// Config-first: if audit write fails after config, the entry is
-	// unconsumed (retryable, benign duplicate). If config write fails
-	// after audit, the entry is consumed but config unchanged (stuck).
+	// unconsumed. On retry, applyProviderRollback rewrites agent.yaml
+	// (stripping any YAML comments added since), then marks consumed.
 	writeFileSync(filePath, nextContent, "utf-8");
 	try {
 		writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");

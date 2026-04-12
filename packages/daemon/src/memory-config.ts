@@ -504,7 +504,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const resolveLockedSynthesisProvider = (): SynthesisProviderKind => {
 		if (!allowRemoteProviders && isRemotePipelineProvider(requestedSynthesisProvider)) {
 			const fallback = providerFallbackForLock(requestedSynthesisProvider, resolvedFallbackProvider);
-			if (isSynthesisProvider(fallback)) return fallback;
+			return isSynthesisProvider(fallback) ? fallback : "none";
 		}
 		return requestedSynthesisProvider;
 	};
