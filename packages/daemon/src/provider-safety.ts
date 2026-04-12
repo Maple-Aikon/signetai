@@ -208,8 +208,11 @@ export function executeProviderRollback(
 	const merged = [...transitions, ...rollbackEntries].slice(-100);
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
-	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
+	// Config-first: if audit write fails after config, the entry is
+	// unconsumed (retryable, benign duplicate). If config write fails
+	// after audit, the entry is consumed but config unchanged (stuck).
 	writeFileSync(filePath, nextContent, "utf-8");
+	writeFileSync(auditPath, `${JSON.stringify(merged, null, 2)}\n`, "utf-8");
 	return { success: true, file: basename(filePath), rolledBack: entry, providerTransitions: rollbackEntries };
 }
 
