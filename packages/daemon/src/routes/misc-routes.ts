@@ -236,6 +236,7 @@ export function registerMiscRoutes(app: Hono): void {
 			return c.json({
 				...result,
 				rolledBack: strippedRolledBack,
+				providerTransitions: result.providerTransitions.map(({ actor: _, ...rest }) => rest),
 			});
 		} catch (e) {
 			if (e instanceof RollbackError) {
