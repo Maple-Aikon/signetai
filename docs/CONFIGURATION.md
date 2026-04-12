@@ -298,6 +298,7 @@ These top-level boolean fields gate major pipeline behaviors.
 | `mutationsFrozen` | `false` | Allow reads; block all writes. Overrides `shadowMode`. |
 | `semanticContradictionEnabled` | `false` | Enable LLM-based semantic contradiction detection for UPDATE/DELETE proposals. |
 | `telemetryEnabled` | `false` | Enable anonymous telemetry reporting. |
+| `allowRemoteProviders` | `true` | Set `false` to block paid/remote extraction and synthesis providers; blocked providers resolve to `extraction.fallbackProvider` (`ollama` by default, or `none`) |
 
 The relationship between `shadowMode` and `mutationsFrozen` matters:
 `shadowMode` suppresses writes from the normal extraction path only;
@@ -312,6 +313,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `provider` | `"ollama"` | — | `"none"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
+| `allowRemoteProviders` | inherited from `pipelineV2.allowRemoteProviders` | — | Backward-compatible alias for the same paid/remote provider lock |
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
@@ -334,6 +336,17 @@ Remote API extraction can accumulate extreme fees quickly because the
 pipeline runs continuously in the background. Use `anthropic`,
 `openrouter`, or remote OpenCode routes only when you explicitly want
 that billing behavior.
+
+For local-only or cost-sensitive deployments, set
+`memory.pipelineV2.allowRemoteProviders: false`. When this guard is off,
+Signet refuses dashboard/API config saves that select paid or remote
+providers (`claude-code`, `codex`, `opencode`, `anthropic`, or
+`openrouter`) and daemon startup resolves any already-written remote
+provider to `extraction.fallbackProvider`. Provider changes written via
+the dashboard/API are also recorded in
+`$SIGNET_WORKSPACE/.daemon/provider-transitions.json` so operators can
+see when extraction or synthesis moved between providers and roll back
+the latest recorded change.
 
 `rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
 provider's existing behavior with no throughput throttling. When

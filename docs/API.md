@@ -266,11 +266,79 @@ contain path separators.
 **Response**
 
 ```json
-{ "success": true }
+{
+  "success": true,
+  "providerTransitions": [
+    {
+      "role": "extraction",
+      "from": "ollama",
+      "to": "anthropic",
+      "timestamp": "2026-04-12T00:00:00.000Z",
+      "source": "api/config:agent.yaml",
+      "risky": true
+    }
+  ]
+}
 ```
 
 Returns `400` for invalid file names, path traversal attempts, or wrong file
-types.
+types. YAML saves also return `400` when
+`memory.pipelineV2.allowRemoteProviders: false` and the submitted config
+selects a paid or remote extraction/synthesis provider.
+
+### GET /api/config/provider-safety
+
+Returns the currently configured provider-safety snapshot plus recent
+provider transitions recorded from config saves and rollbacks.
+
+**Response**
+
+```json
+{
+  "snapshot": {
+    "extractionProvider": "ollama",
+    "synthesisProvider": "ollama",
+    "allowRemoteProviders": true
+  },
+  "transitions": [],
+  "latestRiskyTransition": null
+}
+```
+
+### POST /api/config/provider-safety/rollback
+
+Roll back the latest recorded provider transition with a previous provider.
+Pass `role: "extraction"` or `role: "synthesis"` to restrict the rollback;
+omit it to roll back the most recent provider transition of either role.
+
+**Request body**
+
+```json
+{ "role": "extraction" }
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "file": "agent.yaml",
+  "rolledBack": {
+    "role": "extraction",
+    "from": "ollama",
+    "to": "anthropic"
+	  },
+	  "providerTransitions": [
+	    {
+	      "role": "extraction",
+	      "from": "anthropic",
+	      "to": "ollama",
+	      "source": "api/config/provider-safety/rollback",
+	      "risky": false
+	    }
+	  ]
+	}
+	```
 
 
 Identity

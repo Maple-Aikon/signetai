@@ -555,6 +555,12 @@ app.use("/api/config", async (c, next) => {
 	}
 	return next();
 });
+app.use("/api/config/*", async (c, next) => {
+	if (c.req.method !== "GET") {
+		return requirePermission("admin", authConfig)(c, next);
+	}
+	return next();
+});
 
 app.use("/api/memory/:id", async (c, next) => {
 	if (authConfig.mode !== "local" && (c.req.method === "PATCH" || c.req.method === "DELETE")) {

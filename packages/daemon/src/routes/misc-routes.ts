@@ -1,9 +1,24 @@
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, resolveTaskModel, validateCron } from "../scheduler";
+import {
+	appendProviderTransitions,
+	applyProviderRollback,
+	detectProviderTransitions,
+	readProviderSafetySnapshot,
+	readProviderTransitions,
+	validateProviderSafety,
+} from "../provider-safety.js";
+import {
+	CRON_PRESETS,
+	computeNextRun,
+	isHarnessAvailable,
+	resolveSkillPrompt,
+	resolveTaskModel,
+	validateCron,
+} from "../scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "../scheduler/task-stream.js";
 import { readScopedTask, readTaskAgentId } from "../task-scope.js";
 import {
@@ -140,12 +155,80 @@ export function registerMiscRoutes(app: Hono): void {
 				return c.json({ error: "Invalid file type" }, 400);
 			}
 
-			writeFileSync(join(AGENTS_DIR, file), content, "utf-8");
-			logger.info("api", "Config file updated", { file });
-			return c.json({ success: true });
+			const filePath = join(AGENTS_DIR, file);
+			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
+			if (file.endsWith(".yaml")) {
+				const safety = validateProviderSafety(content);
+				if (!safety.ok) return c.json({ error: safety.error }, 400);
+			}
+			const transitions = file.endsWith(".yaml")
+				? detectProviderTransitions(beforeContent, content, `api/config:${file}`)
+				: [];
+
+			writeFileSync(filePath, content, "utf-8");
+			appendProviderTransitions(AGENTS_DIR, transitions);
+			if (transitions.some((entry) => entry.risky)) {
+				logger.warn("api", "Remote provider enabled in config", { file, transitions });
+			} else {
+				logger.info("api", "Config file updated", { file });
+			}
+			return c.json({ success: true, providerTransitions: transitions });
 		} catch (e) {
 			logger.error("api", "Error saving config file", e as Error);
 			return c.json({ error: "Failed to save file" }, 500);
+		}
+	});
+
+	app.get("/api/config/provider-safety", (c) => {
+		const configPath = ["agent.yaml", "AGENT.yaml", "config.yaml"]
+			.map((name) => join(AGENTS_DIR, name))
+			.find((path) => existsSync(path));
+		let snapshot = null;
+		let snapshotError: string | undefined;
+		if (configPath) {
+			try {
+				snapshot = readProviderSafetySnapshot(readFileSync(configPath, "utf-8"));
+			} catch {
+				snapshotError = "Invalid YAML config";
+			}
+		}
+		const transitions = readProviderTransitions(AGENTS_DIR);
+		const latestRiskyTransition = [...transitions].reverse().find((entry) => entry.risky) ?? null;
+		return c.json({
+			snapshot,
+			snapshotError,
+			transitions,
+			latestRiskyTransition,
+		});
+	});
+
+	app.post("/api/config/provider-safety/rollback", async (c) => {
+		try {
+			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
+			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
+			const transitions = readProviderTransitions(AGENTS_DIR);
+			const entry = [...transitions]
+				.reverse()
+				.find((candidate) => candidate.from && (!requestedRole || candidate.role === requestedRole));
+			if (!entry) return c.json({ error: "No provider transition with rollback target found" }, 404);
+			const file = ["agent.yaml", "AGENT.yaml"].find((name) => existsSync(join(AGENTS_DIR, name))) ?? "agent.yaml";
+			const filePath = join(AGENTS_DIR, file);
+			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : "";
+			const nextContent = applyProviderRollback(beforeContent, entry);
+			const safety = validateProviderSafety(nextContent);
+			if (!safety.ok) return c.json({ error: safety.error }, 400);
+			const rollbackEntries = detectProviderTransitions(
+				beforeContent,
+				nextContent,
+				"api/config/provider-safety/rollback",
+			);
+			writeFileSync(filePath, nextContent, "utf-8");
+			appendProviderTransitions(AGENTS_DIR, rollbackEntries);
+			logger.warn("api", "Provider configuration rolled back", { file, transition: entry, rollbackEntries });
+			return c.json({ success: true, file, rolledBack: entry, providerTransitions: rollbackEntries });
+		} catch (e) {
+			logger.error("api", "Provider rollback failed", e as Error);
+			return c.json({ error: "Provider rollback failed" }, 500);
 		}
 	});
 
@@ -707,7 +790,8 @@ export function registerMiscRoutes(app: Hono): void {
 		const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 		const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
 		const taskAgentId = readTaskAgentId(task, scoped.agentId);
-		const taskModel = taskHarness === "claude-code" || taskHarness === "codex" ? resolveTaskModel(taskHarness) : undefined;
+		const taskModel =
+			taskHarness === "claude-code" || taskHarness === "codex" ? resolveTaskModel(taskHarness) : undefined;
 
 		const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
 		const startedMs = Date.now();

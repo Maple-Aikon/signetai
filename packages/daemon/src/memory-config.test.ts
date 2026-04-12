@@ -255,6 +255,44 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.extraction.fallbackProvider).toBe("none");
 	});
 
+	it("falls back when remote extraction providers are locked", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    allowRemoteProviders: false
+    extraction:
+      provider: anthropic
+      fallbackProvider: none
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.allowRemoteProviders).toBe(false);
+		expect(cfg.pipelineV2.extraction.allowRemoteProviders).toBe(false);
+		expect(cfg.pipelineV2.extraction.provider).toBe("none");
+		expect(cfg.pipelineV2.extraction.model).toBe("");
+	});
+
+	it("falls back when remote synthesis providers are locked", () => {
+		const cfg = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					allowRemoteProviders: false,
+					extractionProvider: "ollama",
+					synthesis: {
+						provider: "openrouter",
+						model: "openrouter/remote-model",
+					},
+				},
+			},
+		});
+
+		expect(cfg.synthesis.provider).toBe("ollama");
+		expect(cfg.synthesis.model).toBe("qwen3:4b");
+	});
+
 	it("loads extractionFallbackProvider from flat config", () => {
 		const cfg = loadPipelineConfig({
 			memory: {
