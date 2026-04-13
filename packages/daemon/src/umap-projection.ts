@@ -421,18 +421,21 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	if (requestedLimit !== null) {
 		hasMore = rows.length > requestedLimit;
-		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
-			| { count?: number }
-			| undefined;
-		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
 
-		if (rawRows.length !== rows.length && !hasMore) {
+		if (rawRows.length !== rows.length) {
 			const validCountRow = db
 				.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`)
 				.get(...params) as { count?: number } | undefined;
 			effectiveTotal =
 				validCountRow !== undefined && typeof validCountRow.count === "number" ? validCountRow.count : 0;
-			hasMore = offset + trimmedRows.length < effectiveTotal;
+			if (!hasMore) {
+				hasMore = offset + trimmedRows.length < effectiveTotal;
+			}
+		} else {
+			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
+				| { count?: number }
+				| undefined;
+			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
 		}
 	} else {
 		effectiveTotal = rows.length + offset;
