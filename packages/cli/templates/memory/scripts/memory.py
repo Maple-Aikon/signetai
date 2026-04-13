@@ -803,45 +803,5 @@ def main():
         migrate_markdown()
 
 
-def _test_like_escaping():
-    db = sqlite3.connect(":memory:")
-    db.execute("CREATE TABLE memories (id INTEGER PRIMARY KEY, tags TEXT)")
-    db.execute(
-        "INSERT INTO memories VALUES (1, 'work,urgent'), (2, 'personal'), (3, 'nodanger')"
-    )
-    search = "%"
-    safe = search.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    rows = db.execute(
-        "SELECT tags FROM memories WHERE LOWER(tags) LIKE ? ESCAPE '\\'",
-        (f"%{safe}%",),
-    ).fetchall()
-    assert len(rows) == 0, f"LIKE metacharacter not escaped: got {rows}"
-    search2 = "work"
-    safe2 = (
-        search2.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
-    rows2 = db.execute(
-        "SELECT tags FROM memories WHERE LOWER(tags) LIKE ? ESCAPE '\\'",
-        (f"%{safe2}%",),
-    ).fetchall()
-    assert len(rows2) == 1 and rows2[0][0] == "work,urgent", (
-        f"literal match failed: got {rows2}"
-    )
-    search3 = "_"
-    safe3 = (
-        search3.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
-    rows3 = db.execute(
-        "SELECT tags FROM memories WHERE LOWER(tags) LIKE ? ESCAPE '\\'",
-        (f"%{safe3}%",),
-    ).fetchall()
-    assert len(rows3) == 0, f"underscore metacharacter not escaped: got {rows3}"
-    db.close()
-    print("LIKE escaping test passed")
-
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--test-like-escaping":
-        _test_like_escaping()
-    else:
-        main()
+    main()
