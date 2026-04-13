@@ -418,7 +418,9 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
 	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
 	const limit = requestedLimit ?? Math.max(0, total - offset);
-	const hasMore = offset + rows.length < total;
+	const hasMore = requestedLimit !== null
+		? offset + rows.length >= requestedLimit && offset + rows.length < total
+		: offset + rows.length < total;
 
 	return { rows, total, offset, limit, hasMore };
 }

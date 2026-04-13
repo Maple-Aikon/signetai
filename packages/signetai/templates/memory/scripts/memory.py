@@ -513,12 +513,13 @@ def query_memories_fts_only(search: str, limit: int = 20):
     except sqlite3.OperationalError:
         pass
 
+    safe_search = search.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     tag_rows = db.execute("""
         SELECT * FROM memories
-        WHERE LOWER(tags) LIKE ?
+        WHERE LOWER(tags) LIKE ? ESCAPE '\\'
         ORDER BY importance DESC
         LIMIT ?
-    """, (f"%{search.lower()}%", limit)).fetchall()
+    """, (f"%{safe_search}%", limit)).fetchall()
 
     seen_ids = {r["id"] for r in results}
     for row in tag_rows:

@@ -486,14 +486,14 @@ async function _refreshRegistryInner(
 	}
 
 	if (anthropicModels.length > 0) {
-		state.models.set("anthropic", anthropicModels);
+		state.models.set("anthropic", markDeprecatedVersions(anthropicModels));
 		// Do NOT overwrite "claude-code" — its IDs must match what the
 		// Claude Code CLI accepts (shorthand aliases, not dated Anthropic IDs).
 		// The seeded KNOWN_MODELS["claude-code"] entries use the correct shorthands.
 	}
 
 	if (openRouterModels.length > 0) {
-		state.models.set("openrouter", openRouterModels);
+		state.models.set("openrouter", markDeprecatedVersions(openRouterModels));
 	}
 
 	state.lastRefreshAt = Date.now();

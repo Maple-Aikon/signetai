@@ -101,13 +101,13 @@ export function buildAgentScopeClause(
 			args: [agentId],
 		};
 	}
-	if (readPolicy === "group") {
+	if (readPolicy === "group" && policyGroup) {
 		return {
 			sql: " AND ((m.visibility = 'global' AND m.agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR m.agent_id = ?) AND m.visibility != 'archived'",
 			args: [policyGroup, agentId],
 		};
 	}
-	// 'isolated' or unknown — own memories only
+	// 'isolated', 'group' without policyGroup, or unknown — own memories only
 	return {
 		sql: " AND m.agent_id = ? AND m.visibility != 'archived'",
 		args: [agentId],
