@@ -324,6 +324,9 @@ export function registerMiscRoutes(app: Hono): void {
 		} finally {
 			_rollbackSignal = null;
 			resolve?.();
+			// null-before-resolve: clearing the signal before resolving
+			// ensures waiting microtasks re-check the new signal rather
+			// than observing the old (already-resolved) promise
 		}
 	});
 

@@ -260,9 +260,10 @@ export function resolveRollbackFilePath(
 				404,
 			);
 		}
-		// Transition source doesn't match any known config file (e.g. test
-		// fixture or non-standard source). Fall through to the first existing
-		// candidate — this is intentional as a "lock-of-locks" safety net.
+		throw new RollbackError(
+			`Transition source '${match.source}' does not match any known config file — cannot determine which file to roll back`,
+			404,
+		);
 	}
 	const fallback = CONFIG_FILE_CANDIDATES.find((name) => existsSync(join(agentsDir, name))) ?? "agent.yaml";
 	return { filePath: join(agentsDir, fallback), transitions };
