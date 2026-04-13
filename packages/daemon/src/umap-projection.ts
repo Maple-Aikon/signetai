@@ -427,9 +427,11 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
 
 		if (rawRows.length !== rows.length && !hasMore) {
-			const countSql = `SELECT e.vector ${EMBEDDINGS_FROM_SQL}${clause}`;
-			const allVectors = db.prepare(countSql).all(...params) as { vector: unknown }[];
-			effectiveTotal = allVectors.filter((r) => isBlob(r.vector)).length;
+			const validCountRow = db
+				.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`)
+				.get(...params) as { count?: number } | undefined;
+			effectiveTotal =
+				validCountRow !== undefined && typeof validCountRow.count === "number" ? validCountRow.count : 0;
 			hasMore = offset + trimmedRows.length < effectiveTotal;
 		}
 	} else {
