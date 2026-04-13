@@ -293,16 +293,6 @@ export function executeProviderRollback(
 	if (!existsSync(filePath)) {
 		throw new RollbackError(`Config file '${basename(filePath)}' not found`, 404);
 	}
-	const beforeContent = readFileSync(filePath, "utf-8");
-	const nextContent = applyProviderRollback(beforeContent, entry);
-	if (nextContent === beforeContent) {
-		throw new RollbackError(
-			`Rollback for ${entry.role} would produce no change — the current config has no ${entry.role} provider to revert. The audit entry is not consumed.`,
-			400,
-		);
-	}
-	const safety = validateProviderSafety(nextContent);
-	if (!safety.ok) throw new RollbackError(safety.error, 400);
 	function markRolledBack(target: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {
 		return {
 			role: target.role,
@@ -316,6 +306,25 @@ export function executeProviderRollback(
 		};
 	}
 
+	const beforeContent = readFileSync(filePath, "utf-8");
+	const nextContent = applyProviderRollback(beforeContent, entry);
+	if (nextContent === beforeContent) {
+		transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
+		const merged = [...transitions].slice(-100);
+		const auditPath = providerAuditPath(agentsDir);
+		mkdirSync(dirname(auditPath), { recursive: true });
+		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
+		return {
+			success: true,
+			file: basename(filePath),
+			rolledBack: markRolledBack(entry),
+			providerTransitions: [],
+			isRetry: true,
+		};
+	}
+	const safety = validateProviderSafety(nextContent);
+	if (!safety.ok) throw new RollbackError(safety.error, 400);
+
 	const rollbackEntries = detectProviderTransitions(
 		beforeContent,
 		nextContent,
@@ -327,17 +336,16 @@ export function executeProviderRollback(
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
 	// Config-first: if audit write fails after config, the entry is
-	// unconsumed. On retry, applyProviderRollback re-serializes and
-	// rewrites agent.yaml (provider is already correct but YAML comments
-	// added since the failed rollback are stripped), then marks consumed.
-	// Atomic write (temp+rename) prevents partial content on crash.
+	// unconsumed. On retry, applyProviderRollback produces identical
+	// YAML (idempotent stringify round-trip), so the no-op guard
+	// above catches it and marks the audit entry consumed without
+	// rewriting the config.
 	atomicWrite(filePath, nextContent, ".rollback-");
 	try {
 		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
 	} catch (e) {
-		// Config is correct but audit is stale — on retry, the same entry
-		// is found again; applyProviderRollback is effectively a no-op but
-		// rewrites agent.yaml (stripping comments), then marks consumed.
+		// Config is correct but audit is stale — retry will hit the
+		// no-op guard above and mark the entry consumed audit-only.
 		logger.error("provider-safety", "Audit write failed after config rollback", {
 			error: e instanceof Error ? e.message : String(e),
 		});

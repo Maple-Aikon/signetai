@@ -315,7 +315,7 @@ describe("provider safety", () => {
 		expect(result).toContain("extractionProvider: ollama");
 	});
 
-	it("throws 400 when synthesis rollback would produce no change", () => {
+	it("marks audit consumed and returns isRetry when config already has correct provider", () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -333,11 +333,11 @@ describe("provider safety", () => {
 		expect(entries).toHaveLength(1);
 		appendProviderTransitions(agentsDir, entries);
 
-		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
-			"would produce no change",
-		);
+		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		expect(result.isRetry).toBe(true);
+		expect(result.providerTransitions).toHaveLength(0);
 
 		const stored = readProviderTransitions(agentsDir);
-		expect(stored[0].rolledBack).toBeUndefined();
+		expect(stored[0].rolledBack).toBe(true);
 	});
 });
