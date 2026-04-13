@@ -422,20 +422,16 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	if (requestedLimit !== null) {
 		hasMore = rows.length > requestedLimit;
 
-		if (rawRows.length !== rows.length) {
-			const validCountRow = db
-				.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`)
-				.get(...params) as { count?: number } | undefined;
-			effectiveTotal =
-				validCountRow !== undefined && typeof validCountRow.count === "number" ? validCountRow.count : 0;
-			if (!hasMore) {
-				hasMore = offset + trimmedRows.length < effectiveTotal;
-			}
-		} else {
-			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
-				| { count?: number }
-				| undefined;
-			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+		const countClause = rawRows.length !== rows.length
+			? `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`
+			: `${EMBEDDINGS_FROM_SQL}${clause}`;
+		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
+			| { count?: number }
+			| undefined;
+		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+
+		if (rawRows.length !== rows.length && !hasMore) {
+			hasMore = offset + trimmedRows.length < effectiveTotal;
 		}
 	} else {
 		effectiveTotal = rows.length + offset;

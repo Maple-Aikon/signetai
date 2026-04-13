@@ -96,10 +96,10 @@ describe("hasMore pagination regression", () => {
 			}
 
 			for (let i = 0; i < 6; i++) {
-				if (i === 5) {
+				if (i === 3) {
 					db.prepare(
 						"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
-					).run("mem-5", "not-a-blob", 4, new Date(baseTime.getTime() + 5 * 1000).toISOString());
+					).run("mem-3", "not-a-blob", 4, new Date(baseTime.getTime() + 3 * 1000).toISOString());
 				} else {
 					db.prepare(
 						"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
@@ -107,10 +107,15 @@ describe("hasMore pagination regression", () => {
 				}
 			}
 
-			const page1 = computeProjectionForQuery(db, 2, { limit: 3, offset: 0 });
+			const page1 = computeProjectionForQuery(db, 2, { limit: 2, offset: 0 });
 			expect(page1.total).toBe(5);
-			expect(page1.count).toBe(3);
+			expect(page1.count).toBe(2);
 			expect(page1.hasMore).toBe(true);
+
+			const page2 = computeProjectionForQuery(db, 2, { limit: 2, offset: 2 });
+			expect(page2.total).toBe(5);
+			expect(page2.count).toBe(2);
+			expect(page2.hasMore).toBe(true);
 
 			const allRows = computeProjectionForQuery(db, 2, { limit: 10, offset: 0 });
 			expect(allRows.count).toBe(5);
