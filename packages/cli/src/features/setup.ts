@@ -11,7 +11,7 @@ import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
-import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
+import { hasCommand, preflightLocalEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
 	type DeploymentTypeChoice,
@@ -574,7 +574,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				],
 			});
 
-			const preflight = await preflightOllamaEmbedding(model);
+			const preflight = await preflightLocalEmbedding(model);
 			embeddingProvider = preflight.provider;
 			embeddingModel = preflight.model ?? embeddingModel;
 			embeddingDimensions = preflight.dimensions ?? embeddingDimensions;

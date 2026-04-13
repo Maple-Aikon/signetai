@@ -1,8 +1,8 @@
+import { spawn, spawnSync } from "node:child_process";
+import { platform } from "node:os";
 import { confirm, select } from "@inquirer/prompts";
 import chalk from "chalk";
-import { platform } from "node:os";
 import ora from "ora";
-import { spawn, spawnSync } from "node:child_process";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
 
 export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"; model: string; dimensions: number }> {
@@ -18,7 +18,7 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 	return { provider: "openai", model, dimensions: getEmbeddingDimensions(model) };
 }
 
-export async function preflightOllamaEmbedding(model: string): Promise<{
+export async function preflightLocalEmbedding(model: string): Promise<{
 	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
 	model?: string;
 	dimensions?: number;

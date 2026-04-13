@@ -1046,7 +1046,7 @@ extraction:
 synthesis:
   enabled: true
   provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
-  model: qwen3:4b
+  model: qwen3.5:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model
   # except extraction.provider=command, which falls back to synthesis defaults
