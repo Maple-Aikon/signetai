@@ -311,6 +311,10 @@ function normalizeFilterValues(values: readonly string[] | undefined): string[] 
 	return [...new Set(normalized)];
 }
 
+function escapeLike(text: string): string {
+	return text.replace(/([\\%_])/g, "\\$1");
+}
+
 function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 	clause: string;
 	params: unknown[];
@@ -322,9 +326,9 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 	const query = filters.query?.trim();
 	if (query && query.length > 0) {
-		const pattern = `%${query}%`;
+		const pattern = `%${escapeLike(query)}%`;
 		parts.push(
-			"(m.content LIKE ? OR m.tags LIKE ? OR m.who LIKE ? OR m.type LIKE ? OR m.source_type LIKE ? OR m.source_id LIKE ?)",
+			"(m.content LIKE ? ESCAPE '\\' OR m.tags LIKE ? ESCAPE '\\' OR m.who LIKE ? ESCAPE '\\' OR m.type LIKE ? ESCAPE '\\' OR m.source_type LIKE ? ESCAPE '\\' OR m.source_id LIKE ? ESCAPE '\\')",
 		);
 		params.push(pattern, pattern, pattern, pattern, pattern, pattern);
 	}
@@ -409,7 +413,7 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	const rowParams: unknown[] = [...params];
 	if (requestedLimit !== null) {
 		sql += " LIMIT ? OFFSET ?";
-		rowParams.push(requestedLimit, offset);
+		rowParams.push(requestedLimit + 1, offset);
 	} else if (offset > 0) {
 		sql += " LIMIT -1 OFFSET ?";
 		rowParams.push(offset);
@@ -419,10 +423,11 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
 	const limit = requestedLimit ?? Math.max(0, total - offset);
 	const hasMore = requestedLimit !== null
-		? offset + rows.length >= requestedLimit && offset + rows.length < total
+		? rows.length > requestedLimit
 		: offset + rows.length < total;
+	const trimmedRows = requestedLimit !== null ? rows.slice(0, requestedLimit) : rows;
 
-	return { rows, total, offset, limit, hasMore };
+	return { rows: trimmedRows, total, offset, limit, hasMore };
 }
 
 function buildNodesFromRows(

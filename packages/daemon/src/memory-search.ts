@@ -21,6 +21,10 @@ import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { FTS_STOP } from "./pipeline/stop-words";
 
+function escapeLike(text: string): string {
+	return text.replace(/([\\%_])/g, "\\$1");
+}
+
 // ---------------------------------------------------------------------------
 // Public interfaces
 // ---------------------------------------------------------------------------
@@ -149,8 +153,8 @@ function buildFilterClause(params: RecallParams): FilterClause {
 			.split(",")
 			.map((s) => s.trim())
 			.filter(Boolean)) {
-			parts.push("m.tags LIKE ?");
-			args.push(`%${t}%`);
+			parts.push("m.tags LIKE ? ESCAPE '\\'");
+			args.push(`%${escapeLike(t)}%`);
 		}
 	}
 	if (params.who) {
