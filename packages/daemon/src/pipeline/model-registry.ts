@@ -196,7 +196,7 @@ function cleanModelLabel(raw: string): string {
  * Given a list of models, return a new array with older versions of the
  * same family marked as deprecated. Does not mutate the input.
  */
-function markDeprecatedVersions(entries: readonly ModelRegistryEntry[]): ModelRegistryEntry[] {
+export function markDeprecatedVersions(entries: readonly ModelRegistryEntry[]): ModelRegistryEntry[] {
 	const familyBest = new Map<string, { version: number; id: string }>();
 
 	for (const entry of entries) {

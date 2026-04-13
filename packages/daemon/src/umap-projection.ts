@@ -7,6 +7,7 @@
 import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
 import type { ReadDb, WriteDb } from "./db-accessor";
+import { escapeLike } from "./sql-utils";
 
 // Try to load native Rust accelerators, fall back to pure TS
 let nativeKnn: typeof import("@signet/native") | null = null;
@@ -311,10 +312,6 @@ function normalizeFilterValues(values: readonly string[] | undefined): string[] 
 	return [...new Set(normalized)];
 }
 
-function escapeLike(text: string): string {
-	return text.replace(/([\\%_])/g, "\\$1");
-}
-
 function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 	clause: string;
 	params: unknown[];
@@ -390,6 +387,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 interface ProjectionRowsResult {
 	readonly rows: EmbeddingRow[];
+	/** Total matching rows after JS-side validation; falls back to DB COUNT(*) when no rows are discarded. */
 	readonly total: number;
 	readonly offset: number;
 	readonly limit: number;
@@ -421,13 +419,26 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
 	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
-	const limit = requestedLimit ?? Math.max(0, total - offset);
+
+	let effectiveTotal: number;
+	if (requestedLimit !== null && rawRows.length !== rows.length) {
+		const allRaw = db
+			.prepare(`${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause}`)
+			.all(...params) as Record<string, unknown>[];
+		effectiveTotal = allRaw.map(toEmbeddingRow).filter((r): r is EmbeddingRow => r !== null).length;
+	} else if (requestedLimit !== null) {
+		effectiveTotal = total;
+	} else {
+		effectiveTotal = rows.length + offset;
+	}
+
+	const limit = requestedLimit ?? Math.max(0, effectiveTotal - offset);
 	const hasMore = requestedLimit !== null
 		? rows.length > requestedLimit
-		: offset + rows.length < total;
+		: offset + rows.length < effectiveTotal;
 	const trimmedRows = requestedLimit !== null ? rows.slice(0, requestedLimit) : rows;
 
-	return { rows: trimmedRows, total, offset, limit, hasMore };
+	return { rows: trimmedRows, total: effectiveTotal, offset, limit, hasMore };
 }
 
 function buildNodesFromRows(

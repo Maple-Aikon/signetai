@@ -19,11 +19,8 @@ import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
+import { escapeLike } from "./sql-utils";
 import { FTS_STOP } from "./pipeline/stop-words";
-
-function escapeLike(text: string): string {
-	return text.replace(/([\\%_])/g, "\\$1");
-}
 
 // ---------------------------------------------------------------------------
 // Public interfaces

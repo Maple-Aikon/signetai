@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { loadMemoryConfig } from "./memory-config";
-import { hybridRecall } from "./memory-search";
-import { buildAgentScopeClause } from "./memory-search";
+import { buildAgentScopeClause, hybridRecall } from "./memory-search";
 
 describe("hybridRecall", () => {
 	let dir = "";
