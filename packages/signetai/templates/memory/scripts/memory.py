@@ -312,7 +312,7 @@ def save_explicit(
     db = get_db()
     now = datetime.now().isoformat()
     memory_id = str(uuid.uuid4())
-    cursor = db.execute(
+    db.execute(
         """
         INSERT INTO memories (id, content, who, why, project, importance, type, tags, pinned, updated_at, updated_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
