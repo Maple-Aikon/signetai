@@ -422,21 +422,17 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	if (requestedLimit !== null) {
 		hasMore = rows.length > requestedLimit;
 
-		if (rawRows.length !== rows.length) {
-			const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
-			// toEmbeddingRow also guards id/content/created_at as non-null strings,
-			// but those are NOT NULL TEXT columns in the schema so SQLite always
-			// returns strings — blob is the only practical discard reason.
-			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
-				| { count?: number }
-				| undefined;
-			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+		const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
+		// toEmbeddingRow also guards id/content/created_at as non-null strings,
+		// but those are NOT NULL TEXT columns in the schema so SQLite always
+		// returns strings — blob is the only practical discard reason.
+		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
+			| { count?: number }
+			| undefined;
+		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
 
-			if (!hasMore) {
-				hasMore = offset + trimmedRows.length < effectiveTotal;
-			}
-		} else {
-			effectiveTotal = offset + rows.length;
+		if (rawRows.length !== rows.length && !hasMore) {
+			hasMore = offset + trimmedRows.length < effectiveTotal;
 		}
 	} else {
 		effectiveTotal = rows.length + offset;
