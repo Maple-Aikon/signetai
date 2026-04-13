@@ -387,7 +387,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 interface ProjectionRowsResult {
 	readonly rows: EmbeddingRow[];
-	/** Total matching rows after JS-side validation; falls back to DB COUNT(*) when no rows are discarded. */
+	/** DB COUNT(*) used when all fetched rows pass JS-side validation; full re-scan used when any row is discarded. */
 	readonly total: number;
 	readonly offset: number;
 	readonly limit: number;
@@ -402,11 +402,6 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	const { clause, params } = buildProjectionWhere(query.filters);
 
-	const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
-		| { count?: number }
-		| undefined;
-	const total = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
-
 	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC`;
 	const rowParams: unknown[] = [...params];
 	if (requestedLimit !== null) {
@@ -419,24 +414,33 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
 	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
+	const trimmedRows = requestedLimit !== null ? rows.slice(0, requestedLimit) : rows;
 
 	let effectiveTotal: number;
-	if (requestedLimit !== null && rawRows.length !== rows.length) {
-		const allRaw = db
-			.prepare(`${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause}`)
-			.all(...params) as Record<string, unknown>[];
-		effectiveTotal = allRaw.map(toEmbeddingRow).filter((r): r is EmbeddingRow => r !== null).length;
-	} else if (requestedLimit !== null) {
-		effectiveTotal = total;
+	let hasMore: boolean;
+
+	if (requestedLimit !== null) {
+		hasMore = rows.length > requestedLimit;
+		if (rawRows.length !== rows.length) {
+			const allRaw = db
+				.prepare(`${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause}`)
+				.all(...params) as Record<string, unknown>[];
+			effectiveTotal = allRaw.map(toEmbeddingRow).filter((r): r is EmbeddingRow => r !== null).length;
+			if (!hasMore) {
+				hasMore = offset + trimmedRows.length < effectiveTotal;
+			}
+		} else {
+			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
+				| { count?: number }
+				| undefined;
+			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+		}
 	} else {
 		effectiveTotal = rows.length + offset;
+		hasMore = false;
 	}
 
 	const limit = requestedLimit ?? Math.max(0, effectiveTotal - offset);
-	const hasMore = requestedLimit !== null
-		? rows.length > requestedLimit
-		: offset + rows.length < effectiveTotal;
-	const trimmedRows = requestedLimit !== null ? rows.slice(0, requestedLimit) : rows;
 
 	return { rows: trimmedRows, total: effectiveTotal, offset, limit, hasMore };
 }

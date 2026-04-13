@@ -81,4 +81,43 @@ describe("hasMore pagination regression", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("detects hasMore=true when toEmbeddingRow discards rows and more pages exist", () => {
+		const { db, dir } = setupDb();
+		try {
+			const fakeBlob = new Uint8Array(8);
+			const baseTime = new Date("2026-01-01T00:00:00Z");
+
+			for (let i = 0; i < 6; i++) {
+				const t = new Date(baseTime.getTime() + i * 1000).toISOString();
+				db.prepare(
+					"INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
+				).run(`mem-${i}`, `memory ${i}`, t, t);
+			}
+
+			for (let i = 0; i < 6; i++) {
+				if (i === 5) {
+					db.prepare(
+						"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
+					).run("mem-5", "not-a-blob", 4, new Date(baseTime.getTime() + 5 * 1000).toISOString());
+				} else {
+					db.prepare(
+						"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
+					).run(`mem-${i}`, fakeBlob, 4, new Date(baseTime.getTime() + i * 1000).toISOString());
+				}
+			}
+
+			const page1 = computeProjectionForQuery(db, 2, { limit: 3, offset: 0 });
+			expect(page1.total).toBe(5);
+			expect(page1.count).toBe(3);
+			expect(page1.hasMore).toBe(true);
+
+			const allRows = computeProjectionForQuery(db, 2, { limit: 10, offset: 0 });
+			expect(allRows.count).toBe(5);
+			expect(allRows.hasMore).toBe(false);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
