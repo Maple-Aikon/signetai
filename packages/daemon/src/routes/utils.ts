@@ -24,7 +24,7 @@ import {
 import { authConfig } from "./state";
 
 export interface EmbeddingStatus {
-	provider: "native" | "ollama" | "openai" | "none";
+	provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
 	model: string;
 	available: boolean;
 	modelCached?: boolean;
@@ -936,6 +936,23 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 					}
 				} catch {
 					status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not reachable.`;
+				}
+			}
+		} else if (cfg.provider === "llama-cpp") {
+			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/v1/models`, {
+				method: "GET",
+				signal: AbortSignal.timeout(5000),
+			});
+
+			if (!res.ok) {
+				status.error = `llama.cpp server returned ${res.status}`;
+			} else {
+				const testResult = await fetchEmbedding("test", cfg);
+				if (testResult) {
+					status.available = true;
+					status.dimensions = testResult.length;
+				} else {
+					status.error = "llama.cpp server reachable but embedding failed";
 				}
 			}
 		} else if (cfg.provider === "ollama") {

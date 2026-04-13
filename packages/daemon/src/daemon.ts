@@ -87,6 +87,7 @@ import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
+	createLlamaCppProvider,
 	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
@@ -1513,6 +1514,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
 	const validExtractionProviders = new Set([
 		"none",
+		"llama-cpp",
 		"ollama",
 		"claude-code",
 		"opencode",
@@ -1523,6 +1525,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	]);
 	const validSynthesisProviders = new Set([
 		"none",
+		"llama-cpp",
 		"ollama",
 		"claude-code",
 		"codex",
@@ -1585,6 +1588,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"https://openrouter.ai/api/v1",
 	);
+	const extractionLlamaCppBaseUrl = normalizeRuntimeBaseUrl(
+		memoryCfg.pipelineV2.extraction.endpoint,
+		"http://127.0.0.1:8080",
+	);
 	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
 	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
 
@@ -1592,8 +1599,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		extractionReason = reason;
 		extractionSince = new Date().toISOString();
 		extractionDegraded = true;
-		if (extractionFallbackProvider === "ollama" && effectiveExtractionProvider !== "ollama") {
-			effectiveExtractionProvider = "ollama";
+		const localFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
+		if ((extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama") && effectiveExtractionProvider !== localFallback) {
+			effectiveExtractionProvider = localFallback;
 			extractionStatus = "degraded";
 			extractionFallbackApplied = true;
 			return;
@@ -1694,7 +1702,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		if (!anthropicApiKey) {
 			logger.error(
 				"config",
-				"ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
+				`ANTHROPIC_API_KEY not found — falling back to ${extractionFallbackProvider}. Set via env or 'signet secrets set ANTHROPIC_API_KEY'`,
 			);
 			if (effectiveExtractionProvider === "anthropic") {
 				markExtractionUnavailable("ANTHROPIC_API_KEY not found for extraction startup preflight");
@@ -1710,7 +1718,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		if (!openRouterApiKey) {
 			logger.error(
 				"config",
-				"OPENROUTER_API_KEY not found — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
+				`OPENROUTER_API_KEY not found — falling back to ${extractionFallbackProvider}. Set via env or 'signet secrets set OPENROUTER_API_KEY'`,
 			);
 			if (effectiveExtractionProvider === "openrouter") {
 				markExtractionUnavailable("OPENROUTER_API_KEY not found for extraction startup preflight");
@@ -1768,6 +1776,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 			});
 		}
+		if (provider === "llama-cpp") {
+			return createLlamaCppProvider({
+				model: model || "qwen3.5:4b",
+				baseUrl: extractionLlamaCppBaseUrl,
+				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			});
+		}
 		return createOllamaProvider({
 			...(model ? { model } : {}),
 			baseUrl: extractionOllamaFallbackBaseUrl,
@@ -1786,19 +1801,20 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		if (!preflightOk) {
 			const failedProvider = effectiveExtractionProvider;
 			const failedReason = extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
-			if (failedProvider !== "ollama" && extractionFallbackProvider === "ollama") {
+			const localFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
+			if (failedProvider !== localFallback && (extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama")) {
 				extractionReason = failedReason;
 				extractionSince = extractionSince ?? new Date().toISOString();
 				extractionDegraded = true;
 				extractionFallbackApplied = true;
 				extractionStatus = "degraded";
-				effectiveExtractionProvider = "ollama";
-				llmProvider = createExtractionProvider("ollama");
+				effectiveExtractionProvider = localFallback;
+				llmProvider = createExtractionProvider(localFallback);
 				if (!llmProvider || !(await llmProvider.available())) {
 					effectiveExtractionProvider = "none";
 					extractionStatus = "blocked";
 					extractionFallbackApplied = false;
-					extractionReason = `${failedReason}; ollama fallback startup preflight failed`;
+					extractionReason = `${failedReason}; ${localFallback} fallback startup preflight failed`;
 					llmProvider = null;
 				}
 			} else {
@@ -1851,11 +1867,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		endpoint: redactUrlForLogs(
 			effectiveExtractionProvider === "ollama"
 				? extractionOllamaFallbackBaseUrl
-				: effectiveExtractionProvider === "opencode"
-					? extractionOpenCodeBaseUrl
-					: effectiveExtractionProvider === "openrouter"
-						? extractionOpenRouterBaseUrl
-						: undefined,
+				: effectiveExtractionProvider === "llama-cpp"
+					? extractionLlamaCppBaseUrl
+					: effectiveExtractionProvider === "opencode"
+						? extractionOpenCodeBaseUrl
+						: effectiveExtractionProvider === "openrouter"
+							? extractionOpenRouterBaseUrl
+							: undefined,
 		),
 	});
 	const extractionModelName = effectiveExtractionModel ?? memoryCfg.pipelineV2.extraction.model;
@@ -1866,7 +1884,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	) {
 		logger.warn(
 			"config",
-			"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on Pro/Max, or local Ollama qwen3:4b+. Remote API extraction can create extreme fees fast. Set provider to 'none' to disable it on a VPS.",
+			"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on Pro/Max, or local llama.cpp qwen3.5:4b+ / Ollama qwen3:4b+. Remote API extraction can create extreme fees fast. Set provider to 'none' to disable it on a VPS.",
 			{
 				provider: effectiveExtractionProvider,
 				model: extractionModelName,
@@ -1921,6 +1939,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			registryAnthropicApiKey,
 			registryOpenRouterApiKey,
 			effectiveExtractionProvider === "openrouter" ? extractionOpenRouterBaseUrl : undefined,
+			effectiveExtractionProvider === "llama-cpp" ? extractionLlamaCppBaseUrl : undefined,
 		);
 	}
 
@@ -1935,12 +1954,17 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
 	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
 		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
+		const synthesisFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
 		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:11434",
 		);
 		const synthesisOllamaFallbackBaseUrl =
 			memoryCfg.pipelineV2.synthesis.provider === "opencode" ? "http://127.0.0.1:11434" : synthesisOllamaBaseUrl;
+		const synthesisLlamaCppBaseUrl = normalizeRuntimeBaseUrl(
+			memoryCfg.pipelineV2.synthesis.endpoint,
+			"http://127.0.0.1:8080",
+		);
 		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:4096",
@@ -1954,8 +1978,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			if (synthesisOpenCodeShouldManage) {
 				const serverReady = await ensureOpenCodeServer(4096);
 				if (!serverReady) {
-					logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
-					effectiveSynthesisProvider = "ollama";
+					logger.warn("config", `OpenCode server not available for synthesis, falling back to ${synthesisFallback}`);
+					effectiveSynthesisProvider = synthesisFallback;
 				}
 			} else {
 				logger.info("config", "Using external OpenCode endpoint for synthesis", {
@@ -1964,19 +1988,19 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			}
 		} else if (effectiveSynthesisProvider === "anthropic") {
 			if (!anthropicApiKey) {
-				logger.warn("config", "ANTHROPIC_API_KEY not found for synthesis, falling back to ollama");
-				effectiveSynthesisProvider = "ollama";
+				logger.warn("config", `ANTHROPIC_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
+				effectiveSynthesisProvider = synthesisFallback;
 			}
 		} else if (effectiveSynthesisProvider === "openrouter") {
 			if (!openRouterApiKey) {
-				logger.warn("config", "OPENROUTER_API_KEY not found for synthesis, falling back to ollama");
-				effectiveSynthesisProvider = "ollama";
+				logger.warn("config", `OPENROUTER_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
+				effectiveSynthesisProvider = synthesisFallback;
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
 			const resolvedClaude = Bun.which("claude");
 			if (resolvedClaude === null) {
-				logger.warn("config", "Claude Code CLI not found, falling back to ollama for synthesis");
-				effectiveSynthesisProvider = "ollama";
+				logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
+				effectiveSynthesisProvider = synthesisFallback;
 			} else {
 				try {
 					const exitCode = await new Promise<number>((resolve) => {
@@ -1990,15 +2014,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					});
 					if (exitCode !== 0) throw new Error("non-zero exit");
 				} catch {
-					logger.warn("config", "Claude Code CLI not found, falling back to ollama for synthesis");
-					effectiveSynthesisProvider = "ollama";
+					logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
+					effectiveSynthesisProvider = synthesisFallback;
 				}
 			}
 		} else if (effectiveSynthesisProvider === "codex") {
 			const resolvedCodex = Bun.which("codex");
 			if (resolvedCodex === null) {
-				logger.warn("config", "Codex CLI not found, falling back to ollama for synthesis");
-				effectiveSynthesisProvider = "ollama";
+				logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
+				effectiveSynthesisProvider = synthesisFallback;
 			} else {
 				try {
 					const exitCode = await new Promise<number>((resolve) => {
@@ -2016,8 +2040,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					});
 					if (exitCode !== 0) throw new Error("non-zero exit");
 				} catch {
-					logger.warn("config", "Codex CLI not found, falling back to ollama for synthesis");
-					effectiveSynthesisProvider = "ollama";
+					logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
+					effectiveSynthesisProvider = synthesisFallback;
 				}
 			}
 		}
@@ -2040,11 +2064,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			endpoint: redactUrlForLogs(
 				effectiveSynthesisProvider === "ollama"
 					? synthesisOllamaFallbackBaseUrl
-					: effectiveSynthesisProvider === "opencode"
-						? synthesisOpenCodeBaseUrl
-						: effectiveSynthesisProvider === "openrouter"
-							? synthesisOpenRouterBaseUrl
-							: undefined,
+					: effectiveSynthesisProvider === "llama-cpp"
+						? synthesisLlamaCppBaseUrl
+						: effectiveSynthesisProvider === "opencode"
+							? synthesisOpenCodeBaseUrl
+							: effectiveSynthesisProvider === "openrouter"
+								? synthesisOpenRouterBaseUrl
+								: undefined,
 			),
 		});
 
@@ -2053,8 +2079,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			memoryCfg.pipelineV2.synthesis.provider,
 			memoryCfg.pipelineV2.synthesis.model,
 		);
-		const usingSynthesisOllamaFallback =
-			effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama";
+		const usingSynthesisLocalFallback =
+			(effectiveSynthesisProvider === "ollama" || effectiveSynthesisProvider === "llama-cpp") &&
+			memoryCfg.pipelineV2.synthesis.provider !== effectiveSynthesisProvider;
 
 		let synthesisProvider =
 			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
@@ -2091,11 +2118,17 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 										model: effectiveSynthesisModel || "haiku",
 										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 									})
-								: createOllamaProvider({
-										...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
-										baseUrl: synthesisOllamaFallbackBaseUrl,
-										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-										...(usingSynthesisOllamaFallback
+								: effectiveSynthesisProvider === "llama-cpp"
+									? createLlamaCppProvider({
+											model: effectiveSynthesisModel || "qwen3.5:4b",
+											baseUrl: synthesisLlamaCppBaseUrl,
+											defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+										})
+									: createOllamaProvider({
+											...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
+											baseUrl: synthesisOllamaFallbackBaseUrl,
+											defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+											...(usingSynthesisLocalFallback
 											? {
 													maxContextTokens: ollamaFallbackMaxContextTokens,
 												}

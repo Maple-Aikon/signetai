@@ -1,5 +1,5 @@
 import type { EmbeddingConfig } from "./memory-config";
-import { DEFAULT_OPENAI_BASE_URL, DEFAULT_OLLAMA_BASE_URL } from "./memory-config";
+import { DEFAULT_LLAMACPP_BASE_URL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OLLAMA_BASE_URL } from "./memory-config";
 import { logger } from "./logger";
 import { getSecret } from "./secrets.js";
 
@@ -43,6 +43,9 @@ async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string
 export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 	if (cfg.provider === "openai") {
 		return cfg.base_url.trim() || DEFAULT_OPENAI_BASE_URL;
+	}
+	if (cfg.provider === "llama-cpp") {
+		return cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
 	}
 	return cfg.base_url;
 }
@@ -107,6 +110,25 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 		}
 		if (cfg.provider === "ollama") {
 			return await fetchOllamaEmbedding(text, cfg.base_url, cfg.model);
+		}
+
+		if (cfg.provider === "llama-cpp") {
+			const baseUrl = cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
+			const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/embeddings`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ model: cfg.model, input: text }),
+				signal: AbortSignal.timeout(30000),
+			});
+			if (!res.ok) {
+				logger.warn("embedding", "llama.cpp embedding request failed", {
+					status: res.status,
+					model: cfg.model,
+				});
+				return null;
+			}
+			const data = (await res.json()) as { data: Array<{ embedding: number[] }> };
+			return data.data?.[0]?.embedding ?? null;
 		}
 
 		const apiKey = await resolveEmbeddingApiKey(cfg.api_key);

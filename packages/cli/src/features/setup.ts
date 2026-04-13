@@ -641,6 +641,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				name: `Codex (GPT Mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
 			},
 			{
+				value: "llama-cpp",
+				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
+			},
+			{
 				value: "ollama",
 				name: `Ollama (local, qwen3:4b minimum)${detectedProvider === "ollama" ? " — detected" : ""}`,
 			},

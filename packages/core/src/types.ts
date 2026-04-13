@@ -205,8 +205,8 @@ export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
 };
 
 export interface PipelineExtractionConfig {
-	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
-	readonly fallbackProvider?: "ollama" | "none";
+	readonly provider: "none" | "llama-cpp" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
+	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
@@ -387,7 +387,7 @@ export interface PipelineEmbeddingTrackerConfig {
 
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
-	readonly provider: "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter";
+	readonly provider: "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter";
 	readonly model: string;
 	readonly endpoint?: string;
 	readonly timeout: number;

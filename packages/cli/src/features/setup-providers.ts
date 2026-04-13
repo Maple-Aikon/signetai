@@ -19,7 +19,7 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 }
 
 export async function preflightOllamaEmbedding(model: string): Promise<{
-	provider: "native" | "ollama" | "openai" | "none";
+	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
 	model?: string;
 	dimensions?: number;
 }> {

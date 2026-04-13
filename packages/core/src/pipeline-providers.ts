@@ -1,5 +1,6 @@
 export const PIPELINE_PROVIDER_CHOICES = [
 	"none",
+	"llama-cpp",
 	"ollama",
 	"claude-code",
 	"codex",
@@ -15,6 +16,7 @@ export const DEFAULT_PIPELINE_TIMEOUT_MS = 90000;
 
 const MODEL_DEFAULTS = {
 	none: "",
+	"llama-cpp": "qwen3.5:4b",
 	ollama: "qwen3:4b",
 	"claude-code": "haiku",
 	codex: "gpt-5-codex-mini",

@@ -67,10 +67,10 @@ export interface FreshSetupConfig {
 	readonly openclawRuntimePath: OpenClawRuntimeChoice;
 	readonly configureOpenClawWs: boolean;
 	readonly openclawConfigCount: number;
-	readonly embeddingProvider: "native" | "ollama" | "openai" | "none";
+	readonly embeddingProvider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
 	readonly embeddingModel: string;
 	readonly embeddingDimensions: number;
-	readonly extractionProvider: "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+	readonly extractionProvider: "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 	readonly extractionModel: string;
 	readonly searchBalance: number;
 	readonly searchTopK: number;
