@@ -1030,7 +1030,7 @@ Extraction safety note:
 
 ```yaml
 extraction:
-  provider: ollama               # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
+  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
   model: qwen3.5:4b
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
@@ -1045,7 +1045,7 @@ extraction:
 
 synthesis:
   enabled: true
-  provider: ollama               # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
   model: qwen3:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model

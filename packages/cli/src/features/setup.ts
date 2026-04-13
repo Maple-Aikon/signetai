@@ -637,12 +637,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,
 			},
 			{
-				value: "codex",
-				name: `Codex (GPT Mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
-			},
-			{
 				value: "llama-cpp",
 				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
+			},
+			{
+				value: "codex",
+				name: `Codex (GPT Mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
 			},
 			{
 				value: "ollama",
