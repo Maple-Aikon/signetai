@@ -421,19 +421,16 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	if (requestedLimit !== null) {
 		hasMore = rows.length > requestedLimit;
-		if (rawRows.length !== rows.length) {
-			const allRaw = db
-				.prepare(`${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause}`)
-				.all(...params) as Record<string, unknown>[];
-			effectiveTotal = allRaw.map(toEmbeddingRow).filter((r): r is EmbeddingRow => r !== null).length;
-			if (!hasMore) {
-				hasMore = offset + trimmedRows.length < effectiveTotal;
-			}
-		} else {
-			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
-				| { count?: number }
-				| undefined;
-			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
+			| { count?: number }
+			| undefined;
+		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+
+		if (rawRows.length !== rows.length && !hasMore) {
+			const countSql = `SELECT e.vector ${EMBEDDINGS_FROM_SQL}${clause}`;
+			const allVectors = db.prepare(countSql).all(...params) as { vector: unknown }[];
+			effectiveTotal = allVectors.filter((r) => isBlob(r.vector)).length;
+			hasMore = offset + trimmedRows.length < effectiveTotal;
 		}
 	} else {
 		effectiveTotal = rows.length + offset;

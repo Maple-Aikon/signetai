@@ -12,6 +12,8 @@ import { getDbAccessor } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
+import { escapeLike } from "./sql-utils";
+import { FTS_STOP } from "./pipeline/stop-words";
 import { constructContextBlocks } from "./pipeline/context-construction";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
 import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
@@ -19,8 +21,6 @@ import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
-import { escapeLike } from "./sql-utils";
-import { FTS_STOP } from "./pipeline/stop-words";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
