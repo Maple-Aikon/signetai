@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-13
+- Bug fixes: enable Signet pipeline through GitHub Copilot providers.
+
 ### 2026-04-12
 - Bug fixes: emit valid Codex hooks.json schema; gate dependency synthesis on extraction progress; expose pinned param in memory_store and memory_modify.
 - Docs: add Ostico as contributor; align generated site metadata.
@@ -29,10 +32,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: harden transcript capture and summary inputs.
 - Refactoring: extract routes from daemon.ts into separate modules.
 
-### 2026-04-06
-- Features: add Hermes Agent memory provider integration; OpenClaw adapter request normalization.
-
 ## Release Ledger
+
+## [0.98.15] - 2026-04-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.14..v0.98.15`.
+
+### Bug Fixes
+
+- **daemon**: enable Signet pipeline through GitHub Copilot providers (#498)
 
 ## [0.98.14] - 2026-04-12
 
