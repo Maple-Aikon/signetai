@@ -130,6 +130,10 @@ describe("handleUserPromptSubmit observability", () => {
 		);
 
 		expect(result.engine).toBeUndefined();
+		expect(result.inject).toContain("## Memory Check");
+		expect(result.inject).toContain("No strong automatic memory match was injected");
+		expect(result.inject).toContain("run 1-3 targeted Signet recalls before executing commands");
+		expect(result.inject).toContain("save it with /remember or memory_store");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
 		expect(submitCalls).toHaveLength(1);
 		const payload = submitCalls[0]?.[2];
@@ -163,9 +167,11 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(payload?.engine).toBe("temporal-fallback");
 		expect(payload?.memoryCount).toBe(1);
 		expect(searchTranscriptFallbackMock).not.toHaveBeenCalled();
+		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("## Relevant Memory");
 		expect(result.inject).toContain("[thread node-1]");
-		expect(result.inject).toContain("if you need deeper history, use /recall or memory_search");
+		expect(result.inject).toContain("Use the memories below as starting context before acting");
+		expect(result.inject).toContain("run 1-3 targeted recalls with /recall or memory_search");
 		expect(result.inject).not.toContain("[signet:recall");
 	});
 
@@ -194,6 +200,7 @@ describe("handleUserPromptSubmit observability", () => {
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("transcript-fallback");
 		expect(payload?.memoryCount).toBe(1);
+		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("## Relevant Memory");
 		expect(result.inject).toContain("[transcript session-2]");
 		expect(result.inject).toContain("save it with /remember or memory_store");
@@ -229,9 +236,11 @@ describe("handleUserPromptSubmit observability", () => {
 
 		expect(result.engine).toBe("hybrid");
 		expect(result.memoryCount).toBe(2);
+		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("## Relevant Memory");
 		expect(result.inject).toContain("[memory] prompt submit observability now logs fallback engine transitions");
-		expect(result.inject).toContain("if you need deeper history, use /recall or memory_search");
+		expect(result.inject).toContain("Use the memories below as starting context before acting");
+		expect(result.inject).toContain("run 1-3 targeted recalls with /recall or memory_search");
 		expect(result.inject).not.toContain("[signet:recall");
 	});
 
@@ -269,6 +278,7 @@ describe("handleUserPromptSubmit observability", () => {
 
 			expect(result.engine).toBe("hybrid");
 			expect(result.memoryCount).toBe(1);
+			expect(result.inject).toContain("## Memory Check");
 			expect(result.inject).toContain("## Relevant Memory");
 			expect(result.inject).toContain("i am so proud of you");
 			expect(result.inject).not.toContain("workspace migration checklist");
@@ -300,10 +310,34 @@ describe("handleUserPromptSubmit observability", () => {
 
 		expect(result.memoryCount).toBe(0);
 		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).toContain("## Memory Check");
+		expect(result.inject).toContain("No strong automatic memory match was injected");
+		expect(result.inject).toContain("save it with /remember or memory_store");
 		expect(result.inject).not.toContain("[signet:recall");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
 		expect(submitCalls).toHaveLength(1);
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("low-confidence");
+	});
+
+	it("returns Memory Check guidance when hybrid recall fails", async () => {
+		hybridRecallMock.mockRejectedValueOnce(new Error("synthetic recall failure"));
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "show memory failure behavior",
+				sessionKey: "session-recall-failure",
+			},
+			makeDeps(),
+		);
+
+		expect(result.memoryCount).toBe(0);
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).toContain("## Memory Check");
+		expect(result.inject).toContain("No strong automatic memory match was injected");
+		expect(result.inject).toContain("run 1-3 targeted Signet recalls before executing commands");
+		expect(result.inject).toContain("save it with /remember or memory_store");
+		expect(errorMock).toHaveBeenCalledTimes(1);
 	});
 });
