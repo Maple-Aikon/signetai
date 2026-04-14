@@ -387,7 +387,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 interface ProjectionRowsResult {
 	readonly rows: EmbeddingRow[];
-	/** Approximate total from offset arithmetic when no discards; full COUNT used when rows are discarded. */
+	/** Stable DB COUNT using typeof(e.vector)='blob' for dashboard display; over-fetch-by-1 sentinel for hasMore. */
 	readonly total: number;
 	readonly offset: number;
 	readonly limit: number;
@@ -422,17 +422,14 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	if (requestedLimit !== null) {
 		hasMore = rows.length > requestedLimit;
 
-		if (rawRows.length !== rows.length) {
-			const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
-			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
-				| { count?: number }
-				| undefined;
-			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
-			if (!hasMore) {
-				hasMore = offset + trimmedRows.length < effectiveTotal;
-			}
-		} else {
-			effectiveTotal = offset + rows.length - (hasMore ? 1 : 0);
+		const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
+		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
+			| { count?: number }
+			| undefined;
+		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+
+		if (rawRows.length !== rows.length && !hasMore) {
+			hasMore = offset + trimmedRows.length < effectiveTotal;
 		}
 	} else {
 		effectiveTotal = rows.length + offset;
