@@ -350,8 +350,8 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 	const tagValues = normalizeFilterValues(filters.tags);
 	for (const tag of tagValues) {
-		parts.push("m.tags LIKE ?");
-		params.push(`%${tag}%`);
+		parts.push("m.tags LIKE ? ESCAPE '\\'");
+		params.push(`%${escapeLike(tag)}%`);
 	}
 
 	if (typeof filters.pinned === "boolean") {

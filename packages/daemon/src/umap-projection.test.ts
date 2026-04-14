@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,9 +33,12 @@ describe("hasMore pagination regression", () => {
 			const fakeBlob = new Uint8Array(8);
 			const now = new Date().toISOString();
 			for (let i = 0; i < 5; i++) {
-				db.prepare(
-					"INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
-				).run(`mem-${i}`, `memory ${i}`, now, now);
+				db.prepare("INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+					`mem-${i}`,
+					`memory ${i}`,
+					now,
+					now,
+				);
 				db.prepare(
 					"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, 4, ?)",
 				).run(`mem-${i}`, fakeBlob, now);
@@ -63,9 +66,13 @@ describe("hasMore pagination regression", () => {
 		try {
 			const fakeBlob = new Uint8Array(8);
 			const now = new Date().toISOString();
-			db.prepare(
-				"INSERT INTO memories (id, content, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-			).run("mem-percent", "contains percent sign", "fact", now, now);
+			db.prepare("INSERT INTO memories (id, content, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
+				"mem-percent",
+				"contains percent sign",
+				"fact",
+				now,
+				now,
+			);
 			db.prepare(
 				"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
 			).run("mem-percent", fakeBlob, 4, now);
@@ -73,6 +80,34 @@ describe("hasMore pagination regression", () => {
 			const result = computeProjectionForQuery(db, 2, {
 				limit: 10,
 				filters: { query: "%" },
+			});
+			expect(result.count).toBe(0);
+			expect(result.total).toBe(0);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes LIKE metacharacters in projection tag filters", () => {
+		const { db, dir } = setupDb();
+		try {
+			const fakeBlob = new Uint8Array(8);
+			const now = new Date().toISOString();
+			db.prepare("INSERT INTO memories (id, content, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
+				"mem-tagged",
+				"tagged memory",
+				"work,urgent",
+				now,
+				now,
+			);
+			db.prepare(
+				"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
+			).run("mem-tagged", fakeBlob, 4, now);
+
+			const result = computeProjectionForQuery(db, 2, {
+				limit: 10,
+				filters: { tags: ["%"] },
 			});
 			expect(result.count).toBe(0);
 			expect(result.total).toBe(0);
@@ -90,9 +125,12 @@ describe("hasMore pagination regression", () => {
 
 			for (let i = 0; i < 6; i++) {
 				const t = new Date(baseTime.getTime() + i * 1000).toISOString();
-				db.prepare(
-					"INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
-				).run(`mem-${i}`, `memory ${i}`, t, t);
+				db.prepare("INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+					`mem-${i}`,
+					`memory ${i}`,
+					t,
+					t,
+				);
 			}
 
 			for (let i = 0; i < 6; i++) {
