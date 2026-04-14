@@ -241,15 +241,22 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 
 export const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"] as const;
 
+function isRollbackEligible(candidate: ProviderTransitionAuditEntry, requestedRole?: ProviderSafetyRole): boolean {
+	return (
+		!!candidate.from &&
+		!candidate.rolledBack &&
+		candidate.source !== "api/config/provider-safety/rollback" &&
+		(!requestedRole || candidate.role === requestedRole)
+	);
+}
+
 export function resolveRollbackFilePath(
 	agentsDir: string,
 	requestedRole?: ProviderSafetyRole,
 ): { filePath: string; transitions: ProviderTransitionAuditEntry[] } {
 	const transitions = readProviderTransitions(agentsDir);
 	const reversed = [...transitions].reverse();
-	const match = reversed.find(
-		(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),
-	);
+	const match = reversed.find((c) => isRollbackEligible(c, requestedRole));
 	if (match) {
 		const fromSource = CONFIG_FILE_CANDIDATES.find((c) => match.source.toLowerCase().endsWith(c.toLowerCase()));
 		if (fromSource) {
@@ -285,13 +292,7 @@ export function executeProviderRollback(
 } {
 	const transitions = [...(priorTransitions ?? readProviderTransitions(agentsDir))];
 	const reversed = [...transitions].reverse();
-	const matchIdx = reversed.findIndex(
-		(candidate) =>
-			candidate.from &&
-			!candidate.rolledBack &&
-			candidate.source !== "api/config/provider-safety/rollback" &&
-			(!requestedRole || candidate.role === requestedRole),
-	);
+	const matchIdx = reversed.findIndex((c) => isRollbackEligible(c, requestedRole));
 	if (matchIdx < 0) throw new RollbackError("No provider transition with rollback target found", 404);
 	const entry = reversed[matchIdx];
 	const originalIndex = transitions.length - 1 - matchIdx;
