@@ -657,12 +657,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 		const choices = [
 			{
-				value: "claude-code",
-				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,
-			},
-			{
 				value: "llama-cpp",
 				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
+			},
+			{
+				value: "claude-code",
+				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,
 			},
 			{
 				value: "codex",
