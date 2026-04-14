@@ -216,6 +216,9 @@ async function queryLlamaCppModels(
 			const id = (item as { id?: unknown }).id;
 			return typeof id === "string" && id.trim().length > 0 ? [id.trim()] : [];
 		});
+		if (models.length === 0) {
+			return { available: false, models: [], error: "llama.cpp server reachable but no models loaded" };
+		}
 		return { available: true, models };
 	} catch (err) {
 		return { available: false, models: [], error: readErr(err) };

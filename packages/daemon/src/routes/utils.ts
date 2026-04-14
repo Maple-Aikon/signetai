@@ -925,6 +925,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 						status.available = true;
 						status.dimensions = 768;
 						status.error = "Native unavailable — using llama.cpp fallback";
+						setNativeFallbackProvider("llama-cpp");
 						fallbackUsed = true;
 						logger.info("embedding", "llama.cpp fallback available — will use llama.cpp for embeddings");
 					}
