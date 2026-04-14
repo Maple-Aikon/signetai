@@ -285,7 +285,11 @@ export function executeProviderRollback(
 	const transitions = [...(priorTransitions ?? readProviderTransitions(agentsDir))];
 	const reversed = [...transitions].reverse();
 	const matchIdx = reversed.findIndex(
-		(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),
+		(candidate) =>
+			candidate.from &&
+			!candidate.rolledBack &&
+			candidate.source !== "api/config/provider-safety/rollback" &&
+			(!requestedRole || candidate.role === requestedRole),
 	);
 	if (matchIdx < 0) throw new RollbackError("No provider transition with rollback target found", 404);
 	const entry = reversed[matchIdx];

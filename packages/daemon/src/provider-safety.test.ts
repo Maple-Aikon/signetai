@@ -392,4 +392,30 @@ describe("provider safety", () => {
 		const updatedPipeline = (updatedRoot.memory as Record<string, unknown>).pipelineV2 as Record<string, unknown>;
 		expect(updatedPipeline.extractionProvider).toBe("ollama");
 	});
+
+	it("skips rollback-sourced entries when selecting rollback target", () => {
+		const agentsDir = makeTempDir();
+		const configDir = makeTempDir();
+
+		writeFileSync(
+			join(configDir, "agent.yaml"),
+			"memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n",
+			"utf-8",
+		);
+
+		const firstTransition = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n",
+			"memory:\n  pipelineV2:\n    extraction:\n      provider: claude-code\n",
+			"test",
+		);
+		expect(firstTransition).toHaveLength(1);
+		appendProviderTransitions(agentsDir, firstTransition);
+
+		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		expect(result.success).toBe(true);
+
+		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
+			/No provider transition with rollback target found/,
+		);
+	});
 });
