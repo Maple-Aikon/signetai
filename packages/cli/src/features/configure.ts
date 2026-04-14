@@ -346,6 +346,8 @@ async function configureEmbedding(yaml: string): Promise<string> {
 		});
 		model = selected;
 		dims = selected === "text-embedding-3-large" ? 3072 : 1536;
+	} else {
+		console.log(`  Warning: unhandled embedding provider '${provider}', using defaults.`);
 	}
 
 	if (yaml.includes("embedding:")) {
