@@ -120,8 +120,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const hasCodexCommand = hasCommand("codex");
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
+	const llamaCppServerAvailable = await hasLlamaCppServer();
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
-	if (await hasLlamaCppServer()) availableToolExtractionProviders.push("llama-cpp");
+	if (llamaCppServerAvailable) availableToolExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
 	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
@@ -565,7 +566,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	} else if (embeddingProvider === "llama-cpp") {
 		embeddingModel = "nomic-embed-text";
 		embeddingDimensions = 768;
-		if (!(await hasLlamaCppServer())) {
+		if (!llamaCppServerAvailable) {
 			console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
 			console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
 		}
