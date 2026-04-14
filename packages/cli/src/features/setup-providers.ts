@@ -23,6 +23,11 @@ export async function preflightLocalEmbedding(model: string): Promise<{
 	model?: string;
 	dimensions?: number;
 }> {
+	const llamaCpp = await queryLlamaCppModels();
+	if (llamaCpp.available) {
+		return { provider: "llama-cpp", model, dimensions: getEmbeddingDimensions(model) };
+	}
+
 	while (true) {
 		if (!hasCommand("ollama")) {
 			console.log(chalk.yellow("  Ollama is not installed."));
@@ -194,6 +199,32 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 	console.log(chalk.yellow("  Automated install is not available on this platform."));
 	printOllamaInstallInstructions();
 	return false;
+}
+
+async function queryLlamaCppModels(
+	baseUrl = "http://localhost:8080",
+): Promise<{ available: boolean; models: string[]; error?: string }> {
+	try {
+		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/models`, {
+			signal: AbortSignal.timeout(5000),
+		});
+		if (!response.ok) {
+			return { available: false, models: [], error: `llama.cpp returned ${response.status}` };
+		}
+
+		const data = (await response.json()) as { data?: Array<{ id?: string }> };
+		const models = (data.data ?? [])
+			.map((model) => model.id?.trim())
+			.filter((model): model is string => Boolean(model));
+		return { available: true, models };
+	} catch (err) {
+		return { available: false, models: [], error: readErr(err) };
+	}
+}
+
+export async function hasLlamaCppServer(): Promise<boolean> {
+	const result = await queryLlamaCppModels();
+	return result.available;
 }
 
 async function queryOllamaModels(

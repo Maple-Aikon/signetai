@@ -296,7 +296,9 @@ async function configureEmbedding(yaml: string): Promise<string> {
 	const provider = await select({
 		message: "Embedding provider:",
 		choices: [
+			{ value: "llama-cpp", name: "llama.cpp (local, recommended)" },
 			{ value: "ollama", name: "Ollama (local)" },
+			{ value: "native", name: "Built-in" },
 			{ value: "openai", name: "OpenAI API" },
 			{ value: "none", name: "Disable embeddings" },
 		],
@@ -320,7 +322,7 @@ async function configureEmbedding(yaml: string): Promise<string> {
 		});
 		model = selected;
 		dims = selected === "all-minilm" ? 384 : selected === "mxbai-embed-large" ? 1024 : 768;
-	} else {
+	} else if (provider === "openai") {
 		const selected = await select({
 			message: "Model:",
 			choices: [

@@ -11,7 +11,12 @@ import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
-import { hasCommand, preflightLocalEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
+import {
+	hasCommand,
+	hasLlamaCppServer,
+	preflightLocalEmbedding,
+	promptOpenAIEmbeddingModel,
+} from "./setup-providers.js";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
 	type DeploymentTypeChoice,
@@ -116,6 +121,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
+	if (await hasLlamaCppServer()) availableToolExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
 	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
@@ -541,7 +547,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		embeddingProvider = await select({
 			message: "How should memories be embedded for search?",
 			choices: [
-				{ value: "native", name: "Built-in (recommended, no setup required)" },
+				{ value: "llama-cpp", name: "llama.cpp (local, recommended — nomic-embed-text)" },
+				{ value: "native", name: "Built-in (no setup required)" },
 				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
 				{ value: "openai", name: "OpenAI API" },
 				{ value: "none", name: "Skip embeddings for now" },

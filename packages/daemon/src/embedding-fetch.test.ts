@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { fetchEmbedding, requiresOpenAiApiKey, setNativeFallbackToOllama } from "./embedding-fetch";
+import { fetchEmbedding, requiresOpenAiApiKey, setNativeFallbackProvider } from "./embedding-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -20,7 +20,7 @@ describe("requiresOpenAiApiKey", () => {
 describe("fetchEmbedding", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
-		setNativeFallbackToOllama(false);
+		setNativeFallbackProvider(null);
 		delete process.env.OPENAI_API_KEY;
 	});
 

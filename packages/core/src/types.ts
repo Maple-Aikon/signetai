@@ -85,7 +85,7 @@ export interface AgentManifest {
 
 	// Embedding configuration
 	embedding?: {
-		provider: "native" | "ollama" | "openai";
+		provider: "native" | "llama-cpp" | "ollama" | "openai";
 		model: string;
 		dimensions: number;
 		base_url?: string;
@@ -151,7 +151,7 @@ export interface AgentConfig {
 	dbPath?: string;
 	autoSync?: boolean;
 	embeddings?: {
-		provider: "native" | "openai" | "ollama" | "local";
+		provider: "native" | "llama-cpp" | "ollama" | "openai";
 		model?: string;
 		dimensions?: number;
 	};
@@ -205,7 +205,16 @@ export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
 };
 
 export interface PipelineExtractionConfig {
-	readonly provider: "none" | "llama-cpp" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
+	readonly provider:
+		| "none"
+		| "llama-cpp"
+		| "ollama"
+		| "claude-code"
+		| "opencode"
+		| "codex"
+		| "anthropic"
+		| "openrouter"
+		| "command";
 	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
@@ -387,7 +396,15 @@ export interface PipelineEmbeddingTrackerConfig {
 
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
-	readonly provider: "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter";
+	readonly provider:
+		| "none"
+		| "llama-cpp"
+		| "ollama"
+		| "claude-code"
+		| "codex"
+		| "opencode"
+		| "anthropic"
+		| "openrouter";
 	readonly model: string;
 	readonly endpoint?: string;
 	readonly timeout: number;

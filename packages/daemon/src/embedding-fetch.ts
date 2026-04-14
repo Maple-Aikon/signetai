@@ -1,6 +1,6 @@
-import type { EmbeddingConfig } from "./memory-config";
-import { DEFAULT_LLAMACPP_BASE_URL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OLLAMA_BASE_URL } from "./memory-config";
 import { logger } from "./logger";
+import type { EmbeddingConfig } from "./memory-config";
+import { DEFAULT_LLAMACPP_BASE_URL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OPENAI_BASE_URL } from "./memory-config";
 import { getSecret } from "./secrets.js";
 
 export function resolveOllamaUrl(): string {
@@ -16,10 +16,10 @@ export function resolveOllamaUrl(): string {
 }
 
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
-let nativeFallbackToOllama = false;
+let nativeFallbackProvider: "llama-cpp" | "ollama" | null = null;
 
-export function setNativeFallbackToOllama(value: boolean): void {
-	nativeFallbackToOllama = value;
+export function setNativeFallbackProvider(provider: "llama-cpp" | "ollama" | null): void {
+	nativeFallbackProvider = provider;
 }
 
 async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string): Promise<number[] | null> {
@@ -75,8 +75,21 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "native") {
-			if (nativeFallbackToOllama) {
+			if (nativeFallbackProvider === "ollama") {
 				return await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
+			}
+			if (nativeFallbackProvider === "llama-cpp") {
+				const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ input: text, model: "nomic-embed-text" }),
+					signal: AbortSignal.timeout(5000),
+				});
+				if (llamaCppRes.ok) {
+					const data = (await llamaCppRes.json()) as { embedding?: number[] };
+					if (data.embedding) return data.embedding;
+				}
+				return null;
 			}
 			try {
 				if (!cachedNativeEmbed) {
@@ -87,14 +100,35 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 			} catch (nativeErr) {
 				logger.warn(
 					"embedding",
-					`Native embedding failed, attempting ollama fallback: ${
+					`Native embedding failed, attempting local fallback: ${
 						nativeErr instanceof Error ? nativeErr.message : String(nativeErr)
 					}`,
 				);
 				try {
+					const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ input: text, model: "nomic-embed-text" }),
+						signal: AbortSignal.timeout(5000),
+					});
+					if (llamaCppRes.ok) {
+						nativeFallbackProvider = "llama-cpp";
+						const data = (await llamaCppRes.json()) as { embedding?: number[] };
+						if (data.embedding) {
+							logger.info(
+								"embedding",
+								"llama.cpp fallback succeeded — will use llama.cpp for remaining embeddings this session",
+							);
+							return data.embedding;
+						}
+					}
+				} catch {
+					logger.warn("embedding", "llama.cpp fallback not reachable");
+				}
+				try {
 					const result = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
 					if (result !== null) {
-						nativeFallbackToOllama = true;
+						nativeFallbackProvider = "ollama";
 						logger.info(
 							"embedding",
 							"Ollama fallback succeeded — will use ollama for remaining embeddings this session",
