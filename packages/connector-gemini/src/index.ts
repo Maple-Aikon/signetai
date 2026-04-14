@@ -115,6 +115,12 @@ export class GeminiConnector extends BaseConnector {
 		this.removeMcpServer(geminiPath);
 		this.removeContextFileNameConfig(geminiPath);
 
+		const skillsLink = join(geminiPath, "skills");
+		if (existsSync(skillsLink)) {
+			rmSync(skillsLink, { recursive: true, force: true });
+			filesRemoved.push(skillsLink);
+		}
+
 		return { filesRemoved };
 	}
 
@@ -142,8 +148,7 @@ export class GeminiConnector extends BaseConnector {
 	}
 
 	static isHarnessInstalled(): boolean {
-		const geminiPath = join(homedir(), ".gemini");
-		return existsSync(join(geminiPath, "settings.json"));
+		return existsSync(join(homedir(), ".gemini"));
 	}
 
 	private async generateGeminiMd(basePath: string): Promise<string | null> {
@@ -242,18 +247,17 @@ export class GeminiConnector extends BaseConnector {
 
 		for (const [event, definition] of Object.entries(signetHooks)) {
 			const existing = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-			const filtered = existing.filter((group: unknown) => {
-				if (!isJsonObject(group)) return true;
+			const cleaned = existing.map((group: unknown) => {
+				if (!isJsonObject(group)) return group;
 				const groupHooks = (group as JsonObject).hooks;
-				if (!Array.isArray(groupHooks)) return true;
-				return !(groupHooks as unknown[]).some(
+				if (!Array.isArray(groupHooks)) return group;
+				const remaining = (groupHooks as unknown[]).filter(
 					(h: unknown) =>
-						isJsonObject(h) &&
-						typeof (h as JsonObject).name === "string" &&
-						((h as JsonObject).name as string).startsWith("signet-"),
+						!(isJsonObject(h) && typeof (h as JsonObject).name === "string" && ((h as JsonObject).name as string).startsWith("signet-")),
 				);
+				return { ...(group as JsonObject), hooks: remaining };
 			});
-			hooks[event] = [...filtered, ...definition];
+			hooks[event] = [...cleaned, ...definition];
 		}
 
 		config.hooks = hooks;
@@ -284,22 +288,28 @@ export class GeminiConnector extends BaseConnector {
 
 		for (const event of Object.keys(hooks)) {
 			const entries = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-			const filtered = entries.filter((group: unknown) => {
-				if (!isJsonObject(group)) return true;
-				const groupHooks = (group as JsonObject).hooks;
-				if (!Array.isArray(groupHooks)) return true;
-				return !(groupHooks as unknown[]).some(
-					(h: unknown) =>
-						isJsonObject(h) &&
-						typeof (h as JsonObject).name === "string" &&
-						((h as JsonObject).name as string).startsWith("signet-"),
-				);
-			});
-			if (filtered.length !== entries.length) {
-				if (filtered.length === 0) {
+			const cleaned = entries
+				.map((group: unknown) => {
+					if (!isJsonObject(group)) return group;
+					const groupHooks = (group as JsonObject).hooks;
+					if (!Array.isArray(groupHooks)) return group;
+					const remaining = (groupHooks as unknown[]).filter(
+						(h: unknown) =>
+							!(isJsonObject(h) && typeof (h as JsonObject).name === "string" && ((h as JsonObject).name as string).startsWith("signet-")),
+					);
+					return { ...(group as JsonObject), hooks: remaining };
+				})
+				.filter((group: unknown) => {
+					if (!isJsonObject(group)) return true;
+					const groupHooks = (group as JsonObject).hooks;
+					if (!Array.isArray(groupHooks)) return true;
+					return groupHooks.length > 0;
+				});
+			if (cleaned.length !== entries.length || cleaned.some((g, i) => g !== entries[i])) {
+				if (cleaned.length === 0) {
 					delete hooks[event];
 				} else {
-					hooks[event] = filtered;
+					hooks[event] = cleaned;
 				}
 				modified = true;
 			}

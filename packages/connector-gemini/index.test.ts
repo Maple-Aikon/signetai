@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GeminiConnector } from "./src/index.js";
@@ -87,5 +88,62 @@ describe("GeminiConnector.uninstall", () => {
 		const result = await makeConnector().uninstall();
 		expect(result.filesRemoved).toHaveLength(0);
 		expect(existsSync(join(geminiDir, "GEMINI.md"))).toBe(true);
+	});
+
+	it("removes skills symlink on uninstall", async () => {
+		writeIdentity(tmpRoot);
+		const skillsDir = join(tmpRoot, "skills");
+		mkdirSync(skillsDir, { recursive: true });
+		writeFileSync(join(skillsDir, "test.md"), "# test", "utf-8");
+
+		const connector = makeConnector();
+		await connector.install(tmpRoot);
+		expect(existsSync(join(geminiDir, "skills"))).toBe(true);
+
+		const result = await connector.uninstall();
+		expect(result.filesRemoved.some((f) => f.endsWith("skills"))).toBe(true);
+		expect(existsSync(join(geminiDir, "skills"))).toBe(false);
+	});
+
+	it("preserves non-signet hooks within the same group", async () => {
+		writeIdentity(tmpRoot);
+		const settings = {
+			hooks: {
+				SessionStart: [
+					{
+						matcher: "*",
+						hooks: [
+							{ type: "command", command: "echo hello", name: "user-hook" },
+						],
+					},
+				],
+			},
+		};
+		writeFileSync(join(geminiDir, "settings.json"), JSON.stringify(settings), "utf-8");
+
+		const connector = makeConnector();
+		await connector.install(tmpRoot);
+
+		const afterInstall = JSON.parse(readFileSync(join(geminiDir, "settings.json"), "utf-8"));
+		const sessionStart = afterInstall.hooks.SessionStart as Array<Record<string, unknown>>;
+		const userGroup = sessionStart.find((g) => {
+			const hooks = g.hooks as Array<Record<string, string>>;
+			return hooks?.some((h) => h.name === "user-hook");
+		});
+		expect(userGroup).toBeDefined();
+
+		await connector.uninstall();
+
+		const afterUninstall = JSON.parse(readFileSync(join(geminiDir, "settings.json"), "utf-8"));
+		const remaining = afterUninstall.hooks?.SessionStart as Array<Record<string, unknown>> | undefined;
+		if (remaining) {
+			for (const group of remaining) {
+				const hooks = group.hooks as Array<Record<string, string>>;
+				for (const h of hooks) {
+					expect(h.name).not.toStartWith("signet-");
+				}
+				expect(hooks.some((h) => h.name === "user-hook")).toBe(true);
+			}
+		}
 	});
 });
