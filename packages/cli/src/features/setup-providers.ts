@@ -211,14 +211,11 @@ async function queryLlamaCppModels(
 		if (typeof raw !== "object" || raw === null || !("data" in raw) || !Array.isArray(raw.data)) {
 			return { available: false, models: [], error: "llama.cpp returned unexpected response shape" };
 		}
-		const models = (raw.data as unknown[]).flatMap((item) =>
-			typeof item === "object" &&
-			item !== null &&
-			"id" in item &&
-			typeof (item as Record<string, unknown>).id === "string"
-				? [(item as { id: string }).id.trim()]
-				: [],
-		);
+		const models = raw.data.flatMap((item: unknown): string[] => {
+			if (typeof item !== "object" || item === null || !("id" in item)) return [];
+			const id = (item as { id?: unknown }).id;
+			return typeof id === "string" && id.trim().length > 0 ? [id.trim()] : [];
+		});
 		return { available: true, models };
 	} catch (err) {
 		return { available: false, models: [], error: readErr(err) };
