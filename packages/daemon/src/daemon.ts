@@ -42,7 +42,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert } from "./db-helpers";
-import { fetchEmbedding, setNativeFallbackProvider } from "./embedding-fetch";
+import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";

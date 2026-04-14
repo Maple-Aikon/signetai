@@ -562,6 +562,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (embeddingProvider === "native") {
 		embeddingModel = "nomic-embed-text-v1.5";
 		embeddingDimensions = 768;
+	} else if (embeddingProvider === "llama-cpp") {
+		embeddingModel = "nomic-embed-text";
+		embeddingDimensions = 768;
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =

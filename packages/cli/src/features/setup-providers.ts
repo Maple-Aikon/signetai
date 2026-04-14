@@ -25,6 +25,7 @@ export async function preflightLocalEmbedding(model: string): Promise<{
 }> {
 	const llamaCpp = await queryLlamaCppModels();
 	if (llamaCpp.available) {
+		console.log(chalk.green("  llama.cpp server detected — using llama.cpp for embeddings."));
 		return { provider: "llama-cpp", model, dimensions: getEmbeddingDimensions(model) };
 	}
 
@@ -206,7 +207,7 @@ async function queryLlamaCppModels(
 ): Promise<{ available: boolean; models: string[]; error?: string }> {
 	try {
 		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/models`, {
-			signal: AbortSignal.timeout(5000),
+			signal: AbortSignal.timeout(2000),
 		});
 		if (!response.ok) {
 			return { available: false, models: [], error: `llama.cpp returned ${response.status}` };
