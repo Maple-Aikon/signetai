@@ -307,24 +307,10 @@ export function executeProviderRollback(
 	}
 
 	const beforeContent = readFileSync(filePath, "utf-8");
-	const previous = readString(entry.from);
-	const isNoOp =
-		previous !== undefined &&
-		(() => {
-			const root = asRecord(parse(beforeContent)) ?? {};
-			const memory = asRecord(root.memory);
-			const pipeline = memory ? asRecord(memory.pipelineV2) : undefined;
-			if (!pipeline) return false;
-			const roleKey = entry.role === "extraction" ? "extraction" : "synthesis";
-			const topLevelKey = entry.role === "extraction" ? "extractionProvider" : null;
-			const currentProvider =
-				(topLevelKey ? String(pipeline[topLevelKey] ?? "") : "") ||
-				(() => {
-					const block = asRecord(pipeline[roleKey]);
-					return block ? String(block.provider ?? "") : "";
-				})();
-			return currentProvider === previous;
-		})();
+	const nextContent = applyProviderRollback(beforeContent, entry);
+	const beforeRoot = asRecord(parse(beforeContent)) ?? {};
+	const nextRoot = asRecord(parse(nextContent)) ?? {};
+	const isNoOp = JSON.stringify(beforeRoot) === JSON.stringify(nextRoot);
 	if (isNoOp) {
 		transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
 		const merged = [...transitions].slice(-100);
@@ -339,7 +325,6 @@ export function executeProviderRollback(
 			isRetry: true,
 		};
 	}
-	const nextContent = applyProviderRollback(beforeContent, entry);
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);
 
@@ -354,9 +339,10 @@ export function executeProviderRollback(
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
 	// Config-first: if audit write fails after config, the entry is
-	// unconsumed. On retry, the semantic no-op guard above detects
-	// the provider already matches and marks the entry consumed
-	// without rewriting the config.
+	// unconsumed. On retry, applyProviderRollback clears stale fields
+	// idempotently and JSON.stringify comparison detects no semantic
+	// change, so the no-op guard marks the entry consumed without
+	// rewriting the config.
 	atomicWrite(filePath, nextContent, ".rollback-");
 	try {
 		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
