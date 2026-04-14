@@ -387,7 +387,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 interface ProjectionRowsResult {
 	readonly rows: EmbeddingRow[];
-	/** DB COUNT(*) used when all fetched rows pass JS-side validation; full re-scan used when any row is discarded. */
+	/** Approximate total from offset arithmetic when no discards; full COUNT used when rows are discarded. */
 	readonly total: number;
 	readonly offset: number;
 	readonly limit: number;
@@ -422,17 +422,17 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	if (requestedLimit !== null) {
 		hasMore = rows.length > requestedLimit;
 
-		const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
-		// toEmbeddingRow also guards id/content/created_at as non-null strings,
-		// but those are NOT NULL TEXT columns in the schema so SQLite always
-		// returns strings — blob is the only practical discard reason.
-		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
-			| { count?: number }
-			| undefined;
-		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
-
-		if (rawRows.length !== rows.length && !hasMore) {
-			hasMore = offset + trimmedRows.length < effectiveTotal;
+		if (rawRows.length !== rows.length) {
+			const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
+			const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
+				| { count?: number }
+				| undefined;
+			effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+			if (!hasMore) {
+				hasMore = offset + trimmedRows.length < effectiveTotal;
+			}
+		} else {
+			effectiveTotal = offset + rows.length - (hasMore ? 1 : 0);
 		}
 	} else {
 		effectiveTotal = rows.length + offset;
