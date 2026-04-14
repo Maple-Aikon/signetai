@@ -129,7 +129,7 @@ export class GeminiConnector extends BaseConnector {
 						if (!target.startsWith("/")) {
 							target = join(skillsDir, target);
 						}
-						if (target.startsWith(signetSkillsSource)) {
+						if (target === signetSkillsSource || target.startsWith(signetSkillsSource + "/") || target.startsWith(signetSkillsSource + "\\")) {
 							unlinkSync(entryPath);
 							removedAny = true;
 						}

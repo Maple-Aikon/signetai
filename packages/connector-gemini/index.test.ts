@@ -131,6 +131,21 @@ describe("GeminiConnector.uninstall", () => {
 		expect(existsSync(join(geminiDir, "skills", "custom-skill"))).toBe(true);
 	});
 
+	it("preserves prefix-colliding symlink paths on uninstall", async () => {
+		writeIdentity(tmpRoot);
+		const skillsBackup = join(tmpRoot, "skills-backup");
+		mkdirSync(skillsBackup, { recursive: true });
+		writeFileSync(join(skillsBackup, "backup.md"), "# backup", "utf-8");
+
+		mkdirSync(join(geminiDir, "skills"), { recursive: true });
+		symlinkSync(skillsBackup, join(geminiDir, "skills", "backup"));
+
+		const connector = makeConnector();
+		const result = await connector.uninstall();
+		expect(result.filesRemoved.some((f) => f.endsWith("skills"))).toBe(false);
+		expect(existsSync(join(geminiDir, "skills", "backup"))).toBe(true);
+	});
+
 	it("preserves non-signet hooks within the same group", async () => {
 		writeIdentity(tmpRoot);
 		const settings = {
