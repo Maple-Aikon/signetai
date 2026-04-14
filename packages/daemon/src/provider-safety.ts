@@ -251,7 +251,7 @@ export function resolveRollbackFilePath(
 		(candidate) => candidate.from && !candidate.rolledBack && (!requestedRole || candidate.role === requestedRole),
 	);
 	if (match) {
-		const fromSource = CONFIG_FILE_CANDIDATES.find((c) => match.source.endsWith(c));
+		const fromSource = CONFIG_FILE_CANDIDATES.find((c) => match.source.toLowerCase().endsWith(c.toLowerCase()));
 		if (fromSource) {
 			const resolved = join(agentsDir, fromSource);
 			if (existsSync(resolved)) return { filePath: resolved, transitions };
