@@ -144,7 +144,11 @@ describe("provider safety", () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
-		writeFileSync(join(configDir, "agent.yaml"), "memory:\n  pipelineV2:\n    extractionProvider: anthropic\n", "utf-8");
+		writeFileSync(
+			join(configDir, "agent.yaml"),
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
+			"utf-8",
+		);
 
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
@@ -245,13 +249,7 @@ describe("provider safety", () => {
 		);
 
 		const entries = detectProviderTransitions(
-			[
-				"memory:",
-				"  pipelineV2:",
-				"    synthesis:",
-				"      provider: ollama",
-				"",
-			].join("\n"),
+			["memory:", "  pipelineV2:", "    synthesis:", "      provider: ollama", ""].join("\n"),
 			[
 				"memory:",
 				"  pipelineV2:",
@@ -321,7 +319,7 @@ describe("provider safety", () => {
 
 		writeFileSync(
 			join(configDir, "agent.yaml"),
-			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
 			"utf-8",
 		);
 
@@ -339,5 +337,27 @@ describe("provider safety", () => {
 
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored[0].rolledBack).toBe(true);
+	});
+
+	it("throws 400 on synthesis rollback when synthesis block absent", () => {
+		const agentsDir = makeTempDir();
+		const configDir = makeTempDir();
+
+		writeFileSync(join(configDir, "agent.yaml"), "memory:\n  pipelineV2:\n    extractionProvider: ollama\n", "utf-8");
+
+		const entries = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: claude-code\n",
+			"test",
+		);
+		expect(entries).toHaveLength(1);
+		appendProviderTransitions(agentsDir, entries);
+
+		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
+			/No synthesis configuration found/,
+		);
+
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored[0].rolledBack).toBeFalsy();
 	});
 });

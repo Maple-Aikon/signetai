@@ -312,6 +312,22 @@ export function executeProviderRollback(
 	const nextRoot = asRecord(parse(nextContent)) ?? {};
 	const isNoOp = JSON.stringify(beforeRoot) === JSON.stringify(nextRoot);
 	if (isNoOp) {
+		const previous = readString(entry.from);
+		const memory = asRecord(beforeRoot.memory);
+		const pipeline = memory ? asRecord(memory.pipelineV2) : undefined;
+		const roleKey = entry.role === "extraction" ? "extraction" : "synthesis";
+		const roleBlock = pipeline ? asRecord(pipeline[roleKey]) : undefined;
+		const topLevelProvider = entry.role === "extraction" && pipeline ? String(pipeline.extractionProvider ?? "") : null;
+		const blockProvider = roleBlock ? String(roleBlock.provider ?? "") : null;
+		const currentProvider = topLevelProvider ?? blockProvider;
+		if (currentProvider !== previous) {
+			throw new RollbackError(
+				currentProvider === null
+					? `No ${entry.role} configuration found to roll back`
+					: `Rollback target provider "${previous ?? ""}" does not match current "${currentProvider}"`,
+				400,
+			);
+		}
 		transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
 		const merged = [...transitions].slice(-100);
 		const auditPath = providerAuditPath(agentsDir);
