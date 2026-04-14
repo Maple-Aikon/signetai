@@ -20,7 +20,7 @@
  * ```
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
@@ -115,10 +115,27 @@ export class GeminiConnector extends BaseConnector {
 		this.removeMcpServer(geminiPath);
 		this.removeContextFileNameConfig(geminiPath);
 
-		const skillsLink = join(geminiPath, "skills");
-		if (existsSync(skillsLink)) {
-			rmSync(skillsLink, { recursive: true, force: true });
-			filesRemoved.push(skillsLink);
+		const skillsDir = join(geminiPath, "skills");
+		if (existsSync(skillsDir) && lstatSync(skillsDir).isDirectory()) {
+			let removedAny = false;
+			for (const entry of readdirSync(skillsDir)) {
+				const entryPath = join(skillsDir, entry);
+				try {
+					if (lstatSync(entryPath).isSymbolicLink()) {
+						unlinkSync(entryPath);
+						removedAny = true;
+					}
+				} catch {
+					// skip entries that can't be stat'd
+				}
+			}
+			if (removedAny) {
+				const remaining = readdirSync(skillsDir);
+				if (remaining.length === 0) {
+					rmSync(skillsDir, { recursive: true, force: true });
+				}
+				filesRemoved.push(skillsDir);
+			}
 		}
 
 		return { filesRemoved };
