@@ -548,8 +548,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		embeddingProvider = await select({
 			message: "How should memories be embedded for search?",
 			choices: [
-				{ value: "llama-cpp", name: "llama.cpp (local, recommended — nomic-embed-text)" },
-				{ value: "native", name: "Built-in (no setup required)" },
+				{ value: "native", name: "Built-in (recommended, no setup required)" },
+				{ value: "llama-cpp", name: "llama.cpp (local — nomic-embed-text)" },
 				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
 				{ value: "openai", name: "OpenAI API" },
 				{ value: "none", name: "Skip embeddings for now" },
