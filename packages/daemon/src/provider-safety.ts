@@ -253,10 +253,11 @@ export function resolveRollbackFilePath(
 	if (match) {
 		const fromSource = CONFIG_FILE_CANDIDATES.find((c) => match.source.toLowerCase().endsWith(c.toLowerCase()));
 		if (fromSource) {
-			const resolved = join(agentsDir, fromSource);
+			const actualName = match.source.slice(-fromSource.length);
+			const resolved = join(agentsDir, actualName);
 			if (existsSync(resolved)) return { filePath: resolved, transitions };
 			throw new RollbackError(
-				`Source config file '${fromSource}' not found — it may have been renamed or deleted since the transition was recorded`,
+				`Source config file '${actualName}' not found — it may have been renamed or deleted since the transition was recorded`,
 				404,
 			);
 		}
