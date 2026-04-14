@@ -9,13 +9,13 @@ import { getAgentPresenceForSession } from "../cross-agent";
 import { getDbAccessor } from "../db-accessor";
 import {
 	fetchEmbedding,
+	findLlamaCppEmbeddingModel,
 	resolveEmbeddingApiKey,
 	resolveEmbeddingBaseUrl,
 	resolveOllamaUrl,
 	setNativeFallbackProvider,
 } from "../embedding-fetch";
 import { logger } from "../logger";
-import { DEFAULT_LLAMACPP_BASE_URL } from "../memory-config";
 import type { EmbeddingConfig } from "../memory-config";
 import {
 	resolveScopedAgent,
@@ -917,17 +917,14 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 				try {
 					let fallbackUsed = false;
 
-					const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/models`, {
-						method: "GET",
-						signal: AbortSignal.timeout(3000),
-					});
-					if (llamaCppRes.ok) {
+					const discoveredModel = await findLlamaCppEmbeddingModel();
+					if (discoveredModel) {
 						status.available = true;
 						status.dimensions = 768;
-						status.error = "Native unavailable — using llama.cpp fallback";
-						setNativeFallbackProvider("llama-cpp");
+						status.error = `Native unavailable — using llama.cpp fallback (model: ${discoveredModel})`;
+						setNativeFallbackProvider("llama-cpp", discoveredModel);
 						fallbackUsed = true;
-						logger.info("embedding", "llama.cpp fallback available — will use llama.cpp for embeddings");
+						logger.info("embedding", `llama.cpp fallback available with ${discoveredModel} — will use for embeddings`);
 					}
 
 					if (!fallbackUsed) {

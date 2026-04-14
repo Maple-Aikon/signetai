@@ -101,9 +101,13 @@ describe("fetchEmbedding", () => {
 
 	it("falls back to llama.cpp when native fails, skipping ollama", async () => {
 		let capturedUrl: string | undefined;
-		globalThis.fetch = mock((url: string | URL | Request) => {
-			capturedUrl = url.toString();
-			if (url.toString().includes("localhost:8080")) {
+		globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("localhost:8080")) {
+				if (urlStr.includes("/v1/models")) {
+					return Promise.resolve(Response.json({ data: [{ id: "nomic-embed-text" }] }));
+				}
+				capturedUrl = urlStr;
 				return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2] }] }));
 			}
 			return Promise.resolve(new Response("unreachable", { status: 503 }));

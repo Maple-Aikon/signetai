@@ -15,11 +15,37 @@ export function resolveOllamaUrl(): string {
 	}
 }
 
+export const LLAMACPP_FALLBACK_EMBEDDING_MODELS = ["nomic-embed-text", "all-minilm", "mxbai-embed-large"] as const;
+export type LlamaCppEmbeddingModel = (typeof LLAMACPP_FALLBACK_EMBEDDING_MODELS)[number];
+
+export async function findLlamaCppEmbeddingModel(
+	baseUrl = DEFAULT_LLAMACPP_BASE_URL,
+): Promise<LlamaCppEmbeddingModel | null> {
+	try {
+		const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/models`, {
+			method: "GET",
+			signal: AbortSignal.timeout(3000),
+		});
+		if (!res.ok) return null;
+		const raw = (await res.json()) as { data?: Array<{ id?: string }> };
+		const loaded = new Set((raw.data ?? []).map((m) => m.id?.trim()).filter(Boolean));
+		for (const model of LLAMACPP_FALLBACK_EMBEDDING_MODELS) {
+			if (loaded.has(model)) return model;
+		}
+	} catch {}
+	return null;
+}
+
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
 let nativeFallbackProvider: "llama-cpp" | "ollama" | null = null;
+let nativeFallbackModel: LlamaCppEmbeddingModel | null = null;
 
-export function setNativeFallbackProvider(provider: "llama-cpp" | "ollama" | null): void {
+export function setNativeFallbackProvider(
+	provider: "llama-cpp" | "ollama" | null,
+	model?: LlamaCppEmbeddingModel | null,
+): void {
 	nativeFallbackProvider = provider;
+	nativeFallbackModel = model ?? null;
 }
 
 async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string): Promise<number[] | null> {
@@ -79,10 +105,11 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 				return await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
 			}
 			if (nativeFallbackProvider === "llama-cpp") {
+				const fallbackModel = nativeFallbackModel ?? "nomic-embed-text";
 				const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ input: text, model: "nomic-embed-text" }),
+					body: JSON.stringify({ input: text, model: fallbackModel }),
 					signal: AbortSignal.timeout(5000),
 				});
 				if (llamaCppRes.ok) {
@@ -105,21 +132,27 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 					}`,
 				);
 				try {
-					const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ input: text, model: "nomic-embed-text" }),
-						signal: AbortSignal.timeout(5000),
-					});
-					if (llamaCppRes.ok) {
-						nativeFallbackProvider = "llama-cpp";
-						const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
-						if (data.data?.[0]?.embedding) {
-							logger.info(
-								"embedding",
-								"llama.cpp fallback succeeded — will use llama.cpp for remaining embeddings this session",
-							);
-							return data.data[0].embedding;
+					const discoveredModel = await findLlamaCppEmbeddingModel();
+					if (!discoveredModel) {
+						logger.warn("embedding", "llama.cpp server reachable but no supported embedding model loaded");
+					} else {
+						const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ input: text, model: discoveredModel }),
+							signal: AbortSignal.timeout(5000),
+						});
+						if (llamaCppRes.ok) {
+							nativeFallbackProvider = "llama-cpp";
+							nativeFallbackModel = discoveredModel;
+							const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
+							if (data.data?.[0]?.embedding) {
+								logger.info(
+									"embedding",
+									`llama.cpp fallback succeeded (model: ${discoveredModel}) — will use llama.cpp for remaining embeddings this session`,
+								);
+								return data.data[0].embedding;
+							}
 						}
 					}
 				} catch {
