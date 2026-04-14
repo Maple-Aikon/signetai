@@ -572,9 +572,17 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			embeddingModel = configuredModel;
 			embeddingDimensions = getEmbeddingDimensions(configuredModel);
 		} else {
-			console.log(chalk.dim("  Using default embedding model: nomic-embed-text (768d)"));
-			embeddingModel = "nomic-embed-text";
-			embeddingDimensions = 768;
+			console.log();
+			const model = await select({
+				message: "Which embedding model?",
+				choices: [
+					{ value: "nomic-embed-text", name: "nomic-embed-text (768d, recommended)" },
+					{ value: "all-minilm", name: "all-minilm (384d, faster)" },
+					{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d, better quality)" },
+				],
+			});
+			embeddingModel = model;
+			embeddingDimensions = getEmbeddingDimensions(model);
 			if (!llamaCppServerAvailable) {
 				console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
 				console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));

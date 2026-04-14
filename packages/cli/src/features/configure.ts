@@ -315,7 +315,16 @@ async function configureEmbedding(yaml: string): Promise<string> {
 		model = "nomic-embed-text-v1.5";
 		console.log("  Embedding model: nomic-embed-text-v1.5 (768d)");
 	} else if (provider === "llama-cpp") {
-		console.log("  Embedding model: nomic-embed-text (768d)");
+		const selected = await select({
+			message: "Model:",
+			choices: [
+				{ value: "nomic-embed-text", name: "nomic-embed-text (768d)" },
+				{ value: "all-minilm", name: "all-minilm (384d)" },
+				{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d)" },
+			],
+		});
+		model = selected;
+		dims = selected === "all-minilm" ? 384 : selected === "mxbai-embed-large" ? 1024 : 768;
 	} else if (provider === "ollama") {
 		const selected = await select({
 			message: "Model:",
