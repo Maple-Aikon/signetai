@@ -311,8 +311,10 @@ async function configureEmbedding(yaml: string): Promise<string> {
 	let model = "nomic-embed-text";
 	let dims = 768;
 
-	if (provider === "llama-cpp" || provider === "native") {
+	if (provider === "llama-cpp") {
 		// model and dims already set to nomic-embed-text / 768 above
+	} else if (provider === "native") {
+		model = "nomic-embed-text-v1.5";
 	} else if (provider === "ollama") {
 		const selected = await select({
 			message: "Model:",
