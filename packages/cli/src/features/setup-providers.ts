@@ -207,8 +207,11 @@ async function queryLlamaCppModels(
 			return { available: false, models: [], error: `llama.cpp returned ${response.status}` };
 		}
 
-		const data = (await response.json()) as { data?: Array<{ id?: string }> };
-		const models = (data.data ?? [])
+		const raw = await response.json();
+		if (typeof raw !== "object" || raw === null || !("data" in raw) || !Array.isArray(raw.data)) {
+			return { available: false, models: [], error: "llama.cpp returned unexpected response shape" };
+		}
+		const models = (raw.data as Array<{ id?: string }>)
 			.map((model) => model.id?.trim())
 			.filter((model): model is string => Boolean(model));
 		return { available: true, models };

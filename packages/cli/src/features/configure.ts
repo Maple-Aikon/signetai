@@ -296,9 +296,9 @@ async function configureEmbedding(yaml: string): Promise<string> {
 	const provider = await select({
 		message: "Embedding provider:",
 		choices: [
-			{ value: "llama-cpp", name: "llama.cpp (local, recommended)" },
+			{ value: "native", name: "Built-in (recommended, no setup required)" },
+			{ value: "llama-cpp", name: "llama.cpp (local)" },
 			{ value: "ollama", name: "Ollama (local)" },
-			{ value: "native", name: "Built-in" },
 			{ value: "openai", name: "OpenAI API" },
 			{ value: "none", name: "Disable embeddings" },
 		],
