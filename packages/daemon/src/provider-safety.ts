@@ -307,8 +307,25 @@ export function executeProviderRollback(
 	}
 
 	const beforeContent = readFileSync(filePath, "utf-8");
-	const nextContent = applyProviderRollback(beforeContent, entry);
-	if (nextContent === beforeContent) {
+	const previous = readString(entry.from);
+	const isNoOp =
+		previous !== undefined &&
+		(() => {
+			const root = asRecord(parse(beforeContent)) ?? {};
+			const memory = asRecord(root.memory);
+			const pipeline = memory ? asRecord(memory.pipelineV2) : undefined;
+			if (!pipeline) return false;
+			const roleKey = entry.role === "extraction" ? "extraction" : "synthesis";
+			const topLevelKey = entry.role === "extraction" ? "extractionProvider" : null;
+			const currentProvider =
+				(topLevelKey ? String(pipeline[topLevelKey] ?? "") : "") ||
+				(() => {
+					const block = asRecord(pipeline[roleKey]);
+					return block ? String(block.provider ?? "") : "";
+				})();
+			return currentProvider === previous;
+		})();
+	if (isNoOp) {
 		transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
 		const merged = [...transitions].slice(-100);
 		const auditPath = providerAuditPath(agentsDir);
@@ -322,6 +339,7 @@ export function executeProviderRollback(
 			isRetry: true,
 		};
 	}
+	const nextContent = applyProviderRollback(beforeContent, entry);
 	const safety = validateProviderSafety(nextContent);
 	if (!safety.ok) throw new RollbackError(safety.error, 400);
 
@@ -336,16 +354,15 @@ export function executeProviderRollback(
 	const auditPath = providerAuditPath(agentsDir);
 	mkdirSync(dirname(auditPath), { recursive: true });
 	// Config-first: if audit write fails after config, the entry is
-	// unconsumed. On retry, applyProviderRollback produces identical
-	// YAML (idempotent stringify round-trip), so the no-op guard
-	// above catches it and marks the audit entry consumed without
-	// rewriting the config.
+	// unconsumed. On retry, the semantic no-op guard above detects
+	// the provider already matches and marks the entry consumed
+	// without rewriting the config.
 	atomicWrite(filePath, nextContent, ".rollback-");
 	try {
 		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
 	} catch (e) {
 		// Config is correct but audit is stale — retry will hit the
-		// no-op guard above and mark the entry consumed audit-only.
+		// semantic no-op guard above and mark the entry consumed audit-only.
 		logger.error("provider-safety", "Audit write failed after config rollback", {
 			error: e instanceof Error ? e.message : String(e),
 		});

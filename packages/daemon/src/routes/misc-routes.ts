@@ -60,7 +60,7 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
-	let _rollbackSignal: { promise: Promise<void> } | null = null;
+	let _rollbackInProgress = false;
 	app.get("/api/logs", (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
@@ -289,16 +289,10 @@ export function registerMiscRoutes(app: Hono): void {
 			c.status(403);
 			return c.json({ error: decision.reason ?? "forbidden" });
 		}
-		const acquire = async (): Promise<void> => {
-			while (_rollbackSignal) await _rollbackSignal.promise;
-		};
-		await acquire();
-		let resolve: (() => void) | undefined;
-		_rollbackSignal = {
-			promise: new Promise<void>((r) => {
-				resolve = r;
-			}),
-		};
+		if (_rollbackInProgress) {
+			return c.json({ error: "Rollback already in progress" }, 409);
+		}
+		_rollbackInProgress = true;
 		try {
 			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
@@ -322,11 +316,7 @@ export function registerMiscRoutes(app: Hono): void {
 			logger.error("api", "Provider rollback failed", e as Error);
 			return c.json({ error: "Provider rollback failed" }, 500);
 		} finally {
-			_rollbackSignal = null;
-			resolve?.();
-			// null-before-resolve: clearing the signal before resolving
-			// ensures waiting microtasks re-check the new signal rather
-			// than observing the old (already-resolved) promise
+			_rollbackInProgress = false;
 		}
 	});
 
