@@ -19,16 +19,10 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 }
 
 export async function preflightLocalEmbedding(model: string): Promise<{
-	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
+	provider: "native" | "ollama" | "openai" | "none";
 	model?: string;
 	dimensions?: number;
 }> {
-	const llamaCpp = await queryLlamaCppModels();
-	if (llamaCpp.available) {
-		console.log(chalk.green("  llama.cpp server detected — using llama.cpp for embeddings."));
-		return { provider: "llama-cpp", model, dimensions: getEmbeddingDimensions(model) };
-	}
-
 	while (true) {
 		if (!hasCommand("ollama")) {
 			console.log(chalk.yellow("  Ollama is not installed."));

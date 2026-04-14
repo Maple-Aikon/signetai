@@ -34,7 +34,7 @@ const selectContentClass =
 const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
 
 const EXTRACTION_SAFETY_TEXT =
-	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local providers (llama.cpp or ollama) at qwen3:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
+	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local providers (llama.cpp or ollama) at qwen3.5:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
 
 const EXTRACTION_PROVIDER_OPTIONS = [
 	{ value: "none", label: "none (disable extraction)" },
