@@ -294,7 +294,11 @@ export function registerMiscRoutes(app: Hono): void {
 		}
 		_rollbackInProgress = true;
 		try {
-			const body = (await c.req.json().catch(() => ({}))) as { role?: unknown };
+			const rawBody = await c.req.json().catch(() => null);
+			if (rawBody === null) {
+				return c.json({ error: "Invalid JSON body" }, 400);
+			}
+			const body = rawBody as { role?: unknown };
 			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
 			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
