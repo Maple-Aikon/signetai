@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "yaml";
 import {
 	appendProviderTransitions,
 	applyProviderRollback,
@@ -359,5 +360,36 @@ describe("provider safety", () => {
 
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored[0].rolledBack).toBeFalsy();
+	});
+
+	it("rolls back nested-only extraction config by adding flat key", () => {
+		const agentsDir = makeTempDir();
+		const configDir = makeTempDir();
+
+		writeFileSync(
+			join(configDir, "agent.yaml"),
+			["memory:", "  pipelineV2:", "    extraction:", "      provider: ollama", ""].join("\n"),
+			"utf-8",
+		);
+
+		const entries = detectProviderTransitions(
+			["memory:", "  pipelineV2:", "    extraction:", "      provider: ollama", ""].join("\n"),
+			["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", ""].join("\n"),
+			"test",
+		);
+		expect(entries).toHaveLength(1);
+		appendProviderTransitions(agentsDir, entries);
+
+		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		expect(result.success).toBe(true);
+		expect(result.rolledBack.rolledBack).toBe(true);
+
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored[0].rolledBack).toBe(true);
+
+		const updatedContent = readFileSync(join(configDir, "agent.yaml"), "utf-8");
+		const updatedRoot = parse(updatedContent) as Record<string, unknown>;
+		const updatedPipeline = (updatedRoot.memory as Record<string, unknown>).pipelineV2 as Record<string, unknown>;
+		expect(updatedPipeline.extractionProvider).toBe("ollama");
 	});
 });

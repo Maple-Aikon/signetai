@@ -317,8 +317,10 @@ export function executeProviderRollback(
 		const pipeline = memory ? asRecord(memory.pipelineV2) : undefined;
 		const roleKey = entry.role === "extraction" ? "extraction" : "synthesis";
 		const roleBlock = pipeline ? asRecord(pipeline[roleKey]) : undefined;
-		const topLevelProvider = entry.role === "extraction" && pipeline ? String(pipeline.extractionProvider ?? "") : null;
-		const blockProvider = roleBlock ? String(roleBlock.provider ?? "") : null;
+		const rawTopLevel = entry.role === "extraction" && pipeline ? pipeline.extractionProvider : undefined;
+		const rawNested = roleBlock?.provider;
+		const topLevelProvider = typeof rawTopLevel === "string" && rawTopLevel.length > 0 ? rawTopLevel : null;
+		const blockProvider = typeof rawNested === "string" && rawNested.length > 0 ? rawNested : null;
 		const currentProvider = topLevelProvider ?? blockProvider;
 		if (currentProvider !== previous) {
 			throw new RollbackError(
