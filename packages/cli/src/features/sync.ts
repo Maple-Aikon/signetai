@@ -2,6 +2,7 @@ import { copyFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
+import { GeminiConnector } from "@signet/connector-gemini";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { PiConnector } from "@signet/connector-pi";
@@ -202,6 +203,9 @@ function detectHarnesses(): string[] {
 	}
 	if (new HermesAgentConnector().isInstalled()) {
 		found.push("hermes-agent");
+	}
+	if (new GeminiConnector().isInstalled()) {
+		found.push("gemini");
 	}
 	if (new PiConnector().isInstalled()) {
 		found.push("pi");

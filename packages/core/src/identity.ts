@@ -187,6 +187,7 @@ export interface SetupDetection {
 	/** Detected installed harnesses */
 	harnesses: {
 		claudeCode: boolean;
+		gemini: boolean;
 		openclaw: boolean;
 		opencode: boolean;
 		codex: boolean;
@@ -471,6 +472,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		hasClaudeSkills: existsSync(join(home, ".claude", "skills")),
 		harnesses: {
 			claudeCode: existsSync(join(home, ".claude", "settings.json")),
+			gemini: existsSync(join(home, ".gemini", "settings.json")),
 			openclaw:
 				existsSync(join(home, ".openclaw", "openclaw.json")) || existsSync(join(home, ".clawdbot", "clawdbot.json")),
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),

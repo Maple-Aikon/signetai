@@ -180,6 +180,7 @@ bun test packages/daemon/src/pipeline/worker.test.ts
 | `@signet/connector-opencode` | OpenCode install-time integration | node |
 | `@signet/connector-openclaw` | OpenClaw install-time integration | node |
 | `@signet/connector-codex` | Codex CLI install-time integration | node |
+| `@signet/connector-gemini` | Gemini CLI install-time integration | node |
 | `@signet/connector-oh-my-pi` | Oh My Pi install-time integration | node |
 | `@signet/connector-pi` | Pi install-time integration | node |
 | `@signet/connector-hermes-agent` | Hermes Agent install-time integration + Python plugin | node |
