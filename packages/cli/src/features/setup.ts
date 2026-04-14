@@ -14,7 +14,7 @@ import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-pro
 import {
 	hasCommand,
 	hasLlamaCppServer,
-	preflightLocalEmbedding,
+	preflightOllamaEmbedding,
 	promptOpenAIEmbeddingModel,
 } from "./setup-providers.js";
 import {
@@ -565,6 +565,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	} else if (embeddingProvider === "llama-cpp") {
 		embeddingModel = "nomic-embed-text";
 		embeddingDimensions = 768;
+		if (!(await hasLlamaCppServer())) {
+			console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
+			console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
+		}
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =
@@ -584,7 +588,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				],
 			});
 
-			const preflight = await preflightLocalEmbedding(model);
+			const preflight = await preflightOllamaEmbedding(model);
 			embeddingProvider = preflight.provider;
 			embeddingModel = preflight.model ?? embeddingModel;
 			embeddingDimensions = preflight.dimensions ?? embeddingDimensions;

@@ -18,7 +18,7 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 	return { provider: "openai", model, dimensions: getEmbeddingDimensions(model) };
 }
 
-export async function preflightLocalEmbedding(model: string): Promise<{
+export async function preflightOllamaEmbedding(model: string): Promise<{
 	provider: "native" | "ollama" | "openai" | "none";
 	model?: string;
 	dimensions?: number;
