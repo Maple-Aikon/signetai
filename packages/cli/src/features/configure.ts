@@ -313,6 +313,7 @@ async function configureEmbedding(yaml: string): Promise<string> {
 
 	if (provider === "native") {
 		model = "nomic-embed-text-v1.5";
+		console.log("  Embedding model: nomic-embed-text-v1.5 (768d)");
 	} else if (provider === "ollama") {
 		const selected = await select({
 			message: "Model:",

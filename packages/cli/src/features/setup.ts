@@ -572,6 +572,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			embeddingModel = configuredModel;
 			embeddingDimensions = getEmbeddingDimensions(configuredModel);
 		} else {
+			console.log(chalk.dim("  Using default embedding model: nomic-embed-text (768d)"));
 			embeddingModel = "nomic-embed-text";
 			embeddingDimensions = 768;
 			if (!llamaCppServerAvailable) {
