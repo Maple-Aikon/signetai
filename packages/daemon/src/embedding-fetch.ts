@@ -86,8 +86,8 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 					signal: AbortSignal.timeout(5000),
 				});
 				if (llamaCppRes.ok) {
-					const data = (await llamaCppRes.json()) as { embedding?: number[] };
-					if (data.embedding) return data.embedding;
+					const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
+					if (data.data?.[0]?.embedding) return data.data[0].embedding;
 				}
 				return null;
 			}
@@ -113,13 +113,13 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 					});
 					if (llamaCppRes.ok) {
 						nativeFallbackProvider = "llama-cpp";
-						const data = (await llamaCppRes.json()) as { embedding?: number[] };
-						if (data.embedding) {
+						const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
+						if (data.data?.[0]?.embedding) {
 							logger.info(
 								"embedding",
 								"llama.cpp fallback succeeded — will use llama.cpp for remaining embeddings this session",
 							);
-							return data.embedding;
+							return data.data[0].embedding;
 						}
 					}
 				} catch {

@@ -68,7 +68,7 @@ describe("fetchEmbedding", () => {
 		globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
 			capturedUrl = url.toString();
 			capturedBody = init?.body as string;
-			return Promise.resolve(Response.json({ embedding: [0.8, 0.9, 1.0] }));
+			return Promise.resolve(Response.json({ data: [{ embedding: [0.8, 0.9, 1.0] }] }));
 		}) as typeof fetch;
 
 		setNativeFallbackProvider("llama-cpp");
@@ -104,7 +104,7 @@ describe("fetchEmbedding", () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			capturedUrl = url.toString();
 			if (url.toString().includes("localhost:8080")) {
-				return Promise.resolve(Response.json({ embedding: [0.1, 0.2] }));
+				return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2] }] }));
 			}
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
 		}) as typeof fetch;

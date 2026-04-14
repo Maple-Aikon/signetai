@@ -284,7 +284,10 @@ function isExtractionFallbackProvider(v: unknown): v is "llama-cpp" | "ollama" |
 	return v === "llama-cpp" || v === "ollama" || v === "none";
 }
 
-function resolveExtractionFallbackProvider(raw: unknown, fallback: "llama-cpp" | "ollama" | "none"): "llama-cpp" | "ollama" | "none" {
+function resolveExtractionFallbackProvider(
+	raw: unknown,
+	fallback: "llama-cpp" | "ollama" | "none",
+): "llama-cpp" | "ollama" | "none" {
 	if (raw === undefined || raw === null) return fallback;
 	if (isExtractionFallbackProvider(raw)) return raw;
 	throw new MemoryConfigValidationError(
@@ -1034,7 +1037,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			if (emb.provider === "none") {
 				defaults.embedding.provider = "none";
 			} else if (emb.provider) {
-				defaults.embedding.provider = emb.provider as "native" | "llama-cpp" | "ollama" | "openai";
+				const rawProvider = String(emb.provider);
+				defaults.embedding.provider =
+					rawProvider === "local" ? "native" : (rawProvider as "native" | "llama-cpp" | "ollama" | "openai");
 				defaults.embedding.model = (emb.model as string | undefined) ?? defaults.embedding.model;
 				defaults.embedding.dimensions = Number.parseInt(String(emb.dimensions ?? "768"), 10);
 				const explicitBaseUrl =
