@@ -1600,7 +1600,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		extractionSince = new Date().toISOString();
 		extractionDegraded = true;
 		const localFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
-		if ((extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama") && effectiveExtractionProvider !== localFallback) {
+		if (
+			(extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama") &&
+			effectiveExtractionProvider !== localFallback
+		) {
 			effectiveExtractionProvider = localFallback;
 			extractionStatus = "degraded";
 			extractionFallbackApplied = true;
@@ -1802,7 +1805,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			const failedProvider = effectiveExtractionProvider;
 			const failedReason = extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
 			const localFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
-			if (failedProvider !== localFallback && (extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama")) {
+			if (
+				failedProvider !== localFallback &&
+				(extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama")
+			) {
 				extractionReason = failedReason;
 				extractionSince = extractionSince ?? new Date().toISOString();
 				extractionDegraded = true;
@@ -1954,7 +1960,12 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
 	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
 		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
-		const synthesisFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
+		const synthesisFallback =
+			extractionFallbackProvider === "llama-cpp"
+				? "llama-cpp"
+				: extractionFallbackProvider === "none"
+					? null
+					: "ollama";
 		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
 			memoryCfg.pipelineV2.synthesis.endpoint,
 			"http://127.0.0.1:11434",
@@ -1978,8 +1989,16 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			if (synthesisOpenCodeShouldManage) {
 				const serverReady = await ensureOpenCodeServer(4096);
 				if (!serverReady) {
-					logger.warn("config", `OpenCode server not available for synthesis, falling back to ${synthesisFallback}`);
-					effectiveSynthesisProvider = synthesisFallback;
+					if (synthesisFallback) {
+						logger.warn("config", `OpenCode server not available for synthesis, falling back to ${synthesisFallback}`);
+						effectiveSynthesisProvider = synthesisFallback;
+					} else {
+						logger.warn(
+							"config",
+							"OpenCode server not available for synthesis, fallback disabled (fallbackProvider: none)",
+						);
+						effectiveSynthesisProvider = "none";
+					}
 				}
 			} else {
 				logger.info("config", "Using external OpenCode endpoint for synthesis", {
@@ -1988,19 +2007,40 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			}
 		} else if (effectiveSynthesisProvider === "anthropic") {
 			if (!anthropicApiKey) {
-				logger.warn("config", `ANTHROPIC_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
-				effectiveSynthesisProvider = synthesisFallback;
+				if (synthesisFallback) {
+					logger.warn("config", `ANTHROPIC_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
+					effectiveSynthesisProvider = synthesisFallback;
+				} else {
+					logger.warn(
+						"config",
+						"ANTHROPIC_API_KEY not found for synthesis, fallback disabled (fallbackProvider: none)",
+					);
+					effectiveSynthesisProvider = "none";
+				}
 			}
 		} else if (effectiveSynthesisProvider === "openrouter") {
 			if (!openRouterApiKey) {
-				logger.warn("config", `OPENROUTER_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
-				effectiveSynthesisProvider = synthesisFallback;
+				if (synthesisFallback) {
+					logger.warn("config", `OPENROUTER_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
+					effectiveSynthesisProvider = synthesisFallback;
+				} else {
+					logger.warn(
+						"config",
+						"OPENROUTER_API_KEY not found for synthesis, fallback disabled (fallbackProvider: none)",
+					);
+					effectiveSynthesisProvider = "none";
+				}
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
 			const resolvedClaude = Bun.which("claude");
 			if (resolvedClaude === null) {
-				logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
-				effectiveSynthesisProvider = synthesisFallback;
+				if (synthesisFallback) {
+					logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
+					effectiveSynthesisProvider = synthesisFallback;
+				} else {
+					logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
+					effectiveSynthesisProvider = "none";
+				}
 			} else {
 				try {
 					const exitCode = await new Promise<number>((resolve) => {
@@ -2014,15 +2054,25 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					});
 					if (exitCode !== 0) throw new Error("non-zero exit");
 				} catch {
-					logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
-					effectiveSynthesisProvider = synthesisFallback;
+					if (synthesisFallback) {
+						logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
+						effectiveSynthesisProvider = synthesisFallback;
+					} else {
+						logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
+						effectiveSynthesisProvider = "none";
+					}
 				}
 			}
 		} else if (effectiveSynthesisProvider === "codex") {
 			const resolvedCodex = Bun.which("codex");
 			if (resolvedCodex === null) {
-				logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
-				effectiveSynthesisProvider = synthesisFallback;
+				if (synthesisFallback) {
+					logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
+					effectiveSynthesisProvider = synthesisFallback;
+				} else {
+					logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
+					effectiveSynthesisProvider = "none";
+				}
 			} else {
 				try {
 					const exitCode = await new Promise<number>((resolve) => {
@@ -2040,8 +2090,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					});
 					if (exitCode !== 0) throw new Error("non-zero exit");
 				} catch {
-					logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
-					effectiveSynthesisProvider = synthesisFallback;
+					if (synthesisFallback) {
+						logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
+						effectiveSynthesisProvider = synthesisFallback;
+					} else {
+						logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
+						effectiveSynthesisProvider = "none";
+					}
 				}
 			}
 		}
@@ -2129,11 +2184,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 											baseUrl: synthesisOllamaFallbackBaseUrl,
 											defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 											...(usingSynthesisLocalFallback
-											? {
-													maxContextTokens: ollamaFallbackMaxContextTokens,
-												}
-											: {}),
-									});
+												? {
+														maxContextTokens: ollamaFallbackMaxContextTokens,
+													}
+												: {}),
+										});
 		initSynthesisProvider(synthesisProvider);
 		const widgetProvider = synthesisProvider;
 		synthesisProvider = withRateLimit(synthesisProvider, memoryCfg.pipelineV2.synthesis.rateLimit);

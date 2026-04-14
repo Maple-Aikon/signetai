@@ -1437,9 +1437,13 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	const endpoint = cfg.pipelineV2.synthesis.endpoint;
 	const ollamaMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const fallbackProvider = cfg.pipelineV2.extraction.fallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
-	const fallback = () =>
-		fallbackProvider === "llama-cpp"
+	const rawFallback = cfg.pipelineV2.extraction.fallbackProvider;
+	const fallbackProvider = rawFallback === "llama-cpp" ? "llama-cpp" : rawFallback === "none" ? null : "ollama";
+	const fallback = () => {
+		if (!fallbackProvider) {
+			throw new Error("Synthesis fallback disabled (fallbackProvider: none)");
+		}
+		return fallbackProvider === "llama-cpp"
 			? createLlamaCppProvider({
 					defaultTimeoutMs: timeout,
 					baseUrl: "http://127.0.0.1:8080",
@@ -1448,6 +1452,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 					defaultTimeoutMs: timeout,
 					maxContextTokens: ollamaMaxContextTokens,
 				});
+	};
 	switch (p) {
 		case "none":
 			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
@@ -1497,7 +1502,10 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 		case "claude-code": {
 			const provider = createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
 			if (await provider.available()) return provider;
-			logger.warn("summary-worker", `Claude Code CLI not available for summary worker — falling back to ${fallbackProvider}`);
+			logger.warn(
+				"summary-worker",
+				`Claude Code CLI not available for summary worker — falling back to ${fallbackProvider}`,
+			);
 			return fallback();
 		}
 		case "codex": {
