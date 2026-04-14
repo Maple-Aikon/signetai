@@ -34,6 +34,7 @@
         "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-codex": "workspace:*",
         "@signet/connector-forge": "workspace:*",
+        "@signet/connector-gemini": "workspace:*",
         "@signet/connector-hermes-agent": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
@@ -148,7 +149,7 @@
     },
     "packages/connector-gemini": {
       "name": "@signet/connector-gemini",
-      "version": "0.98.15",
+      "version": "0.98.16",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
