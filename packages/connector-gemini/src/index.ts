@@ -20,7 +20,7 @@
  * ```
  */
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
@@ -91,6 +91,8 @@ export class GeminiConnector extends BaseConnector {
 			this.symlinkSkills(skillsSource, skillsDest);
 		}
 
+		this.recordSkillsSource(geminiPath, skillsSource);
+
 		return {
 			success: true,
 			message: "Gemini CLI integration installed successfully",
@@ -116,17 +118,24 @@ export class GeminiConnector extends BaseConnector {
 		this.removeContextFileNameConfig(geminiPath);
 
 		const skillsDir = join(geminiPath, "skills");
-		if (existsSync(skillsDir) && lstatSync(skillsDir).isDirectory()) {
+		const signetSkillsSource = this.readSkillsSource(geminiPath);
+		if (signetSkillsSource && existsSync(skillsDir) && lstatSync(skillsDir).isDirectory()) {
 			let removedAny = false;
 			for (const entry of readdirSync(skillsDir)) {
 				const entryPath = join(skillsDir, entry);
 				try {
 					if (lstatSync(entryPath).isSymbolicLink()) {
-						unlinkSync(entryPath);
-						removedAny = true;
+						let target = readlinkSync(entryPath);
+						if (!target.startsWith("/")) {
+							target = join(skillsDir, target);
+						}
+						if (target.startsWith(signetSkillsSource)) {
+							unlinkSync(entryPath);
+							removedAny = true;
+						}
 					}
 				} catch {
-					// skip entries that can't be stat'd
+					// skip entries that can't be stat'd or read
 				}
 			}
 			if (removedAny) {
@@ -136,6 +145,7 @@ export class GeminiConnector extends BaseConnector {
 				}
 				filesRemoved.push(skillsDir);
 			}
+			this.removeSkillsSource(geminiPath);
 		}
 
 		return { filesRemoved };
@@ -463,6 +473,62 @@ export class GeminiConnector extends BaseConnector {
 				delete config.context;
 			}
 
+			atomicWriteJson(settingsPath, config);
+		}
+	}
+
+	private recordSkillsSource(geminiPath: string, sourcePath: string): void {
+		const settingsPath = join(geminiPath, "settings.json");
+
+		let config: JsonObject = {};
+		if (existsSync(settingsPath)) {
+			try {
+				config = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			} catch {
+				config = {};
+			}
+		}
+
+		if (!isJsonObject(config.signet)) {
+			config.signet = {};
+		}
+		(config.signet as JsonObject).skillsSource = sourcePath;
+
+		atomicWriteJson(settingsPath, config);
+	}
+
+	private readSkillsSource(geminiPath: string): string | null {
+		const settingsPath = join(geminiPath, "settings.json");
+		if (!existsSync(settingsPath)) return null;
+		try {
+			const config = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			if (isJsonObject(config.signet) && typeof (config.signet as JsonObject).skillsSource === "string") {
+				return (config.signet as JsonObject).skillsSource as string;
+			}
+		} catch {
+			// not parseable
+		}
+		return null;
+	}
+
+	private removeSkillsSource(geminiPath: string): void {
+		const settingsPath = join(geminiPath, "settings.json");
+		if (!existsSync(settingsPath)) return;
+
+		let config: JsonObject;
+		try {
+			config = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		} catch {
+			return;
+		}
+
+		if (isJsonObject(config.signet)) {
+			// biome-ignore lint/performance/noDelete: intentional for clean JSON serialization
+			delete (config.signet as JsonObject).skillsSource;
+			if (Object.keys(config.signet as JsonObject).length === 0) {
+				// biome-ignore lint/performance/noDelete: intentional for clean JSON serialization
+				delete config.signet;
+			}
 			atomicWriteJson(settingsPath, config);
 		}
 	}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GeminiConnector } from "./src/index.js";
@@ -114,6 +114,21 @@ describe("GeminiConnector.uninstall", () => {
 		const result = await connector.uninstall();
 		expect(result.filesRemoved.some((f) => f.endsWith("skills"))).toBe(false);
 		expect(existsSync(join(geminiDir, "skills", "user-skill", "skill.md"))).toBe(true);
+	});
+
+	it("preserves non-signet symlinks inside skills on uninstall", async () => {
+		writeIdentity(tmpRoot);
+		const userSkillSource = join(tmpRoot, "user-skills");
+		mkdirSync(userSkillSource, { recursive: true });
+		writeFileSync(join(userSkillSource, "custom.md"), "# custom", "utf-8");
+
+		mkdirSync(join(geminiDir, "skills"), { recursive: true });
+		symlinkSync(userSkillSource, join(geminiDir, "skills", "custom-skill"));
+
+		const connector = makeConnector();
+		const result = await connector.uninstall();
+		expect(result.filesRemoved.some((f) => f.endsWith("skills"))).toBe(false);
+		expect(existsSync(join(geminiDir, "skills", "custom-skill"))).toBe(true);
 	});
 
 	it("preserves non-signet hooks within the same group", async () => {
