@@ -85,7 +85,7 @@ export interface AgentManifest {
 
 	// Embedding configuration
 	embedding?: {
-		provider: "native" | "llama-cpp" | "ollama" | "openai";
+		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
 		model: string;
 		dimensions: number;
 		base_url?: string;
@@ -151,7 +151,7 @@ export interface AgentConfig {
 	dbPath?: string;
 	autoSync?: boolean;
 	embeddings?: {
-		provider: "native" | "llama-cpp" | "ollama" | "openai";
+		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
 		model?: string;
 		dimensions?: number;
 	};
