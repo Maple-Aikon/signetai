@@ -564,11 +564,20 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		embeddingModel = "nomic-embed-text-v1.5";
 		embeddingDimensions = 768;
 	} else if (embeddingProvider === "llama-cpp") {
-		embeddingModel = "nomic-embed-text";
-		embeddingDimensions = 768;
-		if (!llamaCppServerAvailable) {
-			console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
-			console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
+		if (nonInteractive) {
+			const configuredModel =
+				deps.normalizeStringValue(options.embeddingModel) ||
+				deps.normalizeStringValue(existingEmbedding.model) ||
+				"nomic-embed-text";
+			embeddingModel = configuredModel;
+			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+		} else {
+			embeddingModel = "nomic-embed-text";
+			embeddingDimensions = 768;
+			if (!llamaCppServerAvailable) {
+				console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
+				console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
+			}
 		}
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
