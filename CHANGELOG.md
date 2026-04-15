@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-15
+- Bug fixes: thread deadline into OpenCode session creation.
+
 ### 2026-04-14
 - Features: add llama.cpp as default fallback runtime provider.
 - Bug fixes: unify LLM concurrency (#509); prevent bypass memory leak in OpenCode provider; reduce OpenCode session overhead for pipeline jobs; five correctness bugs found via sqmd structural review.
@@ -26,12 +29,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-09
 - Bug fixes: block leaked workspace deps in release; improve docs search and docs navigation.
 
-### 2026-04-08
-- Bug fixes: honour maxInjectChars config in session-start hook.
-- Refactoring: align recall surfaces and validate prospective hint retrieval.
-- Docs: sync root-derived docs.
-
 ## Release Ledger
+
+## [0.99.3] - 2026-04-15
+
+Release summary: 1 bug fix.
+Tag range: `v0.99.2..v0.99.3`.
+
+### Bug Fixes
+
+- **daemon**: thread deadline into OpenCode session creation (#511)
 
 ## [0.99.2] - 2026-04-14
 
