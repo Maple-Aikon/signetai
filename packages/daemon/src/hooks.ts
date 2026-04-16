@@ -15,6 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { Worker } from "node:worker_threads";
 import { parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
@@ -87,9 +88,24 @@ import { isNoiseSession } from "./session-noise";
 import { getExpiryWarning } from "./session-tracker";
 import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
 import { getUpdateSummary } from "./update-system";
+
+// ---------------------------------------------------------------------------
+// Synthesis render worker (node:worker_threads)
+// ---------------------------------------------------------------------------
+
+let synthesisWorker: Worker | null = null;
+
+export function setSynthesisWorker(worker: Worker | null): void {
+	synthesisWorker = worker;
+}
+
+export function getSynthesisWorker(): Worker | null {
+	return synthesisWorker;
+}
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -3572,10 +3588,10 @@ export function writeMemoryMd(
 	return { ok: false, error: result.error, ...(result.code ? { code: result.code } : {}) };
 }
 
-export function handleSynthesisRequest(
+export async function handleSynthesisRequest(
 	req: SynthesisRequest,
-	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string },
-): SynthesisResponse {
+	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string; writeToDisk?: boolean },
+): Promise<SynthesisResponse> {
 	logger.info("hooks", "Synthesis request", { trigger: req.trigger });
 
 	const _sinceTimestamp = opts?.sinceTimestamp ?? 0;
@@ -3587,12 +3603,108 @@ export function handleSynthesisRequest(
 	if (hasDbAccessor()) {
 		purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
 	}
-	const rendered = renderMemoryProjection(agentId);
-	return {
-		harness: "daemon",
-		model: "projection",
-		prompt: rendered.content,
-		fileCount: rendered.fileCount,
-		indexBlock: rendered.indexBlock,
-	};
+
+	const worker = getSynthesisWorker();
+	if (worker === null) {
+		logger.warn("hooks", "Synthesis render worker not available, falling back to synchronous render");
+		const rendered = renderMemoryProjection(agentId);
+		if (opts?.writeToDisk === true) {
+			writeMemoryMd(rendered.content, { agentId });
+		}
+		return {
+			harness: "daemon",
+			model: "projection",
+			prompt: rendered.content,
+			fileCount: rendered.fileCount,
+			indexBlock: rendered.indexBlock,
+		};
+	}
+
+	const requestId = randomUUID();
+	const w: Worker = worker;
+	return new Promise<SynthesisResponse>((resolve, reject) => {
+		let settled = false;
+
+		function cleanup(): void {
+			clearTimeout(timer);
+			w.off("message", handler);
+			w.off("error", onError);
+			w.off("exit", onExit);
+		}
+
+		function fallbackToSync(message: string, error?: Error): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			setSynthesisWorker(null);
+			w.terminate().catch((err) => {
+				logger.debug("hooks", "Synthesis render worker terminate failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
+			try {
+				const rendered = renderMemoryProjection(agentId);
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(rendered.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: rendered.content,
+					fileCount: rendered.fileCount,
+					indexBlock: rendered.indexBlock,
+				});
+			} catch (err) {
+				reject(err instanceof Error ? err : new Error(String(err)));
+			}
+		}
+
+		function onError(err: Error): void {
+			logger.error("hooks", "Synthesis render worker failed", err);
+			fallbackToSync("Synthesis render worker failed", err);
+		}
+
+		function onExit(code: number): void {
+			if (settled) return;
+			const err = new Error(`Synthesis render worker exited before responding (code=${code})`);
+			logger.error("hooks", err.message, err);
+			fallbackToSync(err.message, err);
+		}
+
+		const timer = setTimeout(() => {
+			const err = new Error("Synthesis render worker timed out");
+			logger.warn("hooks", err.message);
+			fallbackToSync(err.message, err);
+		}, 30_000);
+
+		function handler(msg: unknown): void {
+			if (!isObject(msg)) return;
+			if (msg.requestId !== requestId) return;
+			if (settled) return;
+			if (isRenderResult(msg)) {
+				settled = true;
+				cleanup();
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(msg.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: msg.content,
+					fileCount: msg.fileCount,
+					indexBlock: msg.indexBlock,
+				});
+			} else if (isRenderError(msg)) {
+				const err = new Error(`Synthesis render worker error: ${msg.error}`);
+				logger.error("hooks", err.message, err);
+				fallbackToSync(err.message, err);
+			}
+		}
+
+		w.on("message", handler);
+		w.once("error", onError);
+		w.once("exit", onExit);
+		w.postMessage({ type: "render", agentId, requestId });
+	});
 }

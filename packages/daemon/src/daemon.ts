@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { createAdaptorServer } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
@@ -40,7 +41,7 @@ import { migrateConfig } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { normalizeAndHashContent } from "./content-normalization";
 import { clearAllPresence } from "./cross-agent";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert } from "./db-helpers";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
@@ -103,6 +104,13 @@ import { detectDrift } from "./predictor-comparison";
 import { getPredictorState } from "./predictor-state";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import {
+	getResourceSnapshot,
+	logFdSnapshot,
+	startEventLoopMonitor,
+	startFdPollMonitor,
+	stopResourceMonitors,
+} from "./resource-monitor";
+import {
 	AGENTS_DIR,
 	ALLOWED_ORIGINS,
 	BIND_HOST,
@@ -153,6 +161,10 @@ import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 
+import {
+	getSynthesisWorker as getSynthesisRenderWorker,
+	setSynthesisWorker as setSynthesisRenderWorker,
+} from "./hooks";
 import { mountMcpRoute } from "./mcp/route.js";
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
@@ -177,6 +189,7 @@ import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider, getConfiguredProviderHints } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
+import { isReadyResponse } from "./synthesis-worker-protocol";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
 	MIN_UPDATE_INTERVAL_SECONDS,
@@ -339,6 +352,7 @@ app.get("/health", (c) => {
 			extractionPending: extraction.stats?.pending ?? 0,
 			extractionBackoffMs: extraction.stats?.backoffMs ?? 0,
 		},
+		resources: getResourceSnapshot(),
 	});
 });
 
@@ -630,6 +644,24 @@ mountOsChatRoutes(app);
 mountOsAgentRoutes(app);
 
 // ============================================================================
+// CLI preflight check
+// ============================================================================
+
+/** Spawn a CLI with --version and return true if it exits 0. */
+async function checkCliAvailable(binary: string, extraEnv?: Record<string, string>): Promise<boolean> {
+	const exitCode = await new Promise<number>((resolve) => {
+		const proc = spawn(binary, ["--version"], {
+			stdio: "pipe",
+			windowsHide: true,
+			env: { ...process.env, SIGNET_NO_HOOKS: "1", ...extraEnv },
+		});
+		proc.on("close", (code) => resolve(code ?? 1));
+		proc.on("error", () => resolve(1));
+	});
+	return exitCode === 0;
+}
+
+// ============================================================================
 // Dashboard static serving
 // ============================================================================
 
@@ -714,6 +746,9 @@ let watcher: ReturnType<typeof watch> | null = null;
 
 // Track ingested files to avoid re-processing (path -> content hash)
 const ingestedMemoryFiles = new Map<string, string>();
+const MEMORY_IMPORT_POLL_MS = 30_000;
+let memoryImportTimer: ReturnType<typeof setInterval> | null = null;
+let memoryImportInFlight = false;
 
 // Track synced memories to avoid duplicates
 const syncedClaudeMemories = new Set<string>();
@@ -1083,10 +1118,17 @@ async function importExistingMemoryFiles(): Promise<number> {
 
 	let files: string[];
 	try {
-		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md");
+		files = readdirSync(memoryDir)
+			.filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
+			.filter((f) => !ARTIFACT_FILENAME_RE.test(f) && !MEMORY_BACKUP_FILENAME_RE.test(f));
 	} catch (e) {
 		const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
 		logger.error("daemon", "Failed to read memory directory", undefined, errDetails);
+		return 0;
+	}
+
+	if (files.length === 0) {
+		logger.debug("daemon", "importExistingMemoryFiles: all files are artifacts/backups, skipping");
 		return 0;
 	}
 
@@ -1103,6 +1145,31 @@ async function importExistingMemoryFiles(): Promise<number> {
 		});
 	}
 	return totalChunks;
+}
+
+function startMemoryImportPoller(): void {
+	if (memoryImportTimer !== null) return;
+	memoryImportTimer = setInterval(() => {
+		if (memoryImportInFlight) return;
+		memoryImportInFlight = true;
+		importExistingMemoryFiles()
+			.catch((e) => {
+				const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+				logger.error("daemon", "Failed to import memory files", undefined, errDetails);
+			})
+			.finally(() => {
+				memoryImportInFlight = false;
+			});
+	}, MEMORY_IMPORT_POLL_MS);
+	memoryImportTimer.unref?.();
+	logger.debug("watcher", "Started memory import poller", { intervalMs: MEMORY_IMPORT_POLL_MS });
+}
+
+function stopMemoryImportPoller(): void {
+	if (memoryImportTimer === null) return;
+	clearInterval(memoryImportTimer);
+	memoryImportTimer = null;
+	memoryImportInFlight = false;
 }
 
 function startClaudeMemoryWatcher() {
@@ -1239,6 +1306,12 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 }
 
 function startFileWatcher() {
+	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
+	// opens one O_RDONLY FD per file in a watched directory and never
+	// releases them on close(), leaking ~8 000 FDs with canonical
+	// artifacts present. Canonical artifacts and backups are intentionally
+	// ignored; rare legacy non-artifact memory markdown imports are handled
+	// by the lightweight poller started after daemon readiness.
 	watcher = watch(
 		[
 			join(AGENTS_DIR, "agent.yaml"),
@@ -1248,7 +1321,6 @@ function startFileWatcher() {
 			join(AGENTS_DIR, "IDENTITY.md"),
 			join(AGENTS_DIR, "USER.md"),
 			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
-			join(AGENTS_DIR, "memory"),
 			join(AGENTS_DIR, "agents"),
 		],
 		{
@@ -1641,45 +1713,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		const resolvedClaude = Bun.which("claude");
 		if (resolvedClaude === null) {
 			markExtractionUnavailable("Claude Code CLI not found during extraction startup preflight");
-		} else {
-			try {
-				const exitCode = await new Promise<number>((resolve) => {
-					const proc = spawn(resolvedClaude, ["--version"], {
-						stdio: "pipe",
-						windowsHide: true,
-						env: { ...process.env, SIGNET_NO_HOOKS: "1" },
-					});
-					proc.on("close", (code) => resolve(code ?? 1));
-					proc.on("error", () => resolve(1));
-				});
-				if (exitCode !== 0) throw new Error("non-zero exit");
-			} catch {
-				markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
-			}
+		} else if (!(await checkCliAvailable(resolvedClaude))) {
+			markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
 		}
 	} else if (effectiveExtractionProvider === "codex") {
 		const resolvedCodex = Bun.which("codex");
 		if (resolvedCodex === null) {
 			markExtractionUnavailable("Codex CLI not found during extraction startup preflight");
-		} else {
-			try {
-				const exitCode = await new Promise<number>((resolve) => {
-					const proc = spawn(resolvedCodex, ["--version"], {
-						stdio: "pipe",
-						windowsHide: true,
-						env: {
-							...process.env,
-							SIGNET_NO_HOOKS: "1",
-							SIGNET_CODEX_BYPASS_WRAPPER: "1",
-						},
-					});
-					proc.on("close", (code) => resolve(code ?? 1));
-					proc.on("error", () => resolve(1));
-				});
-				if (exitCode !== 0) throw new Error("non-zero exit");
-			} catch {
-				markExtractionUnavailable("Codex CLI failed extraction startup preflight");
-			}
+		} else if (!(await checkCliAvailable(resolvedCodex, { SIGNET_CODEX_BYPASS_WRAPPER: "1" }))) {
+			markExtractionUnavailable("Codex CLI failed extraction startup preflight");
 		}
 	}
 	const keyCache = new Map<"ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY", string | undefined>();
@@ -2033,7 +2075,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
 			const resolvedClaude = Bun.which("claude");
-			if (resolvedClaude === null) {
+			if (resolvedClaude === null || !(await checkCliAvailable(resolvedClaude))) {
 				if (synthesisFallback) {
 					logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
 					effectiveSynthesisProvider = synthesisFallback;
@@ -2041,62 +2083,16 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
 					effectiveSynthesisProvider = "none";
 				}
-			} else {
-				try {
-					const exitCode = await new Promise<number>((resolve) => {
-						const proc = spawn(resolvedClaude, ["--version"], {
-							stdio: "pipe",
-							windowsHide: true,
-							env: { ...process.env, SIGNET_NO_HOOKS: "1" },
-						});
-						proc.on("close", (code) => resolve(code ?? 1));
-						proc.on("error", () => resolve(1));
-					});
-					if (exitCode !== 0) throw new Error("non-zero exit");
-				} catch {
-					if (synthesisFallback) {
-						logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
-						effectiveSynthesisProvider = synthesisFallback;
-					} else {
-						logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
-						effectiveSynthesisProvider = "none";
-					}
-				}
 			}
 		} else if (effectiveSynthesisProvider === "codex") {
 			const resolvedCodex = Bun.which("codex");
-			if (resolvedCodex === null) {
+			if (resolvedCodex === null || !(await checkCliAvailable(resolvedCodex, { SIGNET_CODEX_BYPASS_WRAPPER: "1" }))) {
 				if (synthesisFallback) {
 					logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
 					effectiveSynthesisProvider = synthesisFallback;
 				} else {
 					logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
 					effectiveSynthesisProvider = "none";
-				}
-			} else {
-				try {
-					const exitCode = await new Promise<number>((resolve) => {
-						const proc = spawn(resolvedCodex, ["--version"], {
-							stdio: "pipe",
-							windowsHide: true,
-							env: {
-								...process.env,
-								SIGNET_NO_HOOKS: "1",
-								SIGNET_CODEX_BYPASS_WRAPPER: "1",
-							},
-						});
-						proc.on("close", (code) => resolve(code ?? 1));
-						proc.on("error", () => resolve(1));
-					});
-					if (exitCode !== 0) throw new Error("non-zero exit");
-				} catch {
-					if (synthesisFallback) {
-						logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
-						effectiveSynthesisProvider = synthesisFallback;
-					} else {
-						logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
-						effectiveSynthesisProvider = "none";
-					}
 				}
 			}
 		}
@@ -2364,6 +2360,7 @@ async function cleanup() {
 		clearTimeout(syncTimer);
 		syncTimer = null;
 	}
+	stopMemoryImportPoller();
 
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
@@ -2375,6 +2372,8 @@ async function cleanup() {
 		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
+	stopResourceMonitors();
+	logFdSnapshot("cleanup-start");
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
@@ -2405,10 +2404,22 @@ async function cleanup() {
 	await stopGitSyncTimer();
 	stopUpdateTimer();
 
+	const renderWorker = getSynthesisRenderWorker();
+	if (renderWorker !== null) {
+		setSynthesisRenderWorker(null);
+		renderWorker.terminate().catch((e) => {
+			logger.debug("daemon", "render worker terminate failed", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		});
+	}
+
 	closeDbAccessor();
 
 	if (watcher) {
+		logFdSnapshot("pre-cleanup-watcher");
 		watcher.close();
+		logFdSnapshot("post-cleanup-watcher");
 	}
 
 	if (existsSync(PID_FILE)) {
@@ -2457,6 +2468,75 @@ async function main() {
 
 	initDbAccessor(MEMORY_DB, { agentsDir: AGENTS_DIR });
 	startSessionCleanup();
+	logFdSnapshot("post-db-init");
+	startEventLoopMonitor();
+	startFdPollMonitor();
+
+	const { extensionPath } = getVectorRuntimeStatus();
+	const bundled = join(import.meta.dir, "synthesis-render-worker.js");
+	const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "synthesis-render-worker.ts");
+	let synthWorker: Worker | null = null;
+	try {
+		synthWorker = new Worker(workerPath);
+	} catch (err) {
+		logger.warn(
+			"daemon",
+			"synthesis worker creation failed — using sync rendering",
+			err instanceof Error ? err : undefined,
+		);
+	}
+	let synthWorkerReady = false;
+	if (synthWorker) {
+		const w = synthWorker;
+		w.postMessage({ type: "init", dbPath: MEMORY_DB, vecExtensionPath: extensionPath ?? "" });
+		await new Promise<void>((res, rej) => {
+			const timer = setTimeout(() => {
+				rej(new Error("synthesis worker init timeout"));
+			}, 10_000);
+			// Attach error/exit handlers during init to prevent unhandled
+			// 'error' events from crashing the main thread (EventEmitter
+			// convention: unhandled 'error' re-throws in the listener context).
+			const onErr = (err: unknown): void => {
+				clearTimeout(timer);
+				rej(err instanceof Error ? err : new Error(String(err)));
+			};
+			const onExit = (code: number): void => {
+				clearTimeout(timer);
+				rej(new Error(`worker exited during init (code=${code})`));
+			};
+			w.on("error", onErr);
+			w.on("exit", onExit);
+			w.once("message", (msg: unknown) => {
+				clearTimeout(timer);
+				w.removeListener("error", onErr);
+				w.removeListener("exit", onExit);
+				if (isReadyResponse(msg)) {
+					synthWorkerReady = true;
+					res();
+				} else {
+					rej(new Error("unexpected init response"));
+				}
+			});
+		}).catch((err) => {
+			logger.warn("daemon", "synthesis worker failed", err instanceof Error ? err : undefined);
+			w.terminate().catch((e) => {
+				logger.debug("daemon", "synthesis worker terminate failed", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			});
+		});
+	}
+	if (synthWorker && synthWorkerReady) {
+		setSynthesisRenderWorker(synthWorker);
+		synthWorker.on("error", (err) => {
+			logger.error("daemon", "synthesis worker error", err);
+			setSynthesisRenderWorker(null);
+		});
+		synthWorker.on("exit", (code) => {
+			logger.warn("daemon", `synthesis worker exited with code ${code}`);
+			setSynthesisRenderWorker(null);
+		});
+	}
 
 	syncAgentRoster(AGENTS_DIR);
 
@@ -2475,6 +2555,7 @@ async function main() {
 
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
+	logFdSnapshot("post-watcher");
 
 	await ensureArchitectureDoc();
 
@@ -2527,6 +2608,7 @@ async function main() {
 	}
 
 	await startPipelineRuntime(memoryCfg, telemetryCollector);
+	logFdSnapshot("post-pipeline");
 
 	initCheckpointFlush(getDbAccessor());
 
@@ -2618,6 +2700,7 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
+		logFdSnapshot("server-ready");
 
 		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
 		try {
@@ -2650,6 +2733,7 @@ async function main() {
 			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 			logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
 		});
+		startMemoryImportPoller();
 
 		const claudeProjectsDir = join(homedir(), ".claude", "projects");
 		if (existsSync(claudeProjectsDir)) {

@@ -56,7 +56,10 @@ export type LogCategory =
 	| "widget" // Widget HTML generation (Signet OS)
 	| "os-chat" // OS chat agent (natural language → MCP tools)
 	| "os-agent" // OS page-agent (visual GUI automation)
-	| "mcp-analytics"; // MCP invocation analytics
+	| "mcp-analytics" // MCP invocation analytics
+	| "config" // Configuration loading and resolution
+	| "resources" // FD / event-loop resource monitoring
+    | "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 
 export interface LogEntry {
 	timestamp: string;
