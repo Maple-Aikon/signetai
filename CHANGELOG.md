@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-16
 - Bug fixes: resolve FD exhaustion and event loop blocking with thousands of memory artifacts.
+- Refactoring: prompt for sync after restart.
 
 ### 2026-04-15
 - Bug fixes: thread deadline into OpenCode session creation.
@@ -30,6 +31,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: rebuild changelog with readable highlights.
 
 ## Release Ledger
+
+## [0.99.6] - 2026-04-16
+
+Release summary: 1 refactor.
+Tag range: `v0.99.5..v0.99.6`.
+
+### Refactoring
+
+- **cli**: prompt for sync after restart (#514)
 
 ## [0.99.5] - 2026-04-16
 
