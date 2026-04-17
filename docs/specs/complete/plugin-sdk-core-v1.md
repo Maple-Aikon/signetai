@@ -1,7 +1,7 @@
 ---
 title: "Plugin SDK Core V1 and Secrets Local Provider Extraction"
 id: plugin-sdk-core-v1
-status: approved
+status: complete
 informed_by:
   - "docs/research/technical/RESEARCH-PLUGIN-SDK-SECRETS.md"
   - "docs/specs/planning/plugin-api-ecosystem.md"

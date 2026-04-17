@@ -925,8 +925,8 @@ specs:
 
 
   - id: plugin-sdk-core-v1
-    status: approved
-    path: docs/specs/approved/plugin-sdk-core-v1.md
+    status: complete
+    path: docs/specs/complete/plugin-sdk-core-v1.md
     hard_depends_on:
       - signet-runtime
     soft_depends_on:
