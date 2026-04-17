@@ -76,6 +76,40 @@ describe("PluginHostV1", () => {
 		expect(host.checkCapabilities(SIGNET_SECRETS_PLUGIN_ID, ["secrets:write"]).status).toBe("capability-missing");
 	});
 
+	test("preserves explicit empty persisted grants during discovery", () => {
+		const path = makeStoragePath();
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(
+			path,
+			JSON.stringify({
+				version: 1,
+				plugins: {
+					[SIGNET_SECRETS_PLUGIN_ID]: {
+						enabled: true,
+						grantedCapabilities: [],
+						installedAt: "2026-04-01T00:00:00.000Z",
+						updatedAt: "2026-04-01T00:00:00.000Z",
+					},
+				},
+			}),
+		);
+
+		const host = new PluginHostV1({
+			storagePath: path,
+			auditPath: null,
+			corePluginIds: [SIGNET_SECRETS_PLUGIN_ID],
+			now: () => new Date("2026-04-16T12:00:00.000Z"),
+		});
+		const record = host.discover(signetSecretsManifest, {
+			grantedCapabilities: signetSecretsManifest.capabilities,
+		});
+
+		expect(record.grantedCapabilities).toEqual([]);
+		expect(record.pendingCapabilities).toEqual(signetSecretsManifest.capabilities);
+		const registry = JSON.parse(readFileSync(path, "utf-8"));
+		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID].grantedCapabilities).toEqual([]);
+	});
+
 	test("clips prompt contribution content to maxTokens budget", () => {
 		const host = makeHost();
 		const content = "😀😀😀😀 ascii tail should be clipped";

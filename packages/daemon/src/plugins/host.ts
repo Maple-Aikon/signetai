@@ -432,8 +432,7 @@ function parseStore(value: unknown): PluginRegistryStoreV1 {
 
 function parseStringArray(value: unknown): readonly string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
-	const values = value.filter((entry): entry is string => typeof entry === "string");
-	return values.length > 0 ? values : undefined;
+	return value.every((entry) => typeof entry === "string") ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

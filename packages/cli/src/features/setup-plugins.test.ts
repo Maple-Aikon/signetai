@@ -64,6 +64,30 @@ describe("setup core plugin registry", () => {
 		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID].enabled).toBe(true);
 	});
 
+	test("preserves explicit empty capability grants on unrelated plugin entries", () => {
+		const basePath = makeRoot();
+		const path = getSetupPluginRegistryPath(basePath);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(
+			path,
+			JSON.stringify({
+				version: 1,
+				plugins: {
+					"local.example": {
+						enabled: true,
+						grantedCapabilities: [],
+						installedAt: "2026-04-01T00:00:00.000Z",
+						updatedAt: "2026-04-01T00:00:00.000Z",
+					},
+				},
+			}),
+		);
+
+		writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled: true }, new Date("2026-04-17T12:00:00.000Z"));
+		const registry = JSON.parse(readFileSync(path, "utf-8"));
+		expect(registry.plugins["local.example"].grantedCapabilities).toEqual([]);
+	});
+
 	test("does not overwrite malformed registry files", () => {
 		const basePath = makeRoot();
 		const path = getSetupPluginRegistryPath(basePath);
