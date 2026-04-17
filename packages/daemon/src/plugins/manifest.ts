@@ -60,6 +60,17 @@ export function validatePluginManifest(
 		if (contribution.pluginId !== manifest.id) {
 			errors.push(`prompt contribution '${contribution.id}' pluginId must equal manifest id`);
 		}
+		const surface = manifest.surfaces.promptContributions.find((entry) => entry.id === contribution.id);
+		if (!surface) {
+			errors.push(`prompt contribution '${contribution.id}' is missing surface metadata`);
+		} else {
+			if (surface.target !== contribution.target) {
+				errors.push(`prompt contribution '${contribution.id}' target must match surface metadata`);
+			}
+			if (surface.mode !== contribution.mode) {
+				errors.push(`prompt contribution '${contribution.id}' mode must match surface metadata`);
+			}
+		}
 		if (contribution.maxTokens < 1) {
 			errors.push(`prompt contribution '${contribution.id}' maxTokens must be positive`);
 		}

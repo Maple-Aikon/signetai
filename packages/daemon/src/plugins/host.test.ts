@@ -34,6 +34,29 @@ describe("PluginHostV1", () => {
 		expect(disabled?.state).toBe("disabled");
 		expect(host.promptContributions()).toEqual([]);
 		expect(host.diagnostics(SIGNET_SECRETS_PLUGIN_ID)?.promptContributions).toHaveLength(1);
+		expect(host.diagnostics(SIGNET_SECRETS_PLUGIN_ID)?.promptContributionDiagnostics[0]?.included).toBe(false);
+		expect(host.checkCapabilities(SIGNET_SECRETS_PLUGIN_ID, ["secrets:list"]).status).toBe("plugin-inactive");
+	});
+
+	test("filters active surfaces and prompt contributions by granted capabilities", () => {
+		const host = makeHost();
+		host.discover(signetSecretsManifest, {
+			grantedCapabilities: ["cli:command", "secrets:list", "sdk:client"],
+		});
+
+		const record = host.get(SIGNET_SECRETS_PLUGIN_ID);
+		expect(record?.surfaces.daemonRoutes.map((route) => route.path)).toEqual(["/api/secrets"]);
+		expect(record?.surfaces.cliCommands.map((command) => command.path.join(" "))).toEqual(["secret list"]);
+		expect(record?.surfaces.sdkClients.map((client) => client.name)).toEqual(["listSecrets"]);
+		expect(record?.surfaces.promptContributions).toEqual([]);
+		expect(host.promptContributions()).toEqual([]);
+
+		const diagnostics = host.diagnostics(SIGNET_SECRETS_PLUGIN_ID);
+		expect(diagnostics?.promptContributionDiagnostics[0]?.included).toBe(false);
+		expect(diagnostics?.promptContributionDiagnostics[0]?.missingCapabilities).toEqual([
+			"prompt:contribute:user-prompt-submit",
+		]);
+		expect(host.checkCapabilities(SIGNET_SECRETS_PLUGIN_ID, ["secrets:write"]).status).toBe("capability-missing");
 	});
 
 	test("unsupported Rust sidecar manifests are blocked in V1", () => {

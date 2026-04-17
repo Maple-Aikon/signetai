@@ -31,6 +31,11 @@ structured daemon diagnostics such as `secret.listed`, `secret.stored`,
 `secret.exec_completed`; payloads include names or counts where current API
 policy already exposes them, but never raw values.
 
+Secrets API routes are guarded by the plugin registry. If `signet.secrets`
+is disabled, blocked, or missing the required grant for a route, the daemon
+returns a structured plugin-capability error. Stored secret files are left
+in place.
+
 ---
 
 ## Storage

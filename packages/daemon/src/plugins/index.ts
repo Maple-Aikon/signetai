@@ -1,3 +1,4 @@
+import { getLocalSecretProviderHealth } from "../secrets.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
 import { PluginHostV1 } from "./host.js";
 import type { PluginHostOptionsV1 } from "./host.js";
@@ -13,10 +14,7 @@ export function createDefaultPluginHost(opts: PluginHostOptionsV1 = {}): PluginH
 		source: "bundled",
 		enabled: true,
 		grantedCapabilities: signetSecretsManifest.capabilities,
-		health: {
-			status: "healthy",
-			checkedAt: new Date().toISOString(),
-		},
+		health: getLocalSecretProviderHealth(),
 	});
 	return host;
 }

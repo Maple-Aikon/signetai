@@ -5,14 +5,17 @@ import { logger } from "../logger.js";
 import { runtimeSupportedInV1, unsupportedRuntimeReason, validatePluginManifest } from "./manifest.js";
 import { EMPTY_PLUGIN_SURFACES } from "./types.js";
 import type {
+	PluginCapabilityCheckV1,
 	PluginDiagnosticsV1,
 	PluginHealthV1,
 	PluginLifecycleStateV1,
 	PluginManifestV1,
+	PluginPromptContributionDiagnosticV1,
 	PluginPromptContributionV1,
 	PluginPromptTargetV1,
 	PluginRegistryRecordV1,
 	PluginSourceV1,
+	PluginSurfaceBaseV1,
 	PluginSurfaceSummaryV1,
 } from "./types.js";
 
@@ -78,6 +81,9 @@ export class PluginHostV1 {
 		const updatedAt = timestamp;
 		const stateInfo = resolveState(manifest, enabled, opts.health, validationErrors);
 		const active = stateInfo.state === "active" || stateInfo.state === "degraded";
+		const activeSurfaces = active
+			? filterSurfacesByCapabilities(manifest.surfaces, grantedCapabilities)
+			: EMPTY_PLUGIN_SURFACES;
 		const record: PluginRegistryRecordV1 = {
 			id: manifest.id,
 			name: manifest.name,
@@ -91,7 +97,7 @@ export class PluginHostV1 {
 			declaredCapabilities: [...manifest.capabilities],
 			grantedCapabilities,
 			pendingCapabilities: manifest.capabilities.filter((capability) => !grantedCapabilities.includes(capability)),
-			surfaces: active ? manifest.surfaces : EMPTY_PLUGIN_SURFACES,
+			surfaces: activeSurfaces,
 			health: opts.health,
 			installedAt,
 			updatedAt,
@@ -149,7 +155,53 @@ export class PluginHostV1 {
 			activeSurfaces: plugin.record.surfaces,
 			plannedSurfaces: plugin.manifest.surfaces,
 			promptContributions: this.promptContributions({ pluginId: id, activeOnly: false }),
+			promptContributionDiagnostics: this.promptContributionDiagnostics(id),
 			validationErrors: plugin.validationErrors,
+		};
+	}
+
+	checkCapabilities(pluginId: string, requiredCapabilities: readonly string[]): PluginCapabilityCheckV1 {
+		const plugin = this.plugins.get(pluginId);
+		if (!plugin) {
+			return {
+				status: "plugin-not-found",
+				allowed: false,
+				pluginId,
+				reason: "Plugin not found",
+				httpStatus: 404,
+				missingCapabilities: [...requiredCapabilities],
+			};
+		}
+		const active = plugin.record.state === "active" || plugin.record.state === "degraded";
+		if (!active) {
+			return {
+				status: "plugin-inactive",
+				allowed: false,
+				pluginId,
+				reason: plugin.record.stateReason ?? `Plugin is ${plugin.record.state}`,
+				httpStatus: plugin.record.state === "blocked" ? 503 : 403,
+				missingCapabilities: [...requiredCapabilities],
+			};
+		}
+		const missingCapabilities = requiredCapabilities.filter(
+			(capability) => !plugin.record.grantedCapabilities.includes(capability),
+		);
+		if (missingCapabilities.length > 0) {
+			return {
+				status: "capability-missing",
+				allowed: false,
+				pluginId,
+				reason: `Plugin is missing required capabilities: ${missingCapabilities.join(", ")}`,
+				httpStatus: 403,
+				missingCapabilities,
+			};
+		}
+		return {
+			status: "allowed",
+			allowed: true,
+			pluginId,
+			httpStatus: 200,
+			missingCapabilities: [],
 		};
 	}
 
@@ -196,10 +248,60 @@ export class PluginHostV1 {
 			if (activeOnly && !active) continue;
 			for (const contribution of plugin.manifest.promptContributions ?? []) {
 				if (opts.target && contribution.target !== opts.target) continue;
+				const diagnostic = this.promptContributionDiagnostic(plugin, contribution);
+				if (activeOnly && !diagnostic.included) continue;
 				contributions.push(clipPromptContribution(contribution));
 			}
 		}
 		return contributions.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+	}
+
+	private promptContributionDiagnostics(pluginId: string): readonly PluginPromptContributionDiagnosticV1[] {
+		const plugin = this.plugins.get(pluginId);
+		if (!plugin) return [];
+		return (plugin.manifest.promptContributions ?? []).map((contribution) =>
+			this.promptContributionDiagnostic(plugin, contribution),
+		);
+	}
+
+	private promptContributionDiagnostic(
+		plugin: RegisteredPluginV1,
+		contribution: PluginPromptContributionV1,
+	): PluginPromptContributionDiagnosticV1 {
+		const active = plugin.record.state === "active" || plugin.record.state === "degraded";
+		if (!active) {
+			return {
+				contribution: clipPromptContribution(contribution),
+				included: false,
+				reason: plugin.record.stateReason ?? `Plugin is ${plugin.record.state}`,
+				missingCapabilities: [],
+			};
+		}
+		const surface = plugin.manifest.surfaces.promptContributions.find((entry) => entry.id === contribution.id);
+		if (!surface) {
+			return {
+				contribution: clipPromptContribution(contribution),
+				included: false,
+				reason: "Prompt contribution is missing surface metadata",
+				missingCapabilities: [],
+			};
+		}
+		const missingCapabilities = surface.requiredCapabilities.filter(
+			(capability) => !plugin.record.grantedCapabilities.includes(capability),
+		);
+		if (missingCapabilities.length > 0) {
+			return {
+				contribution: clipPromptContribution(contribution),
+				included: false,
+				reason: `Missing required capabilities: ${missingCapabilities.join(", ")}`,
+				missingCapabilities,
+			};
+		}
+		return {
+			contribution: clipPromptContribution(contribution),
+			included: true,
+			missingCapabilities: [],
+		};
 	}
 
 	private loadStore(): PluginRegistryStoreV1 {
@@ -252,6 +354,23 @@ function resolveState(
 
 function normalizeCapabilities(capabilities: readonly string[]): readonly string[] {
 	return [...new Set(capabilities)].sort();
+}
+
+function filterSurfacesByCapabilities(
+	surfaces: PluginSurfaceSummaryV1,
+	grantedCapabilities: readonly string[],
+): PluginSurfaceSummaryV1 {
+	const allowed = (surface: PluginSurfaceBaseV1): boolean =>
+		surface.requiredCapabilities.every((capability) => grantedCapabilities.includes(capability));
+	return {
+		daemonRoutes: surfaces.daemonRoutes.filter(allowed),
+		cliCommands: surfaces.cliCommands.filter(allowed),
+		mcpTools: surfaces.mcpTools.filter(allowed),
+		dashboardPanels: surfaces.dashboardPanels.filter(allowed),
+		sdkClients: surfaces.sdkClients.filter(allowed),
+		connectorCapabilities: surfaces.connectorCapabilities.filter(allowed),
+		promptContributions: surfaces.promptContributions.filter(allowed),
+	};
 }
 
 function parseStore(value: unknown): PluginRegistryStoreV1 {

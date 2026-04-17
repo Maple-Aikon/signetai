@@ -149,7 +149,26 @@ export interface PluginDiagnosticsV1 {
 	readonly activeSurfaces: PluginSurfaceSummaryV1;
 	readonly plannedSurfaces: PluginSurfaceSummaryV1;
 	readonly promptContributions: readonly PluginPromptContributionV1[];
+	readonly promptContributionDiagnostics: readonly PluginPromptContributionDiagnosticV1[];
 	readonly validationErrors: readonly string[];
+}
+
+export interface PluginPromptContributionDiagnosticV1 {
+	readonly contribution: PluginPromptContributionV1;
+	readonly included: boolean;
+	readonly reason?: string;
+	readonly missingCapabilities: readonly string[];
+}
+
+export type PluginCapabilityCheckStatusV1 = "allowed" | "plugin-not-found" | "plugin-inactive" | "capability-missing";
+
+export interface PluginCapabilityCheckV1 {
+	readonly status: PluginCapabilityCheckStatusV1;
+	readonly allowed: boolean;
+	readonly pluginId: string;
+	readonly reason?: string;
+	readonly httpStatus: 200 | 403 | 404 | 503;
+	readonly missingCapabilities: readonly string[];
 }
 
 export interface PluginListResponseV1 {

@@ -788,6 +788,13 @@ export interface PluginPromptContribution {
 	readonly content: string;
 }
 
+export interface PluginPromptContributionDiagnostic {
+	readonly contribution: PluginPromptContribution;
+	readonly included: boolean;
+	readonly reason?: string;
+	readonly missingCapabilities: readonly string[];
+}
+
 export interface PluginListResponse {
 	readonly plugins: readonly PluginRegistryRecord[];
 }
@@ -804,6 +811,7 @@ export interface PluginDiagnosticsResponse {
 		readonly activeSurfaces: PluginSurfaceSummary;
 		readonly plannedSurfaces: PluginSurfaceSummary;
 		readonly promptContributions: readonly PluginPromptContribution[];
+		readonly promptContributionDiagnostics: readonly PluginPromptContributionDiagnostic[];
 		readonly validationErrors: readonly string[];
 	};
 }

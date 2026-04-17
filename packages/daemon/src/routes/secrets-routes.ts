@@ -1,6 +1,8 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { logger } from "../logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
+import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
+import type { PluginHostV1 } from "../plugins/index.js";
 import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "../secrets.js";
 import { parseOptionalBoolean, parseOptionalString, readOptionalJsonObject } from "./utils.js";
 
@@ -26,8 +28,10 @@ async function resolveOnePasswordToken(explicitToken?: string): Promise<string> 
 	return getSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
 }
 
-export function registerSecretRoutes(app: Hono): void {
+export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
 	app.get("/api/secrets", (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:list"]);
+		if (denied) return denied;
 		try {
 			const names = listSecrets();
 			return c.json({ secrets: names });
@@ -38,12 +42,14 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.get("/api/secrets/1password/status", async (c) => {
-		const configured = hasSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
-		if (!configured) {
-			return c.json({ configured: false, connected: false, vaults: [] });
-		}
-
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		if (denied) return denied;
 		try {
+			const configured = hasSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
+			if (!configured) {
+				return c.json({ configured: false, connected: false, vaults: [] });
+			}
+
 			const token = await resolveOnePasswordToken();
 			const vaults = await listOnePasswordVaults(token);
 			return c.json({
@@ -65,6 +71,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.post("/api/secrets/1password/connect", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
 		try {
 			const body = await readOptionalJsonObject(c);
 			if (!body) {
@@ -97,6 +105,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.delete("/api/secrets/1password/connect", (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
 		try {
 			const deleted = deleteSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
 			return c.json({ success: true, disconnected: true, existed: deleted });
@@ -108,6 +118,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.get("/api/secrets/1password/vaults", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		if (denied) return denied;
 		try {
 			const token = await resolveOnePasswordToken();
 			const vaults = await listOnePasswordVaults(token);
@@ -120,6 +132,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.post("/api/secrets/1password/import", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
 		try {
 			const body = await readOptionalJsonObject(c);
 			if (!body) {
@@ -156,6 +170,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.post("/api/secrets/exec", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		if (denied) return denied;
 		try {
 			const body = (await c.req.json()) as {
 				command?: string;
@@ -183,6 +199,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.post("/api/secrets/:name/exec", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
 			const body = (await c.req.json()) as {
@@ -210,6 +228,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.post("/api/secrets/:name", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:write"]);
+		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
 			const body = (await c.req.json()) as { value?: string };
@@ -227,6 +247,8 @@ export function registerSecretRoutes(app: Hono): void {
 	});
 
 	app.delete("/api/secrets/:name", (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:delete"]);
+		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
 			const deleted = deleteSecret(name);
@@ -238,4 +260,22 @@ export function registerSecretRoutes(app: Hono): void {
 			return c.json({ error: (e as Error).message }, 500);
 		}
 	});
+}
+
+function rejectIfCapabilityDenied(
+	c: Context,
+	host: PluginHostV1,
+	requiredCapabilities: readonly string[],
+): Response | null {
+	const check = host.checkCapabilities(SIGNET_SECRETS_PLUGIN_ID, requiredCapabilities);
+	if (check.allowed) return null;
+	const body = {
+		error: check.reason ?? "Plugin capability denied",
+		pluginId: check.pluginId,
+		status: check.status,
+		missingCapabilities: check.missingCapabilities,
+	};
+	if (check.httpStatus === 404) return c.json(body, 404);
+	if (check.httpStatus === 503) return c.json(body, 503);
+	return c.json(body, 403);
 }

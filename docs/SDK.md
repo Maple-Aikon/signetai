@@ -837,6 +837,7 @@ diagnostics for one plugin.
 ```typescript
 const diagnostics = await signet.getPluginDiagnostics("signet.secrets");
 console.log(diagnostics.plugin.activeSurfaces.sdkClients);
+console.log(diagnostics.plugin.promptContributionDiagnostics);
 ```
 
 **`listPluginPromptContributions()`**: List active plugin prompt

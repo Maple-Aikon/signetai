@@ -1548,7 +1548,9 @@ surfaces. Diagnostics never include raw secret values.
 ### GET /api/plugins
 
 List registered plugins and their lifecycle state, grants, pending
-capabilities, and active surface metadata.
+capabilities, and active surface metadata. Active surface metadata is
+filtered by granted capabilities. Planned surfaces remain visible through
+plugin diagnostics.
 
 **Response**
 
@@ -1585,11 +1587,13 @@ registered.
 ### GET /api/plugins/:id/diagnostics
 
 Return the registry record, manifest metadata, active surfaces, planned
-surfaces, prompt contributions, and validation errors for a plugin.
+surfaces, prompt contributions, prompt inclusion/exclusion diagnostics, and
+validation errors for a plugin.
 
 ### GET /api/plugins/prompt-contributions
 
-List active prompt contributions from enabled plugins.
+List active prompt contributions from enabled plugins with the required
+prompt capability grant.
 
 **Response**
 
@@ -1637,6 +1641,9 @@ secrets are stored encrypted on disk at `$SIGNET_WORKSPACE/.secrets/`.
 Values are never returned in ordinary API responses, only names are
 exposed. Bare names such as `OPENAI_API_KEY` are compatibility aliases
 for local provider references such as `local://OPENAI_API_KEY`.
+Secrets routes require the matching granted `signet.secrets` capability. If
+the plugin is disabled, blocked, or missing a route capability, the route
+returns a structured plugin-capability error without deleting stored data.
 Secret operations emit structured daemon diagnostics for listing,
 storage, deletion, command injection, and command completion. These
 diagnostics never include raw secret values.

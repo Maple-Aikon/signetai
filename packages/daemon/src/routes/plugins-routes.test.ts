@@ -36,11 +36,13 @@ describe("plugin routes", () => {
 				record: { id: string };
 				activeSurfaces: { mcpTools: Array<{ name: string }> };
 				plannedSurfaces: { daemonRoutes: Array<{ path: string }> };
+				promptContributionDiagnostics: Array<{ included: boolean }>;
 			};
 		};
 		expect(body.plugin.record.id).toBe(SIGNET_SECRETS_PLUGIN_ID);
 		expect(body.plugin.activeSurfaces.mcpTools.map((tool) => tool.name)).toContain("secret_list");
 		expect(body.plugin.plannedSurfaces.daemonRoutes.map((route) => route.path)).toContain("/api/secrets");
+		expect(body.plugin.promptContributionDiagnostics[0]?.included).toBe(true);
 	});
 
 	test("GET /api/plugins/prompt-contributions returns active contributions only", async () => {

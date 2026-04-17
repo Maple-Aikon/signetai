@@ -304,18 +304,22 @@ export const localSecretProvider: LocalSecretProviderV1 = {
 		};
 	},
 	async health(_ctx) {
-		try {
-			loadStore();
-			return { status: "healthy", checkedAt: new Date().toISOString() };
-		} catch (err) {
-			return {
-				status: "unhealthy",
-				message: err instanceof Error ? err.message : String(err),
-				checkedAt: new Date().toISOString(),
-			};
-		}
+		return getLocalSecretProviderHealth();
 	},
 };
+
+export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
+	try {
+		loadStore();
+		return { status: "healthy", checkedAt: new Date().toISOString() };
+	} catch (err) {
+		return {
+			status: "unhealthy",
+			message: err instanceof Error ? err.message : String(err),
+			checkedAt: new Date().toISOString(),
+		};
+	}
+}
 
 // Belt-and-suspenders: reject obvious shell metacharacters even though
 // we no longer use sh -c. Catches injection attempts early with a

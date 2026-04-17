@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
 import { deleteSecret, getSecret, hasSecret, listSecrets, localSecretProvider, putSecret } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -19,6 +20,7 @@ describe("local secrets provider", () => {
 	});
 
 	afterEach(() => {
+		resetDefaultPluginHostForTests();
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
@@ -52,6 +54,18 @@ describe("local secrets provider", () => {
 		const health = await localSecretProvider.health({});
 		expect(health.status).toBe("unhealthy");
 		expect(readFileSync(secretsFile(), "utf-8")).toBe("not-json");
+	});
+
+	test("default signet.secrets plugin degrades when the local provider is unhealthy", () => {
+		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
+		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });
+		resetDefaultPluginHostForTests();
+
+		const plugin = getDefaultPluginHost().get(SIGNET_SECRETS_PLUGIN_ID);
+
+		expect(plugin?.state).toBe("degraded");
+		expect(plugin?.health?.status).toBe("unhealthy");
+		expect(plugin?.stateReason).toContain("Failed to read secrets store");
 	});
 
 	test("delete accepts local:// compatibility references", async () => {

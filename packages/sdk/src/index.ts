@@ -1197,6 +1197,7 @@ export type {
 	PluginLifecycleState,
 	PluginListResponse,
 	PluginPromptContribution,
+	PluginPromptContributionDiagnostic,
 	PluginPromptContributionListResponse,
 	PluginPromptMode,
 	PluginPromptSummary,

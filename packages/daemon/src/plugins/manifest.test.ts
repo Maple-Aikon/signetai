@@ -26,6 +26,7 @@ describe("plugin manifest validation", () => {
 						requiredCapabilities: ["secrets:exec"],
 					},
 				],
+				promptContributions: [],
 			},
 			docs: { capabilities: {} },
 		};
@@ -35,5 +36,6 @@ describe("plugin manifest validation", () => {
 		expect(errors).toContain("version must be SemVer");
 		expect(errors).toContain("capability 'secrets:list' is missing docs metadata");
 		expect(errors).toContain("surface 'Example route' requires undeclared capability 'secrets:exec'");
+		expect(errors).toContain("prompt contribution 'signet.secrets.credential-guidance' is missing surface metadata");
 	});
 });
