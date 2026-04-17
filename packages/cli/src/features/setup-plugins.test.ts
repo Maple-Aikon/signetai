@@ -63,4 +63,35 @@ describe("setup core plugin registry", () => {
 		expect(registry.plugins["local.example"].grantedCapabilities).toEqual(["example:read"]);
 		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID].enabled).toBe(true);
 	});
+
+	test("does not overwrite malformed registry files", () => {
+		const basePath = makeRoot();
+		const path = getSetupPluginRegistryPath(basePath);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, "{not-json");
+
+		expect(readSetupCorePluginEnabled(basePath)).toBeNull();
+		expect(() => writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled: true })).toThrow(
+			"Refusing to update plugin registry",
+		);
+		expect(readFileSync(path, "utf-8")).toBe("{not-json");
+	});
+
+	test("does not drop invalid unrelated plugin entries", () => {
+		const basePath = makeRoot();
+		const path = getSetupPluginRegistryPath(basePath);
+		mkdirSync(dirname(path), { recursive: true });
+		const content = JSON.stringify({
+			version: 1,
+			plugins: {
+				"local.example": "invalid-entry",
+			},
+		});
+		writeFileSync(path, content);
+
+		expect(() => writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled: true })).toThrow(
+			"expected plugin registry entry local.example to be an object",
+		);
+		expect(readFileSync(path, "utf-8")).toBe(content);
+	});
 });
