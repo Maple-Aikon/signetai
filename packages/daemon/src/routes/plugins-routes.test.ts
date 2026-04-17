@@ -1,13 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Hono } from "hono";
+import { recordPluginAuditEvent } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
 import { registerPluginRoutes } from "./plugins-routes.js";
+
+const originalSignetPath = process.env.SIGNET_PATH;
+let agentsDir = "";
 
 function makeApp(): Hono {
 	const app = new Hono();
 	const host = new PluginHostV1({
 		storagePath: null,
+		auditPath: null,
 		corePluginIds: [SIGNET_SECRETS_PLUGIN_ID],
 		now: () => new Date("2026-04-16T12:00:00.000Z"),
 	});
@@ -17,6 +25,18 @@ function makeApp(): Hono {
 }
 
 describe("plugin routes", () => {
+	afterEach(() => {
+		if (originalSignetPath === undefined) {
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
+		} else {
+			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (agentsDir && existsSync(agentsDir)) {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+		agentsDir = "";
+	});
+
 	test("GET /api/plugins lists signet.secrets diagnostics metadata", async () => {
 		const res = await makeApp().request("/api/plugins");
 		expect(res.status).toBe(200);
@@ -64,5 +84,30 @@ describe("plugin routes", () => {
 		const inactive = (await second.json()) as { activeCount: number; contributions: unknown[] };
 		expect(inactive.activeCount).toBe(0);
 		expect(inactive.contributions).toEqual([]);
+	});
+
+	test("GET /api/plugins/audit lists durable plugin audit events", async () => {
+		agentsDir = join(tmpdir(), `signet-plugin-audit-routes-${process.pid}-${Date.now()}`);
+		process.env.SIGNET_PATH = agentsDir;
+		mkdirSync(agentsDir, { recursive: true });
+		recordPluginAuditEvent({
+			event: "plugin.enabled",
+			pluginId: SIGNET_SECRETS_PLUGIN_ID,
+			source: "plugin-host",
+			data: { value: "raw-secret", name: "OPENAI_API_KEY" },
+			timestamp: "2026-04-16T12:00:00.000Z",
+		});
+
+		const res = await makeApp().request("/api/plugins/audit?pluginId=signet.secrets&limit=5");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			count: number;
+			events: Array<{ event: string; pluginId: string; data: Record<string, unknown> }>;
+		};
+		expect(body.count).toBe(1);
+		expect(body.events[0]?.event).toBe("plugin.enabled");
+		expect(body.events[0]?.pluginId).toBe(SIGNET_SECRETS_PLUGIN_ID);
+		expect(body.events[0]?.data.value).toBe("[REDACTED]");
+		expect(body.events[0]?.data.name).toBe("OPENAI_API_KEY");
 	});
 });

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import sodium from "libsodium-wrappers";
 import { logger } from "./logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
+import { recordPluginAuditEvent } from "./plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID } from "./plugins/bundled/secrets.js";
 
 // ---------------------------------------------------------------------------
@@ -438,6 +439,16 @@ function validateName(name: string): void {
 }
 
 function recordSecretEvent(event: string, data: Record<string, unknown>): void {
+	recordPluginAuditEvent({
+		event,
+		pluginId: SIGNET_SECRETS_PLUGIN_ID,
+		result: event === "secret.exec_completed" && data.code !== 0 ? "error" : "ok",
+		source: "secrets-provider",
+		data: {
+			providerId: "local",
+			...data,
+		},
+	});
 	logger.info("secrets", event, {
 		pluginId: SIGNET_SECRETS_PLUGIN_ID,
 		providerId: "local",

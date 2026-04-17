@@ -42,6 +42,7 @@ import type {
 	OnePasswordImportResult,
 	OnePasswordStatus,
 	PipelineStatusResponse,
+	PluginAuditListResponse,
 	PluginDiagnosticsResponse,
 	PluginListResponse,
 	PluginPromptContributionListResponse,
@@ -1042,6 +1043,25 @@ export class SignetClient extends SignetClientHelpers {
 		return this.transport.get<PluginPromptContributionListResponse>("/api/plugins/prompt-contributions");
 	}
 
+	/**
+	 * List durable plugin audit events. Values marked sensitive by the daemon are redacted.
+	 */
+	async listPluginAuditEvents(opts?: {
+		readonly pluginId?: string;
+		readonly event?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly limit?: number;
+	}): Promise<PluginAuditListResponse> {
+		return this.transport.get<PluginAuditListResponse>("/api/plugins/audit", {
+			pluginId: opts?.pluginId,
+			event: opts?.event,
+			since: opts?.since,
+			until: opts?.until,
+			limit: opts?.limit,
+		});
+	}
+
 	// --- Skills ---
 
 	/**
@@ -1190,6 +1210,10 @@ export type {
 	OnePasswordImportResult,
 	OnePasswordStatus,
 	PipelineStatusResponse,
+	PluginAuditEvent,
+	PluginAuditListResponse,
+	PluginAuditResult,
+	PluginAuditSource,
 	PluginConnectorSummary,
 	PluginDashboardSummary,
 	PluginDiagnosticsResponse,

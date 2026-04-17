@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { logger } from "../logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
+import { recordPluginAuditEvent } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "../secrets.js";
@@ -275,6 +276,20 @@ function rejectIfCapabilityDenied(
 		status: check.status,
 		missingCapabilities: check.missingCapabilities,
 	};
+	recordPluginAuditEvent({
+		event: "plugin.capability_denied",
+		pluginId: check.pluginId,
+		result: "denied",
+		source: "secrets-routes",
+		data: {
+			path: c.req.path,
+			method: c.req.method,
+			status: check.status,
+			httpStatus: check.httpStatus,
+			requiredCapabilities,
+			missingCapabilities: check.missingCapabilities,
+		},
+	});
 	if (check.httpStatus === 404) return c.json(body, 404);
 	if (check.httpStatus === 503) return c.json(body, 503);
 	return c.json(body, 403);

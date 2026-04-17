@@ -31,6 +31,8 @@ export function resetDefaultPluginHostForTests(): void {
 }
 
 export { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
+export { getDefaultPluginAuditPath, queryPluginAuditEvents, recordPluginAuditEvent } from "./audit.js";
 export { PluginHostV1, getDefaultPluginRegistryPath } from "./host.js";
 export { runtimeSupportedInV1, unsupportedRuntimeReason, validatePluginManifest } from "./manifest.js";
+export type * from "./audit.js";
 export type * from "./types.js";

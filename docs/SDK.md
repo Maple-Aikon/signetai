@@ -847,6 +847,18 @@ contributions.
 const { contributions } = await signet.listPluginPromptContributions();
 ```
 
+**`listPluginAuditEvents(opts?)`**: List durable plugin audit events.
+Sensitive fields are redacted by the daemon.
+
+```typescript
+const audit = await signet.listPluginAuditEvents({
+  pluginId: "signet.secrets",
+  event: "plugin.capability_denied",
+  limit: 20,
+});
+console.log(audit.events[0]?.result);
+```
+
 
 Skills Marketplace
 ---

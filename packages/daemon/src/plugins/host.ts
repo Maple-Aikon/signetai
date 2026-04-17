@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { logger } from "../logger.js";
+import { recordPluginAuditEvent } from "./audit.js";
 import { runtimeSupportedInV1, unsupportedRuntimeReason, validatePluginManifest } from "./manifest.js";
 import { EMPTY_PLUGIN_SURFACES } from "./types.js";
 import type {
@@ -40,6 +41,7 @@ interface RegisteredPluginV1 {
 
 export interface PluginHostOptionsV1 {
 	readonly storagePath?: string | null;
+	readonly auditPath?: string | null;
 	readonly now?: () => Date;
 	readonly corePluginIds?: readonly string[];
 }
@@ -53,6 +55,7 @@ export interface DiscoverPluginOptionsV1 {
 
 export class PluginHostV1 {
 	private readonly storagePath: string | null;
+	private readonly auditPath: string | null | undefined;
 	private readonly now: () => Date;
 	private readonly corePluginIds: readonly string[];
 	private readonly plugins = new Map<string, RegisteredPluginV1>();
@@ -60,6 +63,7 @@ export class PluginHostV1 {
 
 	constructor(opts: PluginHostOptionsV1 = {}) {
 		this.storagePath = opts.storagePath === undefined ? getDefaultPluginRegistryPath() : opts.storagePath;
+		this.auditPath = opts.auditPath;
 		this.now = opts.now ?? (() => new Date());
 		this.corePluginIds = opts.corePluginIds ?? [];
 		this.store = this.loadStore();
@@ -122,18 +126,23 @@ export class PluginHostV1 {
 			},
 		};
 		this.saveStore();
-		recordPluginEvent("plugin.discovered", record);
+		recordPluginEvent("plugin.discovered", record, this.auditPath);
 		if (record.state === "blocked") {
-			recordPluginEvent("plugin.blocked", record);
+			recordPluginEvent("plugin.blocked", record, this.auditPath);
 		}
 		if (opts.health?.status === "unhealthy") {
-			recordPluginEvent("plugin.health_failed", record);
+			recordPluginEvent("plugin.health_failed", record, this.auditPath);
 		}
 		if (record.state === "degraded") {
-			recordPluginEvent("plugin.degraded", record);
+			recordPluginEvent("plugin.degraded", record, this.auditPath);
 		}
 		if (active) {
-			recordPromptContributionEvents("prompt.contribution_added", record, manifest.promptContributions ?? []);
+			recordPromptContributionEvents(
+				"prompt.contribution_added",
+				record,
+				manifest.promptContributions ?? [],
+				this.auditPath,
+			);
 		}
 		return record;
 	}
@@ -226,9 +235,14 @@ export class PluginHostV1 {
 			grantedCapabilities: plugin.record.grantedCapabilities,
 			health: plugin.record.health,
 		});
-		recordPluginEvent(enabled ? "plugin.enabled" : "plugin.disabled", record);
+		recordPluginEvent(enabled ? "plugin.enabled" : "plugin.disabled", record, this.auditPath);
 		if (!enabled) {
-			recordPromptContributionEvents("prompt.contribution_removed", record, plugin.manifest.promptContributions ?? []);
+			recordPromptContributionEvents(
+				"prompt.contribution_removed",
+				record,
+				plugin.manifest.promptContributions ?? [],
+				this.auditPath,
+			);
 		}
 		return record;
 	}
@@ -409,13 +423,26 @@ function clipPromptContribution(contribution: PluginPromptContributionV1): Plugi
 	};
 }
 
-function recordPluginEvent(event: string, record: PluginRegistryRecordV1): void {
-	logger.info("plugins", event, {
-		pluginId: record.id,
+function recordPluginEvent(event: string, record: PluginRegistryRecordV1, auditPath?: string | null): void {
+	const data = {
 		state: record.state,
 		enabled: record.enabled,
-		timestamp: new Date().toISOString(),
 		...(record.stateReason ? { stateReason: record.stateReason } : {}),
+	};
+	recordPluginAuditEvent(
+		{
+			event,
+			pluginId: record.id,
+			result: auditResultForRecord(record),
+			source: "plugin-host",
+			data,
+		},
+		auditPath,
+	);
+	logger.info("plugins", event, {
+		pluginId: record.id,
+		...data,
+		timestamp: new Date().toISOString(),
 	});
 }
 
@@ -423,14 +450,34 @@ function recordPromptContributionEvents(
 	event: string,
 	record: PluginRegistryRecordV1,
 	contributions: readonly PluginPromptContributionV1[],
+	auditPath?: string | null,
 ): void {
 	for (const contribution of contributions) {
-		logger.info("plugins", event, {
-			pluginId: record.id,
+		const data = {
 			contributionId: contribution.id,
 			target: contribution.target,
 			mode: contribution.mode,
+		};
+		recordPluginAuditEvent(
+			{
+				event,
+				pluginId: record.id,
+				result: auditResultForRecord(record),
+				source: "plugin-host",
+				data,
+			},
+			auditPath,
+		);
+		logger.info("plugins", event, {
+			pluginId: record.id,
+			...data,
 			timestamp: new Date().toISOString(),
 		});
 	}
+}
+
+function auditResultForRecord(record: PluginRegistryRecordV1): "ok" | "denied" | "degraded" {
+	if (record.state === "blocked" || record.state === "disabled") return "denied";
+	if (record.state === "degraded") return "degraded";
+	return "ok";
 }

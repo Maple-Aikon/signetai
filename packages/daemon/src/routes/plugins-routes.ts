@@ -1,6 +1,8 @@
 import type { Hono } from "hono";
+import { queryPluginAuditEvents } from "../plugins/audit.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
+import { parseBoundedInt, parseIsoDateQuery } from "./utils.js";
 
 export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
 	app.get("/api/plugins", (c) => {
@@ -10,6 +12,18 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	app.get("/api/plugins/prompt-contributions", (c) => {
 		const contributions = host.promptContributions();
 		return c.json({ contributions, activeCount: contributions.length });
+	});
+
+	app.get("/api/plugins/audit", (c) => {
+		return c.json(
+			queryPluginAuditEvents({
+				pluginId: c.req.query("pluginId") ?? undefined,
+				event: c.req.query("event") ?? undefined,
+				since: parseIsoDateQuery(c.req.query("since") ?? undefined),
+				until: parseIsoDateQuery(c.req.query("until") ?? undefined),
+				limit: parseBoundedInt(c.req.query("limit"), 100, 1, 500),
+			}),
+		);
 	});
 
 	app.get("/api/plugins/:id/diagnostics", (c) => {

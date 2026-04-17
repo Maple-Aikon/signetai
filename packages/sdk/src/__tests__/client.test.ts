@@ -491,6 +491,7 @@ describe("SignetClient", () => {
 			if (req.path === "/api/plugins/signet.secrets/diagnostics")
 				return { plugin: { record: { id: "signet.secrets" } } };
 			if (req.path === "/api/plugins/prompt-contributions") return { contributions: [], activeCount: 0 };
+			if (req.path === "/api/plugins/audit") return { events: [], count: 0 };
 			return { ok: true };
 		});
 
@@ -505,5 +506,23 @@ describe("SignetClient", () => {
 
 		await client.listPluginPromptContributions();
 		expect(lastRequest().path).toBe("/api/plugins/prompt-contributions");
+
+		await client.listPluginAuditEvents({
+			pluginId: "signet.secrets",
+			event: "plugin.enabled",
+			since: "2026-04-16T00:00:00.000Z",
+			until: "2026-04-17T00:00:00.000Z",
+			limit: 10,
+		});
+		expect(lastRequest()).toMatchObject({
+			path: "/api/plugins/audit",
+			query: {
+				pluginId: "signet.secrets",
+				event: "plugin.enabled",
+				since: "2026-04-16T00:00:00.000Z",
+				until: "2026-04-17T00:00:00.000Z",
+				limit: "10",
+			},
+		});
 	});
 });

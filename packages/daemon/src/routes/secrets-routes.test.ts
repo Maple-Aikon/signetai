@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { queryPluginAuditEvents } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
 import { registerSecretRoutes } from "./secrets-routes.js";
@@ -13,6 +14,7 @@ let agentsDir = "";
 function makeHost(grantedCapabilities: readonly string[] = signetSecretsManifest.capabilities): PluginHostV1 {
 	const host = new PluginHostV1({
 		storagePath: null,
+		auditPath: null,
 		corePluginIds: [SIGNET_SECRETS_PLUGIN_ID],
 		now: () => new Date("2026-04-16T12:00:00.000Z"),
 	});
@@ -57,6 +59,13 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(res.status).toBe(403);
 		expect(body.status).toBe("capability-missing");
 		expect(body.missingCapabilities).toEqual(["secrets:write"]);
+		const audit = queryPluginAuditEvents({
+			pluginId: SIGNET_SECRETS_PLUGIN_ID,
+			event: "plugin.capability_denied",
+		});
+		expect(audit.count).toBe(1);
+		expect(audit.events[0]?.result).toBe("denied");
+		expect(audit.events[0]?.source).toBe("secrets-routes");
 	});
 
 	test("disabled signet.secrets blocks route access without deleting stored secrets", async () => {

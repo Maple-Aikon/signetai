@@ -804,6 +804,25 @@ export interface PluginPromptContributionListResponse {
 	readonly activeCount: number;
 }
 
+export type PluginAuditResult = "ok" | "denied" | "degraded" | "error";
+export type PluginAuditSource = "plugin-host" | "secrets-provider" | "secrets-routes";
+
+export interface PluginAuditEvent {
+	readonly id: string;
+	readonly timestamp: string;
+	readonly event: string;
+	readonly pluginId: string;
+	readonly result: PluginAuditResult;
+	readonly source: PluginAuditSource;
+	readonly agentId?: string;
+	readonly data: Record<string, unknown>;
+}
+
+export interface PluginAuditListResponse {
+	readonly events: readonly PluginAuditEvent[];
+	readonly count: number;
+}
+
 export interface PluginDiagnosticsResponse {
 	readonly plugin: {
 		readonly record: PluginRegistryRecord;

@@ -1614,6 +1614,42 @@ prompt capability grant.
 }
 ```
 
+### GET /api/plugins/audit
+
+List durable plugin audit events from
+`$SIGNET_WORKSPACE/.daemon/plugins/audit-v1.ndjson`. Events are newest
+first, capped to 500 rows, and sensitive fields are redacted before they
+are written and again when read.
+
+**Query parameters**
+
+- `pluginId` - optional plugin id filter, for example `signet.secrets`
+- `event` - optional exact event name filter
+- `since` / `until` - optional ISO timestamp bounds
+- `limit` - optional row limit, default `100`, max `500`
+
+**Response**
+
+```json
+{
+  "events": [
+    {
+      "id": "m36n9q5a-x4w2k8p1",
+      "timestamp": "2026-04-16T12:00:00.000Z",
+      "event": "plugin.enabled",
+      "pluginId": "signet.secrets",
+      "result": "ok",
+      "source": "plugin-host",
+      "data": {
+        "state": "active",
+        "enabled": true
+      }
+    }
+  ],
+  "count": 1
+}
+```
+
 ### PATCH /api/plugins/:id
 
 Enable or disable a registered plugin.
@@ -1630,7 +1666,9 @@ surface metadata. It does not delete stored secrets.
 Plugin lifecycle changes emit structured daemon diagnostics including
 `plugin.discovered`, `plugin.enabled`, `plugin.disabled`,
 `plugin.blocked`, `plugin.degraded`, `plugin.health_failed`,
-`prompt.contribution_added`, and `prompt.contribution_removed`.
+`plugin.capability_denied`, `prompt.contribution_added`, and
+`prompt.contribution_removed`. The same events are appended to the durable
+plugin audit log for diagnostics and support.
 
 
 Secrets

@@ -29,7 +29,10 @@ adopts the existing encrypted store in place. Secret operations emit
 structured daemon diagnostics such as `secret.listed`, `secret.stored`,
 `secret.deleted`, `secret.resolved_for_exec`, `secret.exec_started`, and
 `secret.exec_completed`; payloads include names or counts where current API
-policy already exposes them, but never raw values.
+policy already exposes them, but never raw values. Plugin lifecycle,
+capability-denial, and secret-provider events are also appended to
+`$SIGNET_WORKSPACE/.daemon/plugins/audit-v1.ndjson` with sensitive fields
+redacted before storage.
 
 Secrets API routes are guarded by the plugin registry. If `signet.secrets`
 is disabled, blocked, or missing the required grant for a route, the daemon
@@ -254,6 +257,7 @@ The full secrets API is documented in [API.md](./API.md#secrets-api). Summary:
 | `/api/secrets/1password/vaults` | GET | List accessible 1Password vaults |
 | `/api/secrets/1password/import` | POST | Import vault secrets into Signet |
 | `/api/plugins` | GET | List plugin registry records, including `signet.secrets` |
+| `/api/plugins/audit` | GET | List redacted durable plugin audit events |
 | `/api/plugins/signet.secrets/diagnostics` | GET | Inspect Secrets plugin diagnostics and surface metadata |
 
 ---

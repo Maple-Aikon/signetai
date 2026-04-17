@@ -6,6 +6,7 @@ import type { PluginManifestV1 } from "./types.js";
 function makeHost(): PluginHostV1 {
 	return new PluginHostV1({
 		storagePath: null,
+		auditPath: null,
 		corePluginIds: [SIGNET_SECRETS_PLUGIN_ID, "signet.rust-example"],
 		now: () => new Date("2026-04-16T12:00:00.000Z"),
 	});
