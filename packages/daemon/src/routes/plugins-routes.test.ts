@@ -94,7 +94,13 @@ describe("plugin routes", () => {
 			event: "plugin.enabled",
 			pluginId: SIGNET_SECRETS_PLUGIN_ID,
 			source: "plugin-host",
-			data: { value: "raw-secret", name: "OPENAI_API_KEY" },
+			data: {
+				value: "raw-secret",
+				secret: "raw-secret-under-secret-key",
+				name: "OPENAI_API_KEY",
+				nested: { clientSecret: "nested-secret" },
+				command: "OPENAI_API_KEY=sk-test1234567890abcdef bun test",
+			},
 			timestamp: "2026-04-16T12:00:00.000Z",
 		});
 
@@ -108,6 +114,9 @@ describe("plugin routes", () => {
 		expect(body.events[0]?.event).toBe("plugin.enabled");
 		expect(body.events[0]?.pluginId).toBe(SIGNET_SECRETS_PLUGIN_ID);
 		expect(body.events[0]?.data.value).toBe("[REDACTED]");
+		expect(body.events[0]?.data.secret).toBe("[REDACTED]");
 		expect(body.events[0]?.data.name).toBe("OPENAI_API_KEY");
+		expect(body.events[0]?.data.nested).toEqual({ clientSecret: "[REDACTED]" });
+		expect(body.events[0]?.data.command).toBe("OPENAI_API_KEY=[REDACTED] bun test");
 	});
 });
