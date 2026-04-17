@@ -42,6 +42,10 @@ import type {
 	OnePasswordImportResult,
 	OnePasswordStatus,
 	PipelineStatusResponse,
+	PluginDiagnosticsResponse,
+	PluginListResponse,
+	PluginPromptContributionListResponse,
+	PluginRegistryRecord,
 	RecallResponse,
 	RecoverResult,
 	RememberResult,
@@ -79,11 +83,12 @@ export interface SignetClientConfig {
 	readonly token?: string;
 }
 
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: P2 methods are mixed into SignetClient below for compatibility.
 export class SignetClient extends SignetClientHelpers {
 	constructor(config?: SignetClientConfig) {
 		const headers: Record<string, string> = {};
 		if (config?.token) {
-			headers["Authorization"] = `Bearer ${config.token}`;
+			headers.Authorization = `Bearer ${config.token}`;
 		}
 		if (config?.actor) {
 			headers["x-signet-actor"] = config.actor;
@@ -1007,6 +1012,36 @@ export class SignetClient extends SignetClientHelpers {
 		return this.transport.post<OnePasswordImportResult>("/api/secrets/1password/import", opts);
 	}
 
+	// --- Plugins ---
+
+	/**
+	 * List daemon-owned plugin registry records.
+	 */
+	async listPlugins(): Promise<PluginListResponse> {
+		return this.transport.get<PluginListResponse>("/api/plugins");
+	}
+
+	/**
+	 * Get one plugin registry record.
+	 */
+	async getPlugin(id: string): Promise<PluginRegistryRecord> {
+		return this.transport.get<PluginRegistryRecord>(`/api/plugins/${id}`);
+	}
+
+	/**
+	 * Get plugin diagnostics including manifest, surfaces, and prompt metadata.
+	 */
+	async getPluginDiagnostics(id: string): Promise<PluginDiagnosticsResponse> {
+		return this.transport.get<PluginDiagnosticsResponse>(`/api/plugins/${id}/diagnostics`);
+	}
+
+	/**
+	 * List active plugin prompt contributions.
+	 */
+	async listPluginPromptContributions(): Promise<PluginPromptContributionListResponse> {
+		return this.transport.get<PluginPromptContributionListResponse>("/api/plugins/prompt-contributions");
+	}
+
 	// --- Skills ---
 
 	/**
@@ -1155,6 +1190,23 @@ export type {
 	OnePasswordImportResult,
 	OnePasswordStatus,
 	PipelineStatusResponse,
+	PluginConnectorSummary,
+	PluginDashboardSummary,
+	PluginDiagnosticsResponse,
+	PluginHealth,
+	PluginLifecycleState,
+	PluginListResponse,
+	PluginPromptContribution,
+	PluginPromptContributionListResponse,
+	PluginPromptMode,
+	PluginPromptSummary,
+	PluginPromptTarget,
+	PluginRegistryRecord,
+	PluginRouteSummary,
+	PluginSdkSummary,
+	PluginSurfaceBase,
+	PluginSurfaceSummary,
+	PluginToolSummary,
 	RecallResponse,
 	RecallResult,
 	RecoverResult,
