@@ -23,6 +23,7 @@ import type {
 } from "./types.js";
 
 interface PersistedPluginStateV1 {
+	readonly [key: string]: unknown;
 	readonly enabled?: boolean;
 	readonly grantedCapabilities?: readonly string[];
 	readonly installedAt?: string;
@@ -61,6 +62,8 @@ export class PluginHostV1 {
 	private readonly now: () => Date;
 	private readonly corePluginIds: readonly string[];
 	private readonly plugins = new Map<string, RegisteredPluginV1>();
+	private storeWritable = true;
+	private storeLoadError: string | null = null;
 	private store: PluginRegistryStoreV1;
 
 	constructor(opts: PluginHostOptionsV1 = {}) {
@@ -120,6 +123,7 @@ export class PluginHostV1 {
 			plugins: {
 				...this.store.plugins,
 				[manifest.id]: {
+					...previous,
 					enabled,
 					grantedCapabilities,
 					installedAt,
@@ -327,13 +331,26 @@ export class PluginHostV1 {
 		try {
 			const parsed: unknown = JSON.parse(readFileSync(this.storagePath, "utf-8"));
 			return parseStore(parsed);
-		} catch {
+		} catch (err) {
+			this.storeWritable = false;
+			this.storeLoadError = err instanceof Error ? err.message : String(err);
+			logger.warn("plugins", "plugin registry load failed; persistence disabled to avoid data loss", {
+				path: this.storagePath,
+				error: this.storeLoadError,
+			});
 			return { version: 1, plugins: {} };
 		}
 	}
 
 	private saveStore(): void {
 		if (!this.storagePath) return;
+		if (!this.storeWritable) {
+			logger.warn("plugins", "plugin registry write skipped because existing registry could not be loaded safely", {
+				path: this.storagePath,
+				error: this.storeLoadError ?? "unknown registry load error",
+			});
+			return;
+		}
 		mkdirSync(dirname(this.storagePath), { recursive: true });
 		writeFileSync(this.storagePath, `${JSON.stringify(this.store, null, 2)}\n`, { mode: 0o600 });
 	}
@@ -395,12 +412,15 @@ function filterSurfacesByCapabilities(
 
 function parseStore(value: unknown): PluginRegistryStoreV1 {
 	if (!isRecord(value) || value.version !== 1 || !isRecord(value.plugins)) {
-		return { version: 1, plugins: {} };
+		throw new Error("expected plugin registry version 1 with a plugins object");
 	}
 	const plugins: Record<string, PersistedPluginStateV1> = {};
 	for (const [id, raw] of Object.entries(value.plugins)) {
-		if (!isRecord(raw)) continue;
+		if (!isRecord(raw)) {
+			throw new Error(`expected plugin registry entry ${id} to be an object`);
+		}
 		plugins[id] = {
+			...raw,
 			enabled: typeof raw.enabled === "boolean" ? raw.enabled : undefined,
 			grantedCapabilities: parseStringArray(raw.grantedCapabilities),
 			installedAt: typeof raw.installedAt === "string" ? raw.installedAt : undefined,

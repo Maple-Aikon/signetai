@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { countTokens } from "../pipeline/tokenizer.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
 import { PluginHostV1 } from "./host.js";
@@ -11,6 +14,18 @@ function makeHost(): PluginHostV1 {
 		corePluginIds: [SIGNET_SECRETS_PLUGIN_ID, "signet.rust-example"],
 		now: () => new Date("2026-04-16T12:00:00.000Z"),
 	});
+}
+
+let root = "";
+
+afterEach(() => {
+	if (root) rmSync(root, { recursive: true, force: true });
+	root = "";
+});
+
+function makeStoragePath(): string {
+	root = mkdtempSync(join(tmpdir(), "signet-plugin-host-"));
+	return join(root, "registry-v1.json");
 }
 
 describe("PluginHostV1", () => {
@@ -139,5 +154,54 @@ describe("PluginHostV1", () => {
 		expect(record.state).toBe("blocked");
 		expect(record.grantedCapabilities).toEqual([]);
 		expect(record.pendingCapabilities).toEqual(signetSecretsManifest.capabilities);
+	});
+
+	test("does not overwrite malformed registry files during discovery", () => {
+		const path = makeStoragePath();
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, "{not-json");
+
+		const host = new PluginHostV1({
+			storagePath: path,
+			auditPath: null,
+			corePluginIds: [SIGNET_SECRETS_PLUGIN_ID],
+			now: () => new Date("2026-04-16T12:00:00.000Z"),
+		});
+		host.discover(signetSecretsManifest, { grantedCapabilities: signetSecretsManifest.capabilities });
+
+		expect(readFileSync(path, "utf-8")).toBe("{not-json");
+	});
+
+	test("preserves unknown registry entry metadata when rediscovering plugins", () => {
+		const path = makeStoragePath();
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(
+			path,
+			JSON.stringify({
+				version: 1,
+				plugins: {
+					[SIGNET_SECRETS_PLUGIN_ID]: {
+						enabled: true,
+						grantedCapabilities: signetSecretsManifest.capabilities,
+						installedAt: "2026-04-01T00:00:00.000Z",
+						updatedAt: "2026-04-01T00:00:00.000Z",
+						providerMetadata: { source: "future-provider" },
+					},
+				},
+			}),
+		);
+
+		const host = new PluginHostV1({
+			storagePath: path,
+			auditPath: null,
+			corePluginIds: [SIGNET_SECRETS_PLUGIN_ID],
+			now: () => new Date("2026-04-16T12:00:00.000Z"),
+		});
+		host.discover(signetSecretsManifest);
+
+		const registry = JSON.parse(readFileSync(path, "utf-8"));
+		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID].providerMetadata).toEqual({
+			source: "future-provider",
+		});
 	});
 });
