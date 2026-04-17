@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { logger } from "../logger.js";
+import { truncateToTokens } from "../pipeline/tokenizer.js";
 import { recordPluginAuditEvent } from "./audit.js";
 import { runtimeSupportedInV1, unsupportedRuntimeReason, validatePluginManifest } from "./manifest.js";
 import { EMPTY_PLUGIN_SURFACES } from "./types.js";
@@ -415,11 +416,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function clipPromptContribution(contribution: PluginPromptContributionV1): PluginPromptContributionV1 {
-	const maxChars = Math.max(1, contribution.maxTokens) * 4;
-	if (contribution.content.length <= maxChars) return contribution;
+	const maxTokens = Number.isFinite(contribution.maxTokens) ? Math.max(0, Math.trunc(contribution.maxTokens)) : 0;
+	const content = truncateToTokens(contribution.content, maxTokens);
+	if (content === contribution.content) return contribution;
 	return {
 		...contribution,
-		content: contribution.content.slice(0, Math.max(0, maxChars - 1)).trimEnd(),
+		content,
 	};
 }
 

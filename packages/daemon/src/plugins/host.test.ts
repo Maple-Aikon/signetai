@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { countTokens } from "../pipeline/tokenizer.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
 import { PluginHostV1 } from "./host.js";
 import type { PluginManifestV1 } from "./types.js";
@@ -62,6 +63,7 @@ describe("PluginHostV1", () => {
 
 	test("clips prompt contribution content to maxTokens budget", () => {
 		const host = makeHost();
+		const content = "😀😀😀😀 ascii tail should be clipped";
 		host.discover({
 			...signetSecretsManifest,
 			surfaces: {
@@ -86,14 +88,14 @@ describe("PluginHostV1", () => {
 					mode: "context",
 					priority: 420,
 					maxTokens: 2,
-					content: "1234567890 extra content should be clipped",
+					content,
 				},
 			],
 		});
 
 		const contribution = host.promptContributions()[0];
-		expect(contribution?.content.length).toBeLessThanOrEqual(8);
-		expect(contribution?.content).toBe("1234567");
+		expect(contribution?.content).not.toBe(content);
+		expect(countTokens(contribution?.content ?? "")).toBeLessThanOrEqual(2);
 	});
 
 	test("unsupported Rust sidecar manifests are blocked in V1", () => {
