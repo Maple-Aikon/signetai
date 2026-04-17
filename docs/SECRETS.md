@@ -39,6 +39,20 @@ is disabled, blocked, or missing the required grant for a route, the daemon
 returns a structured plugin-capability error. Stored secret files are left
 in place.
 
+### Setup defaults
+
+Existing installs default to Signet Secrets enabled, even if they do not yet
+have a plugin registry file. New interactive installs include a **Core
+plugins** step that explains what Signet Secrets stores, how it connects to
+Signet's encrypted local store and compatible 1Password references, which
+value-safe surfaces it enables, and why that is safer than putting credentials
+in prompts, shell history, logs, or source files.
+
+For non-interactive setup, Signet Secrets is enabled by default. Use
+`signet setup --disable-signet-secrets` to leave the bundled plugin installed
+but disabled. Disabling the plugin blocks secret API routes and tool surfaces
+without deleting existing encrypted secret files.
+
 ---
 
 ## Storage

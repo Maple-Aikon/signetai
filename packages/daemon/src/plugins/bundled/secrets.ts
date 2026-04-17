@@ -1,3 +1,4 @@
+import { SIGNET_SECRETS_PLUGIN_ID } from "@signet/core";
 import type { PluginManifestV1, PluginSurfaceDeclarationsV1 } from "../types.js";
 
 const SECRET_CAPABILITIES = [
@@ -162,7 +163,7 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 	],
 };
 
-export const SIGNET_SECRETS_PLUGIN_ID = "signet.secrets";
+export { SIGNET_SECRETS_PLUGIN_ID };
 
 export const signetSecretsManifest: PluginManifestV1 = {
 	id: SIGNET_SECRETS_PLUGIN_ID,
