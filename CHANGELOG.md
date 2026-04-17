@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-17
+- Performance: paginate entity IDs before counting to avoid full GROUP BY.
+- Docs: add recall confidence gate record; define plugin sdk core v1.
+
 ### 2026-04-16
 - Bug fixes: resolve FD exhaustion and event loop blocking with thousands of memory artifacts.
 - Refactoring: prompt for sync after restart.
@@ -27,10 +31,21 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-11
 - Docs: refresh public Signet positioning.
 
-### 2026-04-10
-- Bug fixes: rebuild changelog with readable highlights.
-
 ## Release Ledger
+
+## [0.99.7] - 2026-04-17
+
+Release summary: 1 performance improvement and 2 docs updates.
+Tag range: `v0.99.6..v0.99.7`.
+
+### Performance
+
+- **knowledge-graph**: paginate entity IDs before counting to avoid full GROUP BY (#516)
+
+### Docs
+
+- **specs**: add recall confidence gate record
+- **specs**: define plugin sdk core v1
 
 ## [0.99.6] - 2026-04-16
 
