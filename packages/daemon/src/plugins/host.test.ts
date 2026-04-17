@@ -60,6 +60,42 @@ describe("PluginHostV1", () => {
 		expect(host.checkCapabilities(SIGNET_SECRETS_PLUGIN_ID, ["secrets:write"]).status).toBe("capability-missing");
 	});
 
+	test("clips prompt contribution content to maxTokens budget", () => {
+		const host = makeHost();
+		host.discover({
+			...signetSecretsManifest,
+			surfaces: {
+				...signetSecretsManifest.surfaces,
+				promptContributions: [
+					{
+						id: "signet.secrets.credential-guidance",
+						target: "user-prompt-submit",
+						mode: "context",
+						priority: 420,
+						maxTokens: 2,
+						summary: "Tiny prompt budget",
+						requiredCapabilities: ["prompt:contribute:user-prompt-submit"],
+					},
+				],
+			},
+			promptContributions: [
+				{
+					id: "signet.secrets.credential-guidance",
+					pluginId: SIGNET_SECRETS_PLUGIN_ID,
+					target: "user-prompt-submit",
+					mode: "context",
+					priority: 420,
+					maxTokens: 2,
+					content: "1234567890 extra content should be clipped",
+				},
+			],
+		});
+
+		const contribution = host.promptContributions()[0];
+		expect(contribution?.content.length).toBeLessThanOrEqual(8);
+		expect(contribution?.content).toBe("1234567");
+	});
+
 	test("unsupported Rust sidecar manifests are blocked in V1", () => {
 		const host = makeHost();
 		const manifest: PluginManifestV1 = {

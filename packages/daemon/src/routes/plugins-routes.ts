@@ -2,7 +2,6 @@ import type { Hono } from "hono";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
-import { parseBoundedInt, parseIsoDateQuery } from "./utils.js";
 
 export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
 	app.get("/api/plugins", (c) => {
@@ -78,4 +77,20 @@ function parseOptionalBoolean(value: unknown): boolean | undefined {
 		if (lower === "0" || lower === "false") return false;
 	}
 	return undefined;
+}
+
+function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+	if (!raw) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.min(max, Math.max(min, parsed));
+}
+
+function parseIsoDateQuery(raw: string | undefined): string | undefined {
+	if (!raw) return undefined;
+	const value = raw.trim();
+	if (!value) return undefined;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return undefined;
+	return date.toISOString();
 }

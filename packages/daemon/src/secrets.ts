@@ -189,7 +189,12 @@ async function decrypt(ciphertext: string): Promise<string> {
 	const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
 	const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
 
-	const message = sodium.crypto_secretbox_open_easy(box, nonce, key);
+	let message: Uint8Array | false;
+	try {
+		message = sodium.crypto_secretbox_open_easy(box, nonce, key);
+	} catch {
+		throw new Error("Decryption failed - key mismatch or corrupted data");
+	}
 	if (!message) throw new Error("Decryption failed - key mismatch or corrupted data");
 
 	return new TextDecoder().decode(message);

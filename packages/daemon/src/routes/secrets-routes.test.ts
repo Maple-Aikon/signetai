@@ -78,6 +78,7 @@ describe("secrets routes plugin capability enforcement", () => {
 			body: JSON.stringify({ value: "sk-test" }),
 		});
 		expect(stored.status).toBe(200);
+		expect(await stored.json()).toEqual({ success: true, name: "OPENAI_API_KEY" });
 
 		host.setEnabled(SIGNET_SECRETS_PLUGIN_ID, false);
 		const blocked = await app.request("/api/secrets");
@@ -90,5 +91,16 @@ describe("secrets routes plugin capability enforcement", () => {
 		const listedBody = (await listed.json()) as { secrets: string[] };
 		expect(listed.status).toBe(200);
 		expect(listedBody.secrets).toEqual(["OPENAI_API_KEY"]);
+		expect(JSON.stringify(listedBody)).not.toContain("sk-test");
+	});
+
+	test("1Password compatibility status route does not require configured token", async () => {
+		const res = await makeApp(makeHost()).request("/api/secrets/1password/status");
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({
+			configured: false,
+			connected: false,
+			vaults: [],
+		});
 	});
 });
