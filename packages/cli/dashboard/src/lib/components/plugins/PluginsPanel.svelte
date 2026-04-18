@@ -3,6 +3,7 @@ import type {
 	PluginCommandSummary,
 	PluginConnectorSummary,
 	PluginDashboardSummary,
+	PluginPromptContributionDiagnostic,
 	PluginPromptSummary,
 	PluginRegistryRecord,
 	PluginRouteSummary,
@@ -86,6 +87,24 @@ function connectorLabel(connector: PluginConnectorSummary): string {
 
 function promptLabel(prompt: PluginPromptSummary): string {
 	return `${prompt.target} ${prompt.mode} (${prompt.maxTokens} tokens)`;
+}
+
+function promptDiagnosticLabel(diagnostic: PluginPromptContributionDiagnostic): string {
+	return `${diagnostic.contribution.target} ${diagnostic.contribution.mode} (${diagnostic.contribution.maxTokens} tokens)`;
+}
+
+function promptDiagnosticSummary(diagnostic: PluginPromptContributionDiagnostic): string {
+	if (diagnostic.included) return "Included in active prompt context.";
+	if (diagnostic.reason) return diagnostic.reason;
+	if (diagnostic.missingCapabilities.length > 0) return "Missing required capability grants.";
+	return "Excluded from active prompt context.";
+}
+
+function promptDiagnosticCaps(diagnostic: PluginPromptContributionDiagnostic): string {
+	if (diagnostic.missingCapabilities.length > 0) {
+		return `Missing: ${diagnostic.missingCapabilities.join(", ")}`;
+	}
+	return diagnostic.included ? "Included" : "Excluded";
 }
 
 function capabilityText(capability: string): string {
@@ -360,6 +379,10 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 							{@render SurfaceSection("SDK Clients", selected.surfaces.sdkClients, sdkLabel)}
 							{@render SurfaceSection("Connector Capabilities", selected.surfaces.connectorCapabilities, connectorLabel)}
 							{@render SurfaceSection("Prompt Contributions", selected.surfaces.promptContributions, promptLabel)}
+							{#if selectedDiagnostics}
+								{@render PromptDiagnosticsSection(selectedDiagnostics.promptContributionDiagnostics)}
+								{@render ValidationErrorsSection(selectedDiagnostics.validationErrors)}
+							{/if}
 						</div>
 					</div>
 				</div>
@@ -389,6 +412,48 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 							<div class="row-sub">{item.summary}</div>
 						</div>
 						<div class="surface-caps">{surfaceCapabilityLabel(item.requiredCapabilities)}</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet PromptDiagnosticsSection(items: readonly PluginPromptContributionDiagnostic[])}
+	<div class="surface-section">
+		<div class="section-title">Prompt Diagnostics</div>
+		{#if items.length === 0}
+			<div class="drawer-empty">No prompt diagnostics reported.</div>
+		{:else}
+			<div class="rows">
+				{#each items as item (item.contribution.id)}
+					<div class="activity-row">
+						<div>
+							<div class="row-title">{item.contribution.id}</div>
+							<div class="row-sub">{promptDiagnosticLabel(item)} · {promptDiagnosticSummary(item)}</div>
+						</div>
+						<div class="surface-caps">{promptDiagnosticCaps(item)}</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet ValidationErrorsSection(items: readonly string[])}
+	<div class="surface-section">
+		<div class="section-title">Validation Errors</div>
+		{#if items.length === 0}
+			<div class="drawer-empty">No validation errors.</div>
+		{:else}
+			<div class="rows">
+				{#each items as item (item)}
+					<div class="activity-row">
+						<div>
+							<div class="row-title">Validation error</div>
+							<div class="row-sub">{item}</div>
+						</div>
+						<span class="state-pill state-error">error</span>
 					</div>
 				{/each}
 			</div>

@@ -8,6 +8,7 @@ import {
 	setPluginEnabled,
 } from "$lib/api";
 import { createLatestRequestGate } from "$lib/stores/latest-request";
+import { mergePluginRecord } from "$lib/stores/plugin-record";
 import { toast } from "$lib/stores/toast.svelte";
 
 const AUDIT_LIMIT = 50;
@@ -143,9 +144,11 @@ export async function togglePlugin(id: string, enabled: boolean): Promise<void> 
 	pluginsStore.togglingId = id;
 	try {
 		const data = await setPluginEnabled(id, enabled);
-		pluginsStore.plugins = pluginsStore.plugins.map((plugin) => (plugin.id === id ? data.plugin : plugin));
+		const existing = pluginsStore.plugins.find((plugin) => plugin.id === id);
+		const updated = existing ? mergePluginRecord(existing, data.plugin) : data.plugin;
+		pluginsStore.plugins = pluginsStore.plugins.map((plugin) => (plugin.id === id ? updated : plugin));
 		await Promise.all([loadPluginDiagnostics(id), loadPluginAuditEvents(id)]);
-		toast(`${data.plugin.name} ${enabled ? "enabled" : "disabled"}`, "success");
+		toast(`${updated.name} ${enabled ? "enabled" : "disabled"}`, "success");
 	} catch (error) {
 		toast(toErrorMessage(error), "error");
 	} finally {
