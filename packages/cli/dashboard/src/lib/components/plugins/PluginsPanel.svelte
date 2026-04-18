@@ -35,12 +35,15 @@ let openDrawer = $state<Drawer | null>(null);
 
 const selected = $derived(getSelectedPlugin());
 const selectedDiagnostics = $derived(
-	pluginsStore.diagnostics?.record.id === selected?.id ? pluginsStore.diagnostics : null,
+	pluginsStore.diagnosticsPluginId === selected?.id && pluginsStore.diagnostics?.record.id === selected?.id
+		? pluginsStore.diagnostics
+		: null,
 );
-const lastAuditEvent = $derived(pluginsStore.auditEvents[0] ?? null);
-const activityPageCount = $derived(Math.max(1, Math.ceil(pluginsStore.auditEvents.length / ACTIVITY_PAGE_SIZE)));
+const selectedAuditEvents = $derived(pluginsStore.auditPluginId === selected?.id ? pluginsStore.auditEvents : []);
+const lastAuditEvent = $derived(selectedAuditEvents[0] ?? null);
+const activityPageCount = $derived(Math.max(1, Math.ceil(selectedAuditEvents.length / ACTIVITY_PAGE_SIZE)));
 const activityStart = $derived(activityPage * ACTIVITY_PAGE_SIZE);
-const activityItems = $derived(pluginsStore.auditEvents.slice(activityStart, activityStart + ACTIVITY_PAGE_SIZE));
+const activityItems = $derived(selectedAuditEvents.slice(activityStart, activityStart + ACTIVITY_PAGE_SIZE));
 
 onMount(() => {
 	void loadPlugins().then(() => loadSelectedPluginDetails());

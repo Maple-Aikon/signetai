@@ -7,16 +7,22 @@ import {
 	listPlugins,
 	setPluginEnabled,
 } from "$lib/api";
+import { createLatestRequestGate } from "$lib/stores/latest-request";
 import { toast } from "$lib/stores/toast.svelte";
 
 const AUDIT_LIMIT = 50;
 export const SIGNET_SECRETS_PLUGIN_ID = "signet.secrets";
 
+const diagnosticsRequests = createLatestRequestGate();
+const auditRequests = createLatestRequestGate();
+
 export const pluginsStore = $state({
 	plugins: [] as PluginRegistryRecord[],
 	selectedId: null as string | null,
 	diagnostics: null as PluginDiagnostics | null,
+	diagnosticsPluginId: null as string | null,
 	auditEvents: [] as PluginAuditEvent[],
+	auditPluginId: null as string | null,
 	loading: false,
 	diagnosticsLoading: false,
 	auditLoading: false,
@@ -91,30 +97,45 @@ export async function loadSelectedPluginDetails(): Promise<void> {
 }
 
 export async function loadPluginDiagnostics(id: string): Promise<void> {
+	const requestId = diagnosticsRequests.next();
+	pluginsStore.diagnosticsPluginId = id;
 	pluginsStore.diagnosticsLoading = true;
 	pluginsStore.diagnosticsError = null;
 	try {
 		const data = await getPluginDiagnostics(id);
+		if (!diagnosticsRequests.isCurrent(requestId)) return;
 		pluginsStore.diagnostics = data.plugin;
 	} catch (error) {
+		if (!diagnosticsRequests.isCurrent(requestId)) return;
 		pluginsStore.diagnostics = null;
 		pluginsStore.diagnosticsError = toErrorMessage(error);
 	} finally {
-		pluginsStore.diagnosticsLoading = false;
+		if (diagnosticsRequests.isCurrent(requestId)) {
+			pluginsStore.diagnosticsLoading = false;
+		}
 	}
 }
 
 export async function loadPluginAuditEvents(id: string): Promise<void> {
+	const requestId = auditRequests.next();
+	if (pluginsStore.auditPluginId !== id) {
+		pluginsStore.auditEvents = [];
+	}
+	pluginsStore.auditPluginId = id;
 	pluginsStore.auditLoading = true;
 	pluginsStore.auditError = null;
 	try {
 		const data = await listPluginAuditEvents({ pluginId: id, limit: AUDIT_LIMIT });
+		if (!auditRequests.isCurrent(requestId)) return;
 		pluginsStore.auditEvents = [...data.events];
 	} catch (error) {
+		if (!auditRequests.isCurrent(requestId)) return;
 		pluginsStore.auditEvents = [];
 		pluginsStore.auditError = toErrorMessage(error);
 	} finally {
-		pluginsStore.auditLoading = false;
+		if (auditRequests.isCurrent(requestId)) {
+			pluginsStore.auditLoading = false;
+		}
 	}
 }
 
