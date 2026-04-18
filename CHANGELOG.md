@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-18
 - Features: add plugin registry panel.
-- Bug fixes: align desktop release build prerequisites.
+- Bug fixes: scope Signet memory to named agents; align desktop release build prerequisites.
 
 ### 2026-04-17
 - Features: replace Tauri shell with Electron app; add plugin SDK core v1 secrets registry.
@@ -35,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: add Ostico as contributor; align generated site metadata.
 
 ## Release Ledger
+
+## [0.102.1] - 2026-04-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.102.0..v0.102.1`.
+
+### Bug Fixes
+
+- **hermes**: scope Signet memory to named agents (#504)
 
 ## [0.102.0] - 2026-04-18
 
