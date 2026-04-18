@@ -6,6 +6,12 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-17
+- Features: replace Tauri shell with Electron app; add plugin SDK core v1 secrets registry.
+- Bug fixes: pass AGENTS_DIR directly in runSyncTemplates instead of accepting a parameter; wire enableOllamaFallback config and add native embedding init cooldown; prevent session-start hook timeouts.
+- Performance: paginate entity IDs before counting to avoid full GROUP BY.
+- Docs: add recall confidence gate record; define plugin sdk core v1.
+
 ### 2026-04-16
 - Bug fixes: resolve FD exhaustion and event loop blocking with thousands of memory artifacts.
 - Refactoring: prompt for sync after restart.
@@ -27,10 +33,66 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-11
 - Docs: refresh public Signet positioning.
 
-### 2026-04-10
-- Bug fixes: rebuild changelog with readable highlights.
-
 ## Release Ledger
+
+## [0.101.1] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.101.0..v0.101.1`.
+
+### Bug Fixes
+
+- **cli**: pass AGENTS_DIR directly in runSyncTemplates instead of accepting a parameter (#523)
+
+## [0.101.0] - 2026-04-17
+
+Release summary: 1 feature.
+Tag range: `v0.100.1..v0.101.0`.
+
+### Features
+
+- **desktop**: replace Tauri shell with Electron app (#519)
+
+## [0.100.1] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.100.0..v0.100.1`.
+
+### Bug Fixes
+
+- **daemon**: wire enableOllamaFallback config and add native embedding init cooldown (#520)
+
+## [0.100.0] - 2026-04-17
+
+Release summary: 1 feature.
+Tag range: `v0.99.8..v0.100.0`.
+
+### Features
+
+- **plugins**: add plugin SDK core v1 secrets registry (#518)
+
+## [0.99.8] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.99.7..v0.99.8`.
+
+### Bug Fixes
+
+- **codex**: prevent session-start hook timeouts (#517)
+
+## [0.99.7] - 2026-04-17
+
+Release summary: 1 performance improvement and 2 docs updates.
+Tag range: `v0.99.6..v0.99.7`.
+
+### Performance
+
+- **knowledge-graph**: paginate entity IDs before counting to avoid full GROUP BY (#516)
+
+### Docs
+
+- **specs**: add recall confidence gate record
+- **specs**: define plugin sdk core v1
 
 ## [0.99.6] - 2026-04-16
 
