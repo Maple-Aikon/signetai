@@ -11,6 +11,7 @@ import type {
 	PluginToolSummary,
 } from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
+import { clampPage } from "$lib/stores/plugin-pagination";
 import {
 	SIGNET_SECRETS_PLUGIN_ID,
 	formatPluginState,
@@ -45,6 +46,13 @@ const lastAuditEvent = $derived(selectedAuditEvents[0] ?? null);
 const activityPageCount = $derived(Math.max(1, Math.ceil(selectedAuditEvents.length / ACTIVITY_PAGE_SIZE)));
 const activityStart = $derived(activityPage * ACTIVITY_PAGE_SIZE);
 const activityItems = $derived(selectedAuditEvents.slice(activityStart, activityStart + ACTIVITY_PAGE_SIZE));
+
+$effect(() => {
+	const page = clampPage(activityPage, selectedAuditEvents.length, ACTIVITY_PAGE_SIZE);
+	if (page !== activityPage) {
+		activityPage = page;
+	}
+});
 
 onMount(() => {
 	void loadPlugins().then(() => loadSelectedPluginDetails());

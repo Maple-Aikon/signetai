@@ -131,6 +131,9 @@ const activeSecondarySortLabel = $derived.by(() => {
 });
 
 function handleSectionChange(value: string): void {
+	navMode = "tabs";
+	focusedCardIndex = -1;
+	focusedFilterIndex = 0;
 	if (value === "plugins") {
 		section = "plugins";
 		void loadPlugins();
@@ -533,15 +536,14 @@ function handleGlobalKey(e: KeyboardEvent) {
 			const isLastCard = focusedCardIndex === cards.length - 1;
 
 			if (isAtEndOfRow || isLastCard) {
+				const filters = getFilterElements();
+				if (filters.length === 0) return;
+
 				// Move to filters panel
 				navMode = "filters";
 				focusedFilterIndex = 0;
 				for (const card of cards) card.blur();
-
-				const filters = getFilterElements();
-				if (filters.length > 0) {
-					filters[0]?.focus();
-				}
+				filters[0]?.focus();
 				return;
 			}
 
