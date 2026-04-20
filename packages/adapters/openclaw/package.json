@@ -36,7 +36,7 @@
     "@sinclair/typebox": "0.34.47"
   },
   "devDependencies": {
-    "@signet/core": "workspace:*",
+    "@signet/core": "0.102.5",
     "@types/node": "^22.0.0"
   },
   "peerDependencies": {
