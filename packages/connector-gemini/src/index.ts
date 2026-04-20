@@ -175,7 +175,7 @@ export class GeminiConnector extends BaseConnector {
 	}
 
 	static isHarnessInstalled(): boolean {
-		return existsSync(join(homedir(), ".gemini"));
+		return existsSync(join(homedir(), ".gemini", "settings.json"));
 	}
 
 	private async generateGeminiMd(basePath: string): Promise<string | null> {
