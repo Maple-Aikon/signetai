@@ -93,6 +93,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	},
 	graph: {
 		enabled: true,
+		extractionWritesEnabled: false,
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
@@ -189,18 +190,18 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		reconcileIntervalMs: 60000,
 	},
 	structural: {
-		enabled: true,
+		enabled: false,
 		classifyBatchSize: 8,
 		dependencyBatchSize: 5,
 		pollIntervalMs: 10000,
-		synthesisEnabled: true,
+		synthesisEnabled: false,
 		synthesisIntervalMs: 60_000,
 		synthesisTopEntities: 20,
 		synthesisMaxFacts: 10,
 		synthesisMaxStallMs: 30 * 60_000,
 		supersessionEnabled: true,
 		supersessionSweepEnabled: true,
-		supersessionSemanticFallback: true,
+		supersessionSemanticFallback: false,
 		supersessionMinConfidence: 0.7,
 	},
 	feedback: {
@@ -614,6 +615,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 
 		graph: {
 			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),
+			extractionWritesEnabled: resolveBool(
+				graphRaw?.extractionWritesEnabled,
+				raw.graphExtractionWritesEnabled,
+				d.graph.extractionWritesEnabled,
+			),
 			boostWeight: clampFraction(graphRaw?.boostWeight ?? raw.graphBoostWeight, d.graph.boostWeight),
 			boostTimeoutMs: clampPositive(
 				graphRaw?.boostTimeoutMs ?? raw.graphBoostTimeoutMs,

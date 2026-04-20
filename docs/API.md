@@ -362,6 +362,7 @@ Body-level fields override prefix-parsed values.
   "pinned": false,
   "sourceType": "manual",
   "sourceId": "optional-external-id",
+  "createdAt": "2026-02-21T10:00:00.000Z",
   "agentId": "alice",
   "visibility": "global"
 }
@@ -373,6 +374,27 @@ Only `content` is required. Multi-agent fields:
 |--------------|-------------|
 | `agentId`    | Agent that owns this memory. Defaults to `"default"`. |
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
+
+`createdAt` is optional and must be a valid ISO timestamp. Use it when the
+memory is sourced from an older conversation or imported artifact so structured
+currentness and supersession can compare facts by source time instead of ingest
+time.
+
+Structured callers may also pass `structured.entities`, `structured.aspects`,
+and `structured.hints`. Aspect attributes are persisted directly under
+`entity_attributes`. Include `groupKey` to create a navigable subgroup inside an
+aspect, and include `claimKey` when the claim can be updated over time.
+Supersession only runs within the same entity/aspect/groupKey/claimKey, so
+unrelated events under one aspect do not replace each other. Newer conflicting
+attributes on the same grouped claim can mark older attributes as `superseded`
+with `superseded_by` pointing at the replacement.
+
+When `structured` is omitted, the default remember path is deliberately
+conservative. It embeds and stores the memory, then links mentions to existing
+entities for the same `agentId` when they are mechanically recognizable. It does
+not create new entities, aspects, attributes, dependencies, or supersession
+claims from raw text. Use a structured payload when the caller intends to author
+or update the knowledge graph.
 
 **Response**
 
@@ -2754,6 +2776,113 @@ Requires `admin` permission and uses the admin rate limit bucket.
 
 `changed` is `false` when the persisted pause flag already matches the
 requested state.
+
+
+Knowledge graph navigation
+--------------------------
+
+Signet exposes the structured memory graph as a navigable hierarchy for agents.
+Search discovers unknown paths; navigation inspects known paths without loading
+the full constellation graph.
+
+```text
+Entity -> Aspect -> Group -> ClaimKey -> Attributes
+```
+
+The house/filesystem analogy is intentional: entities are houses or top-level
+folders, aspects are rooms, groups are dressers, claim keys are drawers, and
+attributes are notes inside those drawers.
+
+All routes accept optional `agent_id` and default to `default`.
+
+### GET /api/knowledge/navigation/entities
+
+List entities with structural counts. Query parameters: `q`, `type`, `limit`,
+`offset`.
+
+### GET /api/knowledge/navigation/entity
+
+Resolve one entity by name.
+
+```text
+/api/knowledge/navigation/entity?name=Nicholai
+```
+
+### GET /api/knowledge/navigation/tree
+
+Return a compact entity outline for agent browsing. The tree includes aspects,
+groups, claim slots, counts, and active previews so agents can decide where to
+drill next without loading the full constellation graph. Query parameters:
+`entity`, `depth`, `max_aspects`, `max_groups`, `max_claims`.
+
+Depth controls how far the outline expands: `1` returns aspects, `2` returns
+aspects and groups, and `3` returns aspects, groups, and claim slots.
+
+```text
+/api/knowledge/navigation/tree?entity=Nicholai&depth=3
+```
+
+### GET /api/knowledge/navigation/aspects
+
+List aspects for an entity.
+
+```text
+/api/knowledge/navigation/aspects?entity=Nicholai
+```
+
+### GET /api/knowledge/navigation/groups
+
+List groups under an entity aspect. Attributes without `group_key` appear under
+`general` for backward compatibility.
+
+```text
+/api/knowledge/navigation/groups?entity=Nicholai&aspect=food
+```
+
+### GET /api/knowledge/navigation/claims
+
+List claim slots under an entity/aspect/group path.
+
+```text
+/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants
+```
+
+### GET /api/knowledge/navigation/attributes
+
+List attributes under an entity/aspect/group/claim path. Defaults to
+`status=active`; pass `status=all` to include superseded history. Query
+parameters: `entity`, `aspect`, `group`, `claim`, `status`, `kind`, `limit`,
+`offset`.
+
+```text
+/api/knowledge/navigation/attributes?entity=Nicholai&aspect=food&group=restaurants&claim=favorite_restaurant
+```
+
+CLI equivalents:
+
+```bash
+signet knowledge tree Nicholai
+signet knowledge entities --query Nicholai
+signet knowledge entity Nicholai
+signet knowledge aspects Nicholai
+signet knowledge groups Nicholai food
+signet knowledge claims Nicholai food restaurants
+signet knowledge attributes Nicholai food restaurants favorite_restaurant
+signet knowledge attributes Nicholai food restaurants favorite_restaurant --status all
+signet knowledge hygiene
+```
+
+### GET /api/knowledge/hygiene
+
+Return a report-only graph hygiene scan. Query parameters: `agent_id`, `limit`,
+and `memory_limit`.
+
+The response includes suspicious entities, duplicate canonical entity groups,
+attribute rows missing `group_key` or `claim_key`, attributes without source
+memories, and safe mention-link candidates where an existing entity name appears
+in a memory that is not yet linked. This endpoint does not mutate graph data.
+
+MCP exposes the same report as `knowledge_hygiene_report`.
 
 
 Dreaming
