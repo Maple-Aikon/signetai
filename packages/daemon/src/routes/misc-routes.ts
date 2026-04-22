@@ -12,6 +12,7 @@ import {
 	detectProviderTransitions,
 	executeProviderRollback,
 	isRemotePipelineProvider,
+	parseProviderSafetyRole,
 	preserveLockInYaml,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
@@ -235,7 +236,7 @@ export function registerMiscRoutes(app: Hono): void {
 			writeFileSync(filePath, content, "utf-8");
 			let auditError: string | undefined;
 			try {
-				appendProviderTransitions(AGENTS_DIR, transitions);
+				await appendProviderTransitions(AGENTS_DIR, transitions);
 			} catch (auditErr) {
 				auditError = String(auditErr);
 				logger.warn("api", "Audit write failed after config save", { file, error: auditError });
@@ -311,8 +312,15 @@ export function registerMiscRoutes(app: Hono): void {
 			if (rawBody === null) {
 				return c.json({ error: "Invalid JSON body" }, 400);
 			}
-			const body = rawBody as { role?: unknown };
-			const requestedRole = body.role === "synthesis" || body.role === "extraction" ? body.role : undefined;
+			const body = toRecord(rawBody);
+			if (!body) {
+				return c.json({ error: "Invalid JSON body" }, 400);
+			}
+			const parsedRole = parseProviderSafetyRole(body.role);
+			if (!parsedRole.ok) {
+				return c.json({ error: parsedRole.error }, 400);
+			}
+			const requestedRole = parsedRole.role;
 			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
 			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;

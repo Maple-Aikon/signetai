@@ -83,14 +83,14 @@ describe("provider safety", () => {
 		expect(result).toEqual({ ok: true });
 	});
 
-	it("records transitions and rolls back the latest provider", () => {
+	it("records transitions and rolls back the latest provider", async () => {
 		const agentsDir = makeTempDir();
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    extractionProvider: none\n",
 			"memory:\n  pipelineV2:\n    extractionProvider: codex\n",
 			"test",
 		);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored).toHaveLength(1);
@@ -100,14 +100,14 @@ describe("provider safety", () => {
 		expect(readFileSync(join(agentsDir, "agent.yaml"), "utf-8")).toContain("extractionProvider: none");
 	});
 
-	it("clears model and endpoint fields on extraction rollback", () => {
+	it("clears model and endpoint fields on extraction rollback", async () => {
 		const agentsDir = makeTempDir();
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n    extraction:\n      provider: ollama\n      model: qwen3:4b\n",
 			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extraction:\n      provider: anthropic\n      model: claude-3-haiku\n      endpoint: https://api.anthropic.com\n",
 			"test",
 		);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored).toHaveLength(1);
 
@@ -121,14 +121,14 @@ describe("provider safety", () => {
 		expect(next).not.toContain("provider: anthropic");
 	});
 
-	it("clears flat pipelineV2 extraction keys on rollback", () => {
+	it("clears flat pipelineV2 extraction keys on rollback", async () => {
 		const agentsDir = makeTempDir();
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
 			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extractionModel: claude-3-haiku\n    extractionEndpoint: https://api.anthropic.com\n",
 			"test",
 		);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored).toHaveLength(1);
 
@@ -141,7 +141,7 @@ describe("provider safety", () => {
 		expect(next).toContain("extractionProvider: ollama");
 	});
 
-	it("prevents rollback ping-pong by marking consumed entries", () => {
+	it("prevents rollback ping-pong by marking consumed entries", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -156,7 +156,7 @@ describe("provider safety", () => {
 			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
 			"test",
 		);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 
 		const result1 = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result1.success).toBe(true);
@@ -167,6 +167,26 @@ describe("provider safety", () => {
 
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored[0].rolledBack).toBe(true);
+	});
+
+	it("serializes concurrent audit appends without losing transitions", async () => {
+		const agentsDir = makeTempDir();
+		const first = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
+			"first",
+		);
+		const second = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: claude-code\n",
+			"second",
+		);
+
+		await Promise.all([appendProviderTransitions(agentsDir, first), appendProviderTransitions(agentsDir, second)]);
+
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored).toHaveLength(2);
+		expect(stored.map((entry) => entry.source).sort()).toEqual(["first", "second"]);
 	});
 
 	it("skips corrupted entries in audit file", () => {
@@ -231,7 +251,7 @@ describe("provider safety", () => {
 		);
 	});
 
-	it("rolls back synthesis provider transition end-to-end", () => {
+	it("rolls back synthesis provider transition end-to-end", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -266,7 +286,7 @@ describe("provider safety", () => {
 		expect(entries[0].role).toBe("synthesis");
 		expect(entries[0].from).toBe("ollama");
 		expect(entries[0].to).toBe("claude-code");
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 
 		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.success).toBe(true);
@@ -280,14 +300,14 @@ describe("provider safety", () => {
 		expect(after).not.toContain("anthropic.com");
 	});
 
-	it("does not create empty extraction sub-block when only flat keys are used", () => {
+	it("does not create empty extraction sub-block when only flat keys are used", async () => {
 		const agentsDir = makeTempDir();
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
 			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
 			"test",
 		);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 		const stored = readProviderTransitions(agentsDir);
 
 		const configWithOnlyFlatKeys = "memory:\n  pipelineV2:\n    extractionProvider: anthropic\n";
@@ -296,7 +316,7 @@ describe("provider safety", () => {
 		expect(result).not.toContain("extraction:");
 	});
 
-	it("does not create synthesis sub-block when one does not exist in current config", () => {
+	it("does not create synthesis sub-block when one does not exist in current config", async () => {
 		const agentsDir = makeTempDir();
 		const entries = detectProviderTransitions(
 			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
@@ -305,7 +325,7 @@ describe("provider safety", () => {
 		);
 		expect(entries).toHaveLength(1);
 		expect(entries[0].role).toBe("synthesis");
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 		const stored = readProviderTransitions(agentsDir);
 
 		const configNoSynthesis = "memory:\n  pipelineV2:\n    extractionProvider: ollama\n";
@@ -314,7 +334,7 @@ describe("provider safety", () => {
 		expect(result).toContain("extractionProvider: ollama");
 	});
 
-	it("marks audit consumed and returns isRetry when config already has correct provider", () => {
+	it("marks audit consumed and returns isRetry when config already has correct provider", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -330,7 +350,7 @@ describe("provider safety", () => {
 			"test",
 		);
 		expect(entries).toHaveLength(1);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 
 		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.isRetry).toBe(true);
@@ -340,7 +360,7 @@ describe("provider safety", () => {
 		expect(stored[0].rolledBack).toBe(true);
 	});
 
-	it("throws 400 on synthesis rollback when synthesis block absent", () => {
+	it("throws 400 on synthesis rollback when synthesis block absent", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -352,7 +372,7 @@ describe("provider safety", () => {
 			"test",
 		);
 		expect(entries).toHaveLength(1);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 
 		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
 			/No synthesis configuration found/,
@@ -362,7 +382,7 @@ describe("provider safety", () => {
 		expect(stored[0].rolledBack).toBeFalsy();
 	});
 
-	it("rolls back nested-only extraction config by adding flat key", () => {
+	it("rolls back nested-only extraction config by adding flat key", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -378,7 +398,7 @@ describe("provider safety", () => {
 			"test",
 		);
 		expect(entries).toHaveLength(1);
-		appendProviderTransitions(agentsDir, entries);
+		await appendProviderTransitions(agentsDir, entries);
 
 		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.success).toBe(true);
@@ -393,7 +413,7 @@ describe("provider safety", () => {
 		expect(updatedPipeline.extractionProvider).toBe("ollama");
 	});
 
-	it("skips rollback-sourced entries when selecting rollback target", () => {
+	it("skips rollback-sourced entries when selecting rollback target", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 
@@ -409,7 +429,7 @@ describe("provider safety", () => {
 			"test",
 		);
 		expect(firstTransition).toHaveLength(1);
-		appendProviderTransitions(agentsDir, firstTransition);
+		await appendProviderTransitions(agentsDir, firstTransition);
 
 		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.success).toBe(true);
