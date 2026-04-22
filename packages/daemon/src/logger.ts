@@ -60,6 +60,7 @@ export type LogCategory =
 	| "mcp-analytics" // MCP invocation analytics
 	| "config" // Configuration loading and resolution
 	| "config-migration" // Legacy config migration on startup
+	| "provider-safety" // Provider transition audit and rollback guardrails
 	| "dreaming" // Dreaming worker (background knowledge synthesis)
 	| "http" // HTTP server lifecycle
 	| "resources" // FD / event-loop resource monitoring
