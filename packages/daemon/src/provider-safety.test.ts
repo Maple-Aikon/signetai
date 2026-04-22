@@ -61,6 +61,21 @@ describe("provider safety", () => {
 		}
 	});
 
+	it("blocks command extraction when allowRemoteProviders is false", () => {
+		const result = validateProviderSafety(`memory:
+  pipelineV2:
+    allowRemoteProviders: false
+    extraction:
+      provider: command
+`);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("allowRemoteProviders is false");
+			expect(result.error).toContain("command");
+		}
+	});
+
 	it("allows local providers when allowRemoteProviders is false", () => {
 		const result = validateProviderSafety(`memory:
   pipelineV2:
