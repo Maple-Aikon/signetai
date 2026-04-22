@@ -7,6 +7,7 @@ import {
 	detectProviderTransitions,
 	executeProviderRollback,
 	isRemotePipelineProvider,
+	parseProviderSafetyRole,
 	preserveLockInYaml,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
@@ -83,13 +84,22 @@ describe("provider safety guard - config save validation", () => {
 });
 
 describe("provider safety guard - rollback path", () => {
-	it("resolveRollbackFilePath returns transitions to avoid double-read", () => {
+	it("rejects invalid rollback role values instead of widening scope", () => {
+		expect(parseProviderSafetyRole("extracton")).toEqual({
+			ok: false,
+			error: "role must be 'extraction' or 'synthesis'",
+		});
+		expect(parseProviderSafetyRole("extraction")).toEqual({ ok: true, role: "extraction" });
+		expect(parseProviderSafetyRole(undefined)).toEqual({ ok: true });
+	});
+
+	it("resolveRollbackFilePath returns transitions to avoid double-read", async () => {
 		const dir = makeAgentsDir();
 		mkdirSync(dir, { recursive: true });
 		const agentYaml = join(dir, "agent.yaml");
 		writeFileSync(agentYaml, yamlWithExtraction("anthropic", true));
 
-		appendProviderTransitions(
+		await appendProviderTransitions(
 			dir,
 			detectProviderTransitions(
 				yamlWithExtraction("ollama", true),
@@ -109,13 +119,13 @@ describe("provider safety guard - rollback path", () => {
 		expect(result.providerTransitions.length).toBeGreaterThanOrEqual(1);
 	});
 
-	it("executeProviderRollback still works without priorTransitions (backward compat)", () => {
+	it("executeProviderRollback still works without priorTransitions (backward compat)", async () => {
 		const dir = makeAgentsDir();
 		mkdirSync(dir, { recursive: true });
 		const agentYaml = join(dir, "agent.yaml");
 		writeFileSync(agentYaml, yamlWithExtraction("anthropic", true));
 
-		appendProviderTransitions(
+		await appendProviderTransitions(
 			dir,
 			detectProviderTransitions(
 				yamlWithExtraction("ollama", true),
@@ -131,14 +141,14 @@ describe("provider safety guard - rollback path", () => {
 });
 
 describe("provider safety guard - audit write resilience", () => {
-	it("transitions persist and are readable after append", () => {
+	it("transitions persist and are readable after append", async () => {
 		const dir = makeAgentsDir();
 		mkdirSync(dir, { recursive: true });
 
 		const before = yamlWithExtraction("ollama", true);
 		const after = yamlWithExtraction("anthropic", true);
 		const entries = detectProviderTransitions(before, after, "agent.yaml");
-		appendProviderTransitions(dir, entries);
+		await appendProviderTransitions(dir, entries);
 
 		const read = readProviderTransitions(dir);
 		expect(read.length).toBe(1);

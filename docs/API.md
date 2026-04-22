@@ -661,9 +661,10 @@ config already has the target provider (e.g. manually restored) but stale
 model/endpoint fields were cleared. In both cases `providerTransitions`
 is empty.
 
-Returns `400` if the rolled-back config would violate `allowRemoteProviders`,
-or if the rollback would produce no content change (e.g. synthesis rollback
-on a config with no synthesis block — the audit entry is not consumed).
+Returns `400` if `role` is present but not `extraction` or `synthesis`, if
+the rolled-back config would violate `allowRemoteProviders`, or if the rollback
+would produce no content change (e.g. synthesis rollback on a config with no
+synthesis block — the audit entry is not consumed).
 Returns `404` if no un-rolled-back transition exists, or if the source config
 file referenced by the transition has been deleted or renamed.
 

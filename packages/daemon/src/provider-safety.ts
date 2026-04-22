@@ -16,6 +16,14 @@ export class RollbackError extends Error {
 
 export type ProviderSafetyRole = "extraction" | "synthesis";
 
+export function parseProviderSafetyRole(
+	value: unknown,
+): { ok: true; role?: ProviderSafetyRole } | { ok: false; error: string } {
+	if (value === undefined) return { ok: true };
+	if (value === "extraction" || value === "synthesis") return { ok: true, role: value };
+	return { ok: false, error: "role must be 'extraction' or 'synthesis'" };
+}
+
 export interface ProviderTransitionAuditEntry {
 	readonly role: ProviderSafetyRole;
 	readonly from: string | null;
@@ -217,17 +225,15 @@ function atomicWrite(targetPath: string, content: string, prefix = ".atomic-"): 
 	}
 }
 
-export function appendProviderTransitions(agentsDir: string, entries: readonly ProviderTransitionAuditEntry[]): void {
+const auditAppendQueues = new Map<string, Promise<void>>();
+
+function appendProviderTransitionsUnlocked(
+	agentsDir: string,
+	entries: readonly ProviderTransitionAuditEntry[],
+	auditPath: string,
+): void {
 	if (entries.length === 0) return;
-	// NOTE: This is a read-modify-write without write-side serialisation. Two
-	// concurrent POST /api/config calls that both trigger provider transitions
-	// can race on the audit file; one write silently clobbers the other's
-	// new entry. This is a pre-existing architectural limitation (the audit
-	// file predates this PR). The single-flight guard on rollback is an
-	// improvement but does not cover this cross-endpoint race. Fixing this
-	// requires a per-file mutex or write queue scoped to the audit path.
-	const path = providerAuditPath(agentsDir);
-	mkdirSync(dirname(path), { recursive: true });
+	mkdirSync(dirname(auditPath), { recursive: true });
 	const existing = readProviderTransitions(agentsDir);
 	const next = [...existing, ...entries].slice(-100);
 	if (next.length < existing.length + entries.length) {
@@ -236,7 +242,22 @@ export function appendProviderTransitions(agentsDir: string, entries: readonly P
 			total: next.length,
 		});
 	}
-	atomicWrite(path, `${JSON.stringify(next, null, 2)}\n`, ".audit-");
+	atomicWrite(auditPath, `${JSON.stringify(next, null, 2)}\n`, ".audit-");
+}
+
+export async function appendProviderTransitions(
+	agentsDir: string,
+	entries: readonly ProviderTransitionAuditEntry[],
+): Promise<void> {
+	if (entries.length === 0) return;
+	const path = providerAuditPath(agentsDir);
+	const previous = auditAppendQueues.get(path) ?? Promise.resolve();
+	const next = previous.catch(() => undefined).then(() => appendProviderTransitionsUnlocked(agentsDir, entries, path));
+	const queued = next.finally(() => {
+		if (auditAppendQueues.get(path) === queued) auditAppendQueues.delete(path);
+	});
+	auditAppendQueues.set(path, queued);
+	return next;
 }
 
 export const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"] as const;
