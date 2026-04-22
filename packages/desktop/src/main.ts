@@ -4,8 +4,10 @@ import { BrowserWindow, Menu, app, ipcMain, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { dashboardRoot, preloadPath } from "./paths.js";
 import { DesktopTray } from "./tray.js";
+import { applyDesktopWorkspaceEnv, resolveDesktopWorkspace } from "./workspace.js";
 
-const daemon = new DaemonManager();
+const workspace = applyDesktopWorkspaceEnv(resolveDesktopWorkspace());
+const daemon = new DaemonManager({ workspacePath: workspace.path });
 let mainWindow: BrowserWindow | null = null;
 let tray: DesktopTray | null = null;
 let quitting = false;
