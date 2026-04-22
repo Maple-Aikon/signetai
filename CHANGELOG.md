@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-22
 - Features: add desktop source install command; add GraphIQ plugin integration.
-- Bug fixes: write named-agent memory heads locally.
+- Bug fixes: bind install to configured workspace; write named-agent memory heads locally.
 
 ### 2026-04-21
 - Features: add Gemini CLI harness connector.
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: prompt for sync after restart.
 
 ## Release Ledger
+
+## [0.105.1] - 2026-04-22
+
+Release summary: 1 bug fix.
+Tag range: `v0.105.0..v0.105.1`.
+
+### Bug Fixes
+
+- **desktop**: bind install to configured workspace (#548)
 
 ## [0.105.0] - 2026-04-22
 
