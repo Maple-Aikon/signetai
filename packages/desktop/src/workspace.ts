@@ -59,10 +59,13 @@ export function applyDesktopWorkspaceEnv(
 }
 
 function readEnvPath(env: NodeJS.ProcessEnv, home: string): string | null {
-	const raw = env.SIGNET_PATH;
-	if (typeof raw !== "string") return null;
-	const trimmed = raw.trim();
-	return trimmed.length > 0 ? normalizeWorkspacePath(trimmed, home) : null;
+	for (const key of ["SIGNET_PATH", "SIGNET_WORKSPACE"] as const) {
+		const raw = env[key];
+		if (typeof raw !== "string") continue;
+		const trimmed = raw.trim();
+		if (trimmed.length > 0) return normalizeWorkspacePath(trimmed, home);
+	}
+	return null;
 }
 
 function getWorkspaceConfigPath(env: NodeJS.ProcessEnv, home: string): string {

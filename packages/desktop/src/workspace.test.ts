@@ -27,6 +27,19 @@ describe("desktop workspace resolution", () => {
 		}
 	});
 
+	test("uses SIGNET_WORKSPACE when SIGNET_PATH is not set", () => {
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-workspace-"));
+		try {
+			const workspace = join(home, "workspace-env-alias");
+			const result = resolveDesktopWorkspace({ SIGNET_WORKSPACE: workspace }, home);
+
+			expect(result.path).toBe(resolve(workspace));
+			expect(result.source).toBe("env");
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("uses workspace config when SIGNET_PATH is not set", () => {
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-workspace-"));
 		try {

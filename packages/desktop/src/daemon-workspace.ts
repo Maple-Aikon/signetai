@@ -6,12 +6,7 @@ export interface WorkspaceMismatch {
 }
 
 export function healthWorkspaceMismatch(expected: string, actual: string | null): WorkspaceMismatch | null {
-	if (!actual) {
-		return {
-			expected: resolve(expected),
-			actual: "unknown",
-		};
-	}
+	if (!actual) return null;
 
 	const normalizedExpected = resolve(expected);
 	const normalizedActual = resolve(actual);

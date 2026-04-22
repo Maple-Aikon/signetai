@@ -14,10 +14,7 @@ describe("desktop daemon workspace matching", () => {
 		});
 	});
 
-	test("treats missing agentsDir as a mismatch", () => {
-		expect(healthWorkspaceMismatch("/tmp/expected", null)).toEqual({
-			expected: resolve("/tmp/expected"),
-			actual: "unknown",
-		});
+	test("allows missing agentsDir for older health payloads", () => {
+		expect(healthWorkspaceMismatch("/tmp/expected", null)).toBeNull();
 	});
 });
