@@ -1,13 +1,20 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { ensureUnifiedSchema, formatYaml, resolvePrimaryPackageManager, runMigrations } from "@signet/core";
+import {
+	disableGraphiqState,
+	ensureUnifiedSchema,
+	formatYaml,
+	resolvePrimaryPackageManager,
+	runMigrations,
+} from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
+import { installGraphiqPlugin } from "./graphiq.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
@@ -16,6 +23,7 @@ import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
 export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Promise<void> {
 	const spinner = ora("Setting up Signet...").start();
+	let graphiqInstalled = false;
 
 	try {
 		if (cfg.nonInteractive && !cfg.allowUnprotectedWorkspace && !cfg.createLocalBackup) {
@@ -129,7 +137,17 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		writeFileSync(join(cfg.basePath, "agent.yaml"), formatYaml(config));
 
-		writeSetupCorePluginRegistry(cfg.basePath, { signetSecretsEnabled: cfg.signetSecretsEnabled });
+		writeSetupCorePluginRegistry(cfg.basePath, {
+			signetSecretsEnabled: cfg.signetSecretsEnabled,
+			graphiqEnabled: cfg.graphiqEnabled,
+		});
+		if (cfg.graphiqEnabled) {
+			spinner.stop();
+			graphiqInstalled = await installGraphiqPlugin({ agentsDir: cfg.basePath });
+			spinner.start("Continuing Signet setup...");
+		} else {
+			disableGraphiqState(cfg.basePath);
+		}
 
 		const docFiles = [
 			{ name: "MEMORY.md", template: "MEMORY.md.template" },
@@ -244,6 +262,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			chalk.dim(
 				`    ${cfg.signetSecretsEnabled ? "✓" : "○"} Signet Secrets ${cfg.signetSecretsEnabled ? "enabled" : "installed but disabled"}`,
 			),
+		);
+		console.log(
+			chalk.dim(`    ${graphiqInstalled ? "✓" : "○"} GraphIQ ${graphiqInstalled ? "enabled" : "not installed"}`),
 		);
 
 		if (configuredHarnesses.length > 0) {

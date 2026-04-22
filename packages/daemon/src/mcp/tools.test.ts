@@ -5,9 +5,21 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
+	SIGNET_PLUGIN_REGISTRY_DIR,
+	SIGNET_PLUGIN_REGISTRY_FILE,
+	SIGNET_PLUGIN_REGISTRY_VERSION,
+	SIGNET_SECRETS_PLUGIN_ID,
+	updateGraphiqActiveProject,
+} from "@signet/core";
+import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 // ---------------------------------------------------------------------------
@@ -16,7 +28,68 @@ import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 interface RegisteredTool {
 	handler: (args: Record<string, unknown>) => Promise<unknown>;
+	inputSchema: {
+		shape?: Record<
+			string,
+			{
+				def?: {
+					innerType?: { minValue?: number; maxValue?: number };
+				};
+			}
+		>;
+	};
 	enabled: boolean;
+}
+
+const GRAPHIQ_TOOL_NAMES = [
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
+] as const;
+
+function graphiqPolicyHost(
+	state: "active" | "degraded" | "blocked" | "disabled" = "active",
+	toolNames: readonly string[] = GRAPHIQ_TOOL_NAMES,
+): {
+	get: (id: string) =>
+		| {
+				state: string;
+				surfaces: { mcpTools: Array<{ name: string }> };
+		  }
+		| undefined;
+} {
+	return {
+		get: (id: string) =>
+			id === SIGNET_GRAPHIQ_PLUGIN_ID
+				? {
+						state,
+						surfaces: { mcpTools: toolNames.map((name) => ({ name })) },
+					}
+				: undefined,
+	};
+}
+
+function enableGraphiqPluginInRegistry(basePath: string): void {
+	const registryDir = join(basePath, SIGNET_PLUGIN_REGISTRY_DIR);
+	mkdirSync(registryDir, { recursive: true });
+	writeFileSync(
+		join(registryDir, SIGNET_PLUGIN_REGISTRY_FILE),
+		`${JSON.stringify(
+			{
+				version: SIGNET_PLUGIN_REGISTRY_VERSION,
+				plugins: {
+					[SIGNET_SECRETS_PLUGIN_ID]: { enabled: true },
+					[SIGNET_GRAPHIQ_PLUGIN_ID]: { enabled: true },
+				},
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	resetDefaultPluginHostForTests();
 }
 
 function getRegisteredTools(server: McpServer): Record<string, RegisteredTool> {
@@ -48,6 +121,18 @@ function getToolNames(server: McpServer): string[] {
 	return Object.keys(getRegisteredTools(server));
 }
 
+function getToolPropertySchema(
+	server: McpServer,
+	toolName: string,
+	propertyName: string,
+): { minValue?: number; maxValue?: number } {
+	const schema = getRegisteredTools(server)[toolName]?.inputSchema.shape?.[propertyName]?.def?.innerType;
+	if (!schema) {
+		throw new Error(`Schema property ${toolName}.${propertyName} not found`);
+	}
+	return schema;
+}
+
 function mockFetch(status: number, body: unknown, capture?: { url?: string; method?: string; body?: string }): void {
 	globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 		if (capture) {
@@ -69,8 +154,14 @@ function mockFetch(status: number, body: unknown, capture?: { url?: string; meth
 describe("createMcpServer", () => {
 	let server: McpServer;
 	const originalFetch = globalThis.fetch;
+	const originalSignetPath = process.env.SIGNET_PATH;
+	const originalPath = process.env.PATH;
+	let tempAgentsDir = "";
 
 	beforeEach(async () => {
+		tempAgentsDir = mkdtempSync(join(tmpdir(), "signet-mcp-tools-"));
+		process.env.SIGNET_PATH = tempAgentsDir;
+		resetDefaultPluginHostForTests();
 		server = await createMcpServer({
 			daemonUrl: "http://localhost:3850",
 			version: "0.0.1-test",
@@ -80,6 +171,19 @@ describe("createMcpServer", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		if (originalSignetPath === undefined) {
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
+		} else {
+			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (originalPath === undefined) {
+			Reflect.deleteProperty(process.env, "PATH");
+		} else {
+			process.env.PATH = originalPath;
+		}
+		if (tempAgentsDir) rmSync(tempAgentsDir, { recursive: true, force: true });
+		tempAgentsDir = "";
+		resetDefaultPluginHostForTests();
 	});
 
 	it("creates server with correct info", () => {
@@ -128,7 +232,166 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
-		expect(names.length).toBe(39);
+		for (const name of GRAPHIQ_TOOL_NAMES) {
+			expect(names).toContain(name);
+		}
+		expect(names.length).toBe(45);
+	});
+
+	it("registers generic code tools when GraphIQ has an active project", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+		const names = getToolNames(graphServer);
+		expect(names).toContain("code_search");
+		expect(names).toContain("code_context");
+		expect(names).toContain("code_blast");
+		expect(names).toContain("code_status");
+		expect(names).toContain("code_doctor");
+		expect(names).toContain("code_constants");
+	});
+
+	it("gates GraphIQ code tools when plugin host blocks GraphIQ", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+			pluginHost: graphiqPolicyHost("blocked"),
+		});
+		const names = getToolNames(graphServer);
+		for (const name of GRAPHIQ_TOOL_NAMES) {
+			expect(names).toContain(name);
+		}
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("GraphIQ plugin is blocked");
+	});
+
+	it("uses fresh GraphIQ plugin policy when a project is indexed after server construction", async () => {
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBeUndefined();
+		expect(readFileSync(capturePath, "utf-8")).toContain(`status --db ${dbPath}`);
+	});
+
+	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		expect(getToolPropertySchema(graphServer, "code_search", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+		expect(getToolPropertySchema(graphServer, "code_blast", "depth")).toMatchObject({ minValue: 1, maxValue: 10 });
+		expect(getToolPropertySchema(graphServer, "code_constants", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+
+		await callTool(graphServer, "code_search", { query: "GraphIQ", top: 10_000 });
+		expect(readFileSync(capturePath, "utf-8")).toContain("search GraphIQ --top 100 --db");
+
+		await callTool(graphServer, "code_blast", { symbol: "installGraphiqPlugin", depth: -25 });
+		expect(readFileSync(capturePath, "utf-8")).toContain("blast installGraphiqPlugin --depth 1 --direction both --db");
+	});
+
+	it("rejects GraphIQ positional args that would be parsed as CLI options", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		const search = await callTool(graphServer, "code_search", { query: "--help" });
+		const searchFile = await callTool(graphServer, "code_search", { query: "GraphIQ", file: "--db" });
+		const context = await callTool(graphServer, "code_context", { symbol: "-v" });
+		const blast = await callTool(graphServer, "code_blast", { symbol: "--db", depth: 2 });
+		const constants = await callTool(graphServer, "code_constants", { query: "--debug" });
+
+		expect(search.isError).toBe(true);
+		expect(searchFile.isError).toBe(true);
+		expect(context.isError).toBe(true);
+		expect(blast.isError).toBe(true);
+		expect(constants.isError).toBe(true);
+		expect(existsSync(capturePath)).toBe(false);
 	});
 
 	it("registers intuitive knowledge navigation aliases", async () => {
