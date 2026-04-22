@@ -601,7 +601,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
 			),
-			command: resolvedCommandConfig,
+			command: effectiveProvider === "command" ? resolvedCommandConfig : undefined,
 			escalation: {
 				maxNewEntitiesPerChunk: clampPositive(
 					escalationRaw?.maxNewEntitiesPerChunk,
