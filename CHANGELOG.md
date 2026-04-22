@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-22
 - Features: add GraphIQ plugin integration.
+- Bug fixes: write named-agent memory heads locally.
 
 ### 2026-04-21
 - Features: add Gemini CLI harness connector.
@@ -35,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: prompt for sync after restart.
 
 ## Release Ledger
+
+## [0.104.1] - 2026-04-22
+
+Release summary: 1 bug fix.
+Tag range: `v0.104.0..v0.104.1`.
+
+### Bug Fixes
+
+- **daemon**: write named-agent memory heads locally (#547)
 
 ## [0.104.0] - 2026-04-22
 
