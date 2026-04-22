@@ -112,7 +112,7 @@ describe("provider safety guard - rollback path", () => {
 		expect(filePath).toBe(agentYaml);
 		expect(transitions.length).toBe(1);
 
-		const result = executeProviderRollback(dir, filePath, undefined, undefined, transitions);
+		const result = await executeProviderRollback(dir, filePath, undefined, undefined, transitions);
 		expect(result.success).toBe(true);
 		expect(result.rolledBack.from).toBe("ollama");
 		expect(result.rolledBack.to).toBe("anthropic");
@@ -135,7 +135,7 @@ describe("provider safety guard - rollback path", () => {
 		);
 
 		const { filePath } = resolveRollbackFilePath(dir);
-		const result = executeProviderRollback(dir, filePath);
+		const result = await executeProviderRollback(dir, filePath);
 		expect(result.success).toBe(true);
 	});
 });

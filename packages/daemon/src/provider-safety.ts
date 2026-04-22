@@ -225,7 +225,26 @@ function atomicWrite(targetPath: string, content: string, prefix = ".atomic-"): 
 	}
 }
 
-const auditAppendQueues = new Map<string, Promise<void>>();
+const auditMutationQueues = new Map<string, Promise<void>>();
+
+async function enqueueProviderAuditMutation<T>(
+	agentsDir: string,
+	mutation: (auditPath: string) => T | Promise<T>,
+): Promise<T> {
+	const path = providerAuditPath(agentsDir);
+	const previous = auditMutationQueues.get(path) ?? Promise.resolve();
+	const next = previous.catch(() => undefined).then(() => mutation(path));
+	const queued = next
+		.then(
+			() => undefined,
+			() => undefined,
+		)
+		.finally(() => {
+			if (auditMutationQueues.get(path) === queued) auditMutationQueues.delete(path);
+		});
+	auditMutationQueues.set(path, queued);
+	return next;
+}
 
 function appendProviderTransitionsUnlocked(
 	agentsDir: string,
@@ -250,14 +269,7 @@ export async function appendProviderTransitions(
 	entries: readonly ProviderTransitionAuditEntry[],
 ): Promise<void> {
 	if (entries.length === 0) return;
-	const path = providerAuditPath(agentsDir);
-	const previous = auditAppendQueues.get(path) ?? Promise.resolve();
-	const next = previous.catch(() => undefined).then(() => appendProviderTransitionsUnlocked(agentsDir, entries, path));
-	const queued = next.finally(() => {
-		if (auditAppendQueues.get(path) === queued) auditAppendQueues.delete(path);
-	});
-	auditAppendQueues.set(path, queued);
-	return next;
+	return enqueueProviderAuditMutation(agentsDir, (path) => appendProviderTransitionsUnlocked(agentsDir, entries, path));
 }
 
 export const CONFIG_FILE_CANDIDATES = ["agent.yaml", "AGENT.yaml", "config.yaml"] as const;
@@ -268,6 +280,63 @@ function isRollbackEligible(candidate: ProviderTransitionAuditEntry, requestedRo
 		!candidate.rolledBack &&
 		candidate.source !== "api/config/provider-safety/rollback" &&
 		(!requestedRole || candidate.role === requestedRole)
+	);
+}
+
+function markRolledBack(target: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {
+	return {
+		role: target.role,
+		from: target.from,
+		to: target.to,
+		timestamp: target.timestamp,
+		source: target.source,
+		actor: target.actor,
+		risky: target.risky,
+		rolledBack: true,
+	};
+}
+
+function isSameTransition(left: ProviderTransitionAuditEntry, right: ProviderTransitionAuditEntry): boolean {
+	return (
+		left.role === right.role &&
+		left.from === right.from &&
+		left.to === right.to &&
+		left.timestamp === right.timestamp &&
+		left.source === right.source
+	);
+}
+
+function consumeProviderTransitionUnlocked(
+	agentsDir: string,
+	target: ProviderTransitionAuditEntry,
+	rollbackEntries: readonly ProviderTransitionAuditEntry[],
+	auditPath: string,
+): void {
+	mkdirSync(dirname(auditPath), { recursive: true });
+	const existing = readProviderTransitions(agentsDir);
+	const next = [...existing];
+	const targetIndex = next.findIndex((entry) => isSameTransition(entry, target));
+	if (targetIndex >= 0) {
+		next[targetIndex] = markRolledBack(next[targetIndex]);
+	} else {
+		logger.warn("provider-safety", "Rollback audit target missing during consume; preserving consumed marker", {
+			role: target.role,
+			source: target.source,
+			timestamp: target.timestamp,
+		});
+		next.push(markRolledBack(target));
+	}
+	const merged = [...next, ...rollbackEntries].slice(-100);
+	atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
+}
+
+async function consumeProviderTransition(
+	agentsDir: string,
+	target: ProviderTransitionAuditEntry,
+	rollbackEntries: readonly ProviderTransitionAuditEntry[],
+): Promise<void> {
+	return enqueueProviderAuditMutation(agentsDir, (auditPath) =>
+		consumeProviderTransitionUnlocked(agentsDir, target, rollbackEntries, auditPath),
 	);
 }
 
@@ -298,39 +367,26 @@ export function resolveRollbackFilePath(
 	return { filePath: join(agentsDir, fallback), transitions };
 }
 
-export function executeProviderRollback(
+export async function executeProviderRollback(
 	agentsDir: string,
 	filePath: string,
 	requestedRole?: ProviderSafetyRole,
 	actor?: string,
 	priorTransitions?: ProviderTransitionAuditEntry[],
-): {
+): Promise<{
 	success: true;
 	file: string;
 	rolledBack: ProviderTransitionAuditEntry;
 	providerTransitions: ProviderTransitionAuditEntry[];
 	isRetry: boolean;
-} {
+}> {
 	const transitions = [...(priorTransitions ?? readProviderTransitions(agentsDir))];
 	const reversed = [...transitions].reverse();
 	const matchIdx = reversed.findIndex((c) => isRollbackEligible(c, requestedRole));
 	if (matchIdx < 0) throw new RollbackError("No provider transition with rollback target found", 404);
 	const entry = reversed[matchIdx];
-	const originalIndex = transitions.length - 1 - matchIdx;
 	if (!existsSync(filePath)) {
 		throw new RollbackError(`Config file '${basename(filePath)}' not found`, 404);
-	}
-	function markRolledBack(target: ProviderTransitionAuditEntry): ProviderTransitionAuditEntry {
-		return {
-			role: target.role,
-			from: target.from,
-			to: target.to,
-			timestamp: target.timestamp,
-			source: target.source,
-			actor: target.actor,
-			risky: target.risky,
-			rolledBack: true,
-		};
 	}
 
 	const beforeContent = readFileSync(filePath, "utf-8");
@@ -357,11 +413,7 @@ export function executeProviderRollback(
 				400,
 			);
 		}
-		transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
-		const merged = [...transitions].slice(-100);
-		const auditPath = providerAuditPath(agentsDir);
-		mkdirSync(dirname(auditPath), { recursive: true });
-		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
+		await consumeProviderTransition(agentsDir, entry, []);
 		return {
 			success: true,
 			file: basename(filePath),
@@ -379,10 +431,6 @@ export function executeProviderRollback(
 		"api/config/provider-safety/rollback",
 		actor,
 	);
-	transitions[originalIndex] = markRolledBack(transitions[originalIndex]);
-	const merged = [...transitions, ...rollbackEntries].slice(-100);
-	const auditPath = providerAuditPath(agentsDir);
-	mkdirSync(dirname(auditPath), { recursive: true });
 	// Config-first: if audit write fails after config, the entry is
 	// unconsumed. On retry, applyProviderRollback clears stale fields
 	// idempotently and JSON.stringify comparison detects no semantic
@@ -390,7 +438,7 @@ export function executeProviderRollback(
 	// rewriting the config.
 	atomicWrite(filePath, nextContent, ".rollback-");
 	try {
-		atomicWrite(auditPath, `${JSON.stringify(merged, null, 2)}\n`, ".audit-");
+		await consumeProviderTransition(agentsDir, entry, rollbackEntries);
 	} catch (e) {
 		// Config is correct but audit is stale; retry will hit the
 		// semantic no-op guard above and mark the entry consumed audit-only.
