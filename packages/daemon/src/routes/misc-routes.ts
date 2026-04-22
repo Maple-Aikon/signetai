@@ -322,7 +322,7 @@ export function registerMiscRoutes(app: Hono): void {
 			}
 			const requestedRole = parsedRole.role;
 			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
-			const result = executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
+			const result = await executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
 			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
 			logger.warn("api", "Provider configuration rolled back", {
 				file: basename(filePath),

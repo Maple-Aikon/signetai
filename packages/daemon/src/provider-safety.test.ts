@@ -173,7 +173,7 @@ describe("provider safety", () => {
 		);
 		await appendProviderTransitions(agentsDir, entries);
 
-		const result1 = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		const result1 = await executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result1.success).toBe(true);
 		expect(result1.rolledBack.to).toBe("anthropic");
 
@@ -202,6 +202,38 @@ describe("provider safety", () => {
 		const stored = readProviderTransitions(agentsDir);
 		expect(stored).toHaveLength(2);
 		expect(stored.map((entry) => entry.source).sort()).toEqual(["first", "second"]);
+	});
+
+	it("serializes rollback audit consumption with concurrent appends", async () => {
+		const agentsDir = makeTempDir();
+		const configDir = makeTempDir();
+		writeFileSync(
+			join(configDir, "agent.yaml"),
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
+			"utf-8",
+		);
+		const initial = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+			"memory:\n  pipelineV2:\n    extractionProvider: anthropic\n",
+			"agent.yaml",
+		);
+		await appendProviderTransitions(agentsDir, initial);
+		const priorTransitions = readProviderTransitions(agentsDir);
+		const concurrent = detectProviderTransitions(
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: ollama\n",
+			"memory:\n  pipelineV2:\n    synthesis:\n      provider: claude-code\n",
+			"concurrent-save",
+		);
+
+		await Promise.all([
+			appendProviderTransitions(agentsDir, concurrent),
+			executeProviderRollback(agentsDir, join(configDir, "agent.yaml"), undefined, undefined, priorTransitions),
+		]);
+
+		const stored = readProviderTransitions(agentsDir);
+		expect(stored.find((entry) => entry.source === "agent.yaml")?.rolledBack).toBe(true);
+		expect(stored.some((entry) => entry.source === "concurrent-save")).toBe(true);
+		expect(stored.some((entry) => entry.source === "api/config/provider-safety/rollback")).toBe(true);
 	});
 
 	it("skips corrupted entries in audit file", () => {
@@ -256,12 +288,12 @@ describe("provider safety", () => {
 		expect(readProviderTransitions(agentsDir)).toEqual([]);
 	});
 
-	it("executeProviderRollback rejects when no eligible transition exists", () => {
+	it("executeProviderRollback rejects when no eligible transition exists", async () => {
 		const agentsDir = makeTempDir();
 		const configDir = makeTempDir();
 		writeFileSync(join(configDir, "agent.yaml"), "memory:\n  pipelineV2:\n    extractionProvider: ollama\n", "utf-8");
 
-		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
+		await expect(executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).rejects.toThrow(
 			"No provider transition with rollback target found",
 		);
 	});
@@ -303,7 +335,7 @@ describe("provider safety", () => {
 		expect(entries[0].to).toBe("claude-code");
 		await appendProviderTransitions(agentsDir, entries);
 
-		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		const result = await executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.success).toBe(true);
 		expect(result.rolledBack.role).toBe("synthesis");
 		expect(result.rolledBack.from).toBe("ollama");
@@ -367,7 +399,7 @@ describe("provider safety", () => {
 		expect(entries).toHaveLength(1);
 		await appendProviderTransitions(agentsDir, entries);
 
-		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		const result = await executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.isRetry).toBe(true);
 		expect(result.providerTransitions).toHaveLength(0);
 
@@ -389,7 +421,7 @@ describe("provider safety", () => {
 		expect(entries).toHaveLength(1);
 		await appendProviderTransitions(agentsDir, entries);
 
-		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
+		await expect(executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).rejects.toThrow(
 			/No synthesis configuration found/,
 		);
 
@@ -415,7 +447,7 @@ describe("provider safety", () => {
 		expect(entries).toHaveLength(1);
 		await appendProviderTransitions(agentsDir, entries);
 
-		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		const result = await executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.success).toBe(true);
 		expect(result.rolledBack.rolledBack).toBe(true);
 
@@ -446,10 +478,10 @@ describe("provider safety", () => {
 		expect(firstTransition).toHaveLength(1);
 		await appendProviderTransitions(agentsDir, firstTransition);
 
-		const result = executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
+		const result = await executeProviderRollback(agentsDir, join(configDir, "agent.yaml"));
 		expect(result.success).toBe(true);
 
-		expect(() => executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).toThrow(
+		await expect(executeProviderRollback(agentsDir, join(configDir, "agent.yaml"))).rejects.toThrow(
 			/No provider transition with rollback target found/,
 		);
 	});
