@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-22
+- Features: add GraphIQ plugin integration.
+
 ### 2026-04-21
 - Features: add Gemini CLI harness connector.
 - Bug fixes: dedupe summary fact hash collisions; suppress OpenCode notifications for extraction sessions; skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
@@ -31,10 +34,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: resolve FD exhaustion and event loop blocking with thousands of memory artifacts.
 - Refactoring: prompt for sync after restart.
 
-### 2026-04-15
-- Bug fixes: thread deadline into OpenCode session creation.
-
 ## Release Ledger
+
+## [0.104.0] - 2026-04-22
+
+Release summary: 1 feature.
+Tag range: `v0.103.3..v0.104.0`.
+
+### Features
+
+- add GraphIQ plugin integration
 
 ## [0.103.3] - 2026-04-21
 
