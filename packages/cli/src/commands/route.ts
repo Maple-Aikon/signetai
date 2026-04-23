@@ -57,16 +57,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readAgentYaml(agentsDir: string): { readonly path: string; readonly data: Record<string, unknown> } {
-	const path = join(agentsDir, "agent.yaml");
-	if (!existsSync(path)) {
-		return { path, data: {} };
-	}
-	const parsed = parseYamlDocument(readFileSync(path, "utf-8"));
-	return { path, data: isRecord(parsed) ? parsed : {} };
+interface AgentYamlFile {
+	readonly path: string;
+	readonly exists: boolean;
+	readonly data: Record<string, unknown>;
 }
 
-function writeAgentYaml(path: string, data: Record<string, unknown>): void {
+function readAgentYaml(agentsDir: string): AgentYamlFile {
+	const path = join(agentsDir, "agent.yaml");
+	if (!existsSync(path)) {
+		return { path, exists: false, data: {} };
+	}
+	const parsed = parseYamlDocument(readFileSync(path, "utf-8"));
+	return { path, exists: true, data: isRecord(parsed) ? parsed : {} };
+}
+
+function writeAgentYaml(file: AgentYamlFile, data: Record<string, unknown>, allowRewrite: boolean): void {
+	if (file.exists && !allowRewrite) {
+		console.error(
+			chalk.red(
+				"Refusing to rewrite existing agent.yaml because route pin/unpin serializes YAML and may change comments or formatting.",
+			),
+		);
+		console.error(chalk.yellow("Re-run with --rewrite-agent-yaml to confirm this destructive rewrite."));
+		process.exit(1);
+	}
+	const path = file.path;
 	writeFileSync(path, stringifyYamlDocument(data));
 }
 
@@ -352,10 +368,12 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.description("Pin an agent/task-class to a target ref in agent.yaml")
 		.option("--agent <agent>", "Agent id", "default")
 		.option("--task-class <taskClass>", "Task class pin key", "default")
-		.action((targetRef: string, options: { agent: string; taskClass: string }) => {
-			const { path, data } = readAgentYaml(deps.AGENTS_DIR);
+		.option("--rewrite-agent-yaml", "Allow rewriting existing agent.yaml; comments and formatting may be changed")
+		.action((targetRef: string, options: { agent: string; taskClass: string; rewriteAgentYaml?: boolean }) => {
+			const file = readAgentYaml(deps.AGENTS_DIR);
+			const { data } = file;
 			setPinnedTarget(data, options.agent, options.taskClass, targetRef);
-			writeAgentYaml(path, data);
+			writeAgentYaml(file, data, options.rewriteAgentYaml === true);
 			console.log(chalk.green(`Pinned ${options.agent}/${options.taskClass} -> ${targetRef}`));
 		});
 
@@ -364,14 +382,16 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.description("Remove an agent/task-class pin from agent.yaml")
 		.option("--agent <agent>", "Agent id", "default")
 		.option("--task-class <taskClass>", "Task class pin key", "default")
-		.action((options: { agent: string; taskClass: string }) => {
-			const { path, data } = readAgentYaml(deps.AGENTS_DIR);
+		.option("--rewrite-agent-yaml", "Allow rewriting existing agent.yaml; comments and formatting may be changed")
+		.action((options: { agent: string; taskClass: string; rewriteAgentYaml?: boolean }) => {
+			const file = readAgentYaml(deps.AGENTS_DIR);
+			const { data } = file;
 			const removed = removePinnedTarget(data, options.agent, options.taskClass);
 			if (!removed) {
 				console.log(chalk.yellow(`No pin found for ${options.agent}/${options.taskClass}`));
 				return;
 			}
-			writeAgentYaml(path, data);
+			writeAgentYaml(file, data, options.rewriteAgentYaml === true);
 			console.log(chalk.green(`Removed pin for ${options.agent}/${options.taskClass}`));
 		});
 }
