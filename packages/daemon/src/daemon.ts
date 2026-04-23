@@ -52,6 +52,7 @@ import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
+import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
 import { stopModelRegistry } from "./pipeline/model-registry";
 import { stopOpenCodeServer } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
@@ -1136,6 +1137,23 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && extractionAvailable) {
+		const workerInit: WorkerInit | undefined = memoryCfg.pipelineV2.worker.threadedExtraction
+			? {
+					dbPath: MEMORY_DB,
+					vecExtensionPath: getVectorRuntimeStatus().extensionPath ?? "",
+					agentsDir: AGENTS_DIR,
+					agentId: defaultAgentId,
+					embeddingConfig: {
+						provider: memoryCfg.embedding.provider,
+						model: memoryCfg.embedding.model,
+						dimensions: memoryCfg.embedding.dimensions ?? 768,
+						baseUrl: memoryCfg.embedding.base_url,
+					},
+					pipelineConfig: memoryCfg.pipelineV2 as unknown as Record<string, unknown>,
+					searchConfig: memoryCfg.search as unknown as Record<string, unknown>,
+				}
+			: undefined;
+
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
@@ -1146,6 +1164,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			providerTracker,
 			analyticsCollector,
 			telemetry,
+			workerInit,
 		);
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);

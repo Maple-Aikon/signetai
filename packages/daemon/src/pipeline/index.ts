@@ -26,6 +26,8 @@ import { type StructuralDependencyHandle, startStructuralDependencyWorker } from
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
+import { startExtractionThread } from "./extraction-thread-handle";
+import type { WorkerInit } from "./extraction-thread-protocol";
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
@@ -124,6 +126,7 @@ export function startPipeline(
 	providerTracker?: ProviderTracker,
 	analytics?: AnalyticsCollector,
 	telemetry?: TelemetryCollector,
+	workerInit?: WorkerInit,
 ): void {
 	if (workerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");
@@ -169,7 +172,22 @@ export function startPipeline(
 		fetchEmbedding,
 	};
 
-	workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg, analytics, telemetry);
+	if (pipelineCfg.worker.threadedExtraction && workerInit) {
+		startExtractionThread(workerInit)
+			.then((handle) => {
+				workerHandle = handle;
+				logger.info("pipeline", "Extraction worker thread started");
+			})
+			.catch((err) => {
+				logger.error("pipeline", "Failed to start extraction worker thread, falling back to main thread", err);
+				workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg, analytics, telemetry);
+			});
+	} else {
+		if (pipelineCfg.worker.threadedExtraction && !workerInit) {
+			logger.warn("pipeline", "threadedExtraction enabled but no WorkerInit provided, falling back to main thread");
+		}
+		workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg, analytics, telemetry);
+	}
 
 	// Retention worker also managed here when pipeline is active;
 	// standalone retention is started separately in main() for non-pipeline users.
