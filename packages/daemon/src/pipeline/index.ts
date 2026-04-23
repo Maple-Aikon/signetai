@@ -133,6 +133,10 @@ export function startPipeline(
 		logger.warn("pipeline", "Pipeline already running, skipping start");
 		return;
 	}
+	if (pendingStartup) {
+		logger.warn("pipeline", "Pipeline startup already in progress, skipping start");
+		return;
+	}
 	if (!pipelineCfg.enabled) {
 		logger.info("pipeline", "Pipeline disabled; worker start skipped");
 		return;

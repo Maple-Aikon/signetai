@@ -25,6 +25,7 @@ export function startExtractionThread(init: WorkerInit): Promise<WorkerHandle> {
 		const worker = new Worker(workerPath, { workerData: init });
 
 		let running = true;
+		let settled = false;
 		let latestStats: WorkerStats = {
 			failures: 0,
 			lastProgressAt: Date.now(),
@@ -40,6 +41,8 @@ export function startExtractionThread(init: WorkerInit): Promise<WorkerHandle> {
 		};
 
 		const readyTimer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
 			reject(new Error(`Extraction worker thread failed to become ready within ${READY_TIMEOUT_MS}ms`));
 			worker.terminate();
 		}, READY_TIMEOUT_MS);
@@ -48,6 +51,8 @@ export function startExtractionThread(init: WorkerInit): Promise<WorkerHandle> {
 			switch (msg.type) {
 				case "ready":
 					clearTimeout(readyTimer);
+					if (settled) break;
+					settled = true;
 					logger.info("pipeline", "Extraction worker thread ready");
 					resolve(handle);
 					break;
@@ -89,13 +94,21 @@ export function startExtractionThread(init: WorkerInit): Promise<WorkerHandle> {
 			clearTimeout(readyTimer);
 			logger.error("pipeline", "Extraction worker thread crashed", err);
 			running = false;
-			reject(err);
+			if (!settled) {
+				settled = true;
+				reject(err);
+			}
 		});
 
 		worker.on("exit", (code: number) => {
+			clearTimeout(readyTimer);
 			running = false;
 			if (code !== 0) {
 				logger.warn("pipeline", "Extraction worker thread exited with non-zero code", { code });
+			}
+			if (!settled) {
+				settled = true;
+				reject(new Error(`Extraction worker thread exited with code ${code} before becoming ready`));
 			}
 		});
 
