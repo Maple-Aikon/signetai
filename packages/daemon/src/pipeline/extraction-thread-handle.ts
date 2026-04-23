@@ -9,6 +9,7 @@
 
 import { Worker } from "node:worker_threads";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { logger } from "../logger";
 import type { LogCategory } from "../logger";
 import type { WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
@@ -19,7 +20,8 @@ const STOP_TIMEOUT_MS = 10_000;
 
 export function startExtractionThread(init: WorkerInit): Promise<WorkerHandle> {
 	return new Promise<WorkerHandle>((resolve, reject) => {
-		const workerPath = join(__dirname, "extraction-thread.ts");
+		const bundled = join(import.meta.dir, "extraction-thread.js");
+		const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "extraction-thread.ts");
 		const worker = new Worker(workerPath, { workerData: init });
 
 		let running = true;

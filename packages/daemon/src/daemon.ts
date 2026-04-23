@@ -1143,12 +1143,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					vecExtensionPath: getVectorRuntimeStatus().extensionPath ?? "",
 					agentsDir: AGENTS_DIR,
 					agentId: defaultAgentId,
-					embeddingConfig: {
-						provider: memoryCfg.embedding.provider,
-						model: memoryCfg.embedding.model,
-						dimensions: memoryCfg.embedding.dimensions ?? 768,
-						baseUrl: memoryCfg.embedding.base_url,
-					},
+				embeddingConfig: {
+					provider: memoryCfg.embedding.provider,
+					model: memoryCfg.embedding.model,
+					dimensions: memoryCfg.embedding.dimensions ?? 768,
+					base_url: memoryCfg.embedding.base_url,
+					api_key: memoryCfg.embedding.api_key,
+				},
 					pipelineConfig: memoryCfg.pipelineV2 as unknown as Record<string, unknown>,
 					searchConfig: memoryCfg.search as unknown as Record<string, unknown>,
 				}

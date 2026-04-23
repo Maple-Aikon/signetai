@@ -79,6 +79,7 @@ let structuralDependencyHandle: StructuralDependencyHandle | null = null;
 let dependencySynthesisHandle: DependencySynthesisHandle | null = null;
 let hintsWorkerHandle: HintsWorkerHandle | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
+let pendingStartup: Promise<void> | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): Record<string, { running: boolean; stats?: WorkerStats }> {
@@ -173,7 +174,7 @@ export function startPipeline(
 	};
 
 	if (pipelineCfg.worker.threadedExtraction && workerInit) {
-		startExtractionThread(workerInit)
+		pendingStartup = startExtractionThread(workerInit)
 			.then((handle) => {
 				workerHandle = handle;
 				logger.info("pipeline", "Extraction worker thread started");
@@ -181,6 +182,9 @@ export function startPipeline(
 			.catch((err) => {
 				logger.error("pipeline", "Failed to start extraction worker thread, falling back to main thread", err);
 				workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg, analytics, telemetry);
+			})
+			.finally(() => {
+				pendingStartup = null;
 			});
 	} else {
 		if (pipelineCfg.worker.threadedExtraction && !workerInit) {
@@ -273,6 +277,11 @@ export function startPipeline(
 }
 
 export async function stopPipeline(): Promise<void> {
+	// Wait for any pending threaded extraction startup to complete
+	// before checking workerHandle — prevents orphan threads.
+	if (pendingStartup) {
+		await pendingStartup;
+	}
 	if (hintsWorkerHandle) {
 		await hintsWorkerHandle.stop();
 		hintsWorkerHandle = null;

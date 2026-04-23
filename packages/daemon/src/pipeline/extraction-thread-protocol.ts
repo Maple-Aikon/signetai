@@ -20,8 +20,8 @@ export interface SerializedEmbeddingConfig {
 	readonly provider: string;
 	readonly model: string;
 	readonly dimensions: number;
-	readonly baseUrl?: string;
-	readonly apiKey?: string;
+	readonly base_url?: string;
+	readonly api_key?: string;
 }
 
 /** Everything the worker thread needs to self-initialize. */

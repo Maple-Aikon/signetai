@@ -118,7 +118,7 @@ describe("extraction-thread-protocol", () => {
 				provider: "ollama",
 				model: "nomic-embed-text",
 				dimensions: 768,
-				baseUrl: "http://localhost:11434",
+				base_url: "http://localhost:11434",
 			};
 
 			const init: WorkerInit = {
@@ -136,12 +136,12 @@ describe("extraction-thread-protocol", () => {
 			expect(init.embeddingConfig.model).toBe("nomic-embed-text");
 		});
 
-		it("accepts WorkerInit with optional apiKey in embedding config", () => {
+		it("accepts WorkerInit with optional api_key in embedding config", () => {
 			const embeddingConfig: SerializedEmbeddingConfig = {
 				provider: "openai",
 				model: "text-embedding-3-small",
 				dimensions: 1536,
-				apiKey: "sk-...",
+				api_key: "sk-...",
 			};
 
 			const init: WorkerInit = {
@@ -154,7 +154,7 @@ describe("extraction-thread-protocol", () => {
 				searchConfig: {},
 			};
 
-			expect(init.embeddingConfig.apiKey).toBe("sk-...");
+			expect(init.embeddingConfig.api_key).toBe("sk-...");
 		});
 	});
 });
