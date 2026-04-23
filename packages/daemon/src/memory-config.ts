@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
+	DEFAULT_PROVIDER_RATE_LIMIT,
 	type DreamingConfig,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
@@ -10,11 +11,11 @@ import {
 	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
-import { type AuthConfig, parseAuthConfig } from "./auth/config";
+import { type AuthConfig, parseAuthConfig } from "./auth";
 import { logger } from "./logger";
 
 export interface EmbeddingConfig {
-	provider: "native" | "ollama" | "openai" | "none";
+	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
 	model: string;
 	dimensions: number;
 	base_url: string;
@@ -49,7 +50,18 @@ class PipelineConfigValidationError extends Error {
 	}
 }
 
-export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
+type ExtractionFallbackProvider = NonNullable<PipelineV2Config["extraction"]["fallbackProvider"]>;
+
+export type ResolvedPipelineV2Config = Omit<PipelineV2Config, "extraction"> & {
+	readonly extraction: Omit<PipelineV2Config["extraction"], "fallbackProvider"> & {
+		readonly fallbackProvider: ExtractionFallbackProvider;
+	};
+	readonly guardrails: Omit<PipelineV2Config["guardrails"], "contextBudgetChars"> & {
+		readonly contextBudgetChars: number;
+	};
+};
+
+export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	enabled: true,
 	paused: false,
 	shadowMode: false,
@@ -58,9 +70,9 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	semanticContradictionEnabled: true,
 	semanticContradictionTimeoutMs: 120000,
 	extraction: {
-		provider: "ollama",
-		fallbackProvider: "ollama",
-		model: "qwen3:4b",
+		provider: "llama-cpp",
+		fallbackProvider: "llama-cpp",
+		model: "qwen3.5:4b",
 		strength: "low",
 		endpoint: undefined,
 		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
@@ -81,6 +93,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	},
 	graph: {
 		enabled: true,
+		extractionWritesEnabled: false,
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
@@ -177,17 +190,18 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		reconcileIntervalMs: 60000,
 	},
 	structural: {
-		enabled: true,
+		enabled: false,
 		classifyBatchSize: 8,
 		dependencyBatchSize: 5,
 		pollIntervalMs: 10000,
-		synthesisEnabled: true,
+		synthesisEnabled: false,
 		synthesisIntervalMs: 60_000,
 		synthesisTopEntities: 20,
 		synthesisMaxFacts: 10,
+		synthesisMaxStallMs: 30 * 60_000,
 		supersessionEnabled: true,
 		supersessionSweepEnabled: true,
-		supersessionSemanticFallback: true,
+		supersessionSemanticFallback: false,
 		supersessionMinConfidence: 0.7,
 	},
 	feedback: {
@@ -233,19 +247,20 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	hints: {
 		enabled: true,
 		max: 5,
-		timeout: 30000,
+		timeout: 60000,
 		maxTokens: 256,
 		poll: 5000,
 	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+export const DEFAULT_LLAMACPP_BASE_URL = "http://localhost:8080";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
 	search: MemorySearchConfig;
-	pipelineV2: PipelineV2Config;
+	pipelineV2: ResolvedPipelineV2Config;
 	dreaming: DreamingConfig;
 	auth: AuthConfig;
 }
@@ -254,6 +269,17 @@ class MemoryConfigValidationError extends Error {}
 
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+	// Bounds are inclusive; a few config fields intentionally use 0 as a disable sentinel.
+	return Math.max(min, Math.min(max, raw));
+}
+
+function clampNonNegative(raw: unknown, max: number, fallback: number): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
+	return Math.min(max, raw);
+}
+
+function parseOptionalPositive(raw: unknown, min: number, max: number): number | undefined {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
 	return Math.max(min, Math.min(max, raw));
 }
 
@@ -266,15 +292,18 @@ function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 	return typeof v === "string" && ["low", "medium", "high"].includes(v);
 }
 
-function isExtractionFallbackProvider(v: unknown): v is "ollama" | "none" {
-	return v === "ollama" || v === "none";
+function isExtractionFallbackProvider(v: unknown): v is "llama-cpp" | "ollama" | "none" {
+	return v === "llama-cpp" || v === "ollama" || v === "none";
 }
 
-function resolveExtractionFallbackProvider(raw: unknown, fallback: "ollama" | "none"): "ollama" | "none" {
+function resolveExtractionFallbackProvider(
+	raw: unknown,
+	fallback: ExtractionFallbackProvider,
+): ExtractionFallbackProvider {
 	if (raw === undefined || raw === null) return fallback;
 	if (isExtractionFallbackProvider(raw)) return raw;
 	throw new MemoryConfigValidationError(
-		`Invalid extraction fallbackProvider "${String(raw)}"; expected "ollama" or "none"`,
+		`Invalid extraction fallbackProvider "${String(raw)}"; expected "llama-cpp", "ollama", or "none"`,
 	);
 }
 
@@ -286,6 +315,19 @@ function parseOptionalUrl(raw: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rateLimit"] | undefined {
+	if (!isRecord(raw)) return undefined;
+	const maxCallsPerHour = parseOptionalPositive(raw.maxCallsPerHour, 0, 10000);
+	const burstSize = parseOptionalPositive(raw.burstSize, 1, 1000);
+	const waitTimeoutMs = parseOptionalPositive(raw.waitTimeoutMs, 0, 60000);
+	if (maxCallsPerHour === undefined && burstSize === undefined && waitTimeoutMs === undefined) return undefined;
+	return {
+		maxCallsPerHour: maxCallsPerHour ?? DEFAULT_PROVIDER_RATE_LIMIT.maxCallsPerHour,
+		burstSize: burstSize ?? DEFAULT_PROVIDER_RATE_LIMIT.burstSize,
+		waitTimeoutMs: waitTimeoutMs ?? DEFAULT_PROVIDER_RATE_LIMIT.waitTimeoutMs,
+	};
 }
 
 function parseCommandArgv(raw: string): { bin: string; args: string[] } | null {
@@ -350,7 +392,7 @@ function parseCommandConfig(raw: unknown): PipelineV2Config["extraction"]["comma
  * Flat extraction keys (dashboard-written) take precedence over nested keys.
  * Provider and model are paired — if flat provider wins, flat model wins too.
  */
-export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Config {
+export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipelineV2Config {
 	const mem = yaml.memory as Record<string, unknown> | undefined;
 	const raw = mem?.pipelineV2 as Record<string, unknown> | undefined;
 	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
@@ -372,6 +414,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
+	const dependencySynthesisRaw = raw.dependencySynthesis as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
@@ -416,14 +459,14 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const flatProviderWon = isExtractionProvider(flatProvider);
 	const nestedProviderWon = isExtractionProvider(nestedProvider);
 	// Model-only flat key: no provider set anywhere, but extractionModel is
-	// present.  Default to "ollama" so the model isn't silently discarded.
+	// present.  Default to "llama-cpp" so the model isn't silently discarded.
 	const flatModelOnly = !flatProviderWon && !nestedProviderWon && typeof flatModel === "string";
 	const resolvedProvider: ProviderKind = flatProviderWon
 		? flatProvider
 		: nestedProviderWon
 			? nestedProvider
 			: flatModelOnly
-				? "ollama"
+				? "llama-cpp"
 				: d.extraction.provider;
 	const resolvedModel = flatProviderWon
 		? resolveModel(resolvedProvider, flatModel)
@@ -445,7 +488,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	);
 	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
 		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
-		d.extraction.fallbackProvider,
+		d.extraction.fallbackProvider ?? "llama-cpp",
 	);
 	const resolvedCommandConfig = parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand);
 	if (resolvedProvider === "command" && !resolvedCommandConfig) {
@@ -459,9 +502,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		);
 	}
 
-	const synthesisProviderWon = isSynthesisProvider(synthesisRaw?.provider);
-	const resolvedSynthesisProvider: SynthesisProviderKind = synthesisProviderWon
-		? synthesisRaw.provider
+	const rawSynthProvider = synthesisRaw?.provider;
+	const synthesisProviderWon = isSynthesisProvider(rawSynthProvider);
+	const resolvedSynthesisProvider: SynthesisProviderKind = isSynthesisProvider(rawSynthProvider)
+		? rawSynthProvider
 		: resolvedProvider === "command"
 			? d.synthesis.provider
 			: resolvedProvider;
@@ -544,6 +588,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 					d.extraction.escalation?.level2MaxEntities ?? 5,
 				),
 			},
+			rateLimit: parseRateLimitConfig(extractionRaw?.rateLimit),
+			structuredOutput: (() => {
+				const candidate = extractionRaw?.structuredOutput;
+				return typeof candidate === "boolean" ? candidate : undefined;
+			})(),
 		},
 
 		worker: {
@@ -566,6 +615,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 		graph: {
 			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),
+			extractionWritesEnabled: resolveBool(
+				graphRaw?.extractionWritesEnabled,
+				raw.graphExtractionWritesEnabled,
+				d.graph.extractionWritesEnabled,
+			),
 			boostWeight: clampFraction(graphRaw?.boostWeight ?? raw.graphBoostWeight, d.graph.boostWeight),
 			boostTimeoutMs: clampPositive(
 				graphRaw?.boostTimeoutMs ?? raw.graphBoostTimeoutMs,
@@ -777,6 +831,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			timeout: resolvedSynthesisTimeout,
 			maxTokens: clampPositive(synthesisRaw?.maxTokens ?? synthesisRaw?.max_tokens, 1000, 32000, d.synthesis.maxTokens),
 			idleGapMinutes: clampPositive(synthesisRaw?.idleGapMinutes, 1, 1440, d.synthesis.idleGapMinutes),
+			structuredOutput: (() => {
+				const candidate = synthesisRaw?.structuredOutput;
+				if (typeof candidate === "boolean") return candidate;
+				const extractionCandidate = extractionRaw?.structuredOutput;
+				return typeof extractionCandidate === "boolean" ? extractionCandidate : undefined;
+			})(),
+			rateLimit: parseRateLimitConfig(synthesisRaw?.rateLimit),
 		},
 		procedural: {
 			enabled: resolveBool(proceduralRaw?.enabled, undefined, d.procedural.enabled),
@@ -817,6 +878,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				d.structural.synthesisTopEntities,
 			),
 			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
+			synthesisMaxStallMs: clampNonNegative(
+				structuralRaw?.synthesisMaxStallMs ??
+					dependencySynthesisRaw?.maxStallMs ??
+					dependencySynthesisRaw?.synthesisMaxStallMs,
+				24 * 60 * 60_000,
+				d.structural.synthesisMaxStallMs,
+			),
 			supersessionEnabled: resolveBool(structuralRaw?.supersessionEnabled, undefined, d.structural.supersessionEnabled),
 			supersessionSweepEnabled: resolveBool(
 				structuralRaw?.supersessionSweepEnabled,
@@ -919,7 +987,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		hints: {
 			enabled: resolveBool(hintsRaw?.enabled, undefined, d.hints?.enabled ?? true),
 			max: clampPositive(hintsRaw?.max, 1, 10, d.hints?.max ?? 5),
-			timeout: clampPositive(hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 30000),
+			timeout: clampPositive(hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 60000),
 			maxTokens: clampPositive(hintsRaw?.maxTokens, 64, 1024, d.hints?.maxTokens ?? 256),
 			poll: clampPositive(hintsRaw?.poll, 1000, 60000, d.hints?.poll ?? 5000),
 		},
@@ -987,7 +1055,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			if (emb.provider === "none") {
 				defaults.embedding.provider = "none";
 			} else if (emb.provider) {
-				defaults.embedding.provider = emb.provider as "native" | "ollama" | "openai";
+				const rawProvider = String(emb.provider);
+				defaults.embedding.provider =
+					rawProvider === "local" ? "native" : (rawProvider as "native" | "llama-cpp" | "ollama" | "openai");
 				defaults.embedding.model = (emb.model as string | undefined) ?? defaults.embedding.model;
 				defaults.embedding.dimensions = Number.parseInt(String(emb.dimensions ?? "768"), 10);
 				const explicitBaseUrl =
@@ -998,6 +1068,11 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
 							? explicitBaseUrl
 							: DEFAULT_OLLAMA_BASE_URL;
+				} else if (defaults.embedding.provider === "llama-cpp") {
+					defaults.embedding.base_url =
+						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
+							? explicitBaseUrl
+							: DEFAULT_LLAMACPP_BASE_URL;
 				} else if (defaults.embedding.provider === "openai") {
 					defaults.embedding.base_url =
 						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0

@@ -49,18 +49,21 @@ Commands Overview
 | `signet route` | Inspect and control inference routing |
 | `signet dashboard` | Open web UI in browser |
 | `signet daemon` | Grouped daemon subcommands |
+| `signet desktop` | Build and install the Electron desktop app from source |
 | `signet daemon start` | Start the daemon |
 | `signet daemon stop` | Stop the daemon |
 | `signet daemon restart` | Restart the daemon |
 | `signet daemon logs` | View daemon logs |
 | `signet remember` | Save a memory |
 | `signet recall` | Search memories |
+| `signet index` | Index a project with GraphIQ and make it active code context |
 | `signet export` | Export a portable bundle |
 | `signet import` | Import a portable bundle |
 | `signet migrate-schema` | Migrate database to unified schema |
 | `signet migrate-vectors` | Migrate BLOB vectors to sqlite-vec format |
-| `signet sync` | Sync built-in templates and skills |
+| `signet sync` | Sync hooks, extensions, built-in templates, and skills |
 | `signet secret` | Manage encrypted secrets |
+| `signet graphiq` | Manage the optional GraphIQ code retrieval plugin |
 | `signet skill` | Manage agent skills from registry |
 | `signet git` | Git sync management for $SIGNET_WORKSPACE |
 | `signet hook` | Lifecycle hook commands |
@@ -99,6 +102,29 @@ Use explicit commands for interactive flows:
 
 ---
 
+`signet desktop`
+---
+
+Builds the official Electron desktop app from an existing Signet source
+checkout. The command never clones over local work; run it from the repo root,
+set `SIGNET_SOURCE_DIR`, or pass `--repo <path>`.
+
+```bash
+signet desktop build
+signet desktop install
+signet desktop install --repo ~/signet/signetai
+signet desktop install --skip-build
+```
+
+`signet desktop install` runs `bun install`, then `bun run build:desktop`, then
+installs the newest built artifact. Linux/Arch currently installs a user-level
+AppImage launcher at `~/.local/bin/signet-desktop` and a desktop entry under
+`~/.local/share/applications/signet.desktop`. macOS and Windows builds are
+produced by the desktop package, with native installer automation still guarded
+until those platform installers are wired.
+
+---
+
 `signet setup`
 ---
 
@@ -124,7 +150,7 @@ Options:
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `codex`) |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `hermes-agent`, `oh-my-pi`, `pi`, `codex`, `forge`) |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
 | `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
@@ -134,6 +160,9 @@ Options:
 | `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `$SIGNET_WORKSPACE` |
 | `--open-dashboard` | Open dashboard after non-interactive setup |
 | `--skip-git` | Skip git initialization/commits in non-interactive mode |
+| `--disable-signet-secrets` | Leave the bundled Signet Secrets core plugin installed but disabled |
+| `--with-graphiq` | Install and enable the optional verified GraphIQ code retrieval plugin |
+| `--disable-graphiq` | Leave the optional GraphIQ plugin disabled |
 | `--create-local-backup` | If OpenClaw points at this workspace and no origin exists, create a local snapshot automatically |
 | `--allow-unprotected-workspace` | Explicitly allow setup to finish without origin or snapshot in non-interactive mode |
 
@@ -148,6 +177,10 @@ Non-interactive behavior:
   `none` when needed
 - for existing-identity migration, previously configured extraction providers
   are preserved unless `--extraction-provider` is explicitly passed
+- the bundled Signet Secrets core plugin is enabled by default; pass
+  `--disable-signet-secrets` to opt out while leaving it installed
+- GraphIQ is optional and disabled by default; pass `--with-graphiq` to install
+  it through Homebrew, with source install as fallback
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 - when OpenClaw points at this workspace and no `origin` remote exists, setup
@@ -171,21 +204,32 @@ Wizard steps:
 1. **Agent Name** - What to call your agent
 2. **Harnesses** - Which AI platforms you use:
    - Claude Code (Anthropic CLI)
+   - Codex
    - OpenCode
    - OpenClaw
-   - Codex
+   - Oh My Pi
+   - Pi
+   - Hermes Agent
+   - Forge
 3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
    is detected; workspace is patched only if you opt in, and setup warns
    that uninstalling OpenClaw can delete this workspace unless backups exist
 4. **Description** - Short agent description
-5. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
+5. **Core Plugins** - Signet Secrets explains encrypted local storage,
+   value-safe CLI/MCP/SDK access, command injection with output redaction, and
+   connections to Signet's local encrypted store and compatible 1Password
+   references, then asks whether to enable the bundled `signet.secrets` plugin
+6. **Optional Code Retrieval** - GraphIQ explains fast local codebase indexing,
+   structural context, constants, and blast-radius tools, then asks whether to
+   install the verified managed `signet.graphiq` plugin
+7. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
    to show environment-aware guidance before extraction provider selection
-6. **Embedding Provider**:
+8. **Embedding Provider**:
    - Built-in (recommended, no setup required)
    - Ollama (local)
    - OpenAI API
    - Skip embeddings
-7. **Embedding Model** - Based on provider:
+9. **Embedding Model** - Based on provider:
    - Built-in: `nomic-embed-text-v1.5`
    - Ollama: `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
    - OpenAI: text-embedding-3-small, text-embedding-3-large
@@ -193,15 +237,15 @@ Wizard steps:
      service health, and model presence; if checks fail, setup offers
      retry, switch to built-in embeddings, switch to OpenAI, or
      continue without embeddings
-8. **Search Balance** - Semantic vs keyword weighting
-9. **Advanced Settings** (optional):
+10. **Search Balance** - Semantic vs keyword weighting
+11. **Advanced Settings** (optional):
    - `top_k` - Search candidates per source
    - `min_score` - Minimum search score threshold
    - `session_budget` - Context character limit
    - `decay_rate` - Memory importance decay
-10. **Import** - Optionally import from another platform
-11. **Git** - Initialize version control
-12. **Launch Dashboard** - Open web UI
+12. **Import** - Optionally import from another platform
+13. **Git** - Initialize version control
+14. **Launch Dashboard** - Open web UI
 
 What gets created:
 
@@ -217,6 +261,7 @@ $SIGNET_WORKSPACE/
 ├── hooks/               # OpenClaw hooks (if selected)
 │   └── agent-memory/
 └── .daemon/
+    ├── plugins/         # Bundled core plugin registry
     └── logs/
 ```
 
@@ -249,6 +294,43 @@ Sections:
 6. **View current config** - Display agent.yaml contents
 
 Changes are saved to `agent.yaml` immediately.
+
+---
+
+`signet index <path>`
+---
+
+Thin wrapper around `graphiq index <path>`. The command installs GraphIQ if it
+is missing, indexes the project into `<path>/.graphiq/`, enables the managed
+`signet.graphiq` plugin, and records that path as Signet's active code project.
+
+```bash
+signet index ~/signet/signetai
+signet index . --no-install
+```
+
+The GraphIQ index stays outside Signet memory and the main Signet database.
+Signet only stores plugin state and the active project pointer under
+`$SIGNET_WORKSPACE/.daemon/graphiq/state.json`.
+
+---
+
+`signet graphiq`
+---
+
+Manage the optional verified GraphIQ code retrieval plugin.
+
+| Command | Description |
+|---------|-------------|
+| `signet graphiq install` | Install GraphIQ with Homebrew, falling back to source, and enable the plugin |
+| `signet graphiq status` | Show GraphIQ status for the active indexed project |
+| `signet graphiq doctor` | Diagnose the active GraphIQ index |
+| `signet graphiq upgrade-index` | Rebuild stale artifacts for the active project |
+| `signet graphiq uninstall` | Disable Signet's GraphIQ integration and keep project indexes |
+| `signet graphiq uninstall --purge-indexes` | Disable integration and delete known `.graphiq/` directories |
+
+GraphIQ is maintained as a managed plugin by `aaf2tbz`, but remains optional
+and is not installed during setup unless the user opts in.
 
 ---
 
@@ -483,20 +565,41 @@ Search memories using hybrid vector + keyword search.
 
 ```bash
 signet recall "user preferences"
-signet recall "deploy process" --limit 5
-signet recall "auth" --tags backend --who claude-code
+signet recall "release notes" --project /home/user/myapp --expand
+signet recall "deploy process" --limit 5 --type decision
+signet recall "auth" --tags backend --who claude-code --since 2026-01-01
+signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
 signet recall "secrets" --json
 ```
 
-Options:
+Primary controls:
 
 | Option | Description |
 |--------|-------------|
 | `-l, --limit <n>` | Max results (default: 10) |
+| `--project <project>` | Filter by project |
+| `--expand` | Include expanded transcript/context sources |
+
+Common refinements:
+
+| Option | Description |
+|--------|-------------|
 | `-t, --type <type>` | Filter by memory type |
 | `--tags <tags>` | Filter by tags (comma-separated) |
 | `--who <who>` | Filter by author |
-| `--json` | Output raw JSON |
+| `--since <date>` | Only include memories created after this date |
+| `--until <date>` | Only include memories created before this date |
+
+Advanced controls:
+
+| Option | Description |
+|--------|-------------|
+| `--keyword-query <query>` | Override the keyword/FTS query used for recall |
+| `--pinned` | Only return pinned memories |
+| `--importance-min <n>` | Only return memories at or above this importance |
+| `--min-score <n>` | Minimum recall score threshold, applied client-side |
+| `--agent <name>` | Filter by agent ID |
+| `--json` | Print the recall response as JSON |
 
 ---
 
@@ -593,9 +696,11 @@ Options:
 `signet sync`
 ---
 
-Sync built-in template files and skills to your `$SIGNET_WORKSPACE/` directory,
+Sync hooks, extensions, built-in template files, and skills to your `$SIGNET_WORKSPACE/` directory,
 and re-register hooks for any detected harnesses. Run this after an
-upgrade if built-in skills appear stale.
+upgrade if built-in skills appear stale or hooks need updating. If OpenClaw is still configured on
+the legacy Signet hook path, `signet sync` now migrates it to the plugin
+runtime path automatically so full lifecycle capture resumes.
 
 ```bash
 signet sync
@@ -871,7 +976,7 @@ Environment Variables
 | `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
 | `SIGNET_LOG_DIR` | Daemon log directory override | `$SIGNET_WORKSPACE/.daemon/logs` |
 | `SIGNET_SQLITE_PATH` | macOS explicit SQLite dylib override used by the daemon before opening the database | unset |
-| `SIGNET_SESSION_START_TIMEOUT` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs | `15000` |
+| `SIGNET_SESSION_START_TIMEOUT` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace | `15000` |
 | `SIGNET_FETCH_TIMEOUT` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset | `15000` |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace | `5000` |
 | `SIGNET_BYPASS` | Skip all hook processing (exit immediately) | unset |

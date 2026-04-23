@@ -559,8 +559,8 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		// No provider set → defaults to "ollama"; flat model must propagate
-		expect(result.extraction.provider).toBe("ollama");
+		// No provider set → defaults to "llama-cpp"; flat model must propagate
+		expect(result.extraction.provider).toBe("llama-cpp");
 		expect(result.extraction.model).toBe("qwen3:8b");
 	});
 
@@ -742,6 +742,7 @@ describe("loadPipelineConfig", () => {
 					shadowMode: true,
 					allowUpdateDelete: true,
 					graphEnabled: true,
+					graphExtractionWritesEnabled: true,
 					autonomousEnabled: true,
 					mutationsFrozen: true,
 					autonomousFrozen: true,
@@ -753,6 +754,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.shadowMode).toBe(true);
 		expect(result.autonomous.allowUpdateDelete).toBe(true);
 		expect(result.graph.enabled).toBe(true);
+		expect(result.graph.extractionWritesEnabled).toBe(true);
 		expect(result.autonomous.enabled).toBe(true);
 		expect(result.mutationsFrozen).toBe(true);
 		expect(result.autonomous.frozen).toBe(true);
@@ -774,6 +776,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
 		expect(result.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
 		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
+		expect(result.graph.extractionWritesEnabled).toBe(DEFAULT_PIPELINE_V2.graph.extractionWritesEnabled);
 		expect(result.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
 		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
 	});
@@ -804,6 +807,115 @@ describe("loadPipelineConfig", () => {
 		expect(result.feedback.decayRate).toBe(0.02);
 		expect(result.feedback.staleDays).toBe(30);
 		expect(result.feedback.decayIntervalSessions).toBe(25);
+	});
+
+	it("loads dependency synthesis stall circuit breaker config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 90_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(90_000);
+	});
+
+	it("keeps LLM-authored structural graph workers disabled by default", () => {
+		const result = loadPipelineConfig({});
+
+		expect(result.structural.enabled).toBe(false);
+		expect(result.structural.synthesisEnabled).toBe(false);
+		expect(result.structural.supersessionSemanticFallback).toBe(false);
+	});
+
+	it("preserves zero as the dependency synthesis stall disable value", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 0,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(0);
+	});
+
+	it("preserves zero through dependencySynthesis.maxStallMs alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						maxStallMs: 0,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(0);
+	});
+
+	it("does not let negative dependency synthesis stall config disable the gate", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: -1,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs);
+	});
+
+	it("supports dependencySynthesis.maxStallMs as a config alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						maxStallMs: 120_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(120_000);
+	});
+
+	it("supports dependencySynthesis.synthesisMaxStallMs as a config alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						synthesisMaxStallMs: 120_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(120_000);
+	});
+
+	it("prefers structural.synthesisMaxStallMs over dependencySynthesis.maxStallMs", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 60_000,
+					},
+					dependencySynthesis: {
+						maxStallMs: 300_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(60_000);
 	});
 
 	it("treats non-boolean truthy values as defaults (not coerced)", () => {
@@ -888,6 +1000,61 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.minConfidence).toBe(0.55);
 	});
 
+	it("treats empty rateLimit objects as unconfigured", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: { rateLimit: {} },
+					synthesis: { rateLimit: {} },
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toBeUndefined();
+		expect(result.synthesis.rateLimit).toBeUndefined();
+	});
+
+	it("preserves explicit maxCallsPerHour disable in rateLimit config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						rateLimit: {
+							maxCallsPerHour: 0,
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toEqual({
+			maxCallsPerHour: 0,
+			burstSize: 20,
+			waitTimeoutMs: 5000,
+		});
+	});
+
+	it("clamps burstSize to 1 in parsed rateLimit config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						rateLimit: {
+							maxCallsPerHour: 100,
+							burstSize: 0,
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toEqual({
+			maxCallsPerHour: 100,
+			burstSize: 1,
+			waitTimeoutMs: 5000,
+		});
+	});
+
 	it("loads adaptive write-gate config from flat keys", () => {
 		const result = loadPipelineConfig({
 			memory: {
@@ -924,6 +1091,7 @@ describe("loadPipelineConfig", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
+					graphExtractionWritesEnabled: true,
 					graphBoostWeight: 0.25,
 					graphBoostTimeoutMs: 300,
 					rerankerEnabled: true,
@@ -934,6 +1102,7 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
+		expect(result.graph.extractionWritesEnabled).toBe(true);
 		expect(result.graph.boostWeight).toBe(0.25);
 		expect(result.graph.boostTimeoutMs).toBe(300);
 		expect(result.reranker.enabled).toBe(true);
@@ -949,6 +1118,7 @@ describe("loadPipelineConfig", () => {
 		});
 
 		expect(result.graph.boostWeight).toBe(DEFAULT_PIPELINE_V2.graph.boostWeight);
+		expect(result.graph.extractionWritesEnabled).toBe(DEFAULT_PIPELINE_V2.graph.extractionWritesEnabled);
 		expect(result.graph.boostTimeoutMs).toBe(DEFAULT_PIPELINE_V2.graph.boostTimeoutMs);
 		expect(result.reranker.enabled).toBe(DEFAULT_PIPELINE_V2.reranker.enabled);
 		expect(result.reranker.model).toBe(DEFAULT_PIPELINE_V2.reranker.model);
@@ -1118,7 +1288,7 @@ describe("loadPipelineConfig", () => {
 						timeout: 30000,
 						minConfidence: 0.8,
 					},
-					graph: { enabled: true, boostWeight: 0.3 },
+					graph: { enabled: true, extractionWritesEnabled: true, boostWeight: 0.3 },
 					reranker: { enabled: true, model: "my-reranker", useExtractionModel: true, topN: 10 },
 					autonomous: {
 						enabled: true,
@@ -1137,6 +1307,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.timeout).toBe(30000);
 		expect(result.extraction.minConfidence).toBe(0.8);
 		expect(result.graph.enabled).toBe(true);
+		expect(result.graph.extractionWritesEnabled).toBe(true);
 		expect(result.graph.boostWeight).toBe(0.3);
 		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("my-reranker");

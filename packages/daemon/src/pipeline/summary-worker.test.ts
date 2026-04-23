@@ -6,15 +6,21 @@ import { join } from "node:path";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
+import { IMMUTABLE_ARTIFACT_ERROR_PREFIX } from "../memory-lineage";
+import { RateLimitExceededError } from "./provider";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
+	type SummaryWorkerHandle,
 	clearCommandStageRunning,
 	getCommandStageStatus,
 	hasCommandStageCompleted,
 	insertSummaryFacts,
+	isTerminalSummaryJobError,
 	markCommandStageCompleted,
 	markCommandStageRunning,
 	recoverSummaryJobs,
+	resolveFailedSummaryJobStatus,
+	resolveSummaryHeadingDate,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
 	shouldRunSignificanceGateForJob,
@@ -76,13 +82,16 @@ describe("insertSummaryFacts", () => {
 		db.close();
 	});
 
-	it("writes summary facts with updated_by metadata", () => {
+	it("writes summary facts with updated_by metadata and default agent scope", () => {
 		const saved = insertSummaryFacts(
 			accessor,
 			{
 				harness: "codex",
-				project: "/tmp/project",
+				project: "/mnt/work/dev/project",
 				session_key: "session-1",
+				session_id: "session-1",
+				id: "job-1",
+				agent_id: "",
 			},
 			[
 				{
@@ -96,12 +105,13 @@ describe("insertSummaryFacts", () => {
 
 		expect(saved).toBe(1);
 
-		const row = db.prepare("SELECT who, source_id, source_type, project, updated_by FROM memories").get() as
+		const row = db.prepare("SELECT who, source_id, source_type, project, agent_id, updated_by FROM memories").get() as
 			| {
 					who: string;
 					source_id: string | null;
 					source_type: string;
 					project: string | null;
+					agent_id: string;
 					updated_by: string;
 			  }
 			| undefined;
@@ -110,8 +120,65 @@ describe("insertSummaryFacts", () => {
 		expect(row?.who).toBe("codex");
 		expect(row?.source_id).toBe("session-1");
 		expect(row?.source_type).toBe("session_end");
-		expect(row?.project).toBe("/tmp/project");
+		expect(row?.project).toBe("/mnt/work/dev/project");
+		expect(row?.agent_id).toBe("default");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
+	});
+
+	it("fails closed to the default agent scope when runtime rows contain null agent ids", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: "/mnt/work/dev/project",
+				session_key: "session-null-agent",
+				agent_id: null,
+			} as unknown as Parameters<typeof insertSummaryFacts>[1],
+			[
+				{
+					content: "Null agent ids still persist summary facts under the default scope.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(1);
+
+		const row = db.prepare("SELECT agent_id FROM memories WHERE source_id = ?").get("session-null-agent") as
+			| { agent_id: string }
+			| undefined;
+		expect(row?.agent_id).toBe("default");
+	});
+
+	it("scopes duplicate detection to the fact owner's agent", () => {
+		const content = "Agent-scoped duplicate detection keeps this shared fact available to sub-agents.";
+
+		const firstSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-default", agent_id: "default" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(firstSaved).toBe(1);
+
+		const duplicateSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-default-2", agent_id: "default" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(duplicateSaved).toBe(0);
+
+		const crossAgentSaved = insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-agent-a", agent_id: "agent-a" },
+			[{ content, importance: 0.4, type: "fact" }],
+		);
+		expect(crossAgentSaved).toBe(1);
+
+		const rows = db
+			.prepare("SELECT agent_id FROM memories WHERE content = ? ORDER BY agent_id ASC")
+			.all(content) as Array<{ agent_id: string }>;
+		expect(rows).toEqual([{ agent_id: "agent-a" }, { agent_id: "default" }]);
 	});
 
 	it("populates content_hash so the embedding tracker can index summary facts", () => {
@@ -120,7 +187,14 @@ describe("insertSummaryFacts", () => {
 		// and causing the embed backfill to cycle indefinitely on duplicate content.
 		insertSummaryFacts(
 			accessor,
-			{ harness: "claude-code", project: null, session_key: "sess-hash-test", agent_id: "test-agent" },
+			{
+				harness: "claude-code",
+				project: null,
+				session_key: "sess-hash-test",
+				session_id: "sess-hash-test",
+				id: "job-hash",
+				agent_id: "test-agent",
+			},
 			[{ content: "Summary fact that needs a hash for embedding.", importance: 0.4, type: "fact" }],
 		);
 
@@ -131,6 +205,83 @@ describe("insertSummaryFacts", () => {
 		expect(row).toBeDefined();
 		expect(typeof row?.content_hash).toBe("string");
 		expect((row?.content_hash ?? "").length).toBeGreaterThan(0);
+	});
+
+	it("treats content_hash collisions as deduplication instead of job failures", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "opencode",
+				project: null,
+				session_key: "sess-hash-collision",
+				session_id: "sess-hash-collision",
+				id: "job-hash-collision",
+				agent_id: "default",
+			},
+			[
+				{ content: "UI.", importance: 0.4, type: "fact" },
+				{ content: "UI!", importance: 0.4, type: "fact" },
+			],
+		);
+
+		expect(saved).toBe(1);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source_id = 'sess-hash-collision'").get() as {
+			n: number;
+		};
+		expect(row.n).toBe(1);
+	});
+
+	it("skips summary facts for temp sessions", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: "/tmp/signetai",
+				session_key: "sess-temp",
+				session_id: "sess-temp",
+				id: "job-temp",
+				agent_id: "default",
+			},
+			[
+				{
+					content: "This temp-session fact should never hit durable memory.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(0);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number };
+		expect(row.n).toBe(0);
+	});
+
+	it("skips summary facts for synthetic session ids when project is absent", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "codex",
+				project: null,
+				session_key: "stable-session",
+				session_id: "fixture-42",
+				id: "job-synth",
+				agent_id: "default",
+			},
+			[
+				{
+					content: "This synthetic-session fact should never hit durable memory.",
+					importance: 0.4,
+					type: "fact",
+				},
+			],
+		);
+
+		expect(saved).toBe(0);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number };
+		expect(row.n).toBe(0);
 	});
 });
 
@@ -253,6 +404,57 @@ describe("recoverSummaryJobs", () => {
 	});
 });
 
+describe("summary job helpers", () => {
+	it("derives the summary heading date from persisted session timing instead of wall clock", () => {
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: "2026-04-03T17:07:08.000Z",
+				captured_at: "2026-04-03T17:06:55.000Z",
+				created_at: "2026-04-03T17:06:55.000Z",
+			}),
+		).toBe("2026-04-03");
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: null,
+				captured_at: "2026-04-02T23:59:59.000Z",
+				created_at: "2026-04-03T00:00:01.000Z",
+			}),
+		).toBe("2026-04-02");
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: null,
+				captured_at: null,
+				created_at: "2026-04-01T12:00:00.000Z",
+			}),
+		).toBe("2026-04-01");
+	});
+
+	it("classifies immutable artifact conflicts as terminal failures", () => {
+		expect(
+			isTerminalSummaryJobError(
+				`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md`,
+			),
+		).toBe(true);
+		expect(isTerminalSummaryJobError("summary command timed out after 5000ms")).toBe(false);
+	});
+
+	it("classifies RateLimitExceededError as terminal via error instance", () => {
+		const err = new RateLimitExceededError("claude-code:haiku", 200);
+		expect(isTerminalSummaryJobError(err)).toBe(true);
+		expect(isTerminalSummaryJobError(err.message)).toBe(false);
+	});
+
+	it("marks terminal errors dead immediately even with remaining attempts", () => {
+		// terminal=true -> dead regardless of attempt count (one attempt is
+		// still consumed by the worker tick before the error is classified)
+		expect(resolveFailedSummaryJobStatus(true, 1, 3)).toBe("dead");
+		// terminal=false, attempts < maxAttempts -> pending (retryable)
+		expect(resolveFailedSummaryJobStatus(false, 1, 3)).toBe("pending");
+		// terminal=false, attempts >= maxAttempts -> dead (exhausted)
+		expect(resolveFailedSummaryJobStatus(false, 3, 3)).toBe("dead");
+	});
+});
+
 describe("shouldRunSignificanceGateForJob", () => {
 	it("runs significance gate for non-command extraction jobs", () => {
 		expect(shouldRunSignificanceGateForJob(false, "none")).toBe(true);
@@ -364,7 +566,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				...cfg.pipelineV2,
 				extraction: {
 					...cfg.pipelineV2.extraction,
-					provider: "command",
+					provider: "command" as const,
 					command: {
 						bin: "node",
 						args: [scriptPath, "$TRANSCRIPT", "$SESSION_KEY", "$PROJECT", "$AGENT_ID", marker],
@@ -376,10 +578,15 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 			{
 				id: "job-1",
 				session_key: "session-123",
+				session_id: null,
 				harness: "codex",
 				project: "/tmp/project",
 				agent_id: "agent-abc",
 				transcript: "hello command provider",
+				trigger: "test",
+				captured_at: null,
+				started_at: null,
+				ended_at: null,
 				attempts: 1,
 				max_attempts: 3,
 				created_at: new Date().toISOString(),
@@ -405,7 +612,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				...cfg.pipelineV2,
 				extraction: {
 					...cfg.pipelineV2.extraction,
-					provider: "command",
+					provider: "command" as const,
 					command: {
 						bin: "node",
 						args: [scriptPath],
@@ -418,10 +625,15 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				{
 					id: "job-2",
 					session_key: "session-xyz",
+					session_id: null,
 					harness: "codex",
 					project: "/tmp/project",
 					agent_id: "default",
 					transcript: "test",
+					trigger: "test",
+					captured_at: null,
+					started_at: null,
+					ended_at: null,
 					attempts: 1,
 					max_attempts: 3,
 					created_at: new Date().toISOString(),
@@ -458,7 +670,7 @@ setInterval(() => {}, 1000);
 				extraction: {
 					...cfg.pipelineV2.extraction,
 					timeout: 5000,
-					provider: "command",
+					provider: "command" as const,
 					command: {
 						bin: "node",
 						args: [scriptPath, marker],
@@ -472,10 +684,15 @@ setInterval(() => {}, 1000);
 				{
 					id: "job-timeout",
 					session_key: "session-timeout",
+					session_id: null,
 					harness: "codex",
 					project: "/tmp/project",
 					agent_id: "default",
 					transcript: "test",
+					trigger: "test",
+					captured_at: null,
+					started_at: null,
+					ended_at: null,
 					attempts: 1,
 					max_attempts: 3,
 					created_at: new Date().toISOString(),
@@ -504,7 +721,7 @@ describe("resolveSummaryProvider", () => {
 		expect(provider.name).toBe("codex:gpt-5-codex-mini");
 	});
 
-	it("falls back to ollama when synthesis codex is configured but CLI is unavailable", async () => {
+	it("falls back to llama-cpp when synthesis codex is configured but CLI is unavailable", async () => {
 		Bun.which = (() => null) as typeof Bun.which;
 		const dir = makeAgentsDir(`memory:
   pipelineV2:
@@ -514,7 +731,7 @@ describe("resolveSummaryProvider", () => {
 `);
 
 		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
-		expect(provider.name.startsWith("ollama:")).toBe(true);
+		expect(provider.name.startsWith("llama-cpp:")).toBe(true);
 	});
 
 	it("falls back to resolved extraction config when synthesis is absent", async () => {
@@ -542,11 +759,11 @@ describe("resolveSummaryProvider", () => {
 		// Intercept fetch to verify num_ctx is included in the request
 		const original = globalThis.fetch;
 		let captured: unknown = null;
-		const mockFetch: typeof fetch = async (_url, init) => {
+		const mockFetch = (async (_url: URL | RequestInfo, init?: RequestInit) => {
 			if (typeof init?.body !== "string") throw new Error(`Expected string body, got: ${typeof init?.body}`);
 			captured = JSON.parse(init.body);
 			return new Response(JSON.stringify({ response: "{}", done: true }), { status: 200 });
-		};
+		}) as unknown as typeof fetch;
 		globalThis.fetch = mockFetch;
 
 		try {

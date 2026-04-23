@@ -245,6 +245,12 @@ registers as an MCP server so Codex can call `signet_remember` and
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
 5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
+Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
+waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
+the daemon, and the generated Codex hook config adds 5 seconds of harness
+grace. Rerun `signet setup` or `signet connect codex` after upgrading to
+rewrite an existing `~/.codex/hooks.json`.
+
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
 Claude Code or OpenCode.
@@ -405,12 +411,98 @@ next setup or sync run.
 
 ---
 
+## pi (`pi`)
+
+pi uses a managed Signet runtime extension installed by
+`@signet/connector-pi`. The extension forwards lifecycle events
+to the daemon and injects hidden Signet context into the session when
+needed.
+
+### Files managed by Signet
+
+| File | Description |
+|------|-------------|
+| `PI_CODING_AGENT_DIR/extensions/signet-pi.js` | Managed extension bundle when `PI_CODING_AGENT_DIR` is set |
+| `~/.pi/agent/extensions/signet-pi.js` | Managed extension bundle in the default pi agent directory |
+
+### Managed extension
+
+During setup or connect, the connector writes a bundled
+`signet-pi.js` file into the pi extensions directory. If
+`PI_CODING_AGENT_DIR` is set, Signet uses that agent directory.
+Otherwise it writes to `~/.pi/agent/extensions/`.
+
+### Runtime behavior
+
+- Existing unrelated pi extensions are left untouched.
+- Signet refuses to overwrite a colliding unmanaged `signet-pi.js`.
+- Daemon or network failures are fail-open, so prompt handling, compaction, session switches, and shutdown continue even if Signet is unavailable.
+- **Automatic recall**: On every user prompt, the extension automatically fetches relevant memories from the daemon and injects them as hidden messages (`display: false`) into the agent's context. These injections are kept out of transcript reconstruction.
+- **Manual commands**: `/recall <query>` and `/remember <content>` let users explicitly search and store memories. The `/recall` command **displays results in the UI only** — it does not inject them into the conversation context. `/signet-status` shows connection and memory stats.
+  - `/remember <content>` — save a memory
+  - `/remember critical: <content>` — save as pinned (never decays)
+  - `/remember [tag1, tag2]: <content>` — save with tags
+  - `/remember critical: [tag1, tag2]: <content>` — pinned with tags (critical prefix must come first)
+- **Agent tools**: `signet_recall`, `signet_remember`, and `signet_memory_feedback` are registered as LLM-callable tools. When the agent calls `signet_recall`, the results (including memory IDs) **are** returned into the conversation context via the tool response. `signet_memory_feedback` lets the LLM rate injected memory relevance (-1 to 1) to improve future recall ranking.
+- Hidden inject messages use `display: false` and `role: "custom"`. Pi converts custom messages to `role: "user"` for the LLM, so the `X-Initiator` header (which determines Copilot billing attribution) is set based on the last message's role — extensions cannot override it via an `attribution` field as Oh My Pi can.
+- Does not sync `AGENTS.md` into pi.
+
+### Configuration
+
+Configuration is optional and loaded from `~/.pi/agent/extensions/signet.json`
+(or `$PI_CODING_AGENT_DIR/extensions/signet.json` if set). The `SIGNET_ENABLED`
+environment variable overrides the file setting.
+
+**Optional `~/.pi/agent/extensions/signet.json`:**
+
+```json
+{
+  "enabled": false
+}
+```
+
+| Option    | Description                                    | Default |
+|-----------|------------------------------------------------|---------|
+| `enabled` | Whether Signet is enabled by default           | `true`  |
+
+**Environment Variable** (overrides file config):
+
+| Variable         | Description                    |
+|------------------|--------------------------------|
+| `SIGNET_ENABLED` | Set to `false` to disable      |
+
+Examples:
+
+```bash
+# Use config file defaults
+pi
+
+# Disable Signet for a single session
+SIGNET_ENABLED=false pi
+
+# Create a config file to disable by default
+echo '{"enabled": false}' > ~/.pi/agent/extensions/signet.json
+```
+
+### Supported hooks
+
+| Hook               | Supported |
+|--------------------|-----------|
+| session-start      | yes       |
+| user-prompt-submit | yes       |
+| pre-compaction     | yes       |
+| compaction-complete| yes       |
+| session-end        | yes       |
+
+---
 
 ## OpenClaw
 
 OpenClaw is the flagship harness for the lossless working-memory model.
 The plugin path gives the closest match to the full LCM runtime, while the
-legacy hook path remains compatibility-only.
+legacy hook path remains compatibility-only. `signet sync` auto-migrates
+legacy-only Signet installs to the plugin path, and `signet doctor` warns
+when a config is still stuck on legacy-only mode.
 
 ### Files managed by Signet
 
@@ -555,6 +647,74 @@ This is a runtime plugin that OpenClaw loads to:
 
 Has a peer dependency on `openclaw` — only usable within the OpenClaw process.
 
+## Hermes Agent
+
+Hermes Agent is an open-source terminal AI agent by Nous Research. Signet
+integrates as a pluggable memory provider via Hermes's `MemoryProvider` ABC,
+deploying a Python plugin that bridges all Signet daemon hooks into the
+Hermes lifecycle.
+
+### Files managed by Signet
+
+| Location | Description |
+|----------|-------------|
+| `<hermes-repo>/plugins/memory/signet/__init__.py` | Signet `MemoryProvider` implementation |
+| `<hermes-repo>/plugins/memory/signet/client.py` | HTTP client for the Signet daemon API |
+| `<hermes-repo>/plugins/memory/signet/plugin.yaml` | Plugin metadata |
+| `~/.hermes/.env` | Daemon connection environment variables |
+
+### How it works
+
+1. `signet setup` (with `hermes-agent` selected) copies the Python plugin
+   into `plugins/memory/signet/` inside the Hermes Agent repo and writes
+   daemon connection env vars to `~/.hermes/.env`.
+2. The user activates the plugin via `hermes memory setup` (select "signet")
+   or `hermes config set memory.provider signet`.
+3. At session start, Hermes calls `initialize()` on the plugin, which fires
+   `POST /api/hooks/session-start` to load identity, memories, and system
+   prompt injection from the daemon.
+4. On each user turn, `queue_prefetch()` fires
+   `POST /api/hooks/user-prompt-submit` for per-turn hybrid recall
+   (BM25 + vector + KG + predictive scoring).
+5. At session end, `on_session_end()` sends the accumulated transcript via
+   `POST /api/hooks/session-end` for async pipeline extraction.
+
+### Tools exposed to the agent
+
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `memory_store` | Store a fact/preference/decision with auto entity extraction |
+| `memory_get` | Retrieve a memory by ID |
+| `memory_list` | List memories with optional filters |
+| `memory_modify` | Edit an existing memory |
+| `memory_forget` | Soft-delete a memory |
+| `recall` / `remember` | Compatibility aliases for search/store |
+
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes — identity + memories via `system_prompt_block()` |
+| user-prompt-submit | yes — per-turn recall via `queue_prefetch()` / `prefetch()` |
+| pre-compaction | yes — daemon-generated summary guidelines via `on_pre_compress()` |
+| compaction-complete | yes — saves summary as session memory via `on_compaction_complete()` |
+| checkpoint-extract | yes — periodic mid-session delta extraction every 30 turns |
+| session-end | yes — transcript extraction via `on_session_end()` |
+
+### Delegation support
+
+When Hermes delegates to subagents, the parent's `on_delegation()` hook
+stores the task+result pair as a Signet memory tagged `["delegation", "subagent"]`.
+
+### Prerequisites
+
+- Hermes Agent installed (repo with `plugins/memory/` directory)
+- Signet daemon running (`signet start`)
+- Plugin activated via `hermes memory setup` or `hermes config set memory.provider signet`
+
+---
+
 ## Adding a New Harness
 
 To integrate Signet with a harness not listed here:
@@ -582,7 +742,8 @@ All harnesses target the same model:
 
 - one agent
 - many sessions / branches
-- one shared `MEMORY.md` head
+- one shared root `MEMORY.md` head, with optional agent-local `MEMORY.md`
+  overrides for named agents
 - structured retrieval first
 - transcripts as fallback / deep history
 - compaction artifacts feeding the same temporal DAG
@@ -594,6 +755,8 @@ Where they differ is lifecycle fidelity:
 | OpenCode plugin | yes | yes | yes | yes | yes | Reference full-fidelity path |
 | OpenClaw plugin | yes | yes | yes | yes | yes | Flagship path; post-compaction may read summary back from `sessionFile` when the hook only exposes metadata |
 | Oh My Pi extension (v1) | yes | yes | yes | yes | yes | Lifecycle events only; no Signet memory tools or AGENTS.md sync yet |
+| Hermes Agent plugin | yes | yes | yes | yes | yes | Full fidelity via `MemoryProvider` ABC; includes checkpoint-extract and delegation hooks |
+| pi extension | yes | yes | yes | yes | yes | Full lifecycle and memory tools (`/recall`, `/remember`, `signet_recall`, `signet_remember`, `signet_memory_feedback`); no AGENTS.md sync yet |
 | Claude Code | yes | yes | yes | no | yes | Good continuity, degraded after-compaction fidelity |
 | Codex | yes | yes | no | no | yes | Solid baseline, degraded compaction fidelity |
 | OpenClaw legacy hooks | manual `/context` | no | no | no | no | Compatibility-only, not full parity |

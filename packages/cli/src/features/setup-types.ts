@@ -1,5 +1,5 @@
-import type { SetupDetection } from "@signet/core";
-import type { OpenClawRuntimeChoice } from "./setup-shared.js";
+import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
+import type { EmbeddingProviderChoice, ExtractionProviderChoice, OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
 	path?: string;
@@ -20,6 +20,9 @@ export interface SetupWizardOptions {
 	configureOpenclawWorkspace?: boolean;
 	allowUnprotectedWorkspace?: boolean;
 	createLocalBackup?: boolean;
+	disableSignetSecrets?: boolean;
+	withGraphiq?: boolean;
+	disableGraphiq?: boolean;
 }
 
 export interface SetupDeps {
@@ -55,6 +58,7 @@ export interface SetupDeps {
 		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
+	readonly syncWorkspaceSourceRepo: (basePath: string) => Promise<WorkspaceSourceRepoSyncResult>;
 }
 
 export interface FreshSetupConfig {
@@ -66,10 +70,10 @@ export interface FreshSetupConfig {
 	readonly openclawRuntimePath: OpenClawRuntimeChoice;
 	readonly configureOpenClawWs: boolean;
 	readonly openclawConfigCount: number;
-	readonly embeddingProvider: "native" | "ollama" | "openai" | "none";
+	readonly embeddingProvider: EmbeddingProviderChoice;
 	readonly embeddingModel: string;
 	readonly embeddingDimensions: number;
-	readonly extractionProvider: "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+	readonly extractionProvider: ExtractionProviderChoice;
 	readonly extractionModel: string;
 	readonly searchBalance: number;
 	readonly searchTopK: number;
@@ -82,4 +86,6 @@ export interface FreshSetupConfig {
 	readonly openDashboard: boolean;
 	readonly allowUnprotectedWorkspace: boolean;
 	readonly createLocalBackup: boolean;
+	readonly signetSecretsEnabled: boolean;
+	readonly graphiqEnabled: boolean;
 }

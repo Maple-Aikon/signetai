@@ -83,18 +83,43 @@ const result = await signet.remember("Prefers TypeScript over JavaScript", {
 **`recall(query, opts?)`** — Hybrid search across memories using both
 vector similarity and keyword matching.
 
+A good default posture is:
+
+- start with `query`
+- add `limit`, `project`, or `expand` when you need more control
+- reach for the other filters only when you know why you want them
+
 ```typescript
-const { results, stats } = await signet.recall("language preferences", {
+const { results, query, method, meta } = await signet.recall("language preferences", {
+  project: "/home/user/myapp",
   limit: 10,
+  expand: true,
+});
+```
+
+You can refine further when needed:
+
+```typescript
+const result = await signet.recall("language preferences", {
+  keywordQuery: "\"language preferences\" OR tooling",
+  project: "/home/user/myapp",
   type: "preference",
   importance_min: 0.5,
   minScore: 0.3,
   since: "2025-01-01T00:00:00Z",
+  until: "2026-01-01T00:00:00Z",
 });
-// results[n].score — relevance score
-// results[n].source — "hybrid" | "vector" | "keyword"
-// stats.searchTime — milliseconds
+// result.results[n].score — relevance score
+// result.results[n].source — "hybrid" | "vector" | "keyword" | "llm_summary"
+// result.results[n].supplementary — true for supporting context like summary cards
+// result.query — normalized query used by the daemon
+// result.method — "hybrid" | "keyword"
+// result.meta.totalReturned — result count after client-side minScore filtering
 ```
+
+`minScore` is applied client-side by the SDK after the daemon returns recall
+results. This keeps the API contract honest while preserving compatibility for
+existing SDK callers that already rely on score thresholding.
 
 **`getMemory(id)`** — Fetch a single memory record by ID.
 
@@ -428,7 +453,8 @@ const context = await getMemoryContext(signet, userMessage, {
   limit: 5,
   minScore: 0.3,
 });
-// Returns "" if no results, or "## Relevant Memories\n- ..." otherwise
+// Returns "" if no results survive client-side filtering,
+// or "## Relevant Memories\n- ..." otherwise
 ```
 
 
@@ -520,11 +546,12 @@ const signet = new SignetClient({ daemonUrl: "http://localhost:3850" });
 
 async function getContextForTask(taskDescription: string): Promise<string[]> {
   try {
-    const { results } = await signet.recall(taskDescription, {
+    const { results, meta } = await signet.recall(taskDescription, {
       limit: 8,
       importance_min: 0.6,
       minScore: 0.4,
     });
+    console.log(`recall returned ${meta.totalReturned} usable results`);
     return results.map((r) => r.content);
   } catch (err) {
     if (err instanceof SignetApiError) {
@@ -723,26 +750,22 @@ await signet.updateGitConfig({
 Secrets Management
 ---
 
-Store and retrieve secrets securely (integrates with 1Password).
+Store secrets securely, list names, and inject values into subprocesses.
+Ordinary SDK calls do not retrieve raw secret values. The `signet.secrets`
+core plugin owns these helpers and keeps compatibility with the local
+encrypted store plus 1Password import flow.
 
 **`listSecrets()`** — List all secret names (not values).
 
 ```typescript
-const secrets = await signet.listSecrets();
+const { secrets } = await signet.listSecrets();
 // secrets[n] — secret name (e.g., "OPENAI_API_KEY")
 ```
 
-**`getSecret(name)`** — Retrieve a secret value.
+**`storeSecret(name, value)`**: Store a secret.
 
 ```typescript
-const apiKey = await signet.getSecret("OPENAI_API_KEY");
-console.log(apiKey);  // "sk-proj-..."
-```
-
-**`setSecret(name, value)`** — Store a secret.
-
-```typescript
-await signet.setSecret("ANTHROPIC_API_KEY", "sk-ant-...");
+await signet.storeSecret("ANTHROPIC_API_KEY", "sk-ant-...");
 ```
 
 **`deleteSecret(name)`** — Delete a secret.
@@ -754,31 +777,26 @@ await signet.deleteSecret("OLD_API_KEY");
 **`execWithSecrets(opts)`** — Run command with secrets injected as env vars.
 
 ```typescript
-const result = await signet.execWithSecrets({
-  command: "curl https://api.openai.com/v1/models",
-  secrets: {
-    OPENAI_API_KEY: "OPENAI_API_KEY",  // Maps to stored secret
-  },
+const result = await signet.execWithSecrets("curl https://api.openai.com/v1/models", {
+  OPENAI_API_KEY: "OPENAI_API_KEY",  // Bare name maps to local://OPENAI_API_KEY
 });
 // result.stdout — command output
 // result.stderr — error output
-// result.exit_code — process exit code
+// result.code: process exit code
 ```
 
 ### 1Password Integration
 
-**`connect1Password(opts)`** — Connect to 1Password using service account.
+**`connectOnePassword(token)`**: Connect to 1Password using service account.
 
 ```typescript
-await signet.connect1Password({
-  token: "ops_...",  // 1Password service account token
-});
+await signet.connectOnePassword("ops_...");
 ```
 
-**`list1PasswordVaults()`** — List available 1Password vaults.
+**`listOnePasswordVaults()`**: List available 1Password vaults.
 
 ```typescript
-const vaults = await signet.list1PasswordVaults();
+const { vaults } = await signet.listOnePasswordVaults();
 // vaults[n].id — vault identifier
 // vaults[n].name — vault name
 ```
@@ -787,12 +805,64 @@ const vaults = await signet.list1PasswordVaults();
 
 ```typescript
 await signet.import1PasswordSecrets({
-  vault: "Private",
-  items: [
-    { item: "API Keys", field: "OpenAI", secret_name: "OPENAI_API_KEY" },
-    { item: "API Keys", field: "Anthropic", secret_name: "ANTHROPIC_API_KEY" },
-  ],
+  vaults: ["Private"],
+  prefix: "OP",
+  overwrite: false,
 });
+```
+
+
+Plugin Diagnostics
+---
+
+Inspect the Plugin SDK V1 registry and active prompt contributions.
+
+**`listPlugins()`**: List registered daemon plugins.
+
+```typescript
+const { plugins } = await signet.listPlugins();
+const secretsPlugin = plugins.find((plugin) => plugin.id === "signet.secrets");
+const graphiqPlugin = plugins.find((plugin) => plugin.id === "signet.graphiq");
+```
+
+**`getPlugin(id)`**: Get one plugin registry record.
+
+```typescript
+const plugin = await signet.getPlugin("signet.secrets");
+console.log(plugin.state);
+```
+
+**`getPluginDiagnostics(id)`**: Get manifest, surface, and validation
+diagnostics for one plugin.
+
+```typescript
+const diagnostics = await signet.getPluginDiagnostics("signet.secrets");
+console.log(diagnostics.plugin.activeSurfaces.sdkClients);
+console.log(diagnostics.plugin.promptContributionDiagnostics);
+```
+
+The optional GraphIQ plugin is registered as `signet.graphiq`. It is disabled
+by default, can be enabled during setup, and contributes CLI/MCP/prompt
+surfaces for generic code retrieval after `signet index <path>` activates a
+project.
+
+**`listPluginPromptContributions()`**: List active plugin prompt
+contributions.
+
+```typescript
+const { contributions } = await signet.listPluginPromptContributions();
+```
+
+**`listPluginAuditEvents(opts?)`**: List durable plugin audit events.
+Sensitive fields are redacted by the daemon.
+
+```typescript
+const audit = await signet.listPluginAuditEvents({
+  pluginId: "signet.secrets",
+  event: "plugin.capability_denied",
+  limit: 20,
+});
+console.log(audit.events[0]?.result);
 ```
 
 
@@ -872,7 +942,7 @@ Session lifecycle hooks for context injection and memory extraction.
 await signet.sessionStart({
   project: "/home/user/myapp",
   harness: "claude-code",
-  session_key: "sess-abc-123",
+  sessionKey: "sess-abc-123",
 });
 ```
 
@@ -882,18 +952,16 @@ await signet.sessionStart({
 const context = await signet.userPromptSubmit({
   prompt: "How do I implement authentication?",
   project: "/home/user/myapp",
-  session_key: "sess-abc-123",
+  sessionKey: "sess-abc-123",
 });
-// context.memories — relevant memories
-// context.documents — relevant documents
-// context.custom_instructions — synthesized instructions
+// context.context — injected prompt context
 ```
 
 **`sessionEnd(opts)`** — Extract memories at session end.
 
 ```typescript
 await signet.sessionEnd({
-  session_key: "sess-abc-123",
+  sessionKey: "sess-abc-123",
   project: "/home/user/myapp",
   summary: "Implemented JWT authentication with refresh tokens",
 });
@@ -901,24 +969,40 @@ await signet.sessionEnd({
 
 **Memory Operation Hooks**
 
-**`rememberHook(opts)`** — Save memory via hook (with session context).
+**`hookRemember(opts)`** — Save memory via hook (with session context).
 
 ```typescript
-await signet.rememberHook({
+await signet.hookRemember({
   content: "User prefers functional components over class components",
   type: "preference",
-  session_key: "sess-abc-123",
+  sessionKey: "sess-abc-123",
+  runtimePath: "plugin",
 });
 ```
 
-**`recallHook(opts)`** — Recall via hook (with session context).
+`rememberHook(opts)` remains available as a deprecated compatibility alias.
+
+**`hookRecall(opts)`** — Recall via hook (with session context).
 
 ```typescript
-const results = await signet.recallHook({
+const result = await signet.hookRecall({
   query: "component preferences",
-  session_key: "sess-abc-123",
+  project: "/home/user/myapp",
+  type: "preference",
+  tags: "ui,components",
+  since: "2026-01-01T00:00:00Z",
+  sessionKey: "sess-abc-123",
+  runtimePath: "plugin",
 });
+// result.results — recall rows
+// result.memories — deprecated alias of result.results
+// result.count — deprecated alias of result.results.length
+// result.meta.noHits — true when recall succeeded but found nothing
+// result.bypassed — true when the session is bypassed
+// result.internal — true for no-hook internal calls
 ```
+
+`recallHook(opts)` remains available as a deprecated compatibility alias.
 
 **Compaction Hooks**
 
@@ -1696,11 +1780,13 @@ const doc = await signet.createAndIngestDocument({
 
 ```typescript
 try {
-  const { results } = await signet.recallOrThrow("user preferences", {
+  const { results, meta } = await signet.recallOrThrow("user preferences", {
     type: "preference",
     limit: 5,
+    minScore: 0.5,
   });
   // Guaranteed to have at least one result
+  // meta.totalReturned matches the filtered result count
 } catch (err) {
   console.log("No preferences found");
 }

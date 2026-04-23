@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
@@ -18,9 +18,13 @@ const HASH_SCOPE: &str = "body-normalized-v1";
 const SANITIZER_VERSION: &str = "sanitize_transcript_v1";
 const SENTENCE_VERSION: &str = "memory_sentence_v1";
 const LEDGER_HEADING: &str = "Session Ledger (Last 30 Days)";
-const MEMORY_MD_MAX_TOKENS: usize = 5000;
+const MEMORY_HEAD_MAX_TOKENS: usize = 5000;
+const PROJECTION_HEADROOM_TOKENS: usize = 256;
+const MEMORY_MD_MAX_TOKENS: usize = MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM_TOKENS;
 const LOW_SIGNAL_SENTENCES: &[&str] = &["Investigated issue.", "Worked on task.", "Reviewed code."];
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+const NOISE_PURGE_REASON: &str = "automatic projection cleanup for temp/test sessions";
+static PROJECTION_PURGE_SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
@@ -95,6 +99,40 @@ pub struct SummaryArtifactInput {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub summary: String,
+}
+
+pub fn is_temp_project(project: Option<&str>) -> bool {
+    project.is_some_and(|value| {
+        let trimmed = value.trim();
+        trimmed.starts_with("/tmp/") || trimmed.starts_with("/private/tmp/")
+    })
+}
+
+fn has_synthetic_prefix(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| {
+        let lower = raw.trim().to_ascii_lowercase();
+        ["test-", "spec-", "fixture-", "synthetic-", "tmp-"]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+    })
+}
+
+pub fn is_noise_session(
+    project: Option<&str>,
+    session_id: Option<&str>,
+    session_key: Option<&str>,
+    harness: Option<&str>,
+) -> bool {
+    if is_temp_project(project) {
+        return true;
+    }
+    if project.is_some_and(|value| !value.trim().is_empty()) {
+        return false;
+    }
+    if has_synthetic_prefix(session_key) || has_synthetic_prefix(session_id) {
+        return true;
+    }
+    harness.is_some_and(|value| value.trim().eq_ignore_ascii_case("test"))
 }
 
 #[derive(Debug, Clone)]
@@ -941,6 +979,168 @@ pub fn reindex_memory_artifacts(
     Ok(())
 }
 
+fn projection_purge_key(root: &Path, agent_id: &str) -> String {
+    format!("{}\u{0}{agent_id}", root.display())
+}
+
+fn should_purge_projection_noise(root: &Path, agent_id: &str) -> Result<bool, String> {
+    let seen = PROJECTION_PURGE_SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = seen
+        .lock()
+        .map_err(|_| "projection purge state lock poisoned".to_string())?;
+    Ok(guard.insert(projection_purge_key(root, agent_id)))
+}
+
+#[cfg(test)]
+fn reset_projection_purge_state(root: &Path, agent_id: &str) -> Result<(), String> {
+    let Some(seen) = PROJECTION_PURGE_SEEN.get() else {
+        return Ok(());
+    };
+    let mut guard = seen
+        .lock()
+        .map_err(|_| "projection purge state lock poisoned".to_string())?;
+    guard.remove(&projection_purge_key(root, agent_id));
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct NoiseArtifactRow {
+    session_token: String,
+    session_id: String,
+    session_key: Option<String>,
+    project: Option<String>,
+    harness: Option<String>,
+}
+
+fn is_noise_artifact_group(rows: &[NoiseArtifactRow]) -> bool {
+    let mut has_project = false;
+    for row in rows {
+        if is_temp_project(row.project.as_deref()) {
+            return true;
+        }
+        if row.project.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+            has_project = true;
+        }
+    }
+    if has_project {
+        return false;
+    }
+    rows.iter().any(|row| {
+        is_noise_session(
+            None,
+            Some(row.session_id.as_str()),
+            row.session_key.as_deref(),
+            row.harness.as_deref(),
+        )
+    })
+}
+
+pub fn purge_canonical_noise_sessions(
+    conn: &Connection,
+    root: &Path,
+    agent_id: &str,
+    reason: &str,
+) -> Result<usize, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_token, session_id, session_key, project, harness
+             FROM memory_artifacts
+             WHERE agent_id = ?1
+               AND source_kind IN ('summary', 'transcript', 'compaction')
+             ORDER BY session_token",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![agent_id], |row| {
+            Ok(NoiseArtifactRow {
+                session_token: row.get::<_, String>(0)?,
+                session_id: row.get::<_, String>(1)?,
+                session_key: row.get::<_, Option<String>>(2)?,
+                project: row.get::<_, Option<String>>(3)?,
+                harness: row.get::<_, Option<String>>(4)?,
+            })
+        })
+        .map_err(|err| err.to_string())?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+
+    let mut groups = BTreeMap::<String, Vec<NoiseArtifactRow>>::new();
+    for row in rows {
+        groups
+            .entry(row.session_token.clone())
+            .or_default()
+            .push(row);
+    }
+
+    let mut removed = 0usize;
+    for (session_token, group) in groups {
+        if !is_noise_artifact_group(&group) {
+            continue;
+        }
+        let mut path_stmt = conn
+            .prepare(
+                "SELECT source_path FROM memory_artifacts
+                 WHERE agent_id = ?1 AND session_token = ?2",
+            )
+            .map_err(|err| err.to_string())?;
+        let paths = path_stmt
+            .query_map(params![agent_id, session_token], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        // Tombstone insert and artifact row deletion are atomic: if the process
+        // crashes between them the DB would be inconsistent (tombstone present
+        // but artifacts row still live, or vice versa). Wrap both in a savepoint
+        // so they commit or roll back together, matching the TS withWriteTx.
+        conn.execute("SAVEPOINT purge_noise", [])
+            .map_err(|err| err.to_string())?;
+        let db_result = (|| {
+            conn.execute(
+                "INSERT INTO memory_artifact_tombstones (
+                    agent_id, session_token, removed_at, reason, removed_paths
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(agent_id, session_token) DO UPDATE SET
+                    removed_at = excluded.removed_at,
+                    reason = excluded.reason,
+                    removed_paths = excluded.removed_paths",
+                params![
+                    agent_id,
+                    session_token,
+                    Utc::now().to_rfc3339(),
+                    reason,
+                    serde_json::to_string(&paths).map_err(|err| err.to_string())?,
+                ],
+            )
+            .map_err(|err| err.to_string())?;
+            conn.execute(
+                "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND session_token = ?2",
+                params![agent_id, session_token],
+            )
+            .map_err(|err| err.to_string())?;
+            Ok::<(), String>(())
+        })();
+        match db_result {
+            Ok(()) => {
+                conn.execute("RELEASE purge_noise", [])
+                    .map_err(|err| err.to_string())?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK TO purge_noise", []);
+                let _ = conn.execute("RELEASE purge_noise", []);
+                return Err(e);
+            }
+        }
+        // File removal happens after the DB transaction commits. An orphaned
+        // file is benign (reindex skips missing paths); a missing file with a
+        // live DB row is the dangerous case, which the savepoint prevents.
+        for path in &paths {
+            let _ = fs::remove_file(root.join(path));
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 pub fn write_transcript_artifact(
     conn: &Connection,
     root: &Path,
@@ -1142,6 +1342,7 @@ fn build_temporal_index(conn: &Connection, agent_id: &str) -> String {
     };
     let lines = rows
         .filter_map(Result::ok)
+        .filter(|row| !is_noise_session(row.5.as_deref(), Some(row.0.as_str()), row.6.as_deref(), None))
         .map(|row| {
             let preview = normalize_markdown_body(&row.8)
                 .replace('\n', " ")
@@ -1202,7 +1403,7 @@ fn membership_ts(rows: &[ArtifactRow]) -> String {
         .unwrap_or_else(|| Utc::now().to_rfc3339())
 }
 
-fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String>, usize), String> {
+fn build_ledger(conn: &Connection, agent_id: &str) -> Result<Vec<LedgerSession>, String> {
     let now = Utc::now();
     let floor = now - chrono::TimeDelta::days(30);
     let mut stmt = conn
@@ -1253,11 +1454,20 @@ fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String
                 return None;
             }
             let picked = choose_sentence(&group)?;
+            let project = group.iter().find_map(|row| row.project.clone());
+            if is_noise_session(
+                project.as_deref(),
+                Some(group[0].session_id.as_str()),
+                picked.session_key.as_deref(),
+                picked.harness.as_deref(),
+            ) {
+                return None;
+            }
             let kind = ArtifactKind::from_str(&picked.source_kind).unwrap_or(ArtifactKind::Summary);
             Some(LedgerSession {
                 session_id: group[0].session_id.clone(),
                 session_key: picked.session_key.clone(),
-                project: group.iter().find_map(|row| row.project.clone()),
+                project,
                 membership_ts: ts,
                 sentence: coerce_sentence(
                     picked.memory_sentence.as_deref(),
@@ -1274,16 +1484,41 @@ fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String
         })
         .collect::<Vec<_>>();
     sessions.sort_by(|a, b| b.membership_ts.cmp(&a.membership_ts));
-    let refs = sessions
-        .iter()
-        .filter_map(|session| session.manifest_path.clone())
-        .collect::<Vec<_>>();
-    let mut lines = vec![
-        "## Session Ledger (Last 30 Days)".to_string(),
-        String::new(),
-    ];
+    Ok(sessions)
+}
+
+fn render_section(heading: &str, lines: &[String]) -> String {
+    std::iter::once(heading.to_string())
+        .chain(std::iter::once(String::new()))
+        .chain(lines.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+fn join_parts(parts: &[String]) -> String {
+    parts.iter()
+        .filter(|part| !part.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim_end()
+        .to_string()
+}
+
+fn token_count(text: &str) -> Result<usize, String> {
+    Ok(memory_md_tokenizer()?.encode_ordinary(text).len())
+}
+
+fn fits_budget(parts: &[String]) -> Result<bool, String> {
+    Ok(token_count(&join_parts(parts))? <= MEMORY_MD_MAX_TOKENS)
+}
+
+fn render_ledger_rows(sessions: &[LedgerSession]) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut day = String::new();
-    for session in &sessions {
+    for session in sessions {
         let utc_day = session.membership_ts.chars().take(10).collect::<String>();
         if utc_day != day {
             day = utc_day;
@@ -1333,7 +1568,100 @@ fn build_ledger(conn: &Connection, agent_id: &str) -> Result<(String, Vec<String
     if sessions.is_empty() {
         lines.push("- no in-window sessions yet.".to_string());
     }
-    Ok((lines.join("\n"), refs, sessions.len()))
+    lines
+}
+
+fn render_ledger_section(
+    sessions: &[LedgerSession],
+    base: &[String],
+) -> Result<(String, Vec<String>, usize), String> {
+    fn render_count(sessions: &[LedgerSession], count: usize) -> String {
+        let kept = &sessions[..count];
+        let clipped = sessions.len().saturating_sub(kept.len());
+        let lines = if clipped > 0 {
+            let mut lines = vec![format!(
+                "- older ledger rows clipped: kept {} of {} in-window sessions within projection budget.",
+                kept.len(),
+                sessions.len()
+            )];
+            lines.push(String::new());
+            lines.extend(render_ledger_rows(kept));
+            lines
+        } else {
+            render_ledger_rows(kept)
+        };
+        render_section(&format!("## {LEDGER_HEADING}"), &lines)
+    }
+
+    if fits_budget(&[base, &[render_count(sessions, sessions.len())].as_slice()].concat())? {
+        let refs = sessions
+            .iter()
+            .filter_map(|session| session.manifest_path.clone())
+            .collect::<Vec<_>>();
+        return Ok((render_count(sessions, sessions.len()), refs, sessions.len()));
+    }
+
+    let mut low = 1usize;
+    let mut high = sessions.len();
+    let mut best = 0usize;
+    while low <= high {
+        let mid = (low + high) / 2;
+        let block = render_count(sessions, mid);
+        if fits_budget(&[base, &[block].as_slice()].concat())? {
+            best = mid;
+            low = mid + 1;
+        } else {
+            if mid == 0 {
+                break;
+            }
+            high = mid - 1;
+        }
+    }
+
+    if best > 0 {
+        let kept = &sessions[..best];
+        let refs = kept
+            .iter()
+            .filter_map(|session| session.manifest_path.clone())
+            .collect::<Vec<_>>();
+        return Ok((render_count(sessions, best), refs, kept.len()));
+    }
+
+    if sessions.is_empty() {
+        return Ok((render_count(sessions, 0), Vec::new(), 0));
+    }
+
+    Ok((
+        render_section(
+            &format!("## {LEDGER_HEADING}"),
+            &[format!(
+                "- older ledger rows clipped: kept 0 of {} in-window sessions within projection budget.",
+                sessions.len()
+            )],
+        ),
+        Vec::new(),
+        0,
+    ))
+}
+
+fn render_index_section(index_block: &str, base: &[String]) -> Result<String, String> {
+    if index_block.trim().is_empty() {
+        return Ok(String::new());
+    }
+    if fits_budget(&[base, &[index_block.to_string()].as_slice()].concat())? {
+        return Ok(index_block.to_string());
+    }
+
+    let mut lines = index_block.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    while lines.len() > 2 {
+        lines.pop();
+        let next = lines.join("\n").trim_end().to_string();
+        if fits_budget(&[base, &[next.clone()].as_slice()].concat())? {
+            return Ok(next);
+        }
+    }
+
+    Ok(String::new())
 }
 
 fn sync_manifest_refs(conn: &Connection, root: &Path, refs: &[String]) -> Result<(), String> {
@@ -1387,9 +1715,10 @@ pub fn render_memory_projection(
         })
         .map_err(|err| err.to_string())?
         .filter_map(Result::ok)
+        .filter(|row| !is_noise_session(row.3.as_deref(), None, None, None))
         .collect::<Vec<_>>();
     let thread_heads = match conn.prepare(
-        "SELECT label, source_type, latest_at, sample, node_id
+        "SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
          FROM memory_thread_heads
          WHERE agent_id = ?1
          ORDER BY latest_at DESC
@@ -1403,15 +1732,28 @@ pub fn render_memory_projection(
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })
             .ok()
-            .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
+            .map(|rows| {
+                rows.filter_map(Result::ok)
+                    .filter(|row| {
+                        !is_noise_session(
+                            row.5.as_deref(),
+                            Some(row.4.as_str()),
+                            row.6.as_deref(),
+                            row.7.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    let (ledger, refs, count) = build_ledger(conn, agent_id)?;
-    sync_manifest_refs(conn, root, &refs)?;
+    let ledger = build_ledger(conn, agent_id)?;
     let index_block = build_temporal_index(conn, agent_id);
     let global_lines = if memories.is_empty() {
         vec!["- no durable global head items yet.".to_string()]
@@ -1450,36 +1792,28 @@ pub fn render_memory_projection(
     } else {
         memories
             .iter()
+            .take(8)
             .map(|row| format!("- {}", row.0))
             .collect::<Vec<_>>()
     };
     let mut parts = vec![
         "# Working Memory Summary".to_string(),
-        String::new(),
-        "## Global Head (Tier 1)".to_string(),
-        String::new(),
+        render_section("## Global Head (Tier 1)", &global_lines),
+        render_section("## Thread Heads (Tier 2)", &thread_lines),
+        render_section("## Open Threads", &open_lines),
+        render_section("## Durable Notes & Constraints", &durable_lines),
     ];
-    parts.extend(global_lines);
-    parts.extend([
-        String::new(),
-        "## Thread Heads (Tier 2)".to_string(),
-        String::new(),
-    ]);
-    parts.extend(thread_lines);
-    parts.push(ledger);
-    parts.extend([String::new(), "## Open Threads".to_string(), String::new()]);
-    parts.extend(open_lines);
-    parts.extend([
-        String::new(),
-        "## Durable Notes & Constraints".to_string(),
-        String::new(),
-    ]);
-    parts.extend(durable_lines);
-    parts.extend([String::new(), index_block.clone()]);
+    let (ledger_block, refs, count) = render_ledger_section(&ledger, &parts)?;
+    sync_manifest_refs(conn, root, &refs)?;
+    parts.push(ledger_block);
+    let trimmed_index = render_index_section(&index_block, &parts)?;
+    if !trimmed_index.is_empty() {
+        parts.push(trimmed_index.clone());
+    }
     Ok(RenderResult {
-        content: parts.join("\n").trim_end().to_string(),
+        content: join_parts(&parts),
         file_count: memories.len() + thread_heads.len() + count,
-        index_block,
+        index_block: trimmed_index,
     })
 }
 
@@ -1517,6 +1851,9 @@ pub fn write_memory_projection(
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
+    if should_purge_projection_noise(root, agent_id)? {
+        purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
+    }
     let rendered = render_memory_projection(conn, root, agent_id)?;
     let content = truncate_memory_projection(&rendered.content)?;
     write_atomic(&root.join("MEMORY.md"), &format!("{}\n", content))?;
@@ -1969,7 +2306,7 @@ mod tests {
                 agent_id: "default".to_string(),
                 session_id: "sess-1".to_string(),
                 session_key: Some("sess-1".to_string()),
-                project: Some("/tmp/proj".to_string()),
+                project: Some("/home/nicholai/signet/signetai".to_string()),
                 harness: Some("codex".to_string()),
                 captured_at: now.clone(),
                 started_at: None,
@@ -1985,7 +2322,7 @@ mod tests {
                 agent_id: "default".to_string(),
                 session_id: "sess-1".to_string(),
                 session_key: Some("sess-1".to_string()),
-                project: Some("/tmp/proj".to_string()),
+                project: Some("/home/nicholai/signet/signetai".to_string()),
                 harness: Some("codex".to_string()),
                 captured_at: now.clone(),
                 started_at: None,
@@ -2009,6 +2346,275 @@ mod tests {
                 .content
                 .contains("packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs")
         );
+        reset_projection_purge_state(&root, "default").unwrap();
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn projection_clips_older_ledger_rows_within_budget() {
+        let conn = setup_conn();
+        let root = temp_root("projection-ledger-budget");
+        let tok = cl100k_base().unwrap();
+
+        for i in 0..220 {
+            let ts = (Utc::now() - chrono::TimeDelta::minutes(i)).to_rfc3339();
+            write_summary_artifact(
+                &conn,
+                &root,
+                SummaryArtifactInput {
+                    agent_id: "default".to_string(),
+                    session_id: format!("real-{i}"),
+                    session_key: Some(format!("real-{i}")),
+                    project: Some("/home/nicholai/signet/signetai".to_string()),
+                    harness: Some("codex".to_string()),
+                    captured_at: ts.clone(),
+                    started_at: Some(ts.clone()),
+                    ended_at: Some(ts.clone()),
+                    summary: format!(
+                        "Resolved projection pressure for real-{i} in packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs and kept deterministic ledger rendering readable under load."
+                    ),
+                },
+                MemorySentence {
+                    text: format!(
+                        "Resolved projection pressure for real-{i} in packages/daemon-rs/crates/signet-pipeline/src/memory_lineage.rs and kept deterministic ledger rendering readable under load."
+                    ),
+                    quality: "ok".to_string(),
+                    generated_at: ts,
+                },
+            )
+            .unwrap();
+        }
+
+        for i in 0..40 {
+            let ts = (Utc::now() - chrono::TimeDelta::minutes(i + 500)).to_rfc3339();
+            write_summary_artifact(
+                &conn,
+                &root,
+                SummaryArtifactInput {
+                    agent_id: "default".to_string(),
+                    session_id: format!("tmp-{i}"),
+                    session_key: Some(format!("tmp-{i}")),
+                    project: Some("/tmp/signetai".to_string()),
+                    harness: Some("codex".to_string()),
+                    captured_at: ts.clone(),
+                    started_at: Some(ts.clone()),
+                    ended_at: Some(ts.clone()),
+                    summary: "This temp-session artifact should be purged before projection."
+                        .to_string(),
+                },
+                MemorySentence {
+                    text: "This temp-session artifact should be purged before projection."
+                        .to_string(),
+                    quality: "ok".to_string(),
+                    generated_at: ts,
+                },
+            )
+            .unwrap();
+        }
+
+        let rendered = write_memory_projection(&conn, &root, "default").unwrap();
+        assert!(rendered.content.contains("## Session Ledger (Last 30 Days)"));
+        assert!(rendered.content.contains("older ledger rows clipped:"));
+        assert!(!rendered.content.contains("/tmp/signetai"));
+        assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
+        reset_projection_purge_state(&root, "default").unwrap();
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn purge_noise_sessions_removes_artifact_files_after_tombstones() {
+        let conn = setup_conn();
+        let root = temp_root("purge-noise-files");
+        let now = Utc::now().to_rfc3339();
+        let write = write_summary_artifact(
+            &conn,
+            &root,
+            SummaryArtifactInput {
+                agent_id: "default".to_string(),
+                session_id: "tmp-file".to_string(),
+                session_key: Some("tmp-file".to_string()),
+                project: Some("/tmp/signetai".to_string()),
+                harness: Some("codex".to_string()),
+                captured_at: now.clone(),
+                started_at: Some(now.clone()),
+                ended_at: Some(now.clone()),
+                summary: "This temp-session artifact should be purged from disk after tombstoning."
+                    .to_string(),
+            },
+            MemorySentence {
+                text: "This temp-session artifact should be purged from disk after tombstoning."
+                    .to_string(),
+                quality: "ok".to_string(),
+                generated_at: now,
+            },
+        )
+        .unwrap();
+        assert!(root.join(&write.artifact_path).exists());
+
+        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        assert_eq!(removed, 1);
+        assert!(!root.join(&write.artifact_path).exists());
+
+        let tombstones: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifact_tombstones WHERE agent_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 1);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn purge_noise_sessions_deduplicates_session_tokens() {
+        let conn = setup_conn();
+        let root = temp_root("purge-noise-dedup");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'summary', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/one.md",
+                "sha-one",
+                "tmp-dup",
+                Option::<String>::None,
+                "tok-dup",
+                "/tmp/signetai",
+                "codex",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "noise sentence",
+                "noise content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'transcript', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/two.md",
+                "sha-two",
+                "tmp-dup",
+                "tmp-dup",
+                "tok-dup",
+                Option::<String>::None,
+                "codex",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "noise sentence",
+                "noise content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+
+        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        assert_eq!(removed, 1);
+
+        let tombstones: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifact_tombstones WHERE agent_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let artifacts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifacts WHERE agent_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 1);
+        assert_eq!(artifacts, 0);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn purge_noise_sessions_keeps_tokens_with_real_project_rows() {
+        let conn = setup_conn();
+        let root = temp_root("purge-noise-real-project");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'summary', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/mixed-one.md",
+                "sha-mixed-one",
+                "tmp-mixed",
+                Option::<String>::None,
+                "tok-mixed",
+                Option::<String>::None,
+                "test",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "noise sentence",
+                "noise content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_artifacts (
+                agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                started_at, ended_at, manifest_path, source_node_id,
+                memory_sentence, memory_sentence_quality, content, updated_at
+             ) VALUES (?1, ?2, ?3, 'transcript', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, 'ok', ?14, ?15)",
+            params![
+                "default",
+                "memory/mixed-two.md",
+                "sha-mixed-two",
+                "real-mixed",
+                "real-mixed",
+                "tok-mixed",
+                "/home/nicholai/signet/signetai",
+                "codex",
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "real sentence",
+                "real content",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+
+        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        assert_eq!(removed, 0);
+
+        let artifacts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_artifacts WHERE agent_id = 'default' AND session_token = 'tok-mixed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(artifacts, 2);
         fs::remove_dir_all(root).ok();
     }
 

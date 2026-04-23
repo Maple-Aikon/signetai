@@ -136,6 +136,7 @@ and market subdirectories). Reference repos live in `references/`.
 |---|---|---|
 | `memory-md-rolling-window-lineage` | RESEARCH-MEMORY-MD-ROLLING-WINDOW-LINKAGE, RESEARCH-LCM-ACP | How should MEMORY.md treat markdown summaries/transcripts/compactions as canonical history while keeping a strict rolling 30-day per-session ledger? |
 | `knowledge-architecture-schema` | RESEARCH-GITNEXUS-PATTERNS, RESEARCH-LCM-ACP | How should entities, aspects, and attributes be structured? |
+| `knowledge-architecture-navigation` | RESEARCH-KNOWLEDGE-GRAPH-NAVIGATION | How should agents browse large structured memory graphs without dumping the whole graph into context? |
 | `desire-paths-epic` | RESEARCH-LCM-ACP, RESEARCH-REFERENCE-REPOS | How does retrieval evolve from flat search to graph traversal? |
 | `predictive-memory-scorer` | MSAM-COMPARISON | How should scoring balance structural vs behavioral signals? |
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
@@ -643,6 +644,11 @@ Phase ordering based on hard dependencies and integration contracts.
   - reference inspiration: Hermes Agent
 - **Remember/Recall Skill Parity Refresh** (`remember-recall-skill-parity`)
   - align `/remember` and `/recall` skills with current architecture/schema
+- **Explicit Recall Surface Alignment** (`explicit-recall-surface-alignment`)
+  - consolidate TypeScript explicit recall around one engine and one response contract
+  - keep prompt-submit lightweight and stop consumer renderers from discarding metadata
+- **Semantic Prospective Hints** (`semantic-prospective-hints`)
+  - extend prospective indexing with hint embeddings and semantic recall over predicted future cues
 - **Rust Daemon Parity and Runtime Cutover** (`rust-daemon-parity-cutover`)
   - parity completion and primary-runtime switch strategy
 - **Deep Memory Search** (`deep-memory-search`)
@@ -664,7 +670,10 @@ Phase ordering based on hard dependencies and integration contracts.
 - **Connector: Hermes Agent** (`connector-hermes-agent`)
 - **Connector: Oh My Pi** (`connector-oh-my-pi`)
 - **Plugin API and App Ecosystem** (`plugin-api-ecosystem`)
-  - dashboard/CLI plugin surface for app integrations (e.g. Obsidian, Drive)
+  - cross-surface plugin SDK and host for daemon, CLI, MCP, dashboard,
+    connectors, SDK, and prompt lifecycle contributions
+  - uses Signet Secrets as the reference privileged core plugin and provider
+    architecture
 - **Unified Constellation Viewer** (`constellation-unified-viewer`)
   - realtime unified constellation/embedding/entity view, replace slow 3D path
 - **Dashboard IA Refactor** (`dashboard-information-architecture-refactor`)
@@ -708,9 +717,10 @@ Legend:
 | `memory-md-temporal-head` | approved | `docs/specs/approved/memory-md-temporal-head.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `desire-paths-epic` | - | MEMORY.md becomes a DB-backed temporal head over decay-scored memories and temporal DAG artifacts; respects PR #335 synthesis-provider inheritance rules |
 | `lossless-working-memory-runtime` | approved | `docs/specs/approved/lossless-working-memory-runtime.md` | `memory-md-temporal-head`, `session-continuity-protocol`, `knowledge-architecture-schema`, `multi-agent-support` | - | One agent may span many sessions/branches but still keeps one shared MEMORY.md head; live transcripts are fallback-queryable until structured distillation catches up |
 | `lossless-working-memory-closure` | approved | `docs/specs/approved/lossless-working-memory-closure.md` | `memory-md-temporal-head`, `lossless-working-memory-runtime`, `signet-runtime` | - | Hardens the no-gap runtime contract: temporal node expansion, retry-safe merge protection, compaction parity, transcript fallback discipline, explicit harness fidelity docs, and same-wave daemon-rs contract-shape parity with degraded-mode documentation for remaining runtime deltas. |
-| `memory-md-rolling-window-lineage` | complete | `docs/specs/complete/memory-md-rolling-window-lineage.md` | `memory-md-temporal-head`, `lossless-working-memory-runtime`, `session-continuity-protocol` | - | Session-end transcripts, session-end summaries, and compactions now persist as canonical markdown artifacts with workspace-root-relative wikilinks; MEMORY.md is rendered programmatically from artifact frontmatter plus DB-native thread and temporal state. |
+| `memory-md-rolling-window-lineage` | complete | `docs/specs/complete/memory-md-rolling-window-lineage.md` | `memory-md-temporal-head`, `lossless-working-memory-runtime`, `session-continuity-protocol` | - | Session-end transcripts, session-end summaries, and compactions now persist as canonical markdown artifacts with workspace-root-relative wikilinks; MEMORY.md is rendered programmatically from artifact frontmatter plus DB-native thread and temporal state, with fixed-budget clipping of oldest ledger rows and temp/test-session exclusion from projection surfaces. |
 | `procedural-memory-plan` | approved | `docs/specs/approved/procedural-memory-plan.md` | `memory-pipeline-v2` | `knowledge-architecture-schema` | P1 complete; P2 usage ledger + `skill_meta` usage updates shipped, with decay and broader retrieval follow-ups still remaining |
 | `knowledge-architecture-schema` | complete | `docs/specs/complete/knowledge-architecture-schema.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `procedural-memory-plan` | `predictive-memory-scorer` | KA-1 through KA-6 fully implemented. Audit contract: `entity_dependency_history` captures all dependency mutations via DB-level triggers (`changed_by='db-trigger'`); `related_to` edges require a non-empty reason enforced at both app layer and DB BEFORE INSERT/UPDATE triggers. |
+| `knowledge-architecture-navigation` | approved | `docs/specs/approved/knowledge-architecture-navigation.md` | `knowledge-architecture-schema` | - | Entity/aspect/group/claim/attribute navigation surface for MCP and daemon API. |
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
 | `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
 | `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |
@@ -718,6 +728,10 @@ Legend:
 | `pipeline-pause-control` | complete | `docs/specs/complete/pipeline-pause-control.md` | `memory-pipeline-v2` | - | CLI and dashboard pause/resume shipped on top of live daemon pause/resume API, paused-mode observability, and local Ollama unload |
 | `daemon-startup-responsiveness` | planning | `docs/specs/planning/daemon-startup-responsiveness.md` | `memory-pipeline-v2` | - | Incident-driven stub for issue #331: keep /health responsive during large-db startup recovery and recover stale managed daemon processes cleanly |
 | `runtime-upgrade-regression-hardening` | planning | `docs/specs/planning/runtime-upgrade-regression-hardening.md` | `signet-runtime` | - | Incident-driven stub for the March 29, 2026 `0.83.0` → `0.85.3` runtime regressions: hook transport wiring and dashboard publish contract hardening |
+| `explicit-recall-surface-alignment` | approved | `docs/specs/approved/explicit-recall-surface-alignment.md` | `memory-pipeline-v2`, `signet-runtime` | - | Consolidate TypeScript explicit recall around `hybridRecall()` and `/api/memory/recall`, keep prompt-submit lightweight, and stop CLI/MCP/connector consumers from flattening away useful metadata |
+| `semantic-prospective-hints` | planning | `docs/specs/planning/semantic-prospective-hints.md` | `memory-pipeline-v2`, `desire-paths-epic` | - | Extend DP-6.1 prospective indexing with hint embeddings, semantic hint retrieval, incremental backfill, and degraded-mode-safe fusion into hybrid recall |
+| `transcript-surface-separation` | planning | `docs/specs/planning/transcript-surface-separation.md` | `session-continuity-protocol`, `lossless-working-memory-runtime`, `lossless-working-memory-closure`, `explicit-recall-surface-alignment` | - | Keep raw transcripts canonical but move prompt-submit and transcript fallback onto a derived retrieval surface with stronger separation between archive truth and hot recall material |
+| `openclaw-legacy-plugin-migration` | planning | `docs/specs/planning/openclaw-legacy-plugin-migration.md` | `openclaw-hardening`, `signet-runtime` | - | Incident-driven stub for issue #434: auto-migrate legacy-only OpenClaw installs to the plugin runtime path and surface the degraded state in doctor |
 | `dogfood-hardening-2026-03-29` | planning | `docs/specs/planning/dogfood-hardening-2026-03-29.md` | `memory-pipeline-v2`, `signet-runtime`, `knowledge-architecture-schema` | - | Incident-driven stub for the March 29, 2026 dogfood failures across vector runtime gating, exact entity expansion, temporal session lookup, session bypass normalization, and constructed-card hygiene |
 | `daemon-provider-fallback-status` | complete | `docs/specs/complete/daemon-provider-fallback-status.md` | `memory-pipeline-v2` | - | Issue #320 complete: extraction fallback/block state now persists in status surfaces with explicit fallbackProvider control and startup dead-lettering on hard block |
 | `daemon-refactor` | planning | `docs/specs/planning/daemon-refactor.md` | - | `daemon-refactor-plan` | |
@@ -757,7 +771,8 @@ Legend:
 | `connector-hermes-agent` | planning | `docs/specs/planning/connector-hermes-agent.md` | `signet-runtime` | - | Stub: Hermes Agent connector |
 | `connector-oh-my-pi` | planning | `docs/specs/planning/connector-oh-my-pi.md` | `signet-runtime` | - | Stub: Oh My Pi managed runtime extension and connector |
 | `connector-forgecode` | complete | `docs/specs/complete/connector-forgecode.md` | `signet-runtime` | - | ForgeCode connector: AGENTS.md, MCP server registration, skills symlink. MCP-only (no external hook API). |
-| `plugin-api-ecosystem` | planning | `docs/specs/planning/plugin-api-ecosystem.md` | `signet-runtime` | - | Stub: plugin/app API for dashboard and CLI integrations |
+| `plugin-api-ecosystem` | planning | `docs/specs/planning/plugin-api-ecosystem.md` | `signet-runtime` | `plugin-sdk-core-v1` | Cross-surface plugin SDK/host architecture with TypeScript and Rust support, marketplace-ready manifests, prompt contributions, and Signet Secrets as the reference core plugin/provider model |
+| `plugin-sdk-core-v1` | complete | `docs/specs/complete/plugin-sdk-core-v1.md` | `signet-runtime` | - | PR #518 complete: bundled `signet.secrets` core plugin, daemon plugin host/registry diagnostics, prompt and surface metadata, redacted audit events, SDK helpers, setup-time core plugin selection, and local Secrets provider extraction preserving existing `secrets.enc` without rewrite |
 | `constellation-unified-viewer` | planning | `docs/specs/planning/constellation-unified-viewer.md` | `knowledge-architecture-schema` | - | Stub: realtime unified constellation/embedding/entity viewer |
 | `dashboard-information-architecture-refactor` | planning | `docs/specs/planning/dashboard-information-architecture-refactor.md` | `signet-runtime` | - | Stub: dashboard IA cleanup, settings split, breadcrumb navigation |
 | `postinstall-behavior-migration-audit` | planning | `docs/specs/planning/postinstall-behavior-migration-audit.md` | `memory-pipeline-v2` | - | Stub: ensure post-install behavior is daemon/CLI-owned |

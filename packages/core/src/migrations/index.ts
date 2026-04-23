@@ -61,6 +61,12 @@ import { up as mcpInvocations } from "./052-mcp-invocations";
 import { up as skillInvocations } from "./053-skill-invocations";
 import { up as taskAgentScope } from "./054-task-agent-scope";
 import { up as dreamingState } from "./055-dreaming-state";
+import { up as agentScopedContentHash } from "./056-agent-scoped-content-hash";
+import { up as memoriesFtsTokenizerRepair } from "./057-memories-fts-tokenizer-repair";
+import { up as knowledgeGraphIndices } from "./058-knowledge-graph-indices";
+import { up as entityAttributeClaimKey } from "./059-entity-attribute-claim-key";
+import { up as entityAttributeGroupKey } from "./060-entity-attribute-group-key";
+import { up as memoryArtifactSourceMtime } from "./061-memory-artifact-source-mtime";
 
 // -- Public interface consumed by Database.init() --
 
@@ -532,6 +538,45 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: dreamingState,
 		artifacts: {
 			tables: ["dreaming_state", "dreaming_passes"],
+		},
+	},
+	{
+		version: 56,
+		name: "agent-scoped-content-hash",
+		up: agentScopedContentHash,
+	},
+	{
+		version: 57,
+		name: "memories-fts-tokenizer-repair",
+		up: memoriesFtsTokenizerRepair,
+	},
+	{
+		version: 58,
+		name: "knowledge-graph-indices",
+		up: knowledgeGraphIndices,
+	},
+	{
+		version: 59,
+		name: "entity-attribute-claim-key",
+		up: entityAttributeClaimKey,
+		artifacts: {
+			columns: [{ table: "entity_attributes", column: "claim_key" }],
+		},
+	},
+	{
+		version: 60,
+		name: "entity-attribute-group-key",
+		up: entityAttributeGroupKey,
+		artifacts: {
+			columns: [{ table: "entity_attributes", column: "group_key" }],
+		},
+	},
+	{
+		version: 61,
+		name: "memory-artifact-source-mtime",
+		up: memoryArtifactSourceMtime,
+		artifacts: {
+			columns: [{ table: "memory_artifacts", column: "source_mtime_ms" }],
 		},
 	},
 ];

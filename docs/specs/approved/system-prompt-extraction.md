@@ -101,7 +101,7 @@ For deeper exploration:
 
   mcp__signet__lcm_expand — drill into a session summary node.
   Returns parent/child lineage, linked memories, and optionally the
-  raw transcript. Use this when memory_search returns a session
+  cleaned transcript. Use this when memory_search returns a session
   reference you want to expand.
 
   mcp__signet__knowledge_expand — drill into an entity's aspects,
@@ -109,6 +109,10 @@ For deeper exploration:
 
   mcp__signet__knowledge_expand_session — find session summaries
   linked to a specific entity.
+
+Cross-session history is also available through linked summary and
+transcript artifacts in the Signet workspace. Inspect those artifacts
+directly when MEMORY.md or recall snippets are not enough.
 
 To store a memory explicitly:
 

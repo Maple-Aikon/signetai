@@ -1,10 +1,19 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import type { SetupDetection } from "@signet/core";
+import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
 import chalk from "chalk";
 
-export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "oh-my-pi" | "codex" | "forge";
-export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
-export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+export type HarnessChoice =
+	| "claude-code"
+	| "opencode"
+	| "openclaw"
+	| "oh-my-pi"
+	| "pi"
+	| "codex"
+	| "forge"
+	| "hermes-agent"
+	| "gemini";
+export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
+export type ExtractionProviderChoice = "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 export type DeploymentTypeChoice = "local" | "vps" | "server";
 export interface ResolveSetupExtractionProviderOptions {
@@ -22,12 +31,16 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"opencode",
 	"openclaw",
 	"oh-my-pi",
+	"pi",
 	"codex",
 	"forge",
+	"hermes-agent",
+	"gemini",
 ];
-export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "ollama", "openai", "none"];
+export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"claude-code",
+	"llama-cpp",
 	"ollama",
 	"opencode",
 	"codex",
@@ -38,6 +51,7 @@ export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plug
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
 const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["claude-code", "codex", "opencode"];
 const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
+	"llama-cpp",
 	"claude-code",
 	"codex",
 	"ollama",
@@ -72,7 +86,10 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.openclaw) harnesses.push("OpenClaw");
 	if (detection.harnesses.opencode) harnesses.push("OpenCode");
 	if (detection.harnesses.ohMyPi) harnesses.push("Oh My Pi");
+	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
+	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
+	if (detection.harnesses.gemini) harnesses.push("Gemini");
 	if (detection.harnesses.forge) harnesses.push("Forge");
 	if (harnesses.length > 0) {
 		lines.push(`    ✓ Harnesses: ${harnesses.join(", ")}`);
@@ -129,6 +146,21 @@ export function normalizeHarnessList(rawValues: readonly string[] | undefined, d
 	}
 
 	return harnesses;
+}
+
+export function findUnknownHarnessValues(rawValues: readonly string[] | undefined, deps: HarnessDeps): string[] {
+	if (!rawValues || rawValues.length === 0) {
+		return [];
+	}
+
+	return rawValues
+		.flatMap((value) =>
+			value
+				.split(",")
+				.map((part) => part.trim())
+				.filter(Boolean),
+		)
+		.filter((part) => !deps.normalizeChoice(part, SETUP_HARNESS_CHOICES));
 }
 
 export function failSetupValidation(message: string, hint?: string): never {
@@ -274,6 +306,23 @@ export function readRecord(value: unknown): Record<string, unknown> {
 
 export function readString(value: unknown): string | null {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+export function formatWorkspaceSourceRepoSync(result: WorkspaceSourceRepoSyncResult): string | null {
+	switch (result.status) {
+		case "cloned":
+			return `  ✓ ${result.message}: ${result.path}`;
+		case "pulled":
+			return `  ✓ ${result.message}: ${result.path}`;
+		case "fetched":
+			return `  ↺ ${result.message}`;
+		case "error":
+			return `  ⚠ ${result.message}`;
+		case "skipped":
+			return `  ${result.message}`;
+		case "current":
+			return null;
+	}
 }
 
 export function readHarnesses(value: unknown): string[] {

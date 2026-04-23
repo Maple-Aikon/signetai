@@ -11,12 +11,16 @@ import type { TaskHarness } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import type { WorkerHandle } from "../pipeline/worker";
 import { recordSkillInvocation } from "../skill-invocations";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
 import { type SpawnResult, spawnTask } from "./spawn";
 import { emitTaskStream } from "./task-stream";
+
+export interface SchedulerHandle {
+	stop(): Promise<void>;
+	readonly running: boolean;
+}
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
@@ -28,6 +32,10 @@ interface TaskModelCacheEntry {
 }
 
 const taskModelCache = new Map<string, TaskModelCacheEntry>();
+
+function taskModelCacheKey(harness: "claude-code" | "codex", agentsDir: string): string {
+	return `${agentsDir}:${harness}`;
+}
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -76,17 +84,19 @@ export function resolveTaskModel(
 	harness: DueTaskRow["harness"],
 	agentsDir: string = getAgentsDir(),
 ): string | undefined {
-	if (harness !== "codex") return undefined;
+	if (harness !== "codex" && harness !== "claude-code") return undefined;
 
 	const now = Date.now();
-	const cached = taskModelCache.get(agentsDir);
+	const cacheKey = taskModelCacheKey(harness, agentsDir);
+	const cached = taskModelCache.get(cacheKey);
 	if (cached && cached.expiresAt > now) {
 		return cached.model;
 	}
 
 	const cfg = loadMemoryConfig(agentsDir);
-	const model = cfg.pipelineV2.extraction.provider === "codex" ? cfg.pipelineV2.extraction.model : undefined;
-	taskModelCache.set(agentsDir, {
+	const extraction = cfg.pipelineV2.extraction;
+	const model = extraction.provider === harness ? extraction.model : undefined;
+	taskModelCache.set(cacheKey, {
 		model,
 		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
 	});
@@ -118,7 +128,7 @@ const DEFAULT_EXECUTE_TASK_DEPS: ExecuteTaskDeps = {
 };
 
 /** Start the scheduler worker. Returns a handle to stop it. */
-export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
+export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 	let running = true;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	const activeProcesses = new Set<Promise<void>>();
@@ -150,7 +160,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 				p.finally(() => activeProcesses.delete(p));
 			}
 		} catch (err) {
-			logger.error("scheduler", "Poll error", {
+			logger.error("scheduler", "Poll error", undefined, {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
@@ -202,7 +212,7 @@ export async function executeTask(
 	try {
 		nextRun = deps.computeNextRun(task.cron_expression);
 	} catch {
-		deps.logger.error("scheduler", `Invalid cron for task ${task.name}`, {
+		deps.logger.error("scheduler", `Invalid cron for task ${task.name}`, undefined, {
 			taskId: task.id,
 			cron: task.cron_expression,
 		});
@@ -250,7 +260,7 @@ export async function executeTask(
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
 		}
-		const model = deps.resolveTaskModel(task.harness);
+		const model = task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
 		result = await deps.spawnTask(
 			task.harness,
 			effectivePrompt,

@@ -62,8 +62,9 @@ API during OpenCode sessions.
 It bridges OpenClaw's plugin interface to the daemon API for memory
 operations during conversations.
 
-`@signet/tray` is the system tray application. It provides a native
-desktop UI for daemon status, quick actions, and notifications.
+`@signet/desktop` is the Electron desktop application. It provides the native
+desktop UI, menu bar tray, bundled daemon runtime, quick actions, and notifications.
+`@signet/tray` is a shared tray/menu state utility package only.
 
 `predictor` is the predictive memory scorer sidecar, written in Rust.
 It implements autograd, checkpointing, and data loading for real-time
@@ -102,6 +103,9 @@ Harness hook fires (session-start / user-prompt / session-end)
     → /api/memory/recall runs traversal-primary search:
       graph traversal produces the base candidate pool,
       flat FTS5/vector search fills remaining slots,
+      structured evidence shaping balances lexical, semantic,
+      prospective hint, and traversal evidence,
+      currentness shaping dampens grouped claim-key superseded structured facts,
       predictor path can rerank if available
 ```
 
@@ -184,11 +188,14 @@ Gated on `hints.enabled` in pipeline config.
 writes complete. A failure here is non-fatal — it logs a warning and
 does not revert the extracted memories.
 
-**Lossless transcripts**: at session end, the raw conversation text
-is stored in `session_transcripts` (migration 040) alongside the
-extracted memories. This preserves context that extraction may
-discard. The recall endpoint's `expand: true` flag joins transcript
-content back into search results via `source_id`.
+**Lossless transcripts**: Signet stores a cleaned conversation-only
+transcript in `session_transcripts` (migration 040) alongside the
+extracted memories. Tool calls, tool outputs, and thinking traces are
+kept out of this memory surface so retrieval and summarization operate
+on the human/agent exchange. Raw auditable traces may still be written
+to daemon logs outside the memory lineage. The recall endpoint's
+`expand: true` flag joins transcript content back into search results
+via `source_id`.
 
 **Shadow mode**: when `shadowMode = true`, all proposals are logged
 to `memory_history` under the `pipeline-shadow` actor but no
@@ -283,12 +290,15 @@ candidate pool blended with cosine similarity (70% cosine, 30%
 structural importance). Flat FTS5/vector search fills remaining
 slots — at least 40% of the result budget is reserved for flat
 candidates so hub entities cannot exclude keyword/vector matches
-entirely. After merging, the combined pool is score-sorted. When
-traversal is disabled or the graph has no matching entities, the
-system falls back to the legacy path: flat BM25 + vector search
-with optional graph boost (`getGraphBoostIds`). This improves the
-quality of the pool the rest of the system ranks; it is not, by itself,
-the whole Signet thesis.
+entirely. After merging, structured evidence shaping keeps lexical,
+semantic, prospective hint, and traversal evidence as separate channels.
+Traversal-only candidates are capped below directly anchored evidence,
+while exact prospective hints can rescue memories whose stored text uses
+a specific instance rather than the user's query class. When traversal
+is disabled or the graph has no matching entities, the system falls back
+to the legacy path: flat BM25 + vector search with optional graph boost
+(`getGraphBoostIds`). This improves the quality of the pool the rest of
+the system ranks; it is not, by itself, the whole Signet thesis.
 
 **Post-fusion dampening** (`dampening.ts`): three corrections run
 after fusion scoring but before the final sort/return. (1) *Gravity*
@@ -298,6 +308,16 @@ linked entities are all in the top-10% by degree (P90 threshold,
 0.7x). (3) *Resolution* boosts constraints, decisions, and
 date-anchored memories (1.2x). All three stages are independently
 toggleable via `DampeningConfig`.
+
+**Recall surface parity**: all recall entry points should route through the
+same daemon recall implementation whenever possible. Current daemon HTTP
+recall, search aliases, hook recall, prompt-submit injection, and MCP memory
+search all call `hybridRecall`, so they receive the same structured evidence
+shaping behavior. Any future recall surface, including CLI shortcuts, SDK
+helpers, desktop UI search, connector-specific recall, or daemon-rs parity work,
+must either call the daemon recall API or implement the same evidence-channel
+contract. Do not add a separate recall path that bypasses lexical, semantic,
+prospective hint, and traversal evidence shaping.
 
 **Graph boost fallback** (`graph-search.ts`): `getGraphBoostIds`
 is the legacy graph-augmented search path, used when traversal is
@@ -400,7 +420,7 @@ Connector Framework
 
 The connector framework manages external data source integrations that
 push documents and memories into the [[pipeline]]. It is distinct from the
-[[harnesses|harness connector packages]] (claude-code, opencode, openclaw) — those
+[[harnesses|harness connector packages]] (claude-code, opencode, openclaw, oh-my-pi, pi) — those
 handle platform hook installation; this framework handles ongoing sync.
 
 **Registry** (`connectors/registry.ts`): CRUD operations on the
@@ -566,10 +586,11 @@ Stores raw embedding vectors as BLOBs. Keyed by `content_hash`
 
 **memories_fts**
 
-FTS5 external content table backed by `memories`. Three triggers
-(`memories_ai`, `memories_ad`, `memories_au`) keep the index in sync
-with inserts, deletes, and updates. Queried with BM25 scoring via
-`bm25(memories_fts)`.
+FTS5 external content table backed by `memories`, created with the
+`unicode61` tokenizer to avoid overly aggressive stemming on recall
+queries. Three triggers (`memories_ai`, `memories_ad`, `memories_au`)
+keep the index in sync with inserts, deletes, and updates. Queried with
+BM25 scoring via `bm25(memories_fts)`.
 
 **memory_jobs**
 
@@ -658,11 +679,12 @@ reappear.
 **session_transcripts** (migration 040)
 
 Lossless session transcript storage. Fields: `session_key` (PK),
-`content` (raw conversation text), `harness`, `project`, `agent_id`,
-`created_at`. Written at session end alongside extracted memories.
-The recall endpoint supports `expand: true` to join transcript
-content back into results via `source_id`, preserving facts that
-extraction may drop. Indexed on `project` and `created_at`.
+`content` (cleaned conversation transcript), `harness`, `project`,
+`agent_id`, `created_at`. The transcript keeps only user/assistant
+conversation turns for memory use. Raw tool traces may be retained in
+daemon logs for audit. The recall endpoint supports `expand: true` to
+join transcript content back into results via `source_id`, preserving
+facts that extraction may drop. Indexed on `project` and `created_at`.
 
 **umap_cache**
 
@@ -850,6 +872,7 @@ $SIGNET_WORKSPACE/
 ├── memory/
 │   ├── memories.db      # SQLite database (source of truth)
 │   └── scripts/         # Optional batch tools (Python)
+├── signetai/            # Managed local Signet source checkout
 ├── skills/              # Installed skills (subdirs)
 ├── .secrets/            # Encrypted secret store
 └── .daemon/
@@ -924,7 +947,7 @@ All endpoints are served by the Hono server on port 3850.
 | `/api/pipeline/status` | GET | diagnostics | Pipeline status snapshot |
 | `/api/repair/requeue-dead` | POST | operator | Requeue dead-letter jobs |
 | `/api/repair/release-leases` | POST | operator | Release stale job leases |
-| `/api/repair/check-fts` | POST | operator | Check/repair FTS consistency |
+| `/api/repair/check-fts` | POST | operator | Check/repair FTS consistency and tokenizer drift |
 | `/api/repair/retention-sweep` | POST | operator | Trigger retention sweep |
 | `/api/repair/embedding-gaps` | GET | operator | Count unembedded memories |
 | `/api/repair/re-embed` | POST | operator | Batch re-embed missing vectors |
@@ -1051,10 +1074,15 @@ The default agent uses `shared` policy for backward compatibility — existing
 installs see all their memories unchanged.
 
 **Identity inheritance** — each agent can have its own identity files under
-`$SIGNET_WORKSPACE/agents/{name}/`. Only `SOUL.md` and `IDENTITY.md` are
-expected to be overridden; all other files (`AGENTS.md`, `USER.md`, etc.)
-inherit from the workspace root. The daemon's file watcher monitors
-`$SIGNET_WORKSPACE/agents/` and triggers a harness sync on change.
+`$SIGNET_WORKSPACE/agents/{name}/`. On session start, the daemon checks the
+agent directory first for the standard identity files (`AGENTS.md`, `SOUL.md`,
+`IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, `MEMORY.md`,
+`BOOTSTRAP.md`) and falls back to the workspace root when an agent-local file
+does not exist. This lets named agents override prompt identity and working
+memory without copying the whole workspace. If no agent-local `MEMORY.md`
+exists, the shared root `MEMORY.md` remains the working-memory projection for
+that agent. The daemon's file watcher monitors `$SIGNET_WORKSPACE/agents/`
+and triggers a harness sync on change.
 
 **OpenClaw session keys** — OpenClaw encodes the agent ID in session keys as
 `agent:{id}:{rest}`. The daemon's `resolveAgentId()` helper auto-parses this

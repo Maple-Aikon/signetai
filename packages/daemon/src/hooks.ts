@@ -11,10 +11,12 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import type { Worker } from "node:worker_threads";
+import { getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
 import {
@@ -28,14 +30,16 @@ import {
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
 import { getPredictorClient, recordPredictorLatency } from "./daemon";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
 import {
+	NOISE_PURGE_REASON,
 	appendSynthesisIndexBlock as appendRenderedIndexBlock,
+	purgeCanonicalNoiseSessionsOnce,
 	renderMemoryProjection,
 	writeTranscriptArtifact,
 } from "./memory-lineage";
@@ -55,6 +59,9 @@ import {
 	traverseKnowledgeGraph,
 } from "./pipeline/graph-traversal";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
+import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
+import { getDefaultPluginHost } from "./plugins/index";
+import type { PluginPromptTargetV1 } from "./plugins/types";
 import {
 	type CandidateInput,
 	type CandidateSource,
@@ -79,11 +86,28 @@ import {
 	writeCheckpoint,
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { isNoiseSession } from "./session-noise";
 import { getExpiryWarning } from "./session-tracker";
 import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
+import { writeTranscriptAudit } from "./transcript-audit";
 import { getUpdateSummary } from "./update-system";
+
+// ---------------------------------------------------------------------------
+// Synthesis render worker (node:worker_threads)
+// ---------------------------------------------------------------------------
+
+let synthesisWorker: Worker | null = null;
+
+export function setSynthesisWorker(worker: Worker | null): void {
+	synthesisWorker = worker;
+}
+
+export function getSynthesisWorker(): Worker | null {
+	return synthesisWorker;
+}
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -99,6 +123,54 @@ function getMemoryDbPath(): string {
 
 /** Tracks which sessions have already received a full session-start inject. */
 const sessionStartSeen = new Map<string, number>();
+
+const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
+const PREDICTED_CONTEXT_TERM_LIMIT = 6;
+const PREDICTED_CONTEXT_STOPWORDS: ReadonlySet<string> = new Set([
+	"able",
+	"about",
+	"after",
+	"again",
+	"also",
+	"back",
+	"been",
+	"before",
+	"being",
+	"check",
+	"code",
+	"could",
+	"from",
+	"have",
+	"into",
+	"issue",
+	"just",
+	"like",
+	"more",
+	"need",
+	"only",
+	"path",
+	"should",
+	"that",
+	"their",
+	"them",
+	"then",
+	"there",
+	"these",
+	"they",
+	"this",
+	"time",
+	"user",
+	"want",
+	"were",
+	"what",
+	"when",
+	"where",
+	"which",
+	"with",
+	"work",
+	"would",
+	"your",
+]);
 
 /** Sliding window of recently-injected memory IDs per session (prompt-submit). */
 const PROMPT_DEDUP_WINDOW = 5;
@@ -156,12 +228,22 @@ export function buildSignetSystemPrompt(): string {
 	return `[signet active]
 You have persistent memory managed by Signet.
 
+Memory Check Loop:
+- when to use: before commands, file edits, architectural choices, bug fixes, continuation work, user-preference-sensitive answers, or anything that may depend on prior decisions
+- procedure: check injected context first, then run 1-3 targeted recalls with mcp__signet__memory_search; expand session lineage with mcp__signet__lcm_expand or known entities with mcp__signet__knowledge_expand and mcp__signet__knowledge_expand_session when needed
+- pitfalls: do not treat a missing automatic memory match as proof no prior context exists; do not trust memory blindly when repo, files, or live system state can verify it; do not spam broad recalls for trivial self-contained prompts
+- verification: before acting, know what context you found, what remains unknown, and whether it is safe to proceed
+
 Memory tools:
 - mcp__signet__memory_search: search stored memories by keyword or meaning
 - mcp__signet__lcm_expand: expand a session summary into its full lineage and linked memories
 - mcp__signet__knowledge_expand: expand a known entity into its aspects, attributes, and dependencies
 - mcp__signet__knowledge_expand_session: find sessions linked to a known entity
 - mcp__signet__memory_store: save something to memory explicitly
+
+Cross-session history:
+- linked summary and transcript artifacts in your Signet workspace are inspectable across sessions
+- use transcript and summary artifacts when you need deeper history than MEMORY.md or recall snippets provide
 
 Identity files in your Signet workspace:
 - AGENTS.md: how you operate (maintain this)
@@ -201,6 +283,12 @@ export interface HooksConfig {
 		includeRecentContext?: boolean;
 		recencyBias?: number;
 		query?: string;
+		maxInjectTokens?: number;
+		/**
+		 * @deprecated Renamed to `maxInjectTokens`. If set without `maxInjectTokens`,
+		 * the value is auto-migrated using `Math.round(maxInjectChars / 4)` (~4 chars/token
+		 * for ASCII; code or Unicode content may be 1–2 chars/token, so migrate explicitly.
+		 */
 		maxInjectChars?: number;
 	};
 	userPromptSubmit?: {
@@ -348,22 +436,17 @@ export interface RememberResponse {
 export interface RecallRequest {
 	harness: string;
 	query: string;
+	keywordQuery?: string;
 	project?: string;
 	limit?: number;
+	type?: string;
+	tags?: string;
+	who?: string;
+	since?: string;
+	until?: string;
+	expand?: boolean;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
-}
-
-export interface RecallResponse {
-	results: Array<{
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		tags: string | null;
-		created_at: string;
-	}>;
-	count: number;
 }
 
 // ============================================================================
@@ -417,12 +500,13 @@ function buildTranscriptFallbackResponse(
 		readonly excerpt: string;
 	}>,
 	warnings?: string[],
+	pluginContext = "",
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
-		content: `- ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)}, session ${formatTranscriptSessionLabel(hit.sessionKey)})`,
+		content: `- [transcript ${formatTranscriptSessionLabel(hit.sessionKey)}] ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=transcript-fallback]\n${lines.join("\n")}`;
+	const inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -443,12 +527,13 @@ function buildTemporalFallbackResponse(
 		readonly excerpt: string;
 	}>,
 	warnings?: string[],
+	pluginContext = "",
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
-		content: `- [node ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
+		content: `- [thread ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=temporal-fallback]\n${lines.join("\n")}`;
+	const inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -468,6 +553,113 @@ export function selectWithBudget<T extends { content: string }>(rows: ReadonlyAr
 		used += row.content.length;
 	}
 	return selected;
+}
+
+function selectWithBudgetSkippingOversized<T extends { content: string }>(
+	rows: ReadonlyArray<T>,
+	charBudget: number,
+): T[] {
+	const selected: T[] = [];
+	let used = 0;
+	for (const row of rows) {
+		if (used + row.content.length > charBudget) continue;
+		selected.push(row);
+		used += row.content.length;
+	}
+	return selected;
+}
+
+/** Truncate rows to fit a token budget using BPE token counts. */
+export function selectWithTokenBudget<T extends { content: string }>(rows: ReadonlyArray<T>, tokenBudget: number): T[] {
+	const selected: T[] = [];
+	let used = 0;
+	for (const row of rows) {
+		const cost = countTokens(row.content);
+		if (used + cost > tokenBudget) break;
+		selected.push(row);
+		used += cost;
+	}
+	return selected;
+}
+
+const TRUNCATED_MARKER = "\n[context truncated]";
+const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
+
+/**
+ * Truncate `inject` to fit within `mainBudget` tokens.
+ * Returns an empty string when budget is zero (reserved sections exhausted it).
+ * Appends a truncation marker when budget permits; omits it when the budget is
+ * too small to fit the marker itself (avoids overflow in that range).
+ */
+export function applyTokenBudget(inject: string, mainBudget: number): string {
+	if (mainBudget <= 0) return "";
+	if (countTokens(inject) <= mainBudget) return inject;
+	// Budget too tight to fit content + marker — truncate without marker
+	if (mainBudget <= TRUNCATED_MARKER_TOKENS) return truncateToTokens(inject, mainBudget);
+	return truncateToTokens(inject, mainBudget - TRUNCATED_MARKER_TOKENS) + TRUNCATED_MARKER;
+}
+
+function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log: typeof logger): string {
+	try {
+		const contributions = getDefaultPluginHost().promptContributions({ target });
+		if (contributions.length === 0) return "";
+		const parts = ["## Plugin Context", ""];
+		for (const contribution of contributions) {
+			parts.push(
+				`<signet-plugin-context plugin="${contribution.pluginId}" id="${contribution.id}" target="${contribution.target}">`,
+			);
+			parts.push(contribution.content.trim());
+			parts.push("</signet-plugin-context>");
+			parts.push("");
+		}
+		return parts.join("\n").trimEnd();
+	} catch (err) {
+		log.warn("hooks", "Plugin prompt contribution lookup failed", {
+			target,
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return "";
+	}
+}
+
+function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>, pluginContext = ""): string {
+	// Keep formatting behavior aligned with daemon-rs
+	// `build_prompt_recall_inject()` in `packages/daemon-rs/.../routes/hooks.rs`.
+	const parts = [
+		metadataHeader.trimEnd(),
+		"",
+		"## Memory Check",
+		"",
+		"Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search, then expand with lcm_expand or knowledge_expand when needed.",
+		"",
+	];
+	if (pluginContext.trim().length > 0) {
+		parts.push(pluginContext.trimEnd());
+		parts.push("");
+	}
+	parts.push("## Relevant Memory");
+	parts.push("");
+	parts.push(...lines);
+	parts.push("");
+	parts.push("If you learn something durable, save it with /remember or memory_store.");
+	return `${parts.join("\n").trimEnd()}\n`;
+}
+
+function buildNoStrongMemoryMatchInject(metadataHeader: string, pluginContext = ""): string {
+	const parts = [
+		metadataHeader.trimEnd(),
+		"",
+		"## Memory Check",
+		"",
+		"No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.",
+		"",
+	];
+	if (pluginContext.trim().length > 0) {
+		parts.push(pluginContext.trimEnd());
+		parts.push("");
+	}
+	parts.push("If you learn something durable, save it with /remember or memory_store.");
+	return `${parts.join("\n").trimEnd()}\n`;
 }
 
 /** Build a brief "since your last session" summary for temporal awareness */
@@ -516,7 +708,7 @@ function getSessionGapSummary(): string | undefined {
 }
 
 /** Check if content overlaps 70%+ with existing memories via FTS */
-export function isDuplicate(db: Database, content: string): boolean {
+export function isDuplicate(db: Database, content: string, agentId: string): boolean {
 	const words = content
 		.toLowerCase()
 		.split(/\W+/)
@@ -526,8 +718,16 @@ export function isDuplicate(db: Database, content: string): boolean {
 	try {
 		const ftsQuery = words.slice(0, 10).join(" OR ");
 		const rows = db
-			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ? LIMIT 10")
-			.all(ftsQuery) as Array<{ content: string }>;
+			.prepare(
+				`SELECT m.content
+				 FROM memories_fts
+				 JOIN memories m ON memories_fts.rowid = m.rowid
+				 WHERE memories_fts MATCH ?
+				   AND m.is_deleted = 0
+				   AND m.agent_id = ?
+				 LIMIT 10`,
+			)
+			.all(ftsQuery, agentId) as Array<{ content: string }>;
 
 		const inputWords = new Set(words);
 		for (const row of rows) {
@@ -549,9 +749,10 @@ export function isDuplicate(db: Database, content: string): boolean {
 	return false;
 }
 
-function readIdentityFile(fileName: string, charBudget: number): string | undefined {
-	const filePath = join(getAgentsDir(), fileName);
-	if (!existsSync(filePath)) return undefined;
+type IdentityFileMap = Record<string, string>;
+
+function readIdentityPath(filePath: string | undefined, charBudget: number): string | undefined {
+	if (!filePath || !existsSync(filePath)) return undefined;
 
 	try {
 		const content = readFileSync(filePath, "utf-8").trim();
@@ -563,22 +764,21 @@ function readIdentityFile(fileName: string, charBudget: number): string | undefi
 	}
 }
 
-function readMemoryMd(charBudget: number): string | undefined {
-	return readIdentityFile("MEMORY.md", charBudget);
+function readIdentityFile(fileName: string, charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
+	return readIdentityPath(identityFiles?.[fileName] ?? join(getAgentsDir(), fileName), charBudget);
 }
 
-function readAgentsMd(charBudget: number): string | undefined {
-	const agentsMd = join(getAgentsDir(), "AGENTS.md");
-	if (!existsSync(agentsMd)) return undefined;
+function readMemoryMd(charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
+	return readIdentityFile("MEMORY.md", charBudget, identityFiles);
+}
 
-	try {
-		const content = readFileSync(agentsMd, "utf-8").trim();
-		if (!content) return undefined;
-		if (content.length <= charBudget) return content;
-		return `${content.slice(0, charBudget)}\n[truncated]`;
-	} catch {
-		return undefined;
-	}
+function readAgentsMd(charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
+	return readIdentityFile("AGENTS.md", charBudget, identityFiles);
+}
+
+function resolveIdentityFiles(agentId: string): IdentityFileMap {
+	if (!agentId || agentId === "default") return {};
+	return getAgentIdentityFiles(agentId, getAgentsDir());
 }
 
 export interface ScoredMemory {
@@ -767,26 +967,19 @@ function getPredictedContextMemories(
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(getMemoryDbPath())) return [];
+	if (!project || project.trim().length === 0) return [];
 
 	try {
-		// Get recent session summaries for this project
+		// Get recent session summaries for this project only. Global predictive
+		// FTS is too broad for session-start latency on large memory stores.
 		const summaryRows = getDbAccessor().withReadDb((db) => {
-			if (project) {
-				return db
-					.prepare(
-						`SELECT transcript FROM summary_jobs
-						 WHERE project = ? AND status = 'completed' AND agent_id = ?
-						 ORDER BY created_at DESC LIMIT 5`,
-					)
-					.all(project, agentId) as Array<{ transcript: string }>;
-			}
 			return db
 				.prepare(
 					`SELECT transcript FROM summary_jobs
-					 WHERE status = 'completed' AND agent_id = ?
+					 WHERE project = ? AND status = 'completed' AND agent_id = ?
 					 ORDER BY created_at DESC LIMIT 5`,
 				)
-				.all(agentId) as Array<{ transcript: string }>;
+				.all(project, agentId) as Array<{ transcript: string }>;
 		});
 
 		if (summaryRows.length === 0) return [];
@@ -799,7 +992,7 @@ function getPredictedContextMemories(
 				.toLowerCase()
 				.replace(/[^a-z0-9\s]/g, " ")
 				.split(/\s+/)
-				.filter((w) => w.length >= 4);
+				.filter((w) => w.length >= 4 && !PREDICTED_CONTEXT_STOPWORDS.has(w));
 			const seen = new Set<string>();
 			for (const w of words) {
 				if (seen.has(w)) continue;
@@ -812,7 +1005,7 @@ function getPredictedContextMemories(
 		const recurring = [...termFreq.entries()]
 			.filter(([_, count]) => count >= 2)
 			.sort((a, b) => b[1] - a[1])
-			.slice(0, 10)
+			.slice(0, PREDICTED_CONTEXT_TERM_LIMIT)
 			.map(([term]) => term);
 
 		if (recurring.length === 0) return [];
@@ -831,11 +1024,12 @@ function getPredictedContextMemories(
 						 JOIN memories m ON memories_fts.rowid = m.rowid
 						 WHERE memories_fts MATCH ?
 						   AND m.is_deleted = 0
+						   AND m.project = ?
 						   ${scope.sql}
 						 ORDER BY bm25(memories_fts)
 						 LIMIT ?`,
 					)
-					.all(ftsQuery, ...scope.args, limit * 2) as Array<{
+					.all(ftsQuery, project, ...scope.args, limit * 2) as Array<{
 					id: string;
 					content: string;
 					type: string;
@@ -950,6 +1144,7 @@ function getDefaultConfig(): HooksConfig {
 			includeIdentity: true,
 			includeRecentContext: true,
 			recencyBias: 0.7,
+			maxInjectTokens: DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
 		},
 		userPromptSubmit: {
 			enabled: true,
@@ -994,7 +1189,25 @@ function isAgentConfig(value: unknown): value is AgentConfig {
 // Identity Loading
 // ============================================================================
 
-function loadIdentity(): { name: string; description?: string } {
+function parseIdentityMarkdown(content: string): { name: string; description?: string } {
+	const nameMatch = content.match(/name:\s*(.+)/i);
+	const youAreMatch = content.match(/(?:^|\n)\s*(?:#+\s*)?you are\s+([^\n.]+)\.?/i);
+	const descMatch = content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
+
+	return {
+		name: (nameMatch?.[1] ?? youAreMatch?.[1] ?? "Agent").trim(),
+		description: descMatch?.[1]?.trim(),
+	};
+}
+
+function loadIdentity(identityFiles?: IdentityFileMap): { name: string; description?: string } {
+	const identityMd = identityFiles?.["IDENTITY.md"];
+	if (identityMd && existsSync(identityMd)) {
+		try {
+			return parseIdentityMarkdown(readFileSync(identityMd, "utf-8"));
+		} catch {}
+	}
+
 	const agentYaml = join(getAgentsDir(), "agent.yaml");
 	if (existsSync(agentYaml)) {
 		try {
@@ -1010,16 +1223,10 @@ function loadIdentity(): { name: string; description?: string } {
 		} catch {}
 	}
 
-	const identityMd = join(getAgentsDir(), "IDENTITY.md");
-	if (existsSync(identityMd)) {
+	const rootIdentityMd = join(getAgentsDir(), "IDENTITY.md");
+	if (existsSync(rootIdentityMd)) {
 		try {
-			const content = readFileSync(identityMd, "utf-8");
-			const nameMatch = content.match(/name:\s*(.+)/i);
-			const descMatch = content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
-			return {
-				name: nameMatch?.[1]?.trim() || "Agent",
-				description: descMatch?.[1]?.trim(),
-			};
+			return parseIdentityMarkdown(readFileSync(rootIdentityMd, "utf-8"));
 		} catch {}
 	}
 
@@ -1171,13 +1378,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
 
-	const identity = includeIdentity ? loadIdentity() : { name: "Agent" };
+	const identityFiles = resolveIdentityFiles(resolveAgentId(req));
+	const identity = includeIdentity ? loadIdentity(identityFiles) : { name: "Agent" };
 
 	// Read AGENTS.md first so harness instructions precede synthesized memory
-	const agentsMdContent = includeIdentity ? readAgentsMd(12000) : undefined;
+	const agentsMdContent = includeIdentity ? readAgentsMd(12000, identityFiles) : undefined;
 
 	// Read MEMORY.md with 10k char budget
-	const memoryMdContent = readMemoryMd(10000);
+	const memoryMdContent = readMemoryMd(10000, identityFiles);
 
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
@@ -1421,7 +1629,23 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	const memories = selectWithBudget(sortedCandidates, 2000);
+	if (config.maxInjectChars !== undefined && config.maxInjectTokens === undefined) {
+		logger.warn(
+			"hooks",
+			"hooks.sessionStart.maxInjectChars is deprecated — migrating to maxInjectTokens automatically. Rename it in agent.yaml to silence this warning.",
+			{ maxInjectChars: config.maxInjectChars, derivedTokens: Math.round(config.maxInjectChars / 4) },
+		);
+	}
+	const rawTokenBudget =
+		config.maxInjectTokens ??
+		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : DEFAULT_SESSION_START_MAX_INJECT_TOKENS);
+	if (rawTokenBudget <= 0) {
+		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
+			configured: rawTokenBudget,
+		});
+	}
+	const tokenBudget = Math.max(1, rawTokenBudget);
+	const memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -1549,6 +1773,10 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	let recoverySection = "";
 
 	injectParts.push(buildSignetSystemPrompt());
+	const systemPluginContext = buildPluginPromptContributionSection("system", logger);
+	if (systemPluginContext) {
+		injectParts.push(systemPluginContext);
+	}
 	injectParts.push("[memory active | /remember | /recall]");
 	if (predictorStatusLine) {
 		injectParts.push(predictorStatusLine);
@@ -1605,9 +1833,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	// Inject additional identity files
-	const soulContent = includeIdentity ? readIdentityFile("SOUL.md", 4000) : undefined;
-	const identityContent = includeIdentity ? readIdentityFile("IDENTITY.md", 2000) : undefined;
-	const userContent = includeIdentity ? readIdentityFile("USER.md", 6000) : undefined;
+	const soulContent = includeIdentity ? readIdentityFile("SOUL.md", 4000, identityFiles) : undefined;
+	const identityContent = includeIdentity ? readIdentityFile("IDENTITY.md", 2000, identityFiles) : undefined;
+	const userContent = includeIdentity ? readIdentityFile("USER.md", 6000, identityFiles) : undefined;
 
 	if (soulContent) {
 		injectParts.push("\n## Soul\n");
@@ -1684,6 +1912,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		injectParts.push(updateStatus);
 	}
 
+	const sessionPluginContext = buildPluginPromptContributionSection("session-start", logger);
+	if (sessionPluginContext) {
+		injectParts.push(sessionPluginContext);
+	}
+
 	// Surface available secrets so agents know what's available
 	try {
 		const secretNames = listSecrets();
@@ -1699,14 +1932,18 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const duration = Date.now() - start;
-	const maxInject = config.maxInjectChars ?? 24000;
+	const maxTokens = config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
 	// Pre-reserve space for constraints + recovery so they are never truncated
-	const reservedChars = recoverySection.length + constraintsSection.length;
-	const mainBudget = Math.max(0, maxInject - reservedChars);
+	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection);
+	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
-	if (inject.length > mainBudget) {
-		inject = `${inject.slice(0, mainBudget)}\n[context truncated]`;
+	if (mainBudget === 0) {
+		logger.warn("hooks", "Session-start reserved sections exhaust token budget — main inject cleared", {
+			maxTokens,
+			reservedTokens,
+		});
 	}
+	inject = applyTokenBudget(inject, mainBudget);
 	if (constraintsSection) {
 		inject += constraintsSection;
 	}
@@ -1723,8 +1960,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalMemories,
 		traversalConstraints,
 		traversalTimedOut,
+		injectTokens: countTokens(inject),
 		injectChars: inject.length,
-		inject,
 		durationMs: duration,
 	});
 
@@ -2043,6 +2280,96 @@ function extractSubstantiveWords(text: string): string[] {
 	return result;
 }
 
+function countPromptTermOverlap(text: string, promptTerms: ReadonlyArray<string>): number {
+	if (promptTerms.length === 0) return 0;
+	const hay = new Set(extractSubstantiveWords(text));
+	let overlap = 0;
+	for (const term of promptTerms) {
+		if (hay.has(term)) overlap++;
+	}
+	return overlap;
+}
+
+function chooseCompactPromptSentence(content: string, promptTerms: ReadonlyArray<string>): string {
+	const normalized = content
+		.replace(/\s+/g, " ")
+		.replace(/\s*\[truncated\]\s*$/i, "")
+		.trim();
+	if (!normalized) return "";
+	const sentences = normalized
+		.split(/(?<=[.!?])\s+/)
+		.map((part) => part.trim())
+		.filter(Boolean) || [normalized];
+	const ranked = [...sentences].sort((a, b) => {
+		const overlapDelta = countPromptTermOverlap(b, promptTerms) - countPromptTermOverlap(a, promptTerms);
+		if (overlapDelta !== 0) return overlapDelta;
+		return a.length - b.length;
+	});
+	return ranked[0] ?? normalized;
+}
+
+function compactPromptMemoryLine(
+	content: string,
+	createdAt: string,
+	promptTerms: ReadonlyArray<string>,
+	maxChars = 160,
+): string {
+	const sentence = chooseCompactPromptSentence(content, promptTerms);
+	const compact = sentence.length > maxChars ? `${sentence.slice(0, maxChars - 1).trimEnd()}…` : sentence;
+	return `- [memory] ${compact} (${formatMemoryDate(createdAt)})`;
+}
+
+type PromptInjectCandidate = {
+	readonly id: string;
+	readonly content: string;
+	readonly score?: number;
+	readonly overlap: number;
+	readonly index: number;
+};
+
+function buildPromptInjectCandidates(
+	rows: ReadonlyArray<{
+		readonly id: string;
+		readonly content: string;
+		readonly created_at: string;
+		readonly score?: number;
+	}>,
+	promptTerms: ReadonlyArray<string>,
+): PromptInjectCandidate[] {
+	return rows.map((row, index) => {
+		const content = compactPromptMemoryLine(row.content, row.created_at, promptTerms);
+		return {
+			id: row.id,
+			content,
+			score: row.score,
+			overlap: countPromptTermOverlap(row.content, promptTerms),
+			index,
+		};
+	});
+}
+
+function shouldRescuePromptInjectSelection(
+	selected: ReadonlyArray<PromptInjectCandidate>,
+	all: ReadonlyArray<PromptInjectCandidate>,
+): boolean {
+	if (selected.length === 0) return true;
+	const selectedBest = Math.max(...selected.map((row) => row.overlap), 0);
+	if (selectedBest > 0) return false;
+	return all.some((row) => row.overlap > selectedBest);
+}
+
+function rerankPromptInjectCandidates(rows: ReadonlyArray<PromptInjectCandidate>): PromptInjectCandidate[] {
+	return [...rows].sort((a, b) => {
+		const overlapDelta = b.overlap - a.overlap;
+		if (overlapDelta !== 0) return overlapDelta;
+		const aScore = typeof a.score === "number" ? a.score : Number.NEGATIVE_INFINITY;
+		const bScore = typeof b.score === "number" ? b.score : Number.NEGATIVE_INFINITY;
+		if (aScore !== bScore) return bScore - aScore;
+		if (a.content.length !== b.content.length) return a.content.length - b.content.length;
+		return a.index - b.index;
+	});
+}
+
 export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
 	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
 	if (anchors.length === 0) return false;
@@ -2229,26 +2556,48 @@ export async function handleUserPromptSubmit(
 	}
 
 	if (req.sessionKey) {
+		let rawTranscript = "";
 		let transcript = "";
 		if (req.transcriptPath && existsSync(req.transcriptPath)) {
 			try {
-				const raw = readFileSync(req.transcriptPath, "utf-8");
-				transcript = normalizeSessionTranscript(req.harness, raw);
+				rawTranscript = readFileSync(req.transcriptPath, "utf-8");
+				transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 			} catch {
 				deps.logger.warn("hooks", "Could not read prompt transcript", {
 					path: req.transcriptPath,
 				});
 			}
 		} else if (req.transcript) {
-			transcript = normalizeSessionTranscript(req.harness, req.transcript);
+			rawTranscript = req.transcript;
+			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 		}
 
 		if (transcript) {
 			try {
-				deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+				if (!prev || transcript.length >= prev.length) {
+					deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				}
 			} catch (error) {
 				deps.logger.warn("hooks", "Prompt transcript write failed", {
 					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		if (rawTranscript) {
+			try {
+				writeTranscriptAudit({
+					basePath: getAgentsDir(),
+					agentId,
+					sessionId: req.sessionKey,
+					sessionKey: req.sessionKey,
+					rawTranscript,
+				});
+			} catch (error) {
+				deps.logger.warn("hooks", "Prompt transcript audit write failed", {
+					error: error instanceof Error ? error.message : String(error),
+					sessionKey: req.sessionKey,
 				});
 			}
 		}
@@ -2264,6 +2613,7 @@ export async function handleUserPromptSubmit(
 	const metadataHeader = `# Current Date & Time\n${now} (${tz})\n`;
 	const expiryWarning = req.sessionKey ? deps.getExpiryWarning(req.sessionKey) : null;
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
+	const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
 
 	if (submitCfg.enabled === false) {
 		return finalizeUserPromptSubmitSuccess(
@@ -2271,7 +2621,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: metadataHeader,
+				inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 				memoryCount: 0,
 				warnings,
 			},
@@ -2286,7 +2636,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: metadataHeader,
+				inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 				memoryCount: 0,
 				warnings,
 			},
@@ -2295,9 +2645,13 @@ export async function handleUserPromptSubmit(
 		);
 	}
 
+	// `metadataHeader` is deliberately built before this try/catch so even
+	// recall failures can return the per-turn Memory Check guidance.
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const recallLimit = submitCfg.recallLimit ?? 10;
+		// userPromptSubmit.maxInjectChars already reads from config — no hardcoded fallback here.
+		// Falls back to pipelineV2.guardrails.contextBudgetChars when not set in agent.yaml.
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
 		const minScore = resolveUserPromptMinScore(submitCfg.minScore);
 		const queryTerms = vectorQuery.slice(0, 80);
@@ -2335,7 +2689,14 @@ export async function handleUserPromptSubmit(
 					req,
 					userMessage,
 					start,
-					buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings),
+					buildTemporalFallbackResponse(
+						metadataHeader,
+						queryTerms,
+						injectBudget,
+						temporalHits,
+						warnings,
+						pluginContext,
+					),
 					deps.logger,
 				);
 			}
@@ -2345,13 +2706,21 @@ export async function handleUserPromptSubmit(
 				sessionKey: req.sessionKey,
 				project: req.project,
 				limit: 3,
+				allowScanFallback: false,
 			});
 			if (transcriptHits.length > 0) {
 				return finalizeUserPromptSubmitSuccess(
 					req,
 					userMessage,
 					start,
-					buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings),
+					buildTranscriptFallbackResponse(
+						metadataHeader,
+						queryTerms,
+						injectBudget,
+						transcriptHits,
+						warnings,
+						pluginContext,
+					),
 					deps.logger,
 				);
 			}
@@ -2361,7 +2730,7 @@ export async function handleUserPromptSubmit(
 					userMessage,
 					start,
 					{
-						inject: metadataHeader,
+						inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 						memoryCount: 0,
 						warnings,
 					},
@@ -2376,7 +2745,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
-					inject: metadataHeader,
+					inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 					memoryCount: 0,
 					warnings,
 				},
@@ -2389,11 +2758,21 @@ export async function handleUserPromptSubmit(
 			...result,
 			pinned: result.pinned ? 1 : 0,
 		}));
-		const budgetFiltered = selectWithBudget(mapped, injectBudget);
+		const promptTerms = extractSubstantiveWords(userMessage);
+		const candidates = buildPromptInjectCandidates(mapped, promptTerms);
+		let budgetFiltered = selectWithBudgetSkippingOversized(candidates, injectBudget);
+		if (shouldRescuePromptInjectSelection(budgetFiltered, candidates)) {
+			const reranked = rerankPromptInjectCandidates(candidates);
+			const overlapFirst = reranked.filter((row) => row.overlap > 0);
+			budgetFiltered = selectWithBudgetSkippingOversized(
+				overlapFirst.length > 0 ? overlapFirst : reranked,
+				injectBudget,
+			);
+		}
 		const budgetSelected = budgetFiltered.slice(0, 5);
 		// omitted reflects only budget truncation, not the 5-item display cap,
 		// so the hint correctly directs users to raise contextBudgetChars.
-		const omitted = recall.results.length - budgetFiltered.length;
+		const omitted = Math.max(0, recall.results.length - budgetFiltered.length);
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
@@ -2418,7 +2797,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
-					inject: metadataHeader,
+					inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 					memoryCount: 0,
 					warnings,
 				},
@@ -2427,19 +2806,23 @@ export async function handleUserPromptSubmit(
 			);
 		}
 
-		const lines = selected.map((s) => {
-			const dateStr = formatMemoryDate(s.created_at);
-			return `- ${s.content} (${dateStr})`;
-		});
+		const lines = selected.map((s) => s.content);
 		if (omitted > 0) {
-			lines.push(`(+${omitted} more not shown — raise memory.guardrails.contextBudgetChars to include)`);
+			lines.push(
+				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight (raise memory.guardrails.contextBudgetChars to include more).`,
+			);
 		}
-		let inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+		let inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
 		if (feedbackEnabled && selectedIds.length > 0) {
-			inject += `\n<memory-feedback>\nRate injected memories using the mcp__signet__memory_feedback tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
+			const isPiHarness = req.harness === "pi";
+			const toolName = isPiHarness ? "signet_memory_feedback" : "mcp__signet__memory_feedback";
+			const instruction = isPiHarness
+				? `Rate injected memories using the ${toolName} tool. Pass a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`
+				: `Rate injected memories using the ${toolName} tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`;
+			inject += `\n<memory-feedback>\n${instruction}\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
 		}
 
 		// Record injected IDs into sliding window for dedup
@@ -2470,7 +2853,7 @@ export async function handleUserPromptSubmit(
 		);
 	} catch (e) {
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
-		return { inject: "", memoryCount: 0, warnings };
+		return { inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext), memoryCount: 0, warnings };
 	}
 }
 
@@ -2478,10 +2861,45 @@ export async function handleUserPromptSubmit(
 // Session End
 // ============================================================================
 
+// Session keys can be shared across distinct harness runs (for example
+// recurring heartbeat sessions), so artifact lineage needs a more specific
+// fallback identifier when the harness does not supply sessionId.
+export function deriveSessionEndFallbackId(
+	sessionKey: string | undefined,
+	transcriptPath: string | undefined,
+	transcript: string,
+): string {
+	const scopedKey = sessionKey?.trim() || "anonymous";
+	const path = transcriptPath?.trim();
+	const body = transcript.trim();
+	if (path) {
+		// Include a content digest so rotating log files that reuse the same
+		// path across distinct sessions produce different IDs.
+		// Note: sessions with identical path AND identical content will
+		// intentionally deduplicate — writeImmutableArtifact returns the
+		// existing artifact path when the content hash matches, so this is
+		// a graceful no-op rather than an error.
+		if (body.length > 0) {
+			const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+			return `session-end:path:${path}:${digest}`;
+		}
+		// Intentionally non-idempotent: without transcript content there is no
+		// stable material to hash, so each call produces a unique ID.  This
+		// prevents two empty-body session-end calls from colliding but means
+		// retries will create distinct artifacts rather than deduplicating.
+		return `session-end:path:${path}:${randomUUID()}`;
+	}
+	if (body.length > 0) {
+		const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+		return `session-end:${scopedKey}:${digest}`;
+	}
+	// See comment above: non-idempotent for the same reason.
+	return `session-end:${scopedKey}:${randomUUID()}`;
+}
+
 export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
-	const sessionId = req.sessionId ?? sessionKey ?? `session-end:${new Date().toISOString()}`;
 	const endedAt = new Date().toISOString();
 
 	// Clear hook dedup state for this session
@@ -2548,10 +2966,11 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	}
 
 	// Read transcript: prefer file path, fall back to inline body
+	let rawTranscript = "";
 	let transcript = "";
 	if (req.transcriptPath && existsSync(req.transcriptPath)) {
 		try {
-			const rawTranscript = readFileSync(req.transcriptPath, "utf-8");
+			rawTranscript = readFileSync(req.transcriptPath, "utf-8");
 			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 		} catch {
 			logger.warn("hooks", "Could not read transcript", {
@@ -2559,8 +2978,57 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 			});
 		}
 	} else if (req.transcript) {
-		transcript = normalizeSessionTranscript(req.harness, req.transcript);
+		rawTranscript = req.transcript;
+		transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 	}
+
+	let storedTranscript = "";
+	if (sessionKey) {
+		try {
+			storedTranscript = getSessionTranscriptContent(sessionKey, agentId) ?? "";
+		} catch (error) {
+			logger.warn("hooks", "Failed to read stored transcript for fallback", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+		}
+	}
+	if (storedTranscript.length > 0 && (transcript.length === 0 || storedTranscript.length > transcript.length)) {
+		logger.info("hooks", "Session end using stored transcript snapshot", {
+			sessionKey,
+			liveChars: storedTranscript.length,
+			finalChars: transcript.length,
+		});
+		transcript = storedTranscript;
+	}
+
+	if (rawTranscript) {
+		try {
+			writeTranscriptAudit({
+				basePath: getAgentsDir(),
+				agentId,
+				sessionId: req.sessionId?.trim() || sessionKey || "",
+				sessionKey: sessionKey ?? null,
+				rawTranscript,
+				capturedAt: endedAt,
+			});
+		} catch (error) {
+			logger.warn("hooks", "Session end transcript audit write failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+		}
+	}
+	// Derive a stable session identity for artifact paths.  When the
+	// transcript is empty and no explicit sessionId was provided,
+	// deriveSessionEndFallbackId returns a random UUID — making this call
+	// non-idempotent.  This is acceptable because: (a) empty-transcript
+	// sessions skip the transcript artifact write (guard below) and the
+	// summary job (< 500 char guard), so no ghost artifacts accumulate;
+	// (b) very short (1–499 char) transcripts do write a transcript
+	// artifact with a non-deterministic path, but the summary job is
+	// still skipped, limiting blast radius.
+	const sessionId = req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript);
 
 	// Lossless retention: write transcript immediately regardless of length
 	// or whether the summary worker succeeds later.
@@ -2576,17 +3044,26 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 
 	if (transcript.trim().length > 0) {
 		try {
-			writeTranscriptArtifact({
-				agentId,
-				sessionId,
-				sessionKey: sessionKey ?? null,
-				project: req.cwd ?? null,
-				harness: req.harness,
-				capturedAt: endedAt,
-				startedAt: null,
-				endedAt,
-				transcript,
-			});
+			if (
+				!isNoiseSession({
+					project: req.cwd ?? null,
+					sessionKey: sessionKey ?? null,
+					sessionId,
+					harness: req.harness,
+				})
+			) {
+				writeTranscriptArtifact({
+					agentId,
+					sessionId,
+					sessionKey: sessionKey ?? null,
+					project: req.cwd ?? null,
+					harness: req.harness,
+					capturedAt: endedAt,
+					startedAt: null,
+					endedAt,
+					transcript,
+				});
+			}
 		} catch (e) {
 			logger.warn("hooks", "Transcript artifact write failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
@@ -2657,6 +3134,23 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	// Queue for async processing by the summary worker instead of
 	// blocking on LLM inference. The worker produces both a dated
 	// markdown summary and atomic fact rows.
+	if (
+		isNoiseSession({
+			project: req.cwd ?? null,
+			sessionKey: sessionKey ?? null,
+			sessionId,
+			harness: req.harness,
+		})
+	) {
+		logger.debug("hooks", "Session end summary skipped for noise session", {
+			harness: req.harness,
+			project: req.cwd,
+			sessionKey,
+			sessionId,
+		});
+		return { memoriesSaved: 0, queued: false };
+	}
+
 	const jobId = enqueueSummaryJob(getDbAccessor(), {
 		harness: req.harness,
 		transcript,
@@ -2887,6 +3381,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		harness: req.harness,
 		transcript: capped,
 		sessionKey: req.sessionKey,
+		// Intentionally sessionKey: checkpoint extracts reuse the same
+		// session identity so all checkpoint artifacts share a single
+		// canonical manifest.  findExistingManifest looks up by session_id,
+		// which matches because session_id is persisted as sessionKey.
 		sessionId: req.sessionKey,
 		project: req.project,
 		agentId,
@@ -3186,97 +3684,6 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 }
 
 // ============================================================================
-// Recall
-// ============================================================================
-
-export function handleRecall(req: RecallRequest): RecallResponse {
-	const limit = req.limit || 10;
-
-	if (!existsSync(getMemoryDbPath())) {
-		return { results: [], count: 0 };
-	}
-
-	type RecallRow = {
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		tags: string | null;
-		created_at: string;
-	};
-
-	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			let found: RecallRow[] = [];
-
-			// Try FTS search first
-			try {
-				const words = req.query
-					.toLowerCase()
-					.split(/\W+/)
-					.filter((w) => w.length >= 3)
-					.slice(0, 10);
-
-				if (words.length > 0) {
-					const ftsQuery = words.join(" OR ");
-					const baseQuery = req.project
-						? `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-						   FROM memories m
-						   JOIN memories_fts f ON m.rowid = f.rowid
-						   WHERE memories_fts MATCH ?
-						   AND m.is_deleted = 0
-						   AND m.project = ?
-						   LIMIT ?`
-						: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-						   FROM memories m
-						   JOIN memories_fts f ON m.rowid = f.rowid
-						   WHERE memories_fts MATCH ?
-						   AND m.is_deleted = 0
-						   LIMIT ?`;
-
-					found = req.project
-						? (db.prepare(baseQuery).all(ftsQuery, req.project, limit) as RecallRow[])
-						: (db.prepare(baseQuery).all(ftsQuery, limit) as RecallRow[]);
-				}
-			} catch {
-				// FTS not available, fall through to LIKE
-			}
-
-			// Fallback to LIKE search
-			if (found.length === 0) {
-				const likePattern = `%${req.query}%`;
-				const baseQuery = req.project
-					? `SELECT id, content, type, importance, tags, created_at
-					   FROM memories
-					   WHERE content LIKE ? AND is_deleted = 0 AND project = ?
-					   ORDER BY importance DESC
-					   LIMIT ?`
-					: `SELECT id, content, type, importance, tags, created_at
-					   FROM memories
-					   WHERE content LIKE ? AND is_deleted = 0
-					   ORDER BY importance DESC
-					   LIMIT ?`;
-
-				found = req.project
-					? (db.prepare(baseQuery).all(likePattern, req.project, limit) as RecallRow[])
-					: (db.prepare(baseQuery).all(likePattern, limit) as RecallRow[]);
-			}
-
-			return found;
-		});
-
-		// Update access tracking
-		const ids = rows.map((r) => r.id);
-		updateAccessTracking(ids);
-
-		return { results: rows, count: rows.length };
-	} catch (e) {
-		logger.error("hooks", "Recall failed", e as Error);
-		return { results: [], count: 0 };
-	}
-}
-
-// ============================================================================
 // Memory Synthesis
 // ============================================================================
 
@@ -3300,10 +3707,10 @@ export function writeMemoryMd(
 	return { ok: false, error: result.error, ...(result.code ? { code: result.code } : {}) };
 }
 
-export function handleSynthesisRequest(
+export async function handleSynthesisRequest(
 	req: SynthesisRequest,
-	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string },
-): SynthesisResponse {
+	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string; writeToDisk?: boolean },
+): Promise<SynthesisResponse> {
 	logger.info("hooks", "Synthesis request", { trigger: req.trigger });
 
 	const _sinceTimestamp = opts?.sinceTimestamp ?? 0;
@@ -3311,12 +3718,112 @@ export function handleSynthesisRequest(
 	void _sinceTimestamp;
 	void _maxTokens;
 
-	const rendered = renderMemoryProjection(opts?.agentId ?? "default");
-	return {
-		harness: "daemon",
-		model: "projection",
-		prompt: rendered.content,
-		fileCount: rendered.fileCount,
-		indexBlock: rendered.indexBlock,
-	};
+	const agentId = opts?.agentId ?? "default";
+	if (hasDbAccessor()) {
+		purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
+	}
+
+	const worker = getSynthesisWorker();
+	if (worker === null) {
+		logger.warn("hooks", "Synthesis render worker not available, falling back to synchronous render");
+		const rendered = renderMemoryProjection(agentId);
+		if (opts?.writeToDisk === true) {
+			writeMemoryMd(rendered.content, { agentId });
+		}
+		return {
+			harness: "daemon",
+			model: "projection",
+			prompt: rendered.content,
+			fileCount: rendered.fileCount,
+			indexBlock: rendered.indexBlock,
+		};
+	}
+
+	const requestId = randomUUID();
+	const w: Worker = worker;
+	return new Promise<SynthesisResponse>((resolve, reject) => {
+		let settled = false;
+
+		function cleanup(): void {
+			clearTimeout(timer);
+			w.off("message", handler);
+			w.off("error", onError);
+			w.off("exit", onExit);
+		}
+
+		function fallbackToSync(message: string, error?: Error): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			setSynthesisWorker(null);
+			w.terminate().catch((err) => {
+				logger.debug("hooks", "Synthesis render worker terminate failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
+			try {
+				const rendered = renderMemoryProjection(agentId);
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(rendered.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: rendered.content,
+					fileCount: rendered.fileCount,
+					indexBlock: rendered.indexBlock,
+				});
+			} catch (err) {
+				reject(err instanceof Error ? err : new Error(String(err)));
+			}
+		}
+
+		function onError(err: Error): void {
+			logger.error("hooks", "Synthesis render worker failed", err);
+			fallbackToSync("Synthesis render worker failed", err);
+		}
+
+		function onExit(code: number): void {
+			if (settled) return;
+			const err = new Error(`Synthesis render worker exited before responding (code=${code})`);
+			logger.error("hooks", err.message, err);
+			fallbackToSync(err.message, err);
+		}
+
+		const timer = setTimeout(() => {
+			const err = new Error("Synthesis render worker timed out");
+			logger.warn("hooks", err.message);
+			fallbackToSync(err.message, err);
+		}, 30_000);
+
+		function handler(msg: unknown): void {
+			if (!isObject(msg)) return;
+			if (msg.requestId !== requestId) return;
+			if (settled) return;
+			if (isRenderResult(msg)) {
+				settled = true;
+				cleanup();
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(msg.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: msg.content,
+					fileCount: msg.fileCount,
+					indexBlock: msg.indexBlock,
+				});
+			} else if (isRenderError(msg)) {
+				const err = new Error(`Synthesis render worker error: ${msg.error}`);
+				logger.error("hooks", err.message, err);
+				fallbackToSync(err.message, err);
+			}
+		}
+
+		w.on("message", handler);
+		w.once("error", onError);
+		w.once("exit", onExit);
+		w.postMessage({ type: "render", agentId, requestId });
+	});
 }

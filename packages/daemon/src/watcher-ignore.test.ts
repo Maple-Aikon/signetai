@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 
 const tmpDirs: string[] = [];
@@ -70,5 +71,68 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		);
 		expect(shouldIgnore(join(agentsDir, "agents-backup", "claude-code", "workspace", "AGENTS.md"))).toBe(false);
 		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "SOUL.md"))).toBe(false);
+	});
+
+	it("ignores the managed Signet source checkout and everything under it", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+		const repoRoot = resolveWorkspaceSourceRepoPath(agentsDir);
+
+		expect(shouldIgnore(repoRoot)).toBe(true);
+		expect(shouldIgnore(join(repoRoot, "packages", "core", "src", "index.ts"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "signetai-notes.md"))).toBe(false);
+	});
+
+	it("ignores canonical artifact files inside memory/ directory", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"),
+			),
+		).toBe(true);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"),
+			),
+		).toBe(true);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--manifest.md"),
+			),
+		).toBe(true);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--compaction.md"),
+			),
+		).toBe(true);
+	});
+
+	it("does NOT ignore MEMORY.md inside memory/ directory", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "memory", "MEMORY.md"))).toBe(false);
+	});
+
+	it("ignores backup files inside memory/ directory", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "memory", "MEMORY.backup-2026-04-10.md"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "memory", "MEMORY.bak-2026-04-10T12-00-00.md"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "memory", "MEMORY.pre-v1.2.3.md"))).toBe(true);
+	});
+
+	it("does NOT ignore artifact-like filenames outside memory/ directory", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"))).toBe(false);
+		expect(
+			shouldIgnore(join(agentsDir, "archive", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md")),
+		).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "MEMORY.backup-2026-04-10.md"))).toBe(false);
 	});
 });

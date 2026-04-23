@@ -7,6 +7,8 @@ import { startSynthesisWorker } from "./synthesis-worker";
 let agentsDir = "";
 let previousSignetPath: string | undefined;
 
+type WriteResult = { ok: true } | { ok: false; error: string; code?: "busy" | "invalid" };
+
 const mockHandleSynthesisRequest = mock(
 	(_req?: { readonly trigger?: string }, opts?: { readonly agentId?: string }) => ({
 		harness: "daemon",
@@ -16,7 +18,9 @@ const mockHandleSynthesisRequest = mock(
 		indexBlock: "",
 	}),
 );
-const mockWriteMemoryMd = mock((_content: string, _opts?: { owner?: string }) => ({ ok: true as const }));
+const mockWriteMemoryMd = mock((_content: string, _opts?: { agentId?: string; owner?: string }): WriteResult => ({
+	ok: true as const,
+}));
 const mockActiveSessionCount = mock(() => 0);
 const baseCfg = {
 	enabled: true,
@@ -26,6 +30,8 @@ const baseCfg = {
 	maxTokens: 8000,
 	idleGapMinutes: 15,
 };
+
+type SynthesisDeps = Parameters<typeof startSynthesisWorker>[1];
 
 function makeDeps() {
 	return {
@@ -46,7 +52,7 @@ function makeDeps() {
 					}),
 				}),
 		}),
-	};
+	} as unknown as SynthesisDeps;
 }
 
 function createWorker() {
@@ -119,9 +125,13 @@ describe("synthesis-worker", () => {
 				reason: undefined,
 			});
 			expect(worker.isSynthesizing).toBe(false);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# MEMORY\n\nprojection for default", {
-				owner: "synthesis-worker",
-			});
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
+				"# MEMORY\n\nprojection for default",
+				expect.objectContaining({
+					agentId: "default",
+					owner: "synthesis-worker",
+				}),
+			);
 		} finally {
 			worker.stop();
 			await worker.drain();
@@ -202,9 +212,13 @@ describe("synthesis-worker", () => {
 				reason: undefined,
 			});
 			expect(mockHandleSynthesisRequest).toHaveBeenCalledTimes(1);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# MEMORY\n\nprojection for default", {
-				owner: "synthesis-worker",
-			});
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
+				"# MEMORY\n\nprojection for default",
+				expect.objectContaining({
+					agentId: "default",
+					owner: "synthesis-worker",
+				}),
+			);
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
@@ -226,6 +240,13 @@ describe("synthesis-worker", () => {
 				}),
 				expect.objectContaining({
 					agentId: "agent-a",
+				}),
+			);
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
+				"# MEMORY\n\nprojection for agent-a",
+				expect.objectContaining({
+					agentId: "agent-a",
+					owner: "synthesis-worker",
 				}),
 			);
 		} finally {

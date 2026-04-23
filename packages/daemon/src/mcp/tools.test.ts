@@ -5,9 +5,21 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
+	SIGNET_PLUGIN_REGISTRY_DIR,
+	SIGNET_PLUGIN_REGISTRY_FILE,
+	SIGNET_PLUGIN_REGISTRY_VERSION,
+	SIGNET_SECRETS_PLUGIN_ID,
+	updateGraphiqActiveProject,
+} from "@signet/core";
+import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 // ---------------------------------------------------------------------------
@@ -16,7 +28,68 @@ import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 interface RegisteredTool {
 	handler: (args: Record<string, unknown>) => Promise<unknown>;
+	inputSchema: {
+		shape?: Record<
+			string,
+			{
+				def?: {
+					innerType?: { minValue?: number; maxValue?: number };
+				};
+			}
+		>;
+	};
 	enabled: boolean;
+}
+
+const GRAPHIQ_TOOL_NAMES = [
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
+] as const;
+
+function graphiqPolicyHost(
+	state: "active" | "degraded" | "blocked" | "disabled" = "active",
+	toolNames: readonly string[] = GRAPHIQ_TOOL_NAMES,
+): {
+	get: (id: string) =>
+		| {
+				state: string;
+				surfaces: { mcpTools: Array<{ name: string }> };
+		  }
+		| undefined;
+} {
+	return {
+		get: (id: string) =>
+			id === SIGNET_GRAPHIQ_PLUGIN_ID
+				? {
+						state,
+						surfaces: { mcpTools: toolNames.map((name) => ({ name })) },
+					}
+				: undefined,
+	};
+}
+
+function enableGraphiqPluginInRegistry(basePath: string): void {
+	const registryDir = join(basePath, SIGNET_PLUGIN_REGISTRY_DIR);
+	mkdirSync(registryDir, { recursive: true });
+	writeFileSync(
+		join(registryDir, SIGNET_PLUGIN_REGISTRY_FILE),
+		`${JSON.stringify(
+			{
+				version: SIGNET_PLUGIN_REGISTRY_VERSION,
+				plugins: {
+					[SIGNET_SECRETS_PLUGIN_ID]: { enabled: true },
+					[SIGNET_GRAPHIQ_PLUGIN_ID]: { enabled: true },
+				},
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	resetDefaultPluginHostForTests();
 }
 
 function getRegisteredTools(server: McpServer): Record<string, RegisteredTool> {
@@ -48,6 +121,18 @@ function getToolNames(server: McpServer): string[] {
 	return Object.keys(getRegisteredTools(server));
 }
 
+function getToolPropertySchema(
+	server: McpServer,
+	toolName: string,
+	propertyName: string,
+): { minValue?: number; maxValue?: number } {
+	const schema = getRegisteredTools(server)[toolName]?.inputSchema.shape?.[propertyName]?.def?.innerType;
+	if (!schema) {
+		throw new Error(`Schema property ${toolName}.${propertyName} not found`);
+	}
+	return schema;
+}
+
 function mockFetch(status: number, body: unknown, capture?: { url?: string; method?: string; body?: string }): void {
 	globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 		if (capture) {
@@ -69,8 +154,14 @@ function mockFetch(status: number, body: unknown, capture?: { url?: string; meth
 describe("createMcpServer", () => {
 	let server: McpServer;
 	const originalFetch = globalThis.fetch;
+	const originalSignetPath = process.env.SIGNET_PATH;
+	const originalPath = process.env.PATH;
+	let tempAgentsDir = "";
 
 	beforeEach(async () => {
+		tempAgentsDir = mkdtempSync(join(tmpdir(), "signet-mcp-tools-"));
+		process.env.SIGNET_PATH = tempAgentsDir;
+		resetDefaultPluginHostForTests();
 		server = await createMcpServer({
 			daemonUrl: "http://localhost:3850",
 			version: "0.0.1-test",
@@ -80,6 +171,19 @@ describe("createMcpServer", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		if (originalSignetPath === undefined) {
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
+		} else {
+			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (originalPath === undefined) {
+			Reflect.deleteProperty(process.env, "PATH");
+		} else {
+			process.env.PATH = originalPath;
+		}
+		if (tempAgentsDir) rmSync(tempAgentsDir, { recursive: true, force: true });
+		tempAgentsDir = "";
+		resetDefaultPluginHostForTests();
 	});
 
 	it("creates server with correct info", () => {
@@ -97,6 +201,20 @@ describe("createMcpServer", () => {
 		expect(names).toContain("memory_forget");
 		expect(names).toContain("memory_feedback");
 		expect(names).toContain("knowledge_expand");
+		expect(names).toContain("knowledge_tree");
+		expect(names).toContain("knowledge_list_entities");
+		expect(names).toContain("knowledge_get_entity");
+		expect(names).toContain("knowledge_list_aspects");
+		expect(names).toContain("knowledge_list_groups");
+		expect(names).toContain("knowledge_list_claims");
+		expect(names).toContain("knowledge_list_attributes");
+		expect(names).toContain("knowledge_hygiene_report");
+		expect(names).toContain("entity_list");
+		expect(names).toContain("entity_get");
+		expect(names).toContain("entity_aspects");
+		expect(names).toContain("entity_groups");
+		expect(names).toContain("entity_claims");
+		expect(names).toContain("entity_attributes");
 		expect(names).toContain("knowledge_expand_session");
 		expect(names).toContain("lcm_expand");
 		expect(names).toContain("agent_peers");
@@ -114,24 +232,276 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
-		expect(names.length).toBe(25);
+		for (const name of GRAPHIQ_TOOL_NAMES) {
+			expect(names).toContain(name);
+		}
+		expect(names.length).toBe(45);
+	});
+
+	it("registers generic code tools when GraphIQ has an active project", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+		const names = getToolNames(graphServer);
+		expect(names).toContain("code_search");
+		expect(names).toContain("code_context");
+		expect(names).toContain("code_blast");
+		expect(names).toContain("code_status");
+		expect(names).toContain("code_doctor");
+		expect(names).toContain("code_constants");
+	});
+
+	it("gates GraphIQ code tools when plugin host blocks GraphIQ", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+			pluginHost: graphiqPolicyHost("blocked"),
+		});
+		const names = getToolNames(graphServer);
+		for (const name of GRAPHIQ_TOOL_NAMES) {
+			expect(names).toContain(name);
+		}
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("GraphIQ plugin is blocked");
+	});
+
+	it("uses fresh GraphIQ plugin policy when a project is indexed after server construction", async () => {
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBeUndefined();
+		expect(readFileSync(capturePath, "utf-8")).toContain(`status --db ${dbPath}`);
+	});
+
+	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		expect(getToolPropertySchema(graphServer, "code_search", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+		expect(getToolPropertySchema(graphServer, "code_blast", "depth")).toMatchObject({ minValue: 1, maxValue: 10 });
+		expect(getToolPropertySchema(graphServer, "code_constants", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+
+		await callTool(graphServer, "code_search", { query: "GraphIQ", top: 10_000 });
+		expect(readFileSync(capturePath, "utf-8")).toContain("search GraphIQ --top 100 --db");
+
+		await callTool(graphServer, "code_blast", { symbol: "installGraphiqPlugin", depth: -25 });
+		expect(readFileSync(capturePath, "utf-8")).toContain("blast installGraphiqPlugin --depth 1 --direction both --db");
+	});
+
+	it("rejects GraphIQ positional args that would be parsed as CLI options", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		const search = await callTool(graphServer, "code_search", { query: "--help" });
+		const searchFile = await callTool(graphServer, "code_search", { query: "GraphIQ", file: "--db" });
+		const context = await callTool(graphServer, "code_context", { symbol: "-v" });
+		const blast = await callTool(graphServer, "code_blast", { symbol: "--db", depth: 2 });
+		const constants = await callTool(graphServer, "code_constants", { query: "--debug" });
+
+		expect(search.isError).toBe(true);
+		expect(searchFile.isError).toBe(true);
+		expect(context.isError).toBe(true);
+		expect(blast.isError).toBe(true);
+		expect(constants.isError).toBe(true);
+		expect(existsSync(capturePath)).toBe(false);
+	});
+
+	it("registers intuitive knowledge navigation aliases", async () => {
+		const cap: { url?: string } = {};
+		mockFetch(200, { entity: { name: "Nicholai" }, items: [] }, cap);
+
+		const result = await callTool(server, "knowledge_tree", {
+			entity: "Nicholai",
+			depth: 2,
+			max_aspects: 4,
+			max_groups: 5,
+			max_claims: 6,
+			agent_id: "default",
+		});
+
+		expect(cap.url).toBe(
+			"http://localhost:3850/api/knowledge/navigation/tree?entity=Nicholai&depth=2&max_aspects=4&max_groups=5&max_claims=6&agent_id=default",
+		);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("Nicholai");
+	});
+
+	it("registers a report-only knowledge hygiene tool", async () => {
+		const cap: { url?: string } = {};
+		mockFetch(200, { suspiciousEntities: [{ name: "The" }] }, cap);
+
+		const result = await callTool(server, "knowledge_hygiene_report", {
+			limit: 3,
+			memory_limit: 4,
+			agent_id: "default",
+		});
+
+		expect(cap.url).toBe("http://localhost:3850/api/knowledge/hygiene?limit=3&memory_limit=4&agent_id=default");
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("The");
 	});
 
 	describe("memory_search", () => {
 		it("calls recall endpoint with correct params", async () => {
 			const cap: { url?: string; body?: string } = {};
-			mockFetch(200, { results: [{ id: "1", content: "test", score: 0.9 }] }, cap);
+			mockFetch(
+				200,
+				{
+					method: "hybrid",
+					results: [
+						{
+							id: "1",
+							content: "test",
+							score: 0.9,
+							source: "hybrid",
+							type: "fact",
+							created_at: "2026-04-07T12:00:00.000Z",
+						},
+						{
+							id: "2",
+							content: "supporting rationale",
+							score: 0.3,
+							source: "graph",
+							type: "rationale",
+							created_at: "2026-04-06T12:00:00.000Z",
+							supplementary: true,
+						},
+					],
+					meta: {
+						totalReturned: 2,
+						hasSupplementary: true,
+						noHits: false,
+					},
+				},
+				cap,
+			);
 
 			const result = await callTool(server, "memory_search", {
 				query: "test query",
 				limit: 5,
+				keyword_query: "test OR query",
+				project: "/tmp/proj",
+				type: "fact",
+				tags: "release",
+				who: "claude-code",
+				pinned: true,
+				importance_min: 0.7,
+				since: "2026-01-01",
+				until: "2026-04-01",
+				expand: true,
+				score_min: 0.8,
 			});
 
 			expect(cap.url).toBe("http://localhost:3850/api/memory/recall");
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.query).toBe("test query");
+			expect(body.keywordQuery).toBe("test OR query");
 			expect(body.limit).toBe(5);
+			expect(body.project).toBe("/tmp/proj");
+			expect(body.type).toBe("fact");
+			expect(body.tags).toBe("release");
+			expect(body.who).toBe("claude-code");
+			expect(body.pinned).toBe(true);
+			expect(body.importance_min).toBe(0.7);
+			expect(body.since).toBe("2026-01-01");
+			expect(body.until).toBe("2026-04-01");
+			expect(body.expand).toBe(true);
+			expect(body.min_score).toBeUndefined();
+			expect(body.score_min).toBeUndefined();
 			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("Found 1 memory (hybrid).");
+			expect(result.content[0]?.text).toContain("Primary matches:");
+			expect(result.content[0]?.text).not.toContain("Supporting context:");
+			expect(result.content[0]?.text).not.toContain("supporting rationale");
+			expect(result.content[0]?.text).toContain("id: 1; test (fact, hybrid, 2026-04-07)");
 		});
 
 		it("returns error on fetch failure", async () => {
@@ -143,6 +513,91 @@ describe("createMcpServer", () => {
 
 			expect(result.isError).toBe(true);
 			expect(result.content[0].text).toContain("Search failed");
+		});
+
+		it("returns a clear no-hit message", async () => {
+			mockFetch(200, {
+				method: "hybrid",
+				results: [],
+				meta: {
+					totalReturned: 0,
+					hasSupplementary: false,
+					noHits: true,
+				},
+			});
+
+			const result = await callTool(server, "memory_search", {
+				query: "missing query",
+			});
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toBe("No matching memories found.");
+		});
+
+		it("omits the primary section when only supporting context survives score_min filtering", async () => {
+			mockFetch(200, {
+				method: "hybrid",
+				results: [
+					{
+						id: "1",
+						content: "weak primary",
+						score: 0.2,
+						source: "hybrid",
+						type: "fact",
+						created_at: "2026-04-07T12:00:00.000Z",
+					},
+					{
+						id: "2",
+						content: "strong supporting rationale",
+						score: 0.92,
+						source: "graph",
+						type: "rationale",
+						created_at: "2026-04-06T12:00:00.000Z",
+						supplementary: true,
+					},
+				],
+				meta: {
+					totalReturned: 2,
+					hasSupplementary: true,
+					noHits: false,
+				},
+			});
+
+			const result = await callTool(server, "memory_search", {
+				query: "supporting only",
+				score_min: 0.8,
+			});
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).not.toContain("Primary matches:");
+			expect(result.content[0]?.text).toContain("Supporting context:");
+			expect(result.content[0]?.text).toContain("strong supporting rationale");
+		});
+
+		it("preserves legacy min_score as an importance_min compatibility alias", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(
+				200,
+				{
+					method: "hybrid",
+					results: [],
+					meta: {
+						totalReturned: 0,
+						hasSupplementary: false,
+						noHits: true,
+					},
+				},
+				cap,
+			);
+
+			const result = await callTool(server, "memory_search", {
+				query: "legacy threshold",
+				min_score: 0.6,
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.importance_min).toBe(0.6);
+			expect(result.isError).toBeUndefined();
 		});
 	});
 
@@ -162,7 +617,7 @@ describe("createMcpServer", () => {
 			expect(result.isError).toBeUndefined();
 		});
 
-		it("prepends tags when provided", async () => {
+		it("passes tags as structured request metadata", async () => {
 			const cap: { body?: string } = {};
 			mockFetch(200, { id: "abc-456" }, cap);
 
@@ -172,7 +627,85 @@ describe("createMcpServer", () => {
 			});
 
 			const body = JSON.parse(cap.body ?? "{}");
-			expect(body.content).toBe("[foo,bar]: tagged memory");
+			expect(body.content).toBe("tagged memory");
+			expect(body.tags).toBe("foo,bar");
+		});
+
+		it("passes pinned through to request body", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "pin-1", deduped: false }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "critical constraint",
+				pinned: true,
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.pinned).toBe(true);
+		});
+
+		it("passes hints, transcript, and structured graph payloads through to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "structured-1", hints_written: 2, structured: true }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "Nicholai prefers Signet memory tools.",
+				hints: ["durable memory preference", "which memory tools should be used"],
+				transcript: "user: please use Signet memory tools only",
+				structured: {
+					entities: [
+						{
+							source: "Nicholai",
+							relationship: "prefers",
+							target: "Signet memory tools",
+							confidence: 0.95,
+						},
+					],
+					aspects: [
+						{
+							entityName: "Nicholai",
+							aspect: "memory preference",
+							attributes: [{ content: "prefers Signet memory tools", confidence: 0.95 }],
+						},
+					],
+					hints: ["Nicholai durable facts"],
+				},
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.hints).toEqual(["durable memory preference", "which memory tools should be used"]);
+			expect(body.transcript).toBe("user: please use Signet memory tools only");
+			expect(body.structured.entities[0].target).toBe("Signet memory tools");
+			expect(body.structured.aspects[0].entityName).toBe("Nicholai");
+			expect(body.structured.aspects[0].attributes[0].content).toBe("prefers Signet memory tools");
+		});
+
+		it("normalizes legacy structured aspect tuples before forwarding to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "legacy-structured-1", structured: true }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "Legacy structured tuple.",
+				structured: {
+					aspects: [
+						{
+							entity: "Nicholai",
+							aspect: "memory preference",
+							value: "prefers Signet memory tools",
+							confidence: 0.9,
+						},
+					],
+				},
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.structured.aspects).toEqual([
+				{
+					entityName: "Nicholai",
+					aspect: "memory preference",
+					attributes: [{ content: "prefers Signet memory tools", confidence: 0.9 }],
+				},
+			]);
 		});
 	});
 
@@ -213,6 +746,21 @@ describe("createMcpServer", () => {
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.content).toBe("updated content");
 			expect(body.reason).toBe("fixing typo");
+		});
+
+		it("passes pinned through to PATCH body", async () => {
+			const cap: { method?: string; body?: string } = {};
+			mockFetch(200, { status: "updated" }, cap);
+
+			await callTool(server, "memory_modify", {
+				id: "abc",
+				pinned: true,
+				reason: "promoting to pinned",
+			});
+
+			expect(cap.method).toBe("PATCH");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.pinned).toBe(true);
 		});
 	});
 

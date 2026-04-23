@@ -22,8 +22,11 @@ export interface LlmGenerateResult {
 
 export interface LlmProvider {
 	readonly name: string;
-	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<string>;
-	generateWithUsage?(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<LlmGenerateResult>;
+	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number }): Promise<string>;
+	generateWithUsage?(
+		prompt: string,
+		opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number },
+	): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;
 }
 
@@ -85,7 +88,7 @@ export interface AgentManifest {
 
 	// Embedding configuration
 	embedding?: {
-		provider: "native" | "ollama" | "openai";
+		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
 		model: string;
 		dimensions: number;
 		base_url?: string;
@@ -151,7 +154,7 @@ export interface AgentConfig {
 	dbPath?: string;
 	autoSync?: boolean;
 	embeddings?: {
-		provider: "native" | "openai" | "ollama" | "local";
+		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
 		model?: string;
 		dimensions?: number;
 	};
@@ -190,16 +193,41 @@ export interface PipelineCommandConfig {
 	readonly env?: Readonly<Record<string, string>>;
 }
 
+// Callers may provide a partial rate-limit config; omitted fields fall back to
+// these defaults in the config parser and in withRateLimit().
+export interface ProviderRateLimitConfig {
+	readonly maxCallsPerHour?: number;
+	readonly burstSize?: number;
+	readonly waitTimeoutMs?: number;
+}
+
+export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
+	maxCallsPerHour: 200,
+	burstSize: 20,
+	waitTimeoutMs: 5000,
+};
+
 export interface PipelineExtractionConfig {
-	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
-	readonly fallbackProvider?: "ollama" | "none";
+	readonly provider:
+		| "none"
+		| "llama-cpp"
+		| "ollama"
+		| "claude-code"
+		| "opencode"
+		| "codex"
+		| "anthropic"
+		| "openrouter"
+		| "command";
+	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
+	readonly structuredOutput?: boolean;
 	readonly command?: PipelineCommandConfig;
 	readonly escalation?: PipelineEscalationConfig;
+	readonly rateLimit?: ProviderRateLimitConfig;
 }
 
 export interface PipelineWorkerConfig {
@@ -212,6 +240,7 @@ export interface PipelineWorkerConfig {
 
 export interface PipelineGraphConfig {
 	readonly enabled: boolean;
+	readonly extractionWritesEnabled?: boolean;
 	readonly boostWeight: number;
 	readonly boostTimeoutMs: number;
 }
@@ -269,6 +298,7 @@ export interface PipelineGuardrailsConfig {
 	readonly maxContentChars: number;
 	readonly chunkTargetChars: number;
 	readonly recallTruncateChars: number;
+	readonly contextBudgetChars?: number;
 }
 
 export interface PipelineTelemetryConfig {
@@ -371,12 +401,22 @@ export interface PipelineEmbeddingTrackerConfig {
 
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
-	readonly provider: "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter";
+	readonly provider:
+		| "none"
+		| "llama-cpp"
+		| "ollama"
+		| "claude-code"
+		| "codex"
+		| "opencode"
+		| "anthropic"
+		| "openrouter";
 	readonly model: string;
 	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly maxTokens: number;
 	readonly idleGapMinutes: number;
+	readonly structuredOutput?: boolean;
+	readonly rateLimit?: ProviderRateLimitConfig;
 }
 
 export interface PipelineProceduralConfig {
@@ -398,6 +438,7 @@ export interface PipelineStructuralConfig {
 	readonly synthesisIntervalMs: number;
 	readonly synthesisTopEntities: number;
 	readonly synthesisMaxFacts: number;
+	readonly synthesisMaxStallMs: number;
 	readonly supersessionEnabled: boolean;
 	readonly supersessionSweepEnabled: boolean;
 	readonly supersessionSemanticFallback: boolean;
@@ -726,6 +767,8 @@ export interface EntityAttribute {
 	readonly kind: AttributeKind;
 	readonly content: string;
 	readonly normalizedContent: string;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
 	readonly confidence: number;
 	readonly importance: number;
 	readonly status: AttributeStatus;

@@ -10,6 +10,7 @@ success_criteria:
   - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
   - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
   - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+  - "The supported source-build path is exposed through `signet desktop build` and `signet desktop install`"
 scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, and Arch metadata generation. Does not replace npm package publishing flows."
 ---
 
@@ -17,7 +18,7 @@ scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, a
 
 ## Context
 
-Signet already has a Tauri desktop app, but distribution is still
+Signet now uses an Electron desktop app, but distribution is still
 incomplete as a release contract:
 
 - runtime startup depends too heavily on global installs
@@ -34,7 +35,7 @@ Arch.
    - Windows installer artifacts
    - Ubuntu `.deb` and `.AppImage`
    - Arch deliverables as `.AppImage` + AUR metadata
-2. Tray runtime startup must support bundled daemon binaries as a
+2. Electron desktop runtime startup must support a bundled Bun daemon
    fallback path when system runtimes are unavailable.
 3. Release workflows must resolve signing mode before publish:
    - official signing when certificate secrets are present
@@ -43,12 +44,17 @@ Arch.
    URL, and checksum.
 5. Arch packaging must be validated in CI by building from the generated
    `PKGBUILD`.
+6. The official local source-build entrypoint is `signet desktop build`;
+   `signet desktop install` builds from the same source checkout and installs
+   a native launcher where the platform implementation exists.
 
 ## Integration notes
 
 - Depends on `signet-runtime` for daemon behavior contracts.
 - Desktop packaging remains independent of npm release train mechanics.
+- The CLI source-build path uses the already-pulled Signet checkout. It must
+  not clone over local work or silently switch branches.
 - Generated AUR metadata is emitted as CI artifacts and can be pushed by
   a separate credentialed job.
-- `packages/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar
-  usage is intentionally fallback-only until parity cutover is approved.
+- `packages/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar usage is intentionally bound to the current Bun daemon.
+  `daemon-rs` remains separate parity work until cutover is approved.

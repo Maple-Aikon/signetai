@@ -135,7 +135,7 @@ export function resolveRuntimeModel(
 	configured: RuntimeProviderName,
 	model?: string,
 ): string | undefined {
-	return effective === "ollama" && configured !== "ollama" ? undefined : model;
+	return (effective === "ollama" || effective === "llama-cpp") && configured !== effective ? undefined : model;
 }
 
 export function isSupportedRuntimeProvider(role: RuntimeRole, value: unknown): boolean {

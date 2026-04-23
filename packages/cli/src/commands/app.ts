@@ -20,6 +20,9 @@ interface SetupOptions {
 	skipGit?: boolean;
 	allowUnprotectedWorkspace?: boolean;
 	createLocalBackup?: boolean;
+	disableSignetSecrets?: boolean;
+	withGraphiq?: boolean;
+	disableGraphiq?: boolean;
 }
 
 interface PathOptions {
@@ -56,18 +59,18 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--network-mode <mode>", "Daemon network mode in non-interactive mode (localhost, tailscale)")
 		.option(
 			"--harness <harness>",
-			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw, oh-my-pi, forge)",
+			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw, oh-my-pi, pi, hermes-agent, forge, gemini)",
 			deps.collectListOption,
 			[],
 		)
 		.option(
 			"--embedding-provider <provider>",
-			"Embedding provider in non-interactive mode (native, ollama, openai, none)",
+			"Embedding provider in non-interactive mode (native, llama-cpp, ollama, openai, none)",
 		)
 		.option("--embedding-model <model>", "Embedding model in non-interactive mode")
 		.option(
 			"--extraction-provider <provider>",
-			"Extraction provider in non-interactive mode (claude-code, codex, ollama, opencode, openrouter, none)",
+			"Extraction provider in non-interactive mode (claude-code, codex, llama-cpp, ollama, opencode, openrouter, none)",
 		)
 		.option("--extraction-model <model>", "Extraction model in non-interactive mode")
 		.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
@@ -86,6 +89,12 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			"--create-local-backup",
 			"Create a local snapshot backup automatically when OpenClaw points at this workspace and no origin remote exists",
 		)
+		.option(
+			"--disable-signet-secrets",
+			"Leave the bundled Signet Secrets core plugin installed but disabled during setup",
+		)
+		.option("--with-graphiq", "Install and enable the optional GraphIQ code retrieval plugin")
+		.option("--disable-graphiq", "Leave the optional GraphIQ plugin disabled during setup")
 		.action(deps.setupWizard);
 
 	const dashboard = program
@@ -112,5 +121,8 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 
 	program.command("configure").alias("config").description("Configure agent settings").action(deps.configureAgent);
 
-	program.command("sync").description("Sync built-in templates and skills").action(deps.syncTemplates);
+	program
+		.command("sync")
+		.description("Sync hooks, extensions, built-in templates, and skills")
+		.action(() => deps.syncTemplates());
 }

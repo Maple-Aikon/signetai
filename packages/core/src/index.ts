@@ -6,6 +6,9 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
+	Agent,
+	AgentManifest,
+	AgentConfig,
 	MEMORY_TYPES,
 	EXTRACTION_STATUSES,
 	JOB_STATUSES,
@@ -17,11 +20,10 @@ export {
 	ATTRIBUTE_STATUSES,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
+	TASK_HARNESSES,
+	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
 export type {
-	Agent,
-	AgentManifest,
-	AgentConfig,
 	LlmProvider,
 	LlmUsage,
 	LlmGenerateResult,
@@ -56,6 +58,7 @@ export type {
 	PipelineEmbeddingTrackerConfig,
 	PipelineContinuityConfig,
 	PipelineSynthesisConfig,
+	ProviderRateLimitConfig,
 	PipelineProceduralConfig,
 	PredictorConfig,
 	ExtractedFact,
@@ -68,6 +71,7 @@ export type {
 	AttributeStatus,
 	DependencyType,
 	TaskStatus,
+	TaskHarness,
 	EntityAspect,
 	EntityAttribute,
 	EntityDependency,
@@ -81,6 +85,8 @@ export type {
 } from "./types";
 export {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
+	OPENCODE_PIPELINE_AGENT,
+	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	PIPELINE_PROVIDER_CHOICES,
 	SYNTHESIS_PROVIDER_CHOICES,
 	defaultPipelineModel,
@@ -105,14 +111,39 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
-	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,
 	type VectorSearchOptions,
 	type HybridSearchOptions,
 } from "./search";
-export { migrate } from "./migrate";
-export type { MigrationSource } from "./migrate";
+export {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	emptyHookRecallResponse,
+	formatRecallText,
+	normalizeStructuredMemoryPayload,
+	parseRecallMeta,
+	parseRecallPayload,
+	partitionRecallRows,
+	withHookRecallCompat,
+} from "./recall";
+export type {
+	RecallMeta,
+	RecallPartitionableRow,
+	RecallPayload,
+	RecallRequestOptions,
+	RecallRow,
+	RecallScoreFilterRow,
+	RememberRequestOptions,
+} from "./recall";
+export {
+	createMemoriesFts,
+	memoriesFtsNeedsTokenizerRepair,
+	readMemoriesFtsSql,
+	recreateMemoriesFts,
+} from "./fts-schema";
+export { migrate, MigrationSource } from "./migrate";
 export {
 	detectSchema,
 	ensureUnifiedSchema,
@@ -125,10 +156,46 @@ export type {
 	MigrationResult,
 } from "./migration";
 export * from "./constants";
+
+export {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
+	SIGNET_PLUGIN_REGISTRY_DIR,
+	SIGNET_PLUGIN_REGISTRY_FILE,
+	SIGNET_PLUGIN_REGISTRY_VERSION,
+	SIGNET_SECRETS_PLUGIN_ID,
+} from "./plugins";
+export {
+	SIGNET_GRAPHIQ_STATE_FILE,
+	disableGraphiqState,
+	emptyGraphiqState,
+	enableGraphiqState,
+	getGraphiqProjectDbPath,
+	getGraphiqStatePath,
+	readGraphiqState,
+	updateGraphiqActiveProject,
+	writeGraphiqState,
+} from "./graphiq";
+export type {
+	GraphiqIndexedProject,
+	GraphiqPluginState,
+	UpdateGraphiqActiveProjectInput,
+} from "./graphiq";
 export {
 	SIGNET_GIT_PROTECTED_PATHS,
 	mergeSignetGitignoreEntries,
 } from "./gitignore";
+export {
+	SIGNET_SOURCE_CHECKOUT_DIRNAME,
+	SIGNET_SOURCE_REMOTE_URL,
+	resolveWorkspaceSourceRepoPath,
+	syncWorkspaceSourceRepoAsync,
+	syncWorkspaceSourceRepo,
+} from "./workspace-source-repo";
+export type {
+	WorkspaceSourceRepoStatus,
+	WorkspaceSourceRepoSyncOptions,
+	WorkspaceSourceRepoSyncResult,
+} from "./workspace-source-repo";
 
 // Portable export/import
 export {
@@ -172,6 +239,9 @@ export {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolveSignetForgeManagedPath,
 	resolveAgentBasePath,
+	resolveHermesRepoPath,
+	resolveHermesRepoPluginPath,
+	hermesAgentCandidateDirs,
 } from "./identity";
 export type {
 	IdentityFileSpec,
@@ -190,13 +260,26 @@ export {
 	writeConfiguredOhMyPiAgentDir,
 } from "./oh-my-pi";
 
+export {
+	clearConfiguredPiAgentDir,
+	getPiConfigPath,
+	listPiAgentDirCandidates,
+	readConfiguredPiAgentDir,
+	resolvePiAgentDir,
+	resolvePiExtensionsDir,
+	writeConfiguredPiAgentDir,
+} from "./pi";
+
 // Multi-agent support
 export {
 	discoverAgents,
 	scaffoldAgent,
 	getAgentIdentityFiles,
 	resolveAgentSkills,
+	buildAgentMemoryConfig,
+	normalizeAgentRosterEntry,
 } from "./agents";
+export type { AgentRosterReadPolicy, NormalizedAgentRosterEntry } from "./agents";
 
 // Skills unification
 export {

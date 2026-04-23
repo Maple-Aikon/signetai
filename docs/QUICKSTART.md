@@ -28,8 +28,9 @@ cabinet the agent sometimes opens. It puts the LLM in charge of
 micromanaging what to store and when to retrieve it.
 
 Signet takes a different approach. The goal is ambient context
-selection: turn interactions into durable memory substrate, then learn
-what should surface automatically when the next session begins.
+selection: turn interactions into durable memory substrate, preserve the
+record of what actually happened, and surface the right pieces when the
+next session begins.
 
 ### The distillation layer
 
@@ -47,17 +48,16 @@ the project's architecture, the people involved, the tools it depends
 on, the constraints that apply. This structure improves the quality of
 candidate context instead of treating memory as a flat pile of fragments.
 
-### The predictive scorer
+### Context selection
 
-A predictive scorer can use that structured candidate pool to learn what
-context is actually useful in your sessions. The aim is not just storage
-or retrieval, but selecting the most helpful context automatically, with
-high precision. The scorer is unique to each user. Your weights never
-leave your machine.
+The structured candidate pool gives Signet something better than a flat
+list of snippets. Retrieval can combine graph traversal, keyword search,
+semantic similarity, provenance, scope, recency, and feedback without
+hiding the result behind an opaque ranking model.
 
-Crucially, the system should learn from regret, not just reuse. If
-injected context does not help, that should become negative evidence
-instead of being silently reinforced forever.
+The aim is practical precision: surface the context that helps the agent
+work now, and keep noisy or repeatedly unhelpful memories from haunting
+the context window forever.
 
 ### Retrieval
 
@@ -108,6 +108,10 @@ Prerequisites
 Install
 ---
 
+Quickstart is for installing and using Signet. If you want to work on
+Signet itself from source, use the contributor workflow in
+[Contributing](./CONTRIBUTING.md) instead of the global install path below.
+
 ```bash
 # bun (recommended)
 bun add -g signetai
@@ -137,6 +141,16 @@ signet setup --non-interactive \
 `--deployment-type` supports `local`, `vps`, or `server` and adjusts inferred
 defaults when provider flags are omitted. Explicit provider flags always
 override inferred defaults.
+
+Signet Secrets is a bundled core plugin and is enabled by default for existing
+workspaces. New interactive installs include a **Core plugins** step that
+explains what it does before asking whether to enable it. For automation, pass
+`--disable-signet-secrets` if you want the plugin installed but disabled.
+
+GraphIQ is an optional verified managed plugin for fast local code retrieval.
+It is not installed by default. Interactive setup asks whether to install it;
+automation can pass `--with-graphiq` to install through Homebrew with source
+fallback, or `--disable-graphiq` to keep it disabled.
 
 If OpenClaw is configured to use the same workspace path, setup now enforces
 backup posture before finishing. In automation, either configure a git
@@ -177,12 +191,42 @@ for each:
 - OpenClaw — adapter-openclaw hooks
 - Codex — wrapper install + session hooks
 
-**3. Deployment context**
+**3. Agent description**
+
+Add a short description of your agent. This is used in generated identity
+metadata and dashboard summaries.
+
+**4. Core plugins**
+
+Signet Secrets stores reusable credentials outside chat, memory, logs, and
+source files. It connects to Signet's encrypted local store and compatible
+1Password references, then exposes value-safe CLI, MCP, and SDK helpers plus
+command injection with output redaction. This is safer than pasting API keys
+into prompts because agents can list secret names and run commands with
+injected values without reading the raw secrets.
+
+**5. Optional code retrieval**
+
+GraphIQ can index active projects into each project's local `.graphiq/`
+directory and expose generic code retrieval tools through Signet. Use it when
+you want fast symbol search, structural context, constants, and blast-radius
+analysis alongside Signet memory retrieval.
+
+After setup, index a project with:
+
+```bash
+signet index ~/signet/signetai
+```
+
+That path becomes the active code project for GraphIQ-backed MCP tools until
+another `signet index <path>` command changes it.
+
+**6. Deployment context**
 
 Choose where Signet is running (`local`, `vps`, `server`). Setup uses
 this to show guidance before extraction provider selection.
 
-**4. Embedding provider**
+**7. Embedding provider**
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
@@ -193,7 +237,7 @@ Embeddings power semantic (meaning-based) memory search. Choose:
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
 - **Skip** — memory still works via keyword search, just no semantic search.
 
-**5. Embedding model**
+**8. Embedding model**
 
 For Ollama, `nomic-embed-text` is a good default. Setup can pull it for
 you (with confirmation), or you can do it manually:
@@ -202,15 +246,21 @@ you (with confirmation), or you can do it manually:
 ollama pull nomic-embed-text
 ```
 
-**6. Search balance**
+**9. Search balance**
 
 The `alpha` setting controls how much weight goes to semantic vs. keyword
 search. 0.7 (70% semantic, 30% keyword) works well for most people.
 
-**7. Git & auto-commit**
+**9. Git & auto-commit**
 
 The wizard can initialize a git repo in `$SIGNET_WORKSPACE/` so every change to
 your agent files is automatically versioned.
+
+Setup also clones a managed Signet source checkout into
+`$SIGNET_WORKSPACE/signetai/`. Future `signet update` and `signet sync`
+operations fetch the latest upstream changes, but they only auto-pull when that
+checkout is clean and still sitting on the default branch. If you are hacking on
+the internals locally, Signet fetches and leaves your changes alone.
 
 After the wizard completes, the [[daemon]] starts automatically and the
 [[dashboard]] opens at `http://localhost:3850`.
@@ -229,10 +279,12 @@ $SIGNET_WORKSPACE/
 ├── memory/
 │   ├── memories.db      # SQLite memory database
 │   └── scripts/         # Optional batch tools (memory.py)
+├── signetai/            # Managed local Signet source checkout for debugging
 ├── skills/
 │   ├── remember/        # Built-in: /remember command
 │   └── recall/          # Built-in: /recall command
 └── .daemon/
+    ├── plugins/         # Bundled core plugin registry
     └── logs/            # Daemon logs
 ```
 

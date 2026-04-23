@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { readMemoriesFtsSql } from "../fts-schema";
 
 /**
  * Tests for the migration framework.
@@ -15,6 +16,38 @@ import { MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
+}
+
+function installLegacyPorterMemoriesFts(db: Database): void {
+	db.exec("DROP TRIGGER IF EXISTS memories_ai");
+	db.exec("DROP TRIGGER IF EXISTS memories_ad");
+	db.exec("DROP TRIGGER IF EXISTS memories_au");
+	db.exec("DROP TABLE IF EXISTS memories_fts");
+	db.exec(`
+		CREATE VIRTUAL TABLE memories_fts USING fts5(
+			content,
+			content='memories',
+			content_rowid='rowid',
+			tokenize='porter unicode61'
+		);
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
 }
 
 describe("migration framework", () => {
@@ -123,6 +156,10 @@ describe("migration framework", () => {
 		expect(tableNames).toContain("entity_attributes");
 		expect(tableNames).toContain("entity_dependencies");
 		expect(tableNames).toContain("task_meta");
+
+		const attributeColumns = db.query("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
+		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
+		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
 
 		// v20 tables (predictor reporting)
 		expect(tableNames).toContain("predictor_comparisons");
@@ -552,6 +589,15 @@ describe("migration framework", () => {
 		]);
 	});
 
+	test("migration 061 adds source_mtime_ms to memory_artifacts", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(memory_artifacts)").all() as Array<{ name: string }>;
+		const colNames = cols.map((col) => col.name);
+		expect(colNames).toContain("source_mtime_ms");
+	});
+
 	test("entities table has pinning columns after migration 022", () => {
 		db = createFreshDb();
 		runMigrations(db);
@@ -564,37 +610,49 @@ describe("migration framework", () => {
 		expect(colNames).toContain("pinned_at");
 	});
 
-	test("unique partial index on content_hash rejects duplicates", () => {
+	test("unique partial index on content_hash is agent- and scope-aware", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
 		const now = new Date().toISOString();
 		db.prepare(
-			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run("a", "hello", "hash1", "fact", now, now, "test");
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("a", "hello", "hash1", "fact", "default", null, now, now, "test");
 
-		// Same content_hash on a non-deleted row should fail
+		// Same content_hash in the same agent/scope tuple should fail.
 		expect(() =>
 			db
 				.prepare(
-					`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
-				.run("b", "hello again", "hash1", "fact", now, now, "test"),
+				.run("b", "hello again", "hash1", "fact", "default", null, now, now, "test"),
 		).toThrow();
 
-		// NULL content_hash should not conflict
+		// A different agent may persist the same content hash.
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("c", "hello from agent a", "hash1", "fact", "agent-a", null, now, now, "test");
+
+		// A different benchmark scope may also persist the same content hash.
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("d", "hello from bench scope", "hash1", "fact", "default", "bench:run-1", now, now, "test");
+
+		// NULL content_hash should not conflict.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, NULL, ?, ?, ?, ?)`,
-		).run("c", "no hash", "fact", now, now, "test");
+		).run("e", "no hash", "fact", now, now, "test");
 
-		// Soft-deleted row with same hash should not conflict
+		// Soft-deleted row with the same hash should not conflict.
 		db.prepare(
-			`INSERT INTO memories (id, content, content_hash, is_deleted, type, created_at, updated_at, updated_by)
-			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
-		).run("d", "deleted", "hash1", "fact", now, now, "test");
+			`INSERT INTO memories (id, content, content_hash, is_deleted, type, agent_id, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+		).run("f", "deleted", "hash1", "fact", "default", null, now, now, "test");
 	});
 
 	test("migration 003 deduplicates existing content hashes", () => {
@@ -946,5 +1004,42 @@ describe("migration framework", () => {
 				}
 			}
 		}
+	});
+
+	test("migration 057 recreates legacy porter-tokenized memories_fts", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		db.exec(`
+			INSERT INTO memories (id, content, type, confidence, created_at, updated_at, updated_by)
+			VALUES
+				('mem-celebrate', 'We celebrate wins together', 'fact', 0.9, datetime('now'), datetime('now'), 'test'),
+				('mem-celebrity', 'Celebrity filter blocks face likenesses', 'fact', 0.9, datetime('now'), datetime('now'), 'test')
+		`);
+
+		installLegacyPorterMemoriesFts(db);
+		const before = db
+			.query<{ content: string }, [string]>(
+				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
+			)
+			.all("celebrate")
+			.map((row) => row.content);
+		expect(before).toContain("Celebrity filter blocks face likenesses");
+
+		db.prepare("DELETE FROM schema_migrations WHERE version = 57").run();
+		runMigrations(db);
+
+		const sql = readMemoriesFtsSql(db);
+		expect(sql).toContain("tokenize='unicode61'");
+		expect(sql).not.toContain("porter unicode61");
+
+		const after = db
+			.query<{ content: string }, [string]>(
+				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
+			)
+			.all("celebrate")
+			.map((row) => row.content);
+		expect(after).toContain("We celebrate wins together");
+		expect(after).not.toContain("Celebrity filter blocks face likenesses");
 	});
 });

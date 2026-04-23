@@ -7,6 +7,7 @@ COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
 COPY AGENTS.md CLAUDE.md LICENSE README.md ./
 COPY scripts ./scripts
 COPY skills ./skills
+COPY memorybench ./memorybench
 COPY packages ./packages
 COPY public ./public
 COPY web ./web
@@ -18,6 +19,8 @@ RUN bun run build:opencode-plugin
 RUN bun run build:native
 RUN bun run build:oh-my-pi-extension
 RUN bun run build:connector-oh-my-pi
+RUN bun run build:pi-extension
+RUN bun run build:connector-pi
 RUN bun run build:deps
 RUN bun run build:dashboard
 RUN bun run build:signetai

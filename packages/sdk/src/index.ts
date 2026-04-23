@@ -3,9 +3,9 @@
  * No native dependencies (no SQLite, no @signet/core).
  */
 
-import { SignetTransport } from "./transport.js";
-import { SignetClientHelpers } from "./helpers.js";
 import { SignetClientP2 } from "./client-p2.js";
+import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
+import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyItemResult,
 	BatchModifyResponse,
@@ -42,6 +42,11 @@ import type {
 	OnePasswordImportResult,
 	OnePasswordStatus,
 	PipelineStatusResponse,
+	PluginAuditListResponse,
+	PluginDiagnosticsResponse,
+	PluginListResponse,
+	PluginPromptContributionListResponse,
+	PluginRegistryRecord,
 	RecallResponse,
 	RecoverResult,
 	RememberResult,
@@ -79,11 +84,12 @@ export interface SignetClientConfig {
 	readonly token?: string;
 }
 
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: P2 methods are mixed into SignetClient below for compatibility.
 export class SignetClient extends SignetClientHelpers {
 	constructor(config?: SignetClientConfig) {
 		const headers: Record<string, string> = {};
 		if (config?.token) {
-			headers["Authorization"] = `Bearer ${config.token}`;
+			headers.Authorization = `Bearer ${config.token}`;
 		}
 		if (config?.actor) {
 			headers["x-signet-actor"] = config.actor;
@@ -128,21 +134,28 @@ export class SignetClient extends SignetClientHelpers {
 	async recall(
 		query: string,
 		opts?: {
+			readonly keywordQuery?: string;
 			readonly limit?: number;
+			readonly project?: string;
 			readonly type?: string;
 			readonly tags?: string;
 			readonly who?: string;
 			readonly pinned?: boolean;
 			readonly importance_min?: number;
 			readonly since?: string;
+			readonly until?: string;
 			readonly minScore?: number;
 			readonly expand?: boolean;
+			readonly agentId?: string;
 		},
 	): Promise<RecallResponse> {
-		return this.transport.post<RecallResponse>("/api/memory/recall", {
-			query,
-			...opts,
-		});
+		return applyRecallMinScore(
+			await this.transport.post<RecallResponse>("/api/memory/recall", {
+				query,
+				...opts,
+			}),
+			opts?.minScore,
+		);
 	}
 
 	async getMemory(id: string): Promise<MemoryRecord> {
@@ -1000,6 +1013,55 @@ export class SignetClient extends SignetClientHelpers {
 		return this.transport.post<OnePasswordImportResult>("/api/secrets/1password/import", opts);
 	}
 
+	// --- Plugins ---
+
+	/**
+	 * List daemon-owned plugin registry records.
+	 */
+	async listPlugins(): Promise<PluginListResponse> {
+		return this.transport.get<PluginListResponse>("/api/plugins");
+	}
+
+	/**
+	 * Get one plugin registry record.
+	 */
+	async getPlugin(id: string): Promise<PluginRegistryRecord> {
+		return this.transport.get<PluginRegistryRecord>(`/api/plugins/${id}`);
+	}
+
+	/**
+	 * Get plugin diagnostics including manifest, surfaces, and prompt metadata.
+	 */
+	async getPluginDiagnostics(id: string): Promise<PluginDiagnosticsResponse> {
+		return this.transport.get<PluginDiagnosticsResponse>(`/api/plugins/${id}/diagnostics`);
+	}
+
+	/**
+	 * List active plugin prompt contributions.
+	 */
+	async listPluginPromptContributions(): Promise<PluginPromptContributionListResponse> {
+		return this.transport.get<PluginPromptContributionListResponse>("/api/plugins/prompt-contributions");
+	}
+
+	/**
+	 * List durable plugin audit events. Values marked sensitive by the daemon are redacted.
+	 */
+	async listPluginAuditEvents(opts?: {
+		readonly pluginId?: string;
+		readonly event?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly limit?: number;
+	}): Promise<PluginAuditListResponse> {
+		return this.transport.get<PluginAuditListResponse>("/api/plugins/audit", {
+			pluginId: opts?.pluginId,
+			event: opts?.event,
+			since: opts?.since,
+			until: opts?.until,
+			limit: opts?.limit,
+		});
+	}
+
 	// --- Skills ---
 
 	/**
@@ -1087,7 +1149,13 @@ export class SignetClient extends SignetClientHelpers {
 }
 
 export interface SignetClient extends SignetClientP2 {}
-Object.assign(SignetClient.prototype, SignetClientP2.prototype);
+for (const key of Reflect.ownKeys(SignetClientP2.prototype)) {
+	if (key === "constructor") continue;
+	const descriptor = Object.getOwnPropertyDescriptor(SignetClientP2.prototype, key);
+	if (descriptor) {
+		Object.defineProperty(SignetClient.prototype, key, descriptor);
+	}
+}
 
 /** @deprecated Use SignetClient instead */
 export const SignetSDK = SignetClient;
@@ -1142,6 +1210,28 @@ export type {
 	OnePasswordImportResult,
 	OnePasswordStatus,
 	PipelineStatusResponse,
+	PluginAuditEvent,
+	PluginAuditListResponse,
+	PluginAuditResult,
+	PluginAuditSource,
+	PluginConnectorSummary,
+	PluginDashboardSummary,
+	PluginDiagnosticsResponse,
+	PluginHealth,
+	PluginLifecycleState,
+	PluginListResponse,
+	PluginPromptContribution,
+	PluginPromptContributionDiagnostic,
+	PluginPromptContributionListResponse,
+	PluginPromptMode,
+	PluginPromptSummary,
+	PluginPromptTarget,
+	PluginRegistryRecord,
+	PluginRouteSummary,
+	PluginSdkSummary,
+	PluginSurfaceBase,
+	PluginSurfaceSummary,
+	PluginToolSummary,
 	RecallResponse,
 	RecallResult,
 	RecoverResult,

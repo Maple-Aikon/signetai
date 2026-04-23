@@ -1,9 +1,11 @@
+import { spawn, spawnSync } from "node:child_process";
+import { platform } from "node:os";
 import { confirm, select } from "@inquirer/prompts";
 import chalk from "chalk";
-import { platform } from "node:os";
 import ora from "ora";
-import { spawn, spawnSync } from "node:child_process";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
+
+const COMMAND_DETECTION_TIMEOUT_MS = 1000;
 
 export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"; model: string; dimensions: number }> {
 	console.log();
@@ -88,7 +90,11 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 
 export function hasCommand(command: string): boolean {
 	try {
-		const result = spawnSync(command, ["--version"], { stdio: "ignore", windowsHide: true });
+		const result = spawnSync(command, ["--version"], {
+			stdio: "ignore",
+			timeout: COMMAND_DETECTION_TIMEOUT_MS,
+			windowsHide: true,
+		});
 		return result.status === 0;
 	} catch {
 		return false;
@@ -194,6 +200,40 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 	console.log(chalk.yellow("  Automated install is not available on this platform."));
 	printOllamaInstallInstructions();
 	return false;
+}
+
+async function queryLlamaCppModels(
+	baseUrl = "http://localhost:8080",
+): Promise<{ available: boolean; models: string[]; error?: string }> {
+	try {
+		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/models`, {
+			signal: AbortSignal.timeout(2000),
+		});
+		if (!response.ok) {
+			return { available: false, models: [], error: `llama.cpp returned ${response.status}` };
+		}
+
+		const raw = await response.json();
+		if (typeof raw !== "object" || raw === null || !("data" in raw) || !Array.isArray(raw.data)) {
+			return { available: false, models: [], error: "llama.cpp returned unexpected response shape" };
+		}
+		const models = raw.data.flatMap((item: unknown): string[] => {
+			if (typeof item !== "object" || item === null || !("id" in item)) return [];
+			const id = (item as { id?: unknown }).id;
+			return typeof id === "string" && id.trim().length > 0 ? [id.trim()] : [];
+		});
+		if (models.length === 0) {
+			return { available: false, models: [], error: "llama.cpp server reachable but no models loaded" };
+		}
+		return { available: true, models };
+	} catch (err) {
+		return { available: false, models: [], error: readErr(err) };
+	}
+}
+
+export async function hasLlamaCppServer(): Promise<boolean> {
+	const result = await queryLlamaCppModels();
+	return result.available;
 }
 
 async function queryOllamaModels(

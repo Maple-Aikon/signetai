@@ -1,6 +1,15 @@
+import {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+	parseRecallPayload,
+} from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
+
+const MEMORY_RECALL_TIMEOUT_MS = 30_000;
 
 interface MemoryDeps {
 	readonly ensureDaemonForSecrets: () => Promise<boolean>;
@@ -29,15 +38,18 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
 			const spinner = ora("Saving memory...").start();
-			const { ok, data } = await deps.secretApiCall("POST", "/api/memory/remember", {
-				content,
-				who: options.who,
-				tags: options.tags,
-				importance: options.importance,
-				pinned: options.critical,
-				...(options.agent ? { agentId: options.agent } : {}),
-				...(options.private ? { visibility: "private" } : {}),
-			});
+			const { ok, data } = await deps.secretApiCall(
+				"POST",
+				"/api/memory/remember",
+				buildRememberRequestBody(content, {
+					who: options.who,
+					tags: options.tags,
+					importance: options.importance,
+					pinned: options.critical,
+					agentId: options.agent,
+					visibility: options.private ? "private" : undefined,
+				}),
+			);
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
 			if (!ok || typeof err === "string") {
@@ -65,27 +77,42 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.command("recall <query>")
 		.description("Search memories using hybrid (vector + keyword) search")
 		.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
+		.option("--project <project>", "Filter by project")
+		.option("--expand", "Include expanded transcript/context sources", false)
 		.option("-t, --type <type>", "Filter by type")
 		.option("--tags <tags>", "Filter by tags (comma-separated)")
 		.option("--who <who>", "Filter by who")
 		.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
 		.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
+		.option("--keyword-query <query>", "Override the keyword/FTS query used for recall")
+		.option("--pinned", "Only return pinned memories", false)
+		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
+		.option("--min-score <n>", "Minimum recall score threshold (client-side)", Number.parseFloat)
 		.option("--agent <name>", "Filter by agent ID")
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
 			const spinner = ora("Searching memories...").start();
-			const { ok, data } = await deps.secretApiCall("POST", "/api/memory/recall", {
-				query,
-				limit: options.limit,
-				type: options.type,
-				tags: options.tags,
-				who: options.who,
-				since: options.since,
-				until: options.until,
-				...(options.agent ? { agentId: options.agent } : {}),
-			});
+			const { ok, data } = await deps.secretApiCall(
+				"POST",
+				"/api/memory/recall",
+				buildRecallRequestBody(query, {
+					keywordQuery: options.keywordQuery,
+					limit: options.limit,
+					project: options.project,
+					type: options.type,
+					tags: options.tags,
+					who: options.who,
+					pinned: options.pinned,
+					importance_min: options.importanceMin,
+					since: options.since,
+					until: options.until,
+					expand: options.expand,
+					agentId: options.agent,
+				}),
+				MEMORY_RECALL_TIMEOUT_MS,
+			);
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
 			if (!ok || typeof err === "string") {
@@ -94,42 +121,23 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
-			const result = typeof data === "object" && data !== null ? data : {};
-			const rows = Array.isArray(result.results) ? result.results : [];
+			// Score thresholds trim ranked matches, but intentionally keep
+			// unscored supporting context in-band.
+			const filtered = applyRecallScoreThreshold(data, options.minScore);
+			const parsed = parseRecallPayload(filtered);
 
 			if (options.json) {
-				console.log(JSON.stringify(rows, null, 2));
+				console.log(JSON.stringify(filtered, null, 2));
 				return;
 			}
 
-			if (rows.length === 0) {
+			if (parsed.meta.noHits || parsed.rows.length === 0) {
 				console.log(chalk.dim("  No memories found"));
 				console.log(chalk.dim("  Try a different query or add memories with `signet remember`"));
 				return;
 			}
 
-			console.log(chalk.bold(`\n  Found ${rows.length} memories:\n`));
-			for (const row of rows) {
-				if (typeof row !== "object" || row === null) continue;
-				const content = typeof row.content === "string" ? row.content : "";
-				const createdAt = typeof row.created_at === "string" ? row.created_at : "";
-				const scoreValue = typeof row.score === "number" ? row.score : 0;
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const who = typeof row.who === "string" ? row.who : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const tags = typeof row.tags === "string" ? row.tags : "";
-				const pinned = row.pinned === true;
-				const date = createdAt.slice(0, 10);
-				const score = chalk.dim(`[${(scoreValue * 100).toFixed(0)}%]`);
-				const sourceLabel = chalk.dim(`(${source})`);
-				const critical = pinned ? chalk.red("★") : "";
-				const tagLabel = tags ? chalk.dim(` [${tags}]`) : "";
-				const displayContent = content.length > 120 ? `${content.slice(0, 117)}...` : content;
-
-				console.log(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tagLabel}`);
-				console.log(chalk.dim(`      by ${who} · ${type} · ${sourceLabel}`));
-			}
-			console.log();
+			console.log(`\n${formatRecallText(filtered)}\n`);
 		});
 
 	const embedCmd = program.command("embed").description("Embedding management (audit, backfill)");

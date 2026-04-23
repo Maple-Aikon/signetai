@@ -17,20 +17,23 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { normalizeAndHashContent } from "../content-normalization";
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import { writeSummaryArtifact } from "../memory-lineage";
+import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
+import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
 import {
+	RateLimitExceededError,
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
+	createLlamaCppProvider,
 	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
@@ -73,6 +76,11 @@ interface SummaryJobRow {
 	readonly created_at: string;
 }
 
+type SummaryFactJob = Pick<SummaryJobRow, "harness" | "project" | "session_key" | "agent_id"> & {
+	readonly session_id?: string | null;
+	readonly id?: string | null;
+};
+
 interface LlmSummaryResult {
 	readonly summary: string;
 	readonly facts: ReadonlyArray<{
@@ -89,12 +97,72 @@ const COMMAND_STAGE_RUNNING_RESULT = "command-stage-running";
 const COMMAND_STAGE_COMPLETED_RESULT = "command-stage-complete";
 type CommandStageStatus = "none" | "running" | "complete";
 
+export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | "captured_at" | "created_at">): string {
+	const basis = job.ended_at ?? job.captured_at ?? job.created_at;
+	return basis.slice(0, 10);
+}
+
+export function isTerminalSummaryJobError(input: string | Error): boolean {
+	const message = typeof input === "string" ? input : input.message;
+	return message.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX) || input instanceof RateLimitExceededError;
+}
+
+export function resolveFailedSummaryJobStatus(
+	terminal: boolean,
+	attempts: number,
+	maxAttempts: number,
+): "dead" | "pending" {
+	return terminal || attempts >= maxAttempts ? "dead" : "pending";
+}
+
+function hasActiveContentHash(db: WriteDb, contentHash: string, agentId: string): boolean {
+	const row = db
+		.prepare(
+			`SELECT id FROM memories
+			 WHERE content_hash = ?
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND scope IS NULL
+			   AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, agentId);
+	return typeof row === "object" && row !== null;
+}
+
+function isContentHashUniqueError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.message.includes("idx_memories_content_hash_unique") || err.message.includes("memories.content_hash");
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const POLL_INTERVAL_MS = 5_000;
+
+// Cached schema probe: true when summary_jobs has the new-schema columns
+// (session_id, agent_id, trigger, etc.).  Resolved lazily on the first
+// enqueueSummaryJob call so the DB is guaranteed to be open.
+let hasNewSchemaColumns: boolean | null = null;
+
+function probeNewSchemaColumns(accessor: DbAccessor): boolean {
+	if (hasNewSchemaColumns !== null) return hasNewSchemaColumns;
+	try {
+		hasNewSchemaColumns = accessor.withReadDb((db) => {
+			const cols = db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>;
+			return cols.some((col) => col.name === "session_id");
+		});
+	} catch {
+		hasNewSchemaColumns = false;
+	}
+	return hasNewSchemaColumns;
+}
+
+/** @internal Test-only: reset the cached schema probe so the next call re-checks. */
+export function _resetSummarySchemaCache(): void {
+	hasNewSchemaColumns = null;
+}
 // Timeout is now configured per-provider via resolveProvider() and config.
 
 // Transcripts longer than this are split into chunks, each summarized
@@ -107,26 +175,27 @@ const CHUNK_TARGET_CHARS = 20_000;
 // ---------------------------------------------------------------------------
 
 function buildPrompt(transcript: string, date: string): string {
-	return `You are a session librarian. Summarize this coding session as a dated markdown note and extract key durable facts.
+	return `You are reviewing a cleaned transcript from one coding session. The transcript already contains only the human/agent conversation turns, with tool calls, tool outputs, and thinking removed.
+
+Use judgment. Focus on what actually mattered.
 
 Return ONLY a JSON object (no markdown fences, no other text):
 {
-  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nProse summary...",
+  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...",
   "facts": [{"content": "...", "importance": 0.3, "tags": "tag1,tag2", "type": "fact"}]
 }
 
-Summary guidelines:
+Summary:
 - Start with "# ${date} Session Notes"
 - Use ## headings for each distinct topic discussed
-- Include: what was worked on, key decisions, open threads
-- Be concise but complete (200-500 words)
+- Cover what was worked on, key decisions, unresolved threads, and anything likely to matter later
+- Prefer concrete names, files, systems, or people when they matter
 - Write in past tense, third person
 
-Fact extraction guidelines:
+Facts:
 - Each fact must be self-contained and understandable without this conversation
 - Include the specific subject (package name, file path, tool, component) in every fact
-- BAD: "switched to a reactive pattern" → GOOD: "The EmbeddingCanvas2D component switched from polling to a reactive requestRedraw pattern for GPU efficiency"
-- Only durable, reusable knowledge (skip ephemeral details)
+- Keep only durable knowledge, preferences, rules, or decisions
 - Types: fact, preference, decision, learning, rule, issue
 - Importance: 0.3 (routine) to 0.5 (significant)
 - Max 15 facts
@@ -136,23 +205,25 @@ ${transcript}`;
 }
 
 function buildChunkPrompt(chunk: string, index: number, total: number, date: string): string {
-	return `You are a session librarian. This is chunk ${index + 1} of ${total} from a long coding session on ${date}. Summarize this segment and extract key facts.
+	return `You are reviewing chunk ${index + 1} of ${total} from one cleaned coding-session transcript on ${date}. Tool calls, tool outputs, and thinking have already been removed.
+
+Use judgment. Focus on what mattered in this segment.
 
 Return ONLY a JSON object (no markdown fences, no other text):
 {
-  "summary": "Prose summary of this segment (100-300 words)...",
+  "summary": "Free-form summary of this segment...",
   "facts": [{"content": "...", "importance": 0.3, "tags": "tag1,tag2", "type": "fact"}]
 }
 
-Summary guidelines:
-- Summarize what was discussed/worked on in this segment
-- Be concise but capture key decisions and context
+Summary:
+- Summarize what was discussed or worked on in this segment
+- Capture decisions, important context, and unresolved threads
 - Write in past tense, third person
 
-Fact extraction guidelines:
+Facts:
 - Each fact must be self-contained and understandable without this conversation
 - Include the specific subject (package name, file path, tool, component) in every fact
-- Only durable, reusable knowledge (skip ephemeral details)
+- Keep only durable knowledge worth carrying forward
 - Types: fact, preference, decision, learning, rule, issue
 - Importance: 0.3 (routine) to 0.5 (significant)
 - Max 10 facts per chunk
@@ -171,23 +242,22 @@ function buildCombinePrompt(
 		.map((f) => `- ${f.content}`)
 		.join("\n");
 
-	return `You are a session librarian. Below are summaries of ${summaries.length} consecutive segments from one coding session on ${date}, plus extracted facts. Produce a unified session summary and deduplicated fact list.
+	return `You are combining ${summaries.length} segment summaries from one cleaned coding-session transcript on ${date}. Produce one coherent session note and one deduplicated durable fact list.
 
 Return ONLY a JSON object (no markdown fences, no other text):
 {
-  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nProse summary...",
+  "summary": "# ${date} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...",
   "facts": [{"content": "...", "importance": 0.3, "tags": "tag1,tag2", "type": "fact"}]
 }
 
-Summary guidelines:
+Summary:
 - Start with "# ${date} Session Notes"
 - Use ## headings for each distinct topic discussed
-- Merge overlapping content from segments — don't repeat
-- Include: what was worked on, key decisions, open threads
-- Be concise but complete (200-500 words)
+- Merge overlapping content from segments without repeating yourself
+- Keep the note coherent, concrete, and useful for future continuity
 - Write in past tense, third person
 
-Fact guidelines:
+Facts:
 - Deduplicate facts that say the same thing in different words
 - Keep the most specific version of each fact
 - Max 15 facts total
@@ -525,7 +595,7 @@ async function processJob(
 	}
 
 	if (provider) {
-		const today = new Date().toISOString().slice(0, 10);
+		const today = resolveSummaryHeadingDate(job);
 		const genOpts = {
 			timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 			maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
@@ -542,25 +612,34 @@ async function processJob(
 
 		if (!commandMode) {
 			if (job.trigger === "session_end") {
-				const summaryWrite = await writeSummaryArtifact({
-					agentId: job.agent_id,
-					sessionId: job.session_id ?? job.session_key ?? job.id,
-					sessionKey: job.session_key,
-					project: job.project,
-					harness: job.harness,
-					capturedAt: job.captured_at ?? job.created_at,
-					startedAt: job.started_at,
-					endedAt: job.ended_at,
-					summary: result.summary,
-					provider,
-				});
+				if (
+					!isNoiseSession({
+						project: job.project,
+						sessionKey: job.session_key,
+						sessionId: job.session_id ?? job.id,
+						harness: job.harness,
+					})
+				) {
+					const summaryWrite = await writeSummaryArtifact({
+						agentId: job.agent_id,
+						sessionId: job.session_id ?? job.session_key ?? job.id,
+						sessionKey: job.session_key,
+						project: job.project,
+						harness: job.harness,
+						capturedAt: job.captured_at ?? job.created_at,
+						startedAt: job.started_at,
+						endedAt: job.ended_at,
+						summary: result.summary,
+						provider,
+					});
 
-				logger.info("summary-worker", "Wrote session summary artifact", {
-					path: summaryWrite.summaryPath,
-					sessionKey: job.session_key,
-					project: job.project,
-					summaryChars: result.summary.length,
-				});
+					logger.info("summary-worker", "Wrote session summary artifact", {
+						path: summaryWrite.summaryPath,
+						sessionKey: job.session_key,
+						project: job.project,
+						summaryChars: result.summary.length,
+					});
+				}
 			}
 
 			const saved = insertSummaryFacts(accessor, job, result.facts);
@@ -1096,10 +1175,21 @@ async function scoreContinuity(
 
 export function insertSummaryFacts(
 	accessor: DbAccessor,
-	job: Pick<SummaryJobRow, "harness" | "project" | "session_key" | "agent_id">,
+	job: SummaryFactJob,
 	facts: ReadonlyArray<LlmSummaryResult["facts"][number]>,
 ): number {
+	if (
+		isNoiseSession({
+			project: job.project,
+			sessionKey: job.session_key,
+			sessionId: job.session_id ?? job.id ?? null,
+			harness: job.harness,
+		})
+	) {
+		return 0;
+	}
 	const now = new Date().toISOString();
+	const agentId = typeof job.agent_id === "string" && job.agent_id.length > 0 ? job.agent_id : "default";
 
 	return accessor.withWriteTx((db) => {
 		let count = 0;
@@ -1118,29 +1208,35 @@ export function insertSummaryFacts(
 			if (!item.content || typeof item.content !== "string") continue;
 
 			const importance = Math.min(item.importance ?? 0.3, 0.5);
+			const { contentHash } = normalizeAndHashContent(item.content);
 
-			if (isDuplicate(db as unknown as Database, item.content)) continue;
+			if (hasActiveContentHash(db, contentHash, agentId)) continue;
+			if (isDuplicate(db as unknown as Database, item.content, agentId)) continue;
 
 			const id = crypto.randomUUID();
 			const type = item.type || inferType(item.content);
-			const { contentHash } = normalizeAndHashContent(item.content);
 
-			stmt.run(
-				id,
-				item.content,
-				contentHash,
-				type,
-				importance,
-				job.session_key || null,
-				"session_end",
-				job.harness,
-				item.tags || null,
-				job.project || null,
-				job.agent_id,
-				now,
-				now,
-				SUMMARY_WORKER_UPDATED_BY,
-			);
+			try {
+				stmt.run(
+					id,
+					item.content,
+					contentHash,
+					type,
+					importance,
+					job.session_key || null,
+					"session_end",
+					job.harness,
+					item.tags || null,
+					job.project || null,
+					agentId,
+					now,
+					now,
+					SUMMARY_WORKER_UPDATED_BY,
+				);
+			} catch (err) {
+				if (isContentHashUniqueError(err)) continue;
+				throw err;
+			}
 			count++;
 		}
 		return count;
@@ -1152,6 +1248,16 @@ export function insertSummaryFacts(
 // ---------------------------------------------------------------------------
 
 function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: LlmSummaryResult, agentId: string): void {
+	if (
+		isNoiseSession({
+			project: job.project,
+			sessionKey: job.session_key,
+			sessionId: job.session_id ?? job.id,
+			harness: job.harness,
+		})
+	) {
+		return;
+	}
 	accessor.withWriteTx((db) => {
 		// Check if table exists (migration may not have run)
 		const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
@@ -1356,11 +1462,22 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	const endpoint = cfg.pipelineV2.synthesis.endpoint;
 	const ollamaMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const fallback = () =>
-		createOllamaProvider({
-			defaultTimeoutMs: timeout,
-			maxContextTokens: ollamaMaxContextTokens,
-		});
+	const rawFallback = cfg.pipelineV2.extraction.fallbackProvider;
+	const fallbackProvider = rawFallback === "llama-cpp" ? "llama-cpp" : rawFallback === "none" ? null : "ollama";
+	const fallback = () => {
+		if (!fallbackProvider) {
+			throw new Error("Synthesis fallback disabled (fallbackProvider: none)");
+		}
+		return fallbackProvider === "llama-cpp"
+			? createLlamaCppProvider({
+					defaultTimeoutMs: timeout,
+					baseUrl: "http://127.0.0.1:8080",
+				})
+			: createOllamaProvider({
+					defaultTimeoutMs: timeout,
+					maxContextTokens: ollamaMaxContextTokens,
+				});
+	};
 	switch (p) {
 		case "none":
 			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
@@ -1376,7 +1493,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 			if (!apiKey) {
 				logger.error(
 					"summary-worker",
-					"ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
+					`ANTHROPIC_API_KEY not found for summary worker — falling back to ${fallbackProvider}. Set via env or 'signet secrets set ANTHROPIC_API_KEY'`,
 				);
 				return fallback();
 			}
@@ -1394,7 +1511,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 			if (!apiKey) {
 				logger.error(
 					"summary-worker",
-					"OPENROUTER_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
+					`OPENROUTER_API_KEY not found for summary worker — falling back to ${fallbackProvider}. Set via env or 'signet secrets set OPENROUTER_API_KEY'`,
 				);
 				return fallback();
 			}
@@ -1410,13 +1527,16 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 		case "claude-code": {
 			const provider = createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
 			if (await provider.available()) return provider;
-			logger.warn("summary-worker", "Claude Code CLI not available for summary worker — falling back to ollama");
+			logger.warn(
+				"summary-worker",
+				`Claude Code CLI not available for summary worker — falling back to ${fallbackProvider}`,
+			);
 			return fallback();
 		}
 		case "codex": {
 			const provider = createCodexProvider({ model: model || "gpt-5-codex-mini", defaultTimeoutMs: timeout });
 			if (await provider.available()) return provider;
-			logger.warn("summary-worker", "Codex CLI not available for summary worker — falling back to ollama");
+			logger.warn("summary-worker", `Codex CLI not available for summary worker — falling back to ${fallbackProvider}`);
 			return fallback();
 		}
 		case "opencode":
@@ -1425,6 +1545,14 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 				baseUrl: endpoint ?? "http://127.0.0.1:4096",
 				ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 				ollamaFallbackMaxContextTokens: ollamaMaxContextTokens,
+				defaultTimeoutMs: timeout,
+				enableStructuredOutput: cfg.pipelineV2.synthesis.structuredOutput,
+				enableOllamaFallback: rawFallback !== "none",
+			});
+		case "llama-cpp":
+			return createLlamaCppProvider({
+				model: model || "qwen3.5:4b",
+				baseUrl: endpoint ?? "http://127.0.0.1:8080",
 				defaultTimeoutMs: timeout,
 			});
 		default:
@@ -1554,6 +1682,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			// Check for more jobs immediately
 			scheduleTick(500);
 		} catch (e) {
+			const terminal = isTerminalSummaryJobError(e instanceof Error ? e : String(e));
 			const errorMessage = e instanceof Error ? e.message : String(e);
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
@@ -1567,7 +1696,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 
 						if (!row) return;
 
-						const status = row.attempts >= row.max_attempts ? "dead" : "pending";
+						const status = resolveFailedSummaryJobStatus(terminal, row.attempts, row.max_attempts);
 
 						db.prepare(
 							`UPDATE summary_jobs
@@ -1580,8 +1709,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				// DB error during error handling — just log and move on
 			}
 
-			// Back off after failure
-			scheduleTick(POLL_INTERVAL_MS * 3);
+			scheduleTick(terminal ? 500 : POLL_INTERVAL_MS * 3);
 		}
 	}
 
@@ -1657,7 +1785,7 @@ export function enqueueSummaryJob(
 	const now = new Date().toISOString();
 
 	accessor.withWriteTx((db) => {
-		try {
+		if (probeNewSchemaColumns(accessor)) {
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
@@ -1677,7 +1805,15 @@ export function enqueueSummaryJob(
 				params.endedAt || null,
 				now,
 			);
-		} catch {
+		} else {
+			// Legacy schema: databases that have not yet run the migration
+			// adding session_id/agent_id/trigger/etc columns.  The derived
+			// sessionId is dropped, so processJob falls back to session_key —
+			// the per-session-end uniqueness guarantee (distinct sessionId →
+			// distinct token → distinct artifact path) is bypassed.  Recurring
+			// sessions on an old schema may still hit immutable-artifact
+			// conflicts, which are classified as terminal by
+			// isTerminalSummaryJobError.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, harness, project, transcript, status, created_at)

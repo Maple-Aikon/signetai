@@ -46,6 +46,29 @@ afterEach(() => {
 });
 
 describe("OpenClawConnector config patching", () => {
+	it("writes a recall hook that preserves recall metadata and supporting context", () => {
+		const connector = new OpenClawConnector();
+		const hookBasePath = join(tmpRoot, "agents");
+
+		const written = connector.installHookFiles(hookBasePath);
+		const handlerPath = written.find((path) => path.endsWith("hooks/agent-memory/handler.js"));
+
+		if (!handlerPath) {
+			throw new Error("Expected installHookFiles() to write hooks/agent-memory/handler.js");
+		}
+		const handlerJs = readFileSync(handlerPath, "utf-8");
+		expect(handlerJs).toContain("async function recallMessage(data)");
+		expect(handlerJs).toContain('if (typeof data?.message === "string") return data.message;');
+		expect(handlerJs).toContain('await import("@signet/core")');
+		expect(handlerJs).toContain('return "No matching memories found.";');
+		expect(handlerJs).toContain("Keep a compact compatibility path");
+		expect(handlerJs).toContain("rows.slice(0, 8)");
+		expect(handlerJs).not.toContain("JSON.stringify(data, null, 2)");
+		expect(handlerJs).toContain("event.messages.push(await recallMessage(data));");
+		expect(handlerJs).not.toContain("Supporting context:");
+		expect(handlerJs).not.toContain('data.results.map(r => `- ${r.content}`).join("\\\\n")');
+	});
+
 	it("does not patch workspace when configureWorkspace is false", async () => {
 		const configPath = join(tmpRoot, "openclaw.json");
 		const hookBasePath = join(tmpRoot, "agents");
@@ -331,6 +354,30 @@ describe("OpenClawConnector config patching", () => {
 		process.env.OPENCLAW_CONFIG_PATH = configPath;
 
 		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("plugin");
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
+	});
+
+	it("detects plugin runtime state from memory slot without plugin entry", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("plugin");
 		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
 	});
 
@@ -359,6 +406,89 @@ describe("OpenClawConnector config patching", () => {
 
 		const connector = new OpenClawConnector();
 		expect(connector.getConfiguredRuntimePath()).toBe("legacy");
+	});
+
+	it("detects dual runtime state from config", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					hooks: {
+						internal: {
+							entries: {
+								"signet-memory": {
+									enabled: true,
+								},
+							},
+						},
+					},
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {
+							"signet-memory-openclaw": {
+								enabled: true,
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("dual");
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
+	});
+
+	it("detects dual runtime state across multiple discovered configs", () => {
+		const openClawConfigPath = join(tmpRoot, "openclaw.json");
+		const clawdbotConfigPath = join(tmpRoot, "clawdbot.json");
+		writeFileSync(
+			openClawConfigPath,
+			JSON.stringify(
+				{
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: {
+							"signet-memory-openclaw": {
+								enabled: true,
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+		writeFileSync(
+			clawdbotConfigPath,
+			JSON.stringify(
+				{
+					hooks: {
+						internal: {
+							entries: {
+								"signet-memory": {
+									enabled: true,
+								},
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = openClawConfigPath;
+		process.env.CLAWDBOT_CONFIG_PATH = clawdbotConfigPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getRuntimeState()).toBe("dual");
+		expect(connector.getConfiguredRuntimePath()).toBe("plugin");
 	});
 
 	it("adds signet memory plugin to plugins.allow during plugin install", async () => {
@@ -494,11 +624,7 @@ describe("OpenClawConnector config patching", () => {
 describe("OpenClawConnector.install — legacy SIGNET block migration", () => {
 	it("strips legacy block from AGENTS.md and reports path in filesWritten", async () => {
 		const agentsPath = join(tmpRoot, "AGENTS.md");
-		writeFileSync(
-			agentsPath,
-			`before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n`,
-			"utf-8",
-		);
+		writeFileSync(agentsPath, "before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n", "utf-8");
 		const result = await new OpenClawConnector().install(tmpRoot, {
 			configureWorkspace: false,
 			configureHooks: false,

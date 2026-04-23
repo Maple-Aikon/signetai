@@ -29,9 +29,12 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
 import { ForgeConnector } from "@signet/connector-forge";
+import { GeminiConnector } from "@signet/connector-gemini";
+import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
+import { PiConnector } from "@signet/connector-pi";
 import {
 	IDENTITY_FILES,
 	type ImportResult,
@@ -53,6 +56,8 @@ import {
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
 	symlinkSkills,
+	syncWorkspaceSourceRepo,
+	syncWorkspaceSourceRepoAsync,
 	unifySkills,
 } from "@signet/core";
 import chalk from "chalk";
@@ -62,10 +67,13 @@ import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
+import { registerDesktopCommands } from "./commands/desktop.js";
 import { registerDreamCommands } from "./commands/dream.js";
 import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
+import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
+import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerPortableCommands } from "./commands/portable.js";
@@ -87,6 +95,7 @@ import {
 	migrateSchema,
 	showLogs,
 } from "./features/daemon.js";
+import { buildDesktopFromSource, installDesktopFromSource } from "./features/desktop.js";
 import { doctorForge, installForge, showForgeStatus, updateForge } from "./features/forge.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
@@ -260,8 +269,15 @@ async function configureHarnessHooks(
 			await connector.install(basePath);
 			break;
 		}
+		case "pi": {
+			const connector = new PiConnector();
+			await connector.install(basePath);
+			break;
+		}
 		case "openclaw": {
 			const connector = new OpenClawConnector();
+			// sync.ts can force plugin migration by passing openclawRuntimePath here;
+			// fall back to the discovered runtime only when no explicit override was provided.
 			const runtimePath = options?.openclawRuntimePath ?? connector.getConfiguredRuntimePath() ?? "plugin";
 			// Install connector first — writes config with runtimePath so
 			// ensureOpenClawPluginPackage's getConfiguredRuntimePath() check passes.
@@ -304,6 +320,28 @@ async function configureHarnessHooks(
 			const result = await connector.install(basePath);
 			if (!result.success) {
 				console.warn(chalk.yellow(`  Warning: ForgeCode integration setup failed: ${result.message}`));
+			}
+			break;
+		}
+		case "hermes-agent": {
+			const connector = new HermesAgentConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: Hermes Agent integration setup failed: ${result.message}`));
+			}
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
+			}
+			break;
+		}
+		case "gemini": {
+			const connector = new GeminiConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: Gemini CLI integration setup failed: ${result.message}`));
+			}
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
 			}
 			break;
 		}
@@ -706,7 +744,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "none" {
+function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" | "openai" | "none" {
 	const paths = ["agent.yaml", "AGENT.yaml", "config.yaml"].map((name) => join(basePath, name));
 	for (const path of paths) {
 		if (!existsSync(path)) continue;
@@ -716,7 +754,13 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 			const direct = parsed.embedding;
 			if (isRecord(direct) && typeof direct.provider === "string") {
 				const provider = direct.provider;
-				if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (
+					provider === "native" ||
+					provider === "llama-cpp" ||
+					provider === "ollama" ||
+					provider === "openai" ||
+					provider === "none"
+				) {
 					return provider;
 				}
 			}
@@ -725,7 +769,13 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 				const nested = mem.embeddings;
 				if (isRecord(nested) && typeof nested.provider === "string") {
 					const provider = nested.provider;
-					if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+					if (
+						provider === "native" ||
+						provider === "llama-cpp" ||
+						provider === "ollama" ||
+						provider === "openai" ||
+						provider === "none"
+					) {
 						return provider;
 					}
 				}
@@ -733,7 +783,13 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 			const legacy = parsed.embeddings;
 			if (isRecord(legacy) && typeof legacy.provider === "string") {
 				const provider = legacy.provider;
-				if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (
+					provider === "native" ||
+					provider === "llama-cpp" ||
+					provider === "ollama" ||
+					provider === "openai" ||
+					provider === "none"
+				) {
 					return provider;
 				}
 			}
@@ -1229,6 +1285,19 @@ const healthDeps = {
 	signetLogo,
 };
 
+const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> =>
+	syncTemplates({
+		agentsDir: basePath,
+		configureHarnessHooks,
+		getSkillsSourceDir,
+		getTemplatesDir,
+		signetLogo,
+		syncBuiltinSkills,
+		syncNativeEmbeddingModel,
+		syncPredictorBinary,
+		syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
+	});
+
 const daemonDeps = {
 	agentsDir: AGENTS_DIR,
 	defaultPort: DEFAULT_PORT,
@@ -1241,6 +1310,7 @@ const daemonDeps = {
 	sleep,
 	startDaemon,
 	stopDaemon,
+	syncTemplates: runSyncTemplates,
 };
 
 registerAppCommands(program, {
@@ -1282,20 +1352,16 @@ registerAppCommands(program, {
 			signetLogo,
 			startDaemon,
 			syncBuiltinSkills,
+			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
-	syncTemplates: () =>
-		syncTemplates({
-			agentsDir: AGENTS_DIR,
-			configureHarnessHooks,
-			getSkillsSourceDir,
-			getTemplatesDir,
-			signetLogo,
-			syncBuiltinSkills,
-			syncNativeEmbeddingModel,
-			syncPredictorBinary,
-		}),
+	syncTemplates: () => runSyncTemplates(),
+});
+
+registerDesktopCommands(program, {
+	buildDesktopFromSource,
+	installDesktopFromSource,
 });
 
 registerDaemonCommands(program, {
@@ -1339,6 +1405,10 @@ registerForgeCommands(program, {
 		}),
 });
 
+registerGraphiqCommands(program, {
+	agentsDir: AGENTS_DIR,
+});
+
 // ============================================================================
 // signet secret - Secrets management
 // ============================================================================
@@ -1368,6 +1438,11 @@ registerMcpCommands(program, {
 });
 
 registerMemoryCommands(program, {
+	ensureDaemonForSecrets,
+	secretApiCall,
+});
+
+registerKnowledgeCommands(program, {
 	ensureDaemonForSecrets,
 	secretApiCall,
 });
@@ -1413,7 +1488,9 @@ registerUpdateCommands(program, {
 	getTemplatesDir,
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
 	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),
+	isPiInstalled: () => new PiConnector().isInstalled(),
 	syncBuiltinSkills,
+	syncWorkspaceSourceRepo,
 });
 
 registerGitCommands(program, {

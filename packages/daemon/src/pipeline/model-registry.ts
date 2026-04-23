@@ -144,6 +144,11 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 		{ id: "glm-4.7-flash", provider: "ollama", label: "GLM 4.7 Flash", tier: "low", deprecated: false },
 		{ id: "llama3", provider: "ollama", label: "Llama 3", tier: "low", deprecated: false },
 	],
+	"llama-cpp": [
+		{ id: "qwen3.5:4b", provider: "llama-cpp", label: "Qwen3.5 4B", tier: "low", deprecated: false },
+		{ id: "qwen3:8b", provider: "llama-cpp", label: "Qwen3 8B", tier: "low", deprecated: false },
+		{ id: "llama-3.1-8b", provider: "llama-cpp", label: "Llama 3.1 8B", tier: "low", deprecated: false },
+	],
 };
 
 // ---------------------------------------------------------------------------
@@ -196,7 +201,7 @@ function cleanModelLabel(raw: string): string {
  * Given a list of models, return a new array with older versions of the
  * same family marked as deprecated. Does not mutate the input.
  */
-function markDeprecatedVersions(entries: readonly ModelRegistryEntry[]): ModelRegistryEntry[] {
+export function markDeprecatedVersions(entries: readonly ModelRegistryEntry[]): ModelRegistryEntry[] {
 	const familyBest = new Map<string, { version: number; id: string }>();
 
 	for (const entry of entries) {
@@ -263,6 +268,31 @@ async function discoverOllamaModels(baseUrl: string): Promise<ModelRegistryEntry
 		}));
 	} catch {
 		logger.debug("model-registry", "Ollama discovery failed (expected if not running)");
+		return [];
+	}
+}
+
+async function discoverLlamaCppModels(baseUrl: string): Promise<ModelRegistryEntry[]> {
+	try {
+		const res = await fetch(`${baseUrl}/v1/models`, {
+			signal: AbortSignal.timeout(5000),
+		});
+		if (!res.ok) return [];
+
+		const data = (await res.json()) as {
+			data?: Array<{ id: string }>;
+		};
+		if (!Array.isArray(data.data)) return [];
+
+		return data.data.map((m) => ({
+			id: m.id,
+			provider: "llama-cpp",
+			label: m.id,
+			tier: "low" as const,
+			deprecated: false,
+		}));
+	} catch {
+		logger.debug("model-registry", "llama.cpp discovery failed (expected if not running)");
 		return [];
 	}
 }
@@ -385,6 +415,7 @@ export function initModelRegistry(
 	anthropicApiKey?: string,
 	openRouterApiKey?: string,
 	openRouterBaseUrl?: string,
+	llamaCppBaseUrl?: string,
 ): void {
 	if (!config.enabled) {
 		logger.info("model-registry", "Model registry disabled");
@@ -410,7 +441,7 @@ export function initModelRegistry(
 	}
 
 	// Run initial discovery
-	refreshRegistry(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl).catch((err) => {
+	refreshRegistry(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl, llamaCppBaseUrl).catch((err) => {
 		logger.warn("model-registry", "Initial registry refresh failed", { error: String(err) });
 	});
 
@@ -418,7 +449,7 @@ export function initModelRegistry(
 	if (config.refreshIntervalMs > 0) {
 		state.refreshTimer = setInterval(
 			() =>
-				refreshRegistry(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl).catch((err) => {
+				refreshRegistry(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl, llamaCppBaseUrl).catch((err) => {
 					logger.warn("model-registry", "Periodic registry refresh failed", { error: String(err) });
 				}),
 			config.refreshIntervalMs,
@@ -436,6 +467,7 @@ export async function refreshRegistry(
 	anthropicApiKey?: string,
 	openRouterApiKey?: string,
 	openRouterBaseUrl?: string,
+	llamaCppBaseUrl?: string,
 ): Promise<void> {
 	if (!state) return;
 
@@ -445,7 +477,7 @@ export async function refreshRegistry(
 	}
 
 	const doRefresh = async (): Promise<void> => {
-		await _refreshRegistryInner(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl);
+		await _refreshRegistryInner(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl, llamaCppBaseUrl);
 	};
 	refreshInFlight = doRefresh();
 	try {
@@ -460,6 +492,7 @@ async function _refreshRegistryInner(
 	anthropicApiKey?: string,
 	openRouterApiKey?: string,
 	openRouterBaseUrl?: string,
+	llamaCppBaseUrl?: string,
 ): Promise<void> {
 	if (!state) return;
 	const startEpoch = state.epoch;
@@ -467,17 +500,17 @@ async function _refreshRegistryInner(
 	logger.debug("model-registry", "Refreshing model registry");
 
 	// Discover models in parallel — only probe providers that are configured
-	const [ollamaModels, anthropicModels, openRouterModels] = await Promise.all([
+	const [ollamaModels, anthropicModels, openRouterModels, llamaCppModels] = await Promise.all([
 		ollamaBaseUrl ? discoverOllamaModels(ollamaBaseUrl) : Promise.resolve([]),
 		discoverAnthropicModels(anthropicApiKey),
 		discoverOpenRouterModels(openRouterApiKey, openRouterBaseUrl),
+		llamaCppBaseUrl ? discoverLlamaCppModels(llamaCppBaseUrl) : Promise.resolve([]),
 	]);
 
 	// Bail if registry was stopped or re-initialized during discovery
 	if (!state || state.epoch !== startEpoch) return;
 
 	if (ollamaModels.length > 0) {
-		// Merge discovered with known, dedup by id, then mark deprecations
 		const known = KNOWN_MODELS.ollama ?? [];
 		const merged = new Map<string, ModelRegistryEntry>();
 		for (const m of known) merged.set(m.id, m);
@@ -485,15 +518,23 @@ async function _refreshRegistryInner(
 		state.models.set("ollama", markDeprecatedVersions([...merged.values()]));
 	}
 
+	if (llamaCppModels.length > 0) {
+		const known = KNOWN_MODELS["llama-cpp"] ?? [];
+		const merged = new Map<string, ModelRegistryEntry>();
+		for (const m of known) merged.set(m.id, m);
+		for (const m of llamaCppModels) merged.set(m.id, m);
+		state.models.set("llama-cpp", markDeprecatedVersions([...merged.values()]));
+	}
+
 	if (anthropicModels.length > 0) {
-		state.models.set("anthropic", anthropicModels);
+		state.models.set("anthropic", markDeprecatedVersions(anthropicModels));
 		// Do NOT overwrite "claude-code" — its IDs must match what the
 		// Claude Code CLI accepts (shorthand aliases, not dated Anthropic IDs).
 		// The seeded KNOWN_MODELS["claude-code"] entries use the correct shorthands.
 	}
 
 	if (openRouterModels.length > 0) {
-		state.models.set("openrouter", openRouterModels);
+		state.models.set("openrouter", markDeprecatedVersions(openRouterModels));
 	}
 
 	state.lastRefreshAt = Date.now();

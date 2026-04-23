@@ -69,6 +69,9 @@ Prevent these proactively:
    - Update behavior, API, schema, and status docs in the same PR.
    - Keep `docs/API.md`, `docs/specs/INDEX.md`, and
      `docs/specs/dependencies.yaml` accurate when affected.
+   - Root docs duplicated into `docs/` are generated artifacts. Edit the
+     root source, then run `bun scripts/sync-root-docs.ts`. Do not hand-edit
+     `docs/CONTRIBUTING.md` or `docs/ROADMAP.md`.
 
 5. **Duplication / parity drift**
    - Do not duplicate constants, maps, dependency types, descriptions,
@@ -95,6 +98,12 @@ Prevent these proactively:
 cd packages/cli/dashboard && bun run check
 ```
 
+9. **Publish/install integrity drift**
+   - Publishable packages must not ship runtime dependencies on
+     unpublished workspace packages.
+   - Validate publish manifests after version rewriting and before npm
+     publish.
+
 ## PR checklist
 
 Before opening a PR, verify:
@@ -106,6 +115,8 @@ Before opening a PR, verify:
 - Error handling and fallback paths are tested.
 - Security checks exist on admin or mutation endpoints.
 - Docs were updated for API, spec, schema, or status changes.
+- Publish manifests were validated if the PR changes a package that gets
+  published to npm.
 - Each bug fix has a regression test.
 - Lint, typecheck, and tests pass locally.
 
@@ -140,9 +151,14 @@ bun run deploy:web
 
 ```text
 build:core -> build:connector-base -> build:opencode-plugin -> build:native
--> build:oh-my-pi-extension -> build:connector-oh-my-pi -> build:deps
+-> build:oh-my-pi-extension -> build:connector-oh-my-pi
+-> build:pi-extension -> build:connector-pi -> build:deps
 -> build:signetai
 ```
+
+`@signet/pi-extension-base` is a source-only shared package with no
+standalone build step. `build:oh-my-pi-extension` and `build:pi-extension`
+consume it directly from workspace source.
 
 Run a single test file directly with:
 
@@ -165,10 +181,16 @@ bun test packages/daemon/src/pipeline/worker.test.ts
 | `@signet/connector-openclaw` | OpenClaw install-time integration | node |
 | `@signet/connector-codex` | Codex CLI install-time integration | node |
 | `@signet/connector-oh-my-pi` | Oh My Pi install-time integration | node |
+| `@signet/connector-pi` | Pi install-time integration | node |
+| `@signet/connector-hermes-agent` | Hermes Agent install-time integration + Python plugin | node |
+| `@signet/connector-gemini` | Gemini CLI install-time integration | node |
 | `@signet/opencode-plugin` | OpenCode runtime plugin | node |
 | `@signet/oh-my-pi-extension` | Oh My Pi extension/runtime bundle | browser |
+| `@signet/pi-extension-base` | Shared Pi/OMP extension utilities (raw TS) | node |
+| `@signet/pi-extension` | Pi extension/runtime bundle | node |
 | `@signetai/signet-memory-openclaw` | OpenClaw runtime adapter | node |
-| `@signet/tray` | Desktop shell / packaging | node |
+| `@signet/desktop` | Electron desktop shell / packaging | node |
+| `@signet/tray` | Shared tray/menu bar state utilities | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
 | `@signet/web` | Marketing website | cloudflare |
 | `@signet/native` | Native accelerators | node |
@@ -188,7 +210,8 @@ bun test packages/daemon/src/pipeline/worker.test.ts
   expectations.
 - **`@signet/connector-*`**: install-time harness integrations. Distinct
   from daemon-side runtime connector code.
-- **`@signet/tray`**: desktop packaging and local runtime shell.
+- **`@signet/desktop`**: Electron desktop packaging and local runtime shell.
+- **`@signet/tray`**: shared tray/menu bar state utilities only.
 - **`@signet/web`**: Astro static marketing site on Cloudflare Pages.
   Use the `signet-design` skill for visual changes.
 
@@ -252,7 +275,7 @@ The daemon runs a plugin-first memory pipeline in
 - Connectors send `x-signet-runtime-path: plugin|legacy`.
 - The session tracker allows one active runtime path per session and
   returns `409` on conflict.
-- Default extraction model: `qwen3:4b` via Ollama.
+- Default extraction model: `qwen3.5:4b` via llama.cpp.
 - Stages: extraction -> decision -> optional knowledge graph ->
   retention decay -> document ingest -> maintenance -> session summary.
 - Modes: `shadowMode`, `mutationsFrozen`, `graphEnabled`,

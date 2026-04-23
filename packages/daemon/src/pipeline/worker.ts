@@ -7,30 +7,29 @@
  * controlled-write mode it applies ADD/NONE decisions with safety gates.
  */
 
-import type { DbAccessor, WriteDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
-import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { cpus, loadavg } from "node:os";
+import type { AnalyticsCollector } from "../analytics";
+import { normalizeAndHashContent } from "../content-normalization";
+import type { DbAccessor, WriteDb } from "../db-accessor";
+import { countChanges, syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import type { TelemetryCollector } from "../telemetry";
+import { txForgetMemory, txIngestEnvelope, txModifyMemory } from "../transactions";
+import { PROSPECTIVE_ANTONYM_PAIRS, hasAntonymConflict, hasNegation, overlapCount, tokenize } from "./antonyms";
+import { detectSemanticContradiction } from "./contradiction";
+import type { DecisionConfig, FactDecisionProposal } from "./decision";
+import { runShadowDecisions } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
-import { detectSemanticContradiction } from "./contradiction";
-import { runShadowDecisions } from "./decision";
-import { logger } from "../logger";
-import { assessSignificance, type SignificanceConfig } from "./significance-gate";
-import { txIngestEnvelope, txModifyMemory, txForgetMemory } from "../transactions";
-import { archiveToCold } from "./retention-worker";
-import { normalizeAndHashContent } from "../content-normalization";
-import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { enqueueHintsJob } from "./prospective-index";
-import type { AnalyticsCollector } from "../analytics";
-import type { TelemetryCollector } from "../telemetry";
-import { generateWithTracking } from "./provider";
-import { recoverStaleLeases, type StaleLeaseRecovery } from "./stale-leases";
-import { assessWriteGate, type WriteGateConfig } from "./write-gate";
-import { PROSPECTIVE_ANTONYM_PAIRS, tokenize, hasNegation, overlapCount, hasAntonymConflict } from "./antonyms";
+import { type LlmProvider, RateLimitExceededError, generateWithTracking } from "./provider";
+import { archiveToCold } from "./retention-worker";
+import { type SignificanceConfig, assessSignificance } from "./significance-gate";
+import { type StaleLeaseRecovery, recoverStaleLeases } from "./stale-leases";
+import { type WriteGateConfig, assessWriteGate } from "./write-gate";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +48,8 @@ export interface WorkerStats {
 	readonly overloadSince: string | null;
 	readonly nextTickInMs: number;
 }
+
+export type WorkerProgressStats = Pick<WorkerStats, "lastProgressAt" | "pending">;
 
 export interface WorkerHandle {
 	stop(): Promise<void>;
@@ -157,7 +158,7 @@ export function enqueueExtractionJob(accessor: DbAccessor, memoryId: string): vo
 		// Skip if memory extraction is already complete (structured passthrough
 		// or prior pipeline run). This prevents re-processing memories that
 		// were ingested with pre-extracted data.
-		const mem = db.prepare(`SELECT extraction_status FROM memories WHERE id = ? LIMIT 1`).get(memoryId) as
+		const mem = db.prepare("SELECT extraction_status FROM memories WHERE id = ? LIMIT 1").get(memoryId) as
 			| { extraction_status: string | null }
 			| undefined;
 		if (mem?.extraction_status === "complete" || mem?.extraction_status === "completed") return;
@@ -234,17 +235,9 @@ function completeJob(db: WriteDb, jobId: string, result: string | null): void {
 	).run(result, now, now, jobId);
 }
 
-function failJob(
-	db: WriteDb,
-	jobId: string,
-	error: string,
-	attempts: number,
-	maxAttempts: number,
-	effectiveMaxAttempts = maxAttempts,
-): void {
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
 	const now = new Date().toISOString();
-	const maxAllowedAttempts = Math.max(1, Math.min(maxAttempts, effectiveMaxAttempts));
-	const status = attempts >= maxAllowedAttempts ? "dead" : "failed";
+	const status = attempts >= maxAttempts ? "dead" : "failed";
 
 	// Failed jobs go back to pending for retry; dead jobs stay dead
 	const nextStatus = status === "dead" ? "dead" : "pending";
@@ -254,6 +247,20 @@ function failJob(
 		 SET status = ?, error = ?, failed_at = ?, updated_at = ?
 		 WHERE id = ?`,
 	).run(nextStatus, error, now, now, jobId);
+}
+
+// deadLetterJob writes status='dead' directly via SQL, bypassing failJob.
+// It intentionally does NOT increment the attempts column — the caller
+// (rate-limit exhaustion) classifies the job as non-retryable before the
+// normal retry loop can increment attempts. This keeps the attempts value
+// consistent with the lease/claim logic, not the dead-letter classification.
+function deadLetterJob(db: WriteDb, jobId: string, error: string): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`UPDATE memory_jobs
+		 SET status = 'dead', error = ?, failed_at = ?, updated_at = ?
+		 WHERE id = ?`,
+	).run(error, now, now, jobId);
 }
 
 function updateExtractionStatus(db: WriteDb, memoryId: string, status: string, extractionModel?: string): void {
@@ -818,6 +825,10 @@ interface StructuralPass1Stats {
 	dependencyEnqueued: number;
 }
 
+export function shouldPersistExtractionGraph(cfg: PipelineV2Config, entityCount: number): boolean {
+	return cfg.graph.enabled && cfg.graph.extractionWritesEnabled && entityCount > 0;
+}
+
 /**
  * Heuristic entity linking for written facts. For each fact, find
  * matching entity triples, resolve entity IDs, create stub
@@ -828,6 +839,7 @@ function runStructuralPass1(
 	accessor: DbAccessor,
 	writtenFacts: readonly WrittenFact[],
 	extractionTriples: readonly import("@signet/core").ExtractedEntity[],
+	agentId: string,
 ): StructuralPass1Stats {
 	const stats: StructuralPass1Stats = {
 		attributesCreated: 0,
@@ -853,13 +865,13 @@ function runStructuralPass1(
 			// Resolve source entity ID from the entities table
 			const canonical = matchedTriple.source.trim().toLowerCase().replace(/\s+/g, " ");
 			const entityRow = db
-				.prepare("SELECT id, entity_type, agent_id FROM entities WHERE canonical_name = ? LIMIT 1")
-				.get(canonical) as { id: string; entity_type: string; agent_id: string } | undefined;
+				.prepare("SELECT id, entity_type, agent_id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+				.get(canonical, agentId) as { id: string; entity_type: string; agent_id: string } | undefined;
 			if (!entityRow) continue;
 
 			// Skip if this memory already has a structural attribute row (classified or stub)
 			const existingAttr = db
-				.prepare(`SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1`)
+				.prepare("SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1")
 				.get(fact.memoryId) as unknown | undefined;
 			if (existingAttr) continue;
 
@@ -892,8 +904,8 @@ function runStructuralPass1(
 				const targetCanonical = matchedTriple.target.trim().toLowerCase().replace(/\s+/g, " ");
 				if (targetCanonical !== canonical) {
 					const targetRow = db
-						.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1")
-						.get(targetCanonical) as { id: string } | undefined;
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+						.get(targetCanonical, agentId) as { id: string } | undefined;
 					if (targetRow) {
 						const depPayload = JSON.stringify({
 							memory_id: fact.memoryId,
@@ -901,6 +913,7 @@ function runStructuralPass1(
 							entity_name: matchedTriple.source,
 							fact_content: fact.content,
 							target_entity_name: matchedTriple.target,
+							agent_id: entityRow.agent_id,
 						});
 						enqueueStructuralJob(db, fact.memoryId, "structural_dependency", depPayload);
 						stats.dependencyEnqueued++;
@@ -1378,7 +1391,7 @@ export function startWorker(
 			relationsUpdated: 0,
 			mentionsLinked: 0,
 		};
-		if (pipelineCfg.graph.enabled && extraction.entities.length > 0) {
+		if (shouldPersistExtractionGraph(pipelineCfg, extraction.entities.length)) {
 			try {
 				graphStats = accessor.withWriteTx((db) =>
 					txPersistEntities(db, {
@@ -1467,7 +1480,7 @@ export function startWorker(
 			extraction.entities.length > 0
 		) {
 			try {
-				structuralStats = runStructuralPass1(accessor, structuralFacts, extraction.entities);
+				structuralStats = runStructuralPass1(accessor, structuralFacts, extraction.entities, agentId);
 			} catch (e) {
 				logger.warn("pipeline", "Structural pass 1 failed (non-fatal)", {
 					jobId: job.id,
@@ -1542,28 +1555,47 @@ export function startWorker(
 				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
+				const nonRetryable = e instanceof RateLimitExceededError;
 				logger.warn("pipeline", "Job failed", {
 					jobId: job.id,
 					error: msg,
 					attempt: job.attempts,
+					nonRetryable,
 				});
 				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 				analytics?.recordError({
 					timestamp: new Date().toISOString(),
 					stage: "extraction",
-					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
+					code: nonRetryable
+						? "EXTRACTION_RATE_LIMIT"
+						: msg.includes("timeout")
+							? "EXTRACTION_TIMEOUT"
+							: "EXTRACTION_PARSE_FAIL",
 					message: msg,
 					memoryId: job.memory_id,
 				});
 				telemetry?.record("pipeline.error", {
 					stage: "extraction",
-					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
+					code: nonRetryable
+						? "EXTRACTION_RATE_LIMIT"
+						: msg.includes("timeout")
+							? "EXTRACTION_TIMEOUT"
+							: "EXTRACTION_PARSE_FAIL",
 					durationMs: runtime.now() - jobStart,
 				});
-				const effectiveMaxAttempts = Math.max(1, Math.min(job.max_attempts, pipelineCfg.worker.maxRetries));
+				if (nonRetryable) {
+				logger.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, undefined, {
+					error: msg,
+					memoryId: job.memory_id,
+				});
+				}
 				accessor.withWriteTx((db) => {
-					failJob(db, job.id, msg, job.attempts, job.max_attempts, effectiveMaxAttempts);
-					if (job.attempts >= effectiveMaxAttempts) {
+					if (nonRetryable) {
+						deadLetterJob(db, job.id, msg);
+					} else {
+						failJob(db, job.id, msg, job.attempts, job.max_attempts);
+					}
+					if (nonRetryable || job.attempts >= job.max_attempts) {
 						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});

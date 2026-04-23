@@ -19,8 +19,9 @@ use signet_core::db::{DbPool, Priority};
 use signet_services::transactions;
 
 use crate::memory_lineage::{
-    ArtifactKind, MemorySentence, SummaryArtifactInput, SummaryFact, resolve_memory_sentence,
-    write_memory_projection, write_summary_artifact, write_summary_to_dag,
+    ArtifactKind, MemorySentence, SummaryArtifactInput, SummaryFact, is_noise_session,
+    resolve_memory_sentence, write_memory_projection, write_summary_artifact,
+    write_summary_to_dag,
 };
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 
@@ -295,9 +296,15 @@ async fn process_summary(
         .unwrap_or_else(|| created_at.clone());
     let started_at = job.started_at.clone();
     let ended_at = job.ended_at.clone();
+    let noise = is_noise_session(
+        project.as_deref(),
+        Some(session_id.as_str()),
+        session_key.as_deref(),
+        Some(harness.as_str()),
+    );
 
     pool.write(Priority::High, move |conn| {
-        if trigger == "session_end" {
+        if trigger == "session_end" && !noise {
             let _ = write_summary_artifact(
                 conn,
                 &root,
@@ -317,57 +324,61 @@ async fn process_summary(
             .map_err(signet_core::error::CoreError::Migration)?;
         }
 
-        for fact in &facts {
-            if fact.content.trim().is_empty() {
-                continue;
+        if !noise {
+            for fact in &facts {
+                if fact.content.trim().is_empty() {
+                    continue;
+                }
+                let _ = transactions::ingest(
+                    conn,
+                    &transactions::IngestInput {
+                        content: &fact.content,
+                        memory_type: fact.kind.as_deref().unwrap_or("fact"),
+                        tags: fact
+                            .tags
+                            .as_deref()
+                            .map(|value| {
+                                value
+                                    .split(',')
+                                    .map(str::trim)
+                                    .filter(|item| !item.is_empty())
+                                    .map(ToOwned::to_owned)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default(),
+                        who: None,
+                        why: None,
+                        project: project.as_deref(),
+                        importance: fact.importance.unwrap_or(0.3).clamp(0.0, 0.5),
+                        pinned: false,
+                        source_type: Some("session_end"),
+                        source_id: session_key.as_deref(),
+                        idempotency_key: None,
+                        runtime_path: None,
+                        actor: WORKER_ACTOR,
+                        agent_id: &agent_id,
+                        visibility: "global",
+                        scope: None,
+                    },
+                );
             }
-            let _ = transactions::ingest(
-                conn,
-                &transactions::IngestInput {
-                    content: &fact.content,
-                    memory_type: fact.kind.as_deref().unwrap_or("fact"),
-                    tags: fact
-                        .tags
-                        .as_deref()
-                        .map(|value| {
-                            value
-                                .split(',')
-                                .map(str::trim)
-                                .filter(|item| !item.is_empty())
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                    who: None,
-                    why: None,
-                    project: project.as_deref(),
-                    importance: fact.importance.unwrap_or(0.3).clamp(0.0, 0.5),
-                    pinned: false,
-                    source_type: Some("session_end"),
-                    source_id: session_key.as_deref(),
-                    idempotency_key: None,
-                    runtime_path: None,
-                    actor: WORKER_ACTOR,
-                    agent_id: &agent_id,
-                    visibility: "global",
-                    scope: None,
-                },
-            );
         }
 
-        let _ = write_summary_to_dag(
-            conn,
-            &agent_id,
-            session_key.as_deref(),
-            project.as_deref(),
-            Some(harness.as_str()),
-            &created_at,
-            &latest_at,
-            &trigger,
-            &summary,
-            &leaves,
-        )
-        .map_err(signet_core::error::CoreError::Migration)?;
+        if !noise {
+            let _ = write_summary_to_dag(
+                conn,
+                &agent_id,
+                session_key.as_deref(),
+                project.as_deref(),
+                Some(harness.as_str()),
+                &created_at,
+                &latest_at,
+                &trigger,
+                &summary,
+                &leaves,
+            )
+            .map_err(signet_core::error::CoreError::Migration)?;
+        }
 
         let _ = write_memory_projection(conn, &root, &agent_id)
             .map_err(signet_core::error::CoreError::Migration)?;
@@ -487,13 +498,13 @@ fn parse_llm_response(raw: &str) -> Result<LlmSummaryEnvelope, String> {
 
 fn build_prompt(transcript: &str, date: &str) -> String {
     format!(
-        "You are a session librarian. Summarize this coding session as a dated markdown note and extract key durable facts.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {date} Session Notes\\n\\n## Topic Name\\n\\nProse summary...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary guidelines:\n- Start with \"# {date} Session Notes\"\n- Use ## headings for distinct topics\n- Include what was worked on, key decisions, and open threads\n- Be concise but complete\n\nFact guidelines:\n- durable, self-contained knowledge only\n- include concrete subject names in every fact\n- max 15 facts\n\nConversation:\n{transcript}"
+        "You are reviewing a cleaned transcript from one coding session. The transcript already contains only the human/agent conversation turns, with tool calls, tool outputs, and thinking removed.\n\nUse judgment. Focus on what actually mattered.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {date} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary:\n- Start with \"# {date} Session Notes\"\n- Use ## headings for distinct topics\n- Cover what was worked on, key decisions, unresolved threads, and anything likely to matter later\n- Prefer concrete names, files, systems, or people when they matter\n- Write in past tense, third person\n\nFacts:\n- each fact must be self-contained and understandable without this conversation\n- include the specific subject in every fact\n- keep only durable knowledge, preferences, rules, or decisions\n- types: fact, preference, decision, learning, rule, issue\n- importance: 0.3 (routine) to 0.5 (significant)\n- max 15 facts\n\nConversation:\n{transcript}"
     )
 }
 
 fn build_chunk_prompt(chunk: &str, idx: usize, total: usize, date: &str) -> String {
     format!(
-        "You are a session librarian. This is chunk {} of {} from a long coding session on {}. Summarize this segment and extract key durable facts.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"Prose summary of this segment...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nConversation segment:\n{}",
+        "You are reviewing chunk {} of {} from one cleaned coding-session transcript on {}. Tool calls, tool outputs, and thinking have already been removed.\n\nUse judgment. Focus on what mattered in this segment.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"Free-form summary of this segment...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary:\n- summarize what was discussed or worked on in this segment\n- capture decisions, important context, and unresolved threads\n- write in past tense, third person\n\nFacts:\n- each fact must be self-contained and understandable without this conversation\n- include the specific subject in every fact\n- keep only durable knowledge worth carrying forward\n- types: fact, preference, decision, learning, rule, issue\n- importance: 0.3 (routine) to 0.5 (significant)\n- max 10 facts\n\nConversation segment:\n{}",
         idx + 1,
         total,
         date,
@@ -515,8 +526,13 @@ fn build_combine_prompt(leaves: &[String], facts: &[SummaryFact], date: &str) ->
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You are a session librarian. Combine the segment summaries below into one session summary for {} and deduplicate the durable facts.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {} Session Notes\\n\\n## Topic Name\\n\\nProse summary...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSegment summaries:\n{}\n\nFacts:\n{}",
-        date, date, summary_blocks, fact_lines
+        "You are combining {} segment summaries from one cleaned coding-session transcript on {}. Produce one coherent session note and one deduplicated durable fact list.\n\nReturn ONLY a JSON object:\n{{\n  \"summary\": \"# {} Session Notes\\n\\n## Topic Name\\n\\nFree-form session note...\",\n  \"facts\": [{{\"content\": \"...\", \"importance\": 0.3, \"tags\": \"tag1,tag2\", \"type\": \"fact\"}}]\n}}\n\nSummary:\n- Start with \"# {} Session Notes\"\n- Use ## headings for each distinct topic discussed\n- merge overlapping content from segments without repeating yourself\n- keep the note coherent, concrete, and useful for future continuity\n- write in past tense, third person\n\nFacts:\n- deduplicate facts that say the same thing in different words\n- keep the most specific version of each fact\n- max 15 facts total\n\nSegment summaries:\n{}\n\nFacts:\n{}",
+        leaves.len(),
+        date,
+        date,
+        date,
+        summary_blocks,
+        fact_lines
     )
 }
 
@@ -816,5 +832,77 @@ mod tests {
         drop(pool);
         handle.await.expect("writer task join failed");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn process_summary_skips_noise_session_writes() {
+        let path = test_db("noise");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+        let root = std::env::temp_dir().join(format!(
+            "signet-summary-root-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).expect("failed to create temp summary dir");
+        let config = SummaryConfig {
+            agents_dir: root.clone(),
+            ..SummaryConfig::default()
+        };
+        let provider: Arc<dyn LlmProvider> = Arc::new(crate::provider::OllamaLlmProvider::new(
+            "http://127.0.0.1:11434",
+            "unused",
+            1000,
+        ));
+        let semaphore = Arc::new(LlmSemaphore::new(1));
+        let now = Utc::now().to_rfc3339();
+        let job = SummaryJob {
+            id: "job-noise".to_string(),
+            session_key: Some("tmp-session".to_string()),
+            session_id: "tmp-session".to_string(),
+            harness: "codex".to_string(),
+            project: Some("/tmp/signetai".to_string()),
+            agent_id: "default".to_string(),
+            transcript: "short temp session".to_string(),
+            trigger: "session_end".to_string(),
+            captured_at: Some(now.clone()),
+            started_at: Some(now.clone()),
+            ended_at: Some(now),
+            attempts: 0,
+            created_at: Utc::now().to_rfc3339(),
+        };
+
+        let result = process_summary(&pool, &provider, &semaphore, &config, &job)
+            .await
+            .expect("noise summary should still complete");
+        assert_eq!(result.facts_extracted, 0);
+
+        let counts = pool
+            .read(|conn| {
+                let artifacts: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'summary'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let memories: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let dag: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| row.get(0))
+                    .unwrap_or(0);
+                Ok((artifacts, memories, dag))
+            })
+            .await
+            .expect("failed to read summary counts");
+
+        assert_eq!(counts.0, 0);
+        assert_eq!(counts.1, 0);
+        assert_eq!(counts.2, 0);
+
+        drop(pool);
+        handle.await.expect("writer task join failed");
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

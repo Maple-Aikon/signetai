@@ -6,14 +6,18 @@
  * opened on demand (SQLite WAL mode allows concurrent readers).
  */
 
-import { Database, type Statement } from "bun:sqlite";
+import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
 	DEFAULT_EMBEDDING_DIMENSIONS,
+	createMemoriesFts,
 	findSqliteVecExtension,
 	hasPendingMigrations,
+	memoriesFtsNeedsTokenizerRepair,
+	readMemoriesFtsSql,
+	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
 
@@ -89,6 +93,60 @@ function configurePragmas(db: Database): void {
 	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec("PRAGMA synchronous = NORMAL");
 	db.exec("PRAGMA temp_store = MEMORY");
+}
+
+function toRecordOrUndefined(row: unknown): Record<string, unknown> | undefined {
+	if (typeof row !== "object" || row === null) return undefined;
+	return row as Record<string, unknown>;
+}
+
+function toMigrationDb(db: Database): {
+	exec(sql: string): void;
+	prepare(sql: string): {
+		run(...args: unknown[]): void;
+		get(...args: unknown[]): Record<string, unknown> | undefined;
+		all(...args: unknown[]): Record<string, unknown>[];
+	};
+} {
+	return {
+		exec(sql: string): void {
+			db.exec(sql);
+		},
+		prepare(sql: string) {
+			const stmt = db.prepare(sql);
+			return {
+				run(...args: SQLQueryBindings[]): void {
+					stmt.run(...args);
+				},
+				get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined {
+					return toRecordOrUndefined(stmt.get(...args));
+				},
+				all(...args: SQLQueryBindings[]): Record<string, unknown>[] {
+					const rows = stmt.all(...args);
+					return rows
+						.map((row) => toRecordOrUndefined(row))
+						.filter((row): row is Record<string, unknown> => row !== undefined);
+				},
+			};
+		},
+	};
+}
+
+export function toFtsSchemaQueryDb(db: { prepare(sql: string): Statement }): {
+	prepare(sql: string): {
+		get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined;
+	};
+} {
+	return {
+		prepare(sql: string) {
+			const stmt = db.prepare(sql);
+			return {
+				get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined {
+					return toRecordOrUndefined(stmt.get(...args));
+				},
+			};
+		},
+	};
 }
 
 // Cached extension path — resolved once at startup
@@ -381,7 +439,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	loadVecExtension(writeConn);
 
 	// Back up before migrations if there are pending changes
-	if (existsSync(path) && hasPendingMigrations(writeConn)) {
+	if (existsSync(path) && hasPendingMigrations(toMigrationDb(writeConn))) {
 		const row = writeConn.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
 			| { version: number }
 			| undefined;
@@ -391,7 +449,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 
 	// Run schema migrations — this is the sole schema authority.
 	// Failures here are fatal: the daemon must not start on bad schema.
-	runMigrations(writeConn);
+	runMigrations(toMigrationDb(writeConn));
 
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
@@ -423,58 +481,59 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	accessor = createAccessor(writeConn);
 }
 
+export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string): void {
+	if (accessor !== null) throw new Error("DbAccessor already initialised");
+
+	dbPath = dbPathParam;
+	vecExtPath = vecExtensionPath;
+
+	const writeConn = new Database(dbPathParam);
+	configurePragmas(writeConn);
+
+	if (vecExtensionPath) {
+		try {
+			writeConn.loadExtension(vecExtensionPath);
+			vecLoaded = true;
+			vecLoadError = null;
+		} catch (e) {
+			vecLoaded = false;
+			vecLoadError = e instanceof Error ? e.message : String(e);
+		}
+	} else {
+		vecLoaded = false;
+		vecLoadError = "no extension path provided";
+	}
+
+	accessor = createAccessor(writeConn);
+}
+
 // ---------------------------------------------------------------------------
 // FTS table creation (self-healing for upgrades)
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the memories_fts virtual table exists. On upgrades from older
- * installs the table can be missing entirely, silently breaking search.
- * If missing, recreates the FTS5 table, sync triggers, and backfills
- * from existing memories rows.
+ * Ensure the memories_fts virtual table exists with the canonical
+ * tokenizer. Older installs can carry a legacy porter-tokenized table,
+ * which silently harms lexical recall quality for conversational cues.
  */
 export function ensureFtsTable(db: Database): void {
-	const existing = db.prepare("SELECT name FROM sqlite_master WHERE name = 'memories_fts' AND type = 'table'").get() as
-		| { name: string }
-		| undefined;
+	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
-	if (existing) return;
-
-	console.log("[db-accessor] memories_fts missing — recreating FTS5 table");
-
-	db.exec(`
-		CREATE VIRTUAL TABLE memories_fts USING fts5(
-			content,
-			content='memories',
-			content_rowid='rowid'
-		);
-	`);
-
-	// Sync triggers so FTS stays in sync with the memories table
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-		END;
-	`);
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-		END;
-	`);
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-		END;
-	`);
-
-	// Backfill existing rows
-	const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
-
-	if (backfilled.n > 0) {
-		db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
-		console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
+	if (sql === null) {
+		console.log("[db-accessor] memories_fts missing — recreating FTS5 table");
+		createMemoriesFts(db);
+		const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+		if (backfilled.n > 0) {
+			db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+			console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
+		}
+		return;
 	}
+
+	if (!memoriesFtsNeedsTokenizerRepair(sql)) return;
+
+	console.log("[db-accessor] memories_fts tokenizer drift detected — recreating FTS5 table");
+	recreateMemoriesFts(db);
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +718,10 @@ export function getDbAccessor(): DbAccessor {
 		throw new Error("DbAccessor not initialised — call initDbAccessor() first");
 	}
 	return accessor;
+}
+
+export function hasDbAccessor(): boolean {
+	return accessor !== null;
 }
 
 /** Tear down the singleton. Safe to call even if never initialised. */

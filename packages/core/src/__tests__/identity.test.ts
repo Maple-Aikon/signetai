@@ -1,18 +1,30 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry, scaffoldAgent } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	detectExistingSetup,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 } from "../identity";
+import { parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
+const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
-afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+afterEach(() => {
+	if (ORIGINAL_HERMES_REPO === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.HERMES_REPO;
+	} else {
+		process.env.HERMES_REPO = ORIGINAL_HERMES_REPO;
+	}
+	rmSync(TMP, { recursive: true, force: true });
+});
 
 describe("readStaticIdentity", () => {
 	test("returns null when dir does not exist", () => {
@@ -93,6 +105,101 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Identity");
 		expect(result).toContain("## About Your User");
 		expect(result).toContain("## Working Memory");
+	});
+});
+
+describe("parseSimpleYaml", () => {
+	test("degrades malformed YAML to an empty object", () => {
+		expect(parseSimpleYaml("agent:\n  name: [unterminated")).toEqual({});
+	});
+});
+
+describe("detectExistingSetup", () => {
+	test("detects Hermes Agent before the Signet memory plugin is installed", () => {
+		const hermesRepo = join(TMP, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_REPO = hermesRepo;
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.hermesAgent).toBe(true);
+	});
+});
+
+describe("agent roster helpers", () => {
+	test("resolves agent-local identity files before root fallbacks", () => {
+		mkdirSync(join(TMP, "agents", "dot"), { recursive: true });
+		writeFileSync(join(TMP, "AGENTS.md"), "root agents");
+		writeFileSync(join(TMP, "USER.md"), "root user");
+		writeFileSync(join(TMP, "agents", "dot", "AGENTS.md"), "dot agents");
+		writeFileSync(join(TMP, "agents", "dot", "IDENTITY.md"), "dot identity");
+
+		expect(getAgentIdentityFiles("dot", TMP)).toMatchObject({
+			"AGENTS.md": join(TMP, "agents", "dot", "AGENTS.md"),
+			"IDENTITY.md": join(TMP, "agents", "dot", "IDENTITY.md"),
+			"USER.md": join(TMP, "USER.md"),
+		});
+	});
+
+	test("scaffolds only SOUL.md and IDENTITY.md for named agents", () => {
+		scaffoldAgent("dot", TMP);
+		const agentDir = join(TMP, "agents", "dot");
+
+		expect(existsSync(join(agentDir, "SOUL.md"))).toBe(true);
+		expect(existsSync(join(agentDir, "IDENTITY.md"))).toBe(true);
+		expect(existsSync(join(agentDir, "AGENTS.md"))).toBe(false);
+		expect(existsSync(join(agentDir, "MEMORY.md"))).toBe(false);
+	});
+
+	test("normalizes canonical nested memory policies", () => {
+		expect(
+			normalizeAgentRosterEntry({
+				name: "writer",
+				memory: { read_policy: { type: "group", group: "writers" } },
+			}),
+		).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("normalizes legacy flat roster policies for backward compatibility", () => {
+		expect(normalizeAgentRosterEntry({ name: "writer", read_policy: "shared", policy_group: "ignored" })).toEqual({
+			name: "writer",
+			readPolicy: "shared",
+			policyGroup: null,
+		});
+	});
+
+	test("normalizes legacy flat roster group policies for backward compatibility", () => {
+		expect(normalizeAgentRosterEntry({ name: "writer", read_policy: "group", policy_group: "writers" })).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("preserves legacy flat group policy inside a memory block", () => {
+		expect(
+			normalizeAgentRosterEntry({ name: "writer", memory: { read_policy: "group", policy_group: "writers" } }),
+		).toEqual({
+			name: "writer",
+			readPolicy: "group",
+			policyGroup: "writers",
+		});
+	});
+
+	test("builds canonical nested memory config for group policies", () => {
+		expect(buildAgentMemoryConfig("group", "writers")).toEqual({
+			read_policy: { type: "group", group: "writers" },
+		});
+	});
+
+	test("fails closed to isolated when group policy is missing its group", () => {
+		expect(buildAgentMemoryConfig("group", null)).toEqual({
+			read_policy: "isolated",
+		});
 	});
 });
 

@@ -13,7 +13,7 @@ import {
 	type MemoryType,
 } from "@signet/core";
 import { logger } from "../logger";
-import type { LlmProvider } from "./provider";
+import { type LlmProvider, RateLimitExceededError } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -388,6 +388,16 @@ export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
 
 	const parsed = parseExtractionOutput(rawOutput);
 	if (parsed === null) {
+		// Known failure mode: some providers (e.g. OpenCode with gpt-5-mini)
+		// occasionally return plain text instead of JSON — especially when
+		// the input content itself contains question-like text (e.g. hint
+		// questions from a previous pipeline pass). The model's instruction-
+		// following fails and it "answers the questions" instead of extracting
+		// facts. This is a model behavior issue, not a parsing bug.
+		//
+		// Impact is low: the memory still exists but won't get enriched with
+		// extracted facts/entities for this pass. Hints and other pipeline
+		// stages operate independently and are unaffected.
 		const jsonStr = stripFences(rawOutput);
 		logger.warn("pipeline", "Failed to parse extraction JSON", {
 			preview: jsonStr.slice(0, 500),
@@ -454,6 +464,14 @@ export async function extractFactsAndEntities(
 			maxTokens: opts?.maxTokens,
 		});
 	} catch (e) {
+		if (e instanceof RateLimitExceededError) {
+			logger.warn("pipeline", "Extraction LLM call rate limited", {
+				error: e.message,
+				provider: e.providerName,
+				maxCallsPerHour: e.maxCallsPerHour,
+			});
+			throw e;
+		}
 		const msg = e instanceof Error ? e.message : String(e);
 		logger.warn("pipeline", "Extraction LLM call failed", { error: msg });
 		throw new Error(`LLM extraction failed: ${msg}`);

@@ -7,7 +7,16 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+} from "@signet/core";
 import { z } from "zod";
+import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";
+import { createDefaultPluginHost } from "../plugins/index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +35,21 @@ interface McpServerOptions {
 		readonly workspace?: string;
 		readonly channel?: string;
 	};
+	/** Plugin policy source used to gate plugin-owned MCP surfaces */
+	readonly pluginHost?: GraphiqPluginPolicyHost;
+}
+
+type GraphiqPluginPolicyHostProvider = () => GraphiqPluginPolicyHost;
+
+interface GraphiqPluginPolicyHost {
+	readonly get: (id: string) =>
+		| {
+				readonly state: string;
+				readonly surfaces: {
+					readonly mcpTools: ReadonlyArray<{ readonly name: string }>;
+				};
+		  }
+		| undefined;
 }
 
 interface MarketplaceRoutedTool {
@@ -92,6 +116,10 @@ interface MarketplaceProxyState {
 	contextKey: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 interface DaemonResponse<T> {
 	readonly ok: true;
 	readonly data: T;
@@ -114,6 +142,20 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_forget",
 	"memory_feedback",
 	"knowledge_expand",
+	"knowledge_tree",
+	"knowledge_list_entities",
+	"knowledge_get_entity",
+	"knowledge_list_aspects",
+	"knowledge_list_groups",
+	"knowledge_list_claims",
+	"knowledge_list_attributes",
+	"knowledge_hygiene_report",
+	"entity_list",
+	"entity_get",
+	"entity_aspects",
+	"entity_groups",
+	"entity_claims",
+	"entity_attributes",
 	"knowledge_expand_session",
 	"lcm_expand",
 	"agent_peers",
@@ -131,12 +173,32 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"mcp_server_policy_get",
 	"mcp_server_policy_set",
 	"session_bypass",
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
 ]);
 
 const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
 const hotToolIdsByContext = new Map<string, Set<string>>();
 const hotToolTouchedAt = new Map<string, number>();
 const HOT_CONTEXT_TTL_MS = 30 * 60 * 1000;
+const GRAPHIQ_SEARCH_TOP_DEFAULT = 10;
+const GRAPHIQ_SEARCH_TOP_MAX = 100;
+const GRAPHIQ_CONSTANTS_TOP_DEFAULT = 20;
+const GRAPHIQ_CONSTANTS_TOP_MAX = 100;
+const GRAPHIQ_BLAST_DEPTH_DEFAULT = 3;
+const GRAPHIQ_BLAST_DEPTH_MAX = 10;
+const GRAPHIQ_MCP_TOOL_NAMES = new Set([
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
+]);
 
 // ---------------------------------------------------------------------------
 // Internal HTTP helper
@@ -195,6 +257,27 @@ function textResult(value: unknown): { content: Array<{ type: "text"; text: stri
 	};
 }
 
+function boundedInteger(value: number | undefined, fallback: number, max: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	const rounded = Math.trunc(value);
+	if (rounded < 1) return 1;
+	if (rounded > max) return max;
+	return rounded;
+}
+
+function graphIqPositionalArg(
+	value: string,
+	label: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+	if (value.trim().length === 0) {
+		return { ok: false, error: `GraphIQ ${label} is required.` };
+	}
+	if (value.trimStart().startsWith("-")) {
+		return { ok: false, error: `GraphIQ ${label} cannot start with '-' because it would be parsed as a CLI option.` };
+	}
+	return { ok: true, value };
+}
+
 function errorResult(msg: string): {
 	content: Array<{ type: "text"; text: string }>;
 	isError: true;
@@ -203,6 +286,54 @@ function errorResult(msg: string): {
 		content: [{ type: "text" as const, text: msg }],
 		isError: true as const,
 	};
+}
+
+async function graphIqToolResult(
+	args: readonly string[],
+	label: string,
+	toolName: string,
+	pluginHostProvider: GraphiqPluginPolicyHostProvider,
+): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: true }> {
+	const access = graphIqToolAccess(toolName, pluginHostProvider());
+	if (!access.ok) return errorResult(access.error);
+	try {
+		const result = await runGraphiqCli(args);
+		const stderr = result.stderr.trim();
+		const output = result.stdout.trim();
+		const parts = [`Active project: ${result.activeProject}`];
+		if (output) parts.push(output);
+		if (stderr) parts.push(`stderr:\n${stderr}`);
+		return textResult(parts.join("\n\n"));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return errorResult(`${label}: ${message}`);
+	}
+}
+
+function graphIqToolAccess(
+	toolName: string,
+	pluginHost: GraphiqPluginPolicyHost,
+): { ok: true } | { ok: false; error: string } {
+	const plugin = pluginHost.get(SIGNET_GRAPHIQ_PLUGIN_ID);
+	const pluginActive = plugin?.state === "active" || plugin?.state === "degraded";
+	if (!pluginActive) {
+		const state = plugin?.state ?? "not registered";
+		return { ok: false, error: `GraphIQ plugin is ${state}. Run \`signet index <path>\` after enabling GraphIQ.` };
+	}
+	if (!allowedGraphiqMcpTools(pluginHost).has(toolName)) {
+		return { ok: false, error: `GraphIQ plugin has not granted MCP tool access for ${toolName}.` };
+	}
+	if (!getActiveGraphiqDbPath()) {
+		return { ok: false, error: "GraphIQ has no active indexed project. Run `signet index <path>` first." };
+	}
+	return { ok: true };
+}
+
+function allowedGraphiqMcpTools(pluginHost: GraphiqPluginPolicyHost): ReadonlySet<string> {
+	const plugin = pluginHost.get(SIGNET_GRAPHIQ_PLUGIN_ID);
+	const active = plugin?.state === "active" || plugin?.state === "degraded";
+	if (!active) return new Set();
+	return new Set(plugin.surfaces.mcpTools.map((tool) => tool.name).filter((name) => GRAPHIQ_MCP_TOOL_NAMES.has(name)));
 }
 
 function sanitizeToolSegment(value: string): string {
@@ -491,6 +622,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	const enableMarketplaceProxyTools = opts?.enableMarketplaceProxyTools ?? true;
 	const context = normalizeContext(opts?.context);
 	const contextKey = buildContextKey(context);
+	const pluginHostProvider: GraphiqPluginPolicyHostProvider = opts?.pluginHost
+		? () => opts.pluginHost as GraphiqPluginPolicyHost
+		: () => createDefaultPluginHost({ persistRegistry: false });
 
 	const server = new McpServer({
 		name: "signet",
@@ -524,27 +658,62 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				query: z.string().describe("Search query text"),
 				limit: z.number().optional().describe("Max results to return (default 10)"),
-				type: z.string().optional().describe("Filter by memory type"),
-				min_score: z.number().optional().describe("Minimum relevance score threshold"),
+				project: z.string().optional().describe("Optional project path filter"),
 				expand: z.boolean().optional().describe("Include lossless session transcripts as sources"),
+				type: z.string().optional().describe("Filter by memory type"),
+				tags: z.string().optional().describe("Filter by tags (comma-separated)"),
+				who: z.string().optional().describe("Filter by author"),
+				since: z.string().optional().describe("Only include memories created after this date"),
+				until: z.string().optional().describe("Only include memories created before this date"),
+				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
+				pinned: z.boolean().optional().describe("Only return pinned memories"),
+				importance_min: z.number().optional().describe("Minimum memory importance threshold"),
+				min_score: z
+					.number()
+					.optional()
+					.describe("Deprecated compatibility alias for importance_min; ignored when importance_min is also set"),
+				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
 			}),
 		},
-		async ({ query, limit, type, min_score, expand }) => {
+		async ({
+			query,
+			keyword_query,
+			limit,
+			project,
+			type,
+			tags,
+			who,
+			pinned,
+			importance_min,
+			since,
+			until,
+			min_score,
+			score_min,
+			expand,
+		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
-				body: {
-					query,
+				body: buildRecallRequestBody(query, {
+					keyword_query,
 					limit: limit ?? 10,
+					project,
 					type,
-					importance_min: min_score,
+					tags,
+					who,
+					pinned,
+					importance_min: importance_min ?? min_score,
+					since,
+					until,
 					expand,
-				},
+				}),
 			});
 
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			return textResult(result.data);
+			// Score thresholds trim ranked matches, but intentionally keep
+			// unscored supporting context in-band.
+			return textResult(formatRecallText(applyRecallScoreThreshold(result.data, score_min)));
 		},
 	);
 
@@ -561,6 +730,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("Memory type (fact, preference, decision, etc.)"),
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
+				pinned: z.boolean().optional().describe("Pin this memory — prevents decay, bypasses 0.95^days aging"),
+				hints: z
+					.array(z.string())
+					.optional()
+					.describe("Prospective recall hints and alternate phrasings for retrieving this memory later"),
+				createdAt: z
+					.string()
+					.optional()
+					.describe("Source ISO timestamp for imported/older memories; used for currentness and supersession."),
 				transcript: z
 					.string()
 					.optional()
@@ -581,38 +759,63 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 							.optional(),
 						aspects: z
 							.array(
-								z.object({
-									entity: z.string(),
-									aspect: z.string(),
-									value: z.string(),
-									confidence: z.number().optional(),
-								}),
+								z.union([
+									z.object({
+										entityName: z.string(),
+										entityType: z.string().optional(),
+										aspect: z.string(),
+										attributes: z.array(
+											z.object({
+												groupKey: z
+													.string()
+													.optional()
+													.describe("Navigable subgroup within the aspect, like a dresser inside a room."),
+												claimKey: z
+													.string()
+													.optional()
+													.describe(
+														"Stable identity for this claim within the entity/aspect/group, used for supersession.",
+													),
+												content: z.string(),
+												confidence: z.number().optional(),
+												importance: z.number().optional(),
+											}),
+										),
+									}),
+									z.object({
+										entity: z.string(),
+										aspect: z.string(),
+										value: z.string(),
+										groupKey: z.string().optional(),
+										claimKey: z.string().optional(),
+										confidence: z.number().optional(),
+										importance: z.number().optional(),
+									}),
+								]),
 							)
 							.optional(),
 						hints: z.array(z.string()).optional(),
 					})
 					.optional()
 					.describe(
-						"Pre-extracted structured data (entities, aspects, hints). Skips pipeline extraction when provided.",
+						"Pre-extracted structured data: entities, entity aspects with attributes, and hints. Skips pipeline extraction when provided.",
 					),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, transcript, structured }) => {
-			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
-			let body = content;
-			if (tags) {
-				body = `[${tags}]: ${content}`;
-			}
-
+		async ({ content, type, importance, tags, hints, transcript, structured, pinned, createdAt }) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
 				method: "POST",
-				body: {
-					content: body,
+				body: buildRememberRequestBody(content, {
+					type,
 					importance,
+					tags,
+					hints,
 					transcript,
 					structured,
-				},
+					pinned,
+					createdAt,
+				}),
 			});
 
 			if (!result.ok) {
@@ -689,11 +892,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("New type"),
 				importance: z.number().optional().describe("New importance"),
 				tags: z.string().optional().describe("New tags (comma-separated)"),
+				pinned: z.boolean().optional().describe("Pin or unpin this memory"),
 				reason: z.string().describe("Why this edit is being made"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ id, content, type, importance, tags, reason }) => {
+		async ({ id, content, type, importance, tags, reason, pinned }) => {
 			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
 				method: "PATCH",
 				body: {
@@ -702,6 +906,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance,
 					tags,
 					reason,
+					pinned,
 				},
 			});
 
@@ -1402,6 +1607,314 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 	);
 
+	const knowledgeTreeInput = z.object({
+		entity: z.string().optional().describe("Entity name, e.g. Nicholai or Signet. Omit to list entities first."),
+		depth: z.number().optional().describe("How deep to expand: 1=aspects, 2=groups, 3=claims. Default 3."),
+		max_aspects: z.number().optional().describe("Max aspects/rooms to return, default 20"),
+		max_groups: z.number().optional().describe("Max groups/dressers per aspect, default 20"),
+		max_claims: z.number().optional().describe("Max claims/drawers per group, default 50"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listEntitiesInput = z.object({
+		query: z.string().optional().describe("Optional entity name filter"),
+		type: z.string().optional().describe("Optional entity type filter"),
+		limit: z.number().optional().describe("Max entities to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const getEntityInput = z.object({
+		name: z.string().describe("Entity name, e.g. Nicholai or Signet"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listAspectsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listGroupsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name, e.g. food"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listClaimsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name"),
+		group: z.string().describe("Group/dresser key, e.g. restaurants"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listAttributesInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name"),
+		group: z.string().describe("Group/dresser key"),
+		claim: z.string().describe("Claim/drawer key, e.g. favorite_restaurant"),
+		status: z.enum(["active", "superseded", "deleted", "all"]).optional().describe("Default active"),
+		kind: z.enum(["attribute", "constraint"]).optional(),
+		limit: z.number().optional().describe("Max attributes to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const hygieneReportInput = z.object({
+		limit: z.number().optional().describe("Max rows per report section, default 50"),
+		memory_limit: z.number().optional().describe("Recent memories to scan for safe mention candidates, default 200"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+
+	const fetchNavigation = async (path: string, params: URLSearchParams, label: string) => {
+		const query = params.toString();
+		const result = await daemonFetch<unknown>(baseUrl, query ? `${path}?${query}` : path);
+		if (!result.ok) return errorResult(`${label} failed: ${result.error}`);
+		return textResult(result.data);
+	};
+	const knowledgeTree = async ({
+		entity,
+		depth,
+		max_aspects,
+		max_groups,
+		max_claims,
+		agent_id,
+	}: z.infer<typeof knowledgeTreeInput>) => {
+		const params = new URLSearchParams();
+		if (!entity) {
+			if (max_aspects !== undefined) params.set("limit", String(max_aspects));
+			if (agent_id) params.set("agent_id", agent_id);
+			return fetchNavigation("/api/knowledge/navigation/entities", params, "Knowledge tree entity listing");
+		}
+		params.set("entity", entity);
+		if (depth !== undefined) params.set("depth", String(depth));
+		if (max_aspects !== undefined) params.set("max_aspects", String(max_aspects));
+		if (max_groups !== undefined) params.set("max_groups", String(max_groups));
+		if (max_claims !== undefined) params.set("max_claims", String(max_claims));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/tree", params, "Knowledge tree");
+	};
+	const listEntities = async ({ query, type, limit, offset, agent_id }: z.infer<typeof listEntitiesInput>) => {
+		const params = new URLSearchParams();
+		if (query) params.set("q", query);
+		if (type) params.set("type", type);
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/entities", params, "Entity list");
+	};
+	const getEntity = async ({ name, agent_id }: z.infer<typeof getEntityInput>) => {
+		const params = new URLSearchParams({ name });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/entity", params, "Entity get");
+	};
+	const listAspects = async ({ entity, agent_id }: z.infer<typeof listAspectsInput>) => {
+		const params = new URLSearchParams({ entity });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/aspects", params, "Entity aspects");
+	};
+	const listGroups = async ({ entity, aspect, agent_id }: z.infer<typeof listGroupsInput>) => {
+		const params = new URLSearchParams({ entity, aspect });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/groups", params, "Entity groups");
+	};
+	const listClaims = async ({ entity, aspect, group, agent_id }: z.infer<typeof listClaimsInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/claims", params, "Entity claims");
+	};
+	const listAttributes = async ({
+		entity,
+		aspect,
+		group,
+		claim,
+		status,
+		kind,
+		limit,
+		offset,
+		agent_id,
+	}: z.infer<typeof listAttributesInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group, claim });
+		if (status) params.set("status", status);
+		if (kind) params.set("kind", kind);
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/attributes", params, "Entity attributes");
+	};
+	const hygieneReport = async ({ limit, memory_limit, agent_id }: z.infer<typeof hygieneReportInput>) => {
+		const params = new URLSearchParams();
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (memory_limit !== undefined) params.set("memory_limit", String(memory_limit));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/hygiene", params, "Knowledge hygiene report");
+	};
+
+	server.registerTool(
+		"knowledge_tree",
+		{
+			title: "Knowledge Tree",
+			description:
+				"Show a compact outline of the knowledge graph. " +
+				"Use this when you know an entity and need tool-visible structure before choosing what to read. " +
+				"It returns aspects/rooms, groups/dressers, claim drawers, counts, and active previews. " +
+				"Omit entity to list top-level entities first.",
+			inputSchema: knowledgeTreeInput,
+			annotations: { readOnlyHint: true },
+		},
+		knowledgeTree,
+	);
+
+	server.registerTool(
+		"knowledge_list_entities",
+		{
+			title: "Knowledge: List Entities",
+			description:
+				"List top-level knowledge graph entities, like folders or houses. " +
+				"Use this first when you do not know the exact entity name.",
+			inputSchema: listEntitiesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listEntities,
+	);
+
+	server.registerTool(
+		"knowledge_get_entity",
+		{
+			title: "Knowledge: Get Entity",
+			description:
+				"Resolve one entity by name and return its structural summary. " +
+				"Use knowledge_tree after this to scan the entity's rooms, dressers, and drawers.",
+			inputSchema: getEntityInput,
+			annotations: { readOnlyHint: true },
+		},
+		getEntity,
+	);
+
+	server.registerTool(
+		"knowledge_list_aspects",
+		{
+			title: "Knowledge: List Aspects",
+			description:
+				"List aspects, which are broad rooms under an entity. " +
+				"Use this before knowledge_list_groups when you want step-by-step navigation.",
+			inputSchema: listAspectsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAspects,
+	);
+
+	server.registerTool(
+		"knowledge_list_groups",
+		{
+			title: "Knowledge: List Groups",
+			description:
+				"List groups, which are dresser-like subdivisions inside an aspect. " +
+				"Use this to find the right subgroup before opening claim drawers.",
+			inputSchema: listGroupsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listGroups,
+	);
+
+	server.registerTool(
+		"knowledge_list_claims",
+		{
+			title: "Knowledge: List Claims",
+			description:
+				"List claim keys, which are drawers containing current and historical observations. " +
+				"Use this before knowledge_list_attributes when you need the actual saved notes.",
+			inputSchema: listClaimsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listClaims,
+	);
+
+	server.registerTool(
+		"knowledge_list_attributes",
+		{
+			title: "Knowledge: List Attributes",
+			description:
+				"List the saved observations inside one entity/aspect/group/claim path. " +
+				"Defaults to active/current rows; pass status=all when you need superseded history.",
+			inputSchema: listAttributesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAttributes,
+	);
+
+	server.registerTool(
+		"knowledge_hygiene_report",
+		{
+			title: "Knowledge Hygiene Report",
+			description:
+				"Run a report-only scan for likely graph cleanup work. " +
+				"Flags suspicious entities, duplicate canonical entities, missing group/claim/source fields, " +
+				"and safe known-entity mention candidates without mutating the graph.",
+			inputSchema: hygieneReportInput,
+			annotations: { readOnlyHint: true },
+		},
+		hygieneReport,
+	);
+
+	server.registerTool(
+		"entity_list",
+		{
+			title: "List Entities",
+			description: "Compatibility alias for knowledge_list_entities.",
+			inputSchema: listEntitiesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listEntities,
+	);
+
+	server.registerTool(
+		"entity_get",
+		{
+			title: "Get Entity",
+			description: "Compatibility alias for knowledge_get_entity.",
+			inputSchema: getEntityInput,
+			annotations: { readOnlyHint: true },
+		},
+		getEntity,
+	);
+
+	server.registerTool(
+		"entity_aspects",
+		{
+			title: "List Entity Aspects",
+			description: "Compatibility alias for knowledge_list_aspects.",
+			inputSchema: listAspectsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAspects,
+	);
+
+	server.registerTool(
+		"entity_groups",
+		{
+			title: "List Entity Groups",
+			description: "Compatibility alias for knowledge_list_groups.",
+			inputSchema: listGroupsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listGroups,
+	);
+
+	server.registerTool(
+		"entity_claims",
+		{
+			title: "List Entity Claims",
+			description: "Compatibility alias for knowledge_list_claims.",
+			inputSchema: listClaimsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listClaims,
+	);
+
+	server.registerTool(
+		"entity_attributes",
+		{
+			title: "List Entity Attributes",
+			description: "Compatibility alias for knowledge_list_attributes.",
+			inputSchema: listAttributesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAttributes,
+	);
+
 	// ------------------------------------------------------------------
 	// knowledge_expand_session — temporal drill-down via session DAG
 	// ------------------------------------------------------------------
@@ -1466,6 +1979,137 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				return errorResult(`Temporal expansion failed: ${result.error}`);
 			}
 			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"code_search",
+		{
+			title: "Search Code",
+			description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
+			inputSchema: z.object({
+				query: z.string().describe("Code search query"),
+				top: z
+					.number()
+					.int()
+					.min(1)
+					.max(GRAPHIQ_SEARCH_TOP_MAX)
+					.optional()
+					.describe(`Max results to return (default ${GRAPHIQ_SEARCH_TOP_DEFAULT}, max ${GRAPHIQ_SEARCH_TOP_MAX})`),
+				file: z.string().optional().describe("Optional file path filter"),
+				debug: z.boolean().optional().describe("Include GraphIQ score/debug details"),
+			}),
+		},
+		async ({ query, top, file, debug }) => {
+			const safeQuery = graphIqPositionalArg(query, "query");
+			if (!safeQuery.ok) return errorResult(safeQuery.error);
+			const boundedTop = boundedInteger(top, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
+			const args = ["search", safeQuery.value, "--top", String(boundedTop)];
+			if (file) {
+				const safeFile = graphIqPositionalArg(file, "file filter");
+				if (!safeFile.ok) return errorResult(safeFile.error);
+				args.push("--file", safeFile.value);
+			}
+			if (debug) args.push("--debug");
+			return graphIqToolResult(args, "Code search failed", "code_search", pluginHostProvider);
+		},
+	);
+
+	server.registerTool(
+		"code_context",
+		{
+			title: "Code Context",
+			description: "Read full source and structural neighborhood for a symbol in the active GraphIQ project.",
+			inputSchema: z.object({
+				symbol: z.string().describe("Symbol name to inspect"),
+			}),
+		},
+		async ({ symbol }) => {
+			const safeSymbol = graphIqPositionalArg(symbol, "symbol");
+			if (!safeSymbol.ok) return errorResult(safeSymbol.error);
+			return graphIqToolResult(
+				["context", safeSymbol.value],
+				"Code context failed",
+				"code_context",
+				pluginHostProvider,
+			);
+		},
+	);
+
+	server.registerTool(
+		"code_blast",
+		{
+			title: "Code Blast Radius",
+			description: "Analyze impact radius for a symbol in the active GraphIQ project.",
+			inputSchema: z.object({
+				symbol: z.string().describe("Symbol name to analyze"),
+				depth: z
+					.number()
+					.int()
+					.min(1)
+					.max(GRAPHIQ_BLAST_DEPTH_MAX)
+					.optional()
+					.describe(`Traversal depth (default ${GRAPHIQ_BLAST_DEPTH_DEFAULT}, max ${GRAPHIQ_BLAST_DEPTH_MAX})`),
+				direction: z.enum(["forward", "backward", "both"]).optional().describe("Traversal direction"),
+			}),
+		},
+		async ({ symbol, depth, direction }) => {
+			const safeSymbol = graphIqPositionalArg(symbol, "symbol");
+			if (!safeSymbol.ok) return errorResult(safeSymbol.error);
+			const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
+			const args = ["blast", safeSymbol.value, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
+			return graphIqToolResult(args, "Code blast failed", "code_blast", pluginHostProvider);
+		},
+	);
+
+	server.registerTool(
+		"code_status",
+		{
+			title: "Code Index Status",
+			description: "Show GraphIQ status for the active indexed project.",
+			inputSchema: z.object({}),
+		},
+		async () => graphIqToolResult(["status"], "Code status failed", "code_status", pluginHostProvider),
+	);
+
+	server.registerTool(
+		"code_doctor",
+		{
+			title: "Code Index Doctor",
+			description: "Diagnose GraphIQ artifact health for the active indexed project.",
+			inputSchema: z.object({}),
+		},
+		async () => graphIqToolResult(["doctor"], "Code doctor failed", "code_doctor", pluginHostProvider),
+	);
+
+	server.registerTool(
+		"code_constants",
+		{
+			title: "Code Constants",
+			description: "Find shared numeric/string constants in the active GraphIQ project.",
+			inputSchema: z.object({
+				query: z.string().optional().describe("Optional constant/name filter"),
+				top: z
+					.number()
+					.int()
+					.min(1)
+					.max(GRAPHIQ_CONSTANTS_TOP_MAX)
+					.optional()
+					.describe(
+						`Max results to return (default ${GRAPHIQ_CONSTANTS_TOP_DEFAULT}, max ${GRAPHIQ_CONSTANTS_TOP_MAX})`,
+					),
+			}),
+		},
+		async ({ query, top }) => {
+			const args = ["constants"];
+			if (query) {
+				const safeQuery = graphIqPositionalArg(query, "query");
+				if (!safeQuery.ok) return errorResult(safeQuery.error);
+				args.push(safeQuery.value);
+			}
+			const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
+			args.push("--top", String(boundedTop));
+			return graphIqToolResult(args, "Code constants failed", "code_constants", pluginHostProvider);
 		},
 	);
 

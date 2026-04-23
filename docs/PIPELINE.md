@@ -221,39 +221,36 @@ Inline Entity Linker
 
 Before any async pipeline job runs, the inline entity linker
 (`packages/daemon/src/inline-entity-linker.ts`) performs a fast,
-synchronous extraction pass at memory write time. This is the "fast
-path" that complements the "deep path" of LLM-based extraction.
+synchronous mention-linking pass at memory write time. This is a
+mechanical helper, not a semantic author.
 
-The linker runs without an LLM call. It scans the memory's content
-text using regex patterns to extract entities, aspects, and attributes.
-Extracted entities are inserted or matched against `canonical_name` in
-the `entities` table, and corresponding `memory_entity_mentions` and
-`entity_attributes` rows are written in the same transaction as the
-memory itself.
+The linker runs without an LLM call. It scans the memory's content text
+for candidate proper nouns and links only entities that already exist
+for the same `agent_id`. It writes `memory_entity_mentions` rows so a
+new memory can be discovered from known entity pages immediately, but it
+does not create entities, aspects, attributes, or dependencies.
 
-The key benefit is immediacy: entities are queryable via knowledge
-graph traversal the moment the memory is committed — there is no
-waiting for the async extraction worker to pick up the job. When the
-extraction pipeline processes the same memory later, it performs deeper
-analysis: supersession detection, dependency synthesis, and confidence
-calibration. The async pass may refine or extend the entities the
-inline linker created, but the fast path ensures baseline graph
-connectivity is never delayed by queue depth or LLM availability.
+Structured graph writes come from `POST /api/memory/remember` with a
+`structured` payload, explicit user/agent actions, or reviewed
+normalization passes. This keeps the default background path cheap,
+predictable, and hard to poison: incidental capitalization can attach a
+memory to an existing known entity, but it cannot invent graph structure.
 
-Because the linker runs inside the write transaction, it must be fast
-and deterministic. There are no network calls, no LLM inference, and
-no blocking I/O — only regex matching and SQLite writes.
+Because the linker runs inside the write transaction, it must stay fast
+and deterministic. There are no network calls, no LLM inference, and no
+blocking I/O, only candidate matching and SQLite writes against existing
+graph rows.
 
 
 Structural Classification
 ---
 
-After extraction writes facts to the database, the structural classification
-worker (`structural-classify.ts`) runs a second LLM pass to assign each
-extracted fact to its entity's aspect hierarchy. Jobs are enqueued as
-`structural_classify` entries in `memory_jobs` and processed by a separate
-polling worker that batches by `entity_id` — all facts for the same entity
-in one LLM call.
+When explicitly enabled, after extraction writes facts to the database, the
+structural classification worker (`structural-classify.ts`) runs a second LLM
+pass to assign each extracted fact to its entity's aspect hierarchy. Jobs are
+enqueued as `structural_classify` entries in `memory_jobs` and processed by a
+separate polling worker that batches by `entity_id`, all facts for the same
+entity in one LLM call.
 
 The prompt presents the entity name, type, existing aspects, and suggested
 aspect names (from `ASPECT_SUGGESTIONS` keyed by entity type). The LLM
@@ -270,8 +267,10 @@ If a valid canonical type is returned (`person`, `project`, `system`,
 updated in the same transaction.
 
 The worker configuration lives under `structural` in the pipeline config:
-`pollIntervalMs` (how often to check for pending jobs) and
-`classifyBatchSize` (max facts per entity per LLM call).
+`enabled` (default `false`), `pollIntervalMs` (how often to check for pending
+jobs), and `classifyBatchSize` (max facts per entity per LLM call). The default
+pipeline does not use a background LLM to author graph structure; structured
+remember is the normal semantic write path.
 
 For details on the knowledge graph persistence stage, see
 [KNOWLEDGE-GRAPH.md](./KNOWLEDGE-GRAPH.md).
@@ -280,11 +279,16 @@ For details on the knowledge graph persistence stage, see
 Knowledge Graph
 ---
 
-When `graphEnabled` is true, extracted entity triples are persisted to a
-set of graph tables alongside the main fact writes. This happens in a
-**separate** transaction immediately after the main write transaction
-commits. Graph persistence failure is non-fatal — it logs a warning but
-never reverts the fact extraction results.
+When `graph.enabled` is true, graph reads, traversal, and recall boosting are
+available. Background extraction only persists extracted entity triples when
+`graph.extractionWritesEnabled` is also true. That second gate defaults to
+`false` so graph navigation can stay on without letting the async extractor
+author semantic graph structure.
+
+If extraction graph writes are explicitly enabled, they happen in a
+**separate** transaction immediately after the main write transaction commits.
+Graph persistence failure is non-fatal: it logs a warning but never reverts the
+fact extraction results.
 
 Entities are stored in the `entities` table with `name` (original casing),
 `canonical_name` (lowercase, whitespace-normalized), `entity_type`, and
@@ -531,6 +535,12 @@ returning a `Promise<boolean>`.
 
 Two implementations are shipped:
 
+**LlamaCppProvider** calls the llama.cpp server via its OpenAI-compatible
+`POST /v1/chat/completions` endpoint. The default base URL is
+`http://localhost:8080` and the default model is `qwen3.5:4b`. No
+authentication is required. The `available` check uses a 3-second timeout
+against `GET /v1/models`.
+
 **OllamaProvider** calls the Ollama HTTP API at `POST /api/generate` with
 `stream: false`. The default base URL is `http://localhost:11434` and the
 default model is `qwen3:4b` (deprecated — see below). `nemotron-3-nano:4b` is the
@@ -545,7 +555,7 @@ For live prompt harness commands, see
 **ClaudeCodeProvider** invokes the Claude Code CLI as a subprocess:
 `claude -p <prompt> --model <model> --no-session-persistence --output-format text`.
 The default model is `haiku`. Timeout is 60,000 ms. This provider is
-available as a fallback when Ollama is not running locally but the
+available as a fallback when no local LLM server is running but the
 Claude Code CLI is present on PATH.
 
 The interface is intentionally minimal — no streaming, no chat history, no
@@ -857,11 +867,34 @@ memory:
 Post-Fusion Dampening
 ---
 
-After hybrid recall combines traversal, FTS, and vector results into a
-fused score list, the dampening pipeline
+After hybrid recall combines traversal, FTS, vector results, and
+prospective hints into a candidate pool, structured evidence shaping
+(`packages/daemon/src/pipeline/structured-evidence.ts`) scores candidates
+across separate lexical, semantic, hint, and traversal channels. This is
+the recall-side SEC layer: traversal can contribute structure, but
+traversal-only memories are capped below directly anchored evidence;
+prospective hints stay strong enough to recover class-to-instance
+matches, such as "music streaming service" finding a memory that only
+says "Spotify." A light facet-coverage pass then prefers top candidates
+that cover different parts of multi-part queries instead of returning
+near-duplicates for one facet.
+
+After structured evidence shaping produces a fused score list, the
+dampening pipeline
 (`packages/daemon/src/pipeline/dampening.ts`) applies three corrections
 before the final sort. The goal is to break score bunching where relevant
 and irrelevant results land at similar fusion scores.
+
+Structured currentness then applies a final correction before hydration.
+Active attributes remain eligible as current evidence, while memories whose
+structured attributes have been superseded are downweighted and annotated
+with a `[Signet currentness]` note that points to the replacement
+attribute when available. Structured supersession is grouped-claim-scoped: a newer
+attribute can replace an older one only when it shares the same entity,
+aspect, `group_key`, and `claim_key`. Sibling events under the same aspect stay active
+unless the caller explicitly gives them the same group and claim key. This keeps stale
+facts visible for historical questions without letting them win ordinary
+"what is current?" recall.
 
 **Stage 1: Gravity dampening** penalizes results that arrived via a
 semantic path (vector, hybrid, or traversal) but share zero query-term
@@ -894,10 +927,13 @@ are re-sorted by adjusted score descending.
 Lossless Session Transcripts
 ---
 
-After the summary worker extracts facts from a session, it also writes
-the raw transcript to the `session_transcripts` table (migration 040).
-This preserves completeness — extraction creates the search surface, but
-the full conversation text is never lost.
+After the summary worker extracts facts from a session, Signet also
+stores a cleaned conversation-only transcript in the
+`session_transcripts` table (migration 040). Tool calls, tool outputs,
+and thinking traces are removed from this memory surface so retrieval
+and summarization stay focused on the actual conversation. Raw
+auditable traces may still be written to daemon logs outside the memory
+lineage.
 
 The table schema (`session_key TEXT PRIMARY KEY, content TEXT NOT NULL,
 harness TEXT, project TEXT, agent_id TEXT, created_at TEXT`) is indexed
@@ -907,7 +943,7 @@ session via `INSERT OR IGNORE`, keyed on `session_key`.
 The `/api/memory/remember` endpoint accepts an optional `transcript`
 field. When present and a `sourceId` (session key) is available, the
 transcript is written to `session_transcripts` in a separate write
-transaction. This allows connectors to push the raw conversation text
+transaction. This allows connectors to push cleaned conversation text
 alongside memories without waiting for session-end summary processing.
 
 At recall time, the `/api/memory/recall` endpoint supports `expand:
@@ -962,11 +998,10 @@ nodes into `session_summaries`.
 Decision Auto-Protection
 ---
 
-The inline entity linker (`packages/daemon/src/inline-entity-linker.ts`)
-runs a 14-pattern regex battery on memory content at write time. When
-decision language is detected, extracted attributes are promoted from
-`kind='attribute'` to `kind='constraint'` with `importance=0.85`
-(default attributes use `importance=0.5`).
+The shared decision detector (`isDecisionContent`) runs a 14-pattern regex
+battery on memory content. Structured graph writes use this detector when a
+caller does not specify a stronger kind, so decision language can become a
+`kind='constraint'` without requiring a background LLM.
 
 The patterns cover common decision-indicating phrases:
 
@@ -977,16 +1012,10 @@ The patterns cover common decision-indicating phrases:
 - "prefers X over/instead/rather", "adopted"
 - "architecture decision", "design decision"
 
-The detection function `isDecisionContent` returns true if any pattern
-matches. The linker then sets `kind='constraint'` on all attributes
-extracted from that memory's clauses, ensuring they receive the
-resolution boost during dampening (see Post-Fusion Dampening, Stage 3)
-and always surface in recall per INDEX.md invariant 5: constraints must
-be retrievable.
-
-This is a write-time classification — no LLM call is involved. The
-regex battery is fast and deterministic, consistent with the inline
-linker's contract of no network calls inside the write transaction.
+The detection function returns true if any pattern matches. This is a
+write-time classification, no LLM call is involved. The regex battery is fast
+and deterministic, consistent with the pipeline rule that default background
+work should be mechanical and predictable.
 
 
 Configuration Reference
@@ -1027,10 +1056,11 @@ Extraction safety note:
 
 ```yaml
 extraction:
-  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
-  model: qwen3:4b
+  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
+  model: qwen3.5:4b
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
+  structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
   command:                       # required when provider: command
     bin: node
     args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
@@ -1041,8 +1071,8 @@ extraction:
 
 synthesis:
   enabled: true
-  provider: ollama               # same provider choices as extraction, except "command"
-  model: qwen3:4b
+  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  model: qwen3.5:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model
   # except extraction.provider=command, which falls back to synthesis defaults
@@ -1056,8 +1086,20 @@ worker:
 
 graph:
   enabled: true
+  extractionWritesEnabled: false # default; structured remember authors graph data
   boostWeight: 0.15              # fraction 0.0–1.0
   boostTimeoutMs: 500            # ms, range 50–5000
+
+structural:
+  enabled: true
+  classifyBatchSize: 8           # range 1–20
+  dependencyBatchSize: 5         # range 1–10
+  pollIntervalMs: 10000          # ms, range 2000–120000
+  synthesisEnabled: true
+  synthesisIntervalMs: 60000     # ms, range 10000–600000
+  synthesisTopEntities: 20       # range 5–100
+  synthesisMaxFacts: 10          # range 3–50
+  synthesisMaxStallMs: 1800000   # 30 min, set 0 to disable
 
 reranker:
   enabled: true
@@ -1149,6 +1191,7 @@ memory:
     enabled: true
     graph:
       enabled: true
+      extractionWritesEnabled: false
     extraction:
       minConfidence: 0.75
 ```
@@ -1172,8 +1215,8 @@ memory:
     enabled: true
     semanticContradictionEnabled: true
     extraction:
-      provider: ollama
-      model: qwen3:4b
+      provider: llama-cpp
+      model: qwen3.5:4b
     graph:
       enabled: true
     autonomous:

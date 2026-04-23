@@ -4,9 +4,12 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { toFtsSchemaQueryDb } from "./db-accessor";
+import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import {
 	checkFtsConsistency,
@@ -20,6 +23,7 @@ import {
 	releaseStaleLeases,
 	requeueDeadJobs,
 	resyncVectorIndex,
+	structuralBackfill,
 	triggerRetentionSweep,
 } from "./repair-actions";
 
@@ -49,75 +53,66 @@ function asAccessor(db: Database): DbAccessor {
 	};
 }
 
+function installLegacyPorterMemoriesFts(db: Database): void {
+	db.exec("DROP TRIGGER IF EXISTS memories_ai");
+	db.exec("DROP TRIGGER IF EXISTS memories_ad");
+	db.exec("DROP TRIGGER IF EXISTS memories_au");
+	db.exec("DROP TABLE IF EXISTS memories_fts");
+	db.exec(`
+		CREATE VIRTUAL TABLE memories_fts USING fts5(
+			content,
+			content='memories',
+			content_rowid='rowid',
+			tokenize='porter unicode61'
+		);
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+}
+
 const TEST_CFG: PipelineV2Config = {
-	enabled: true,
+	...DEFAULT_PIPELINE_V2,
 	shadowMode: false,
 	mutationsFrozen: false,
 	semanticContradictionEnabled: false,
 	extraction: {
+		...DEFAULT_PIPELINE_V2.extraction,
 		provider: "ollama",
 		model: "test",
 		timeout: 45000,
 		minConfidence: 0.7,
 	},
-	worker: {
-		pollMs: 2000,
-		maxRetries: 3,
-		leaseTimeoutMs: 300000,
-	},
-	graph: {
-		enabled: true,
-		boostWeight: 0.15,
-		boostTimeoutMs: 500,
-	},
 	reranker: {
+		...DEFAULT_PIPELINE_V2.reranker,
 		enabled: false,
-		model: "",
-		useExtractionModel: false,
-		topN: 20,
-		timeoutMs: 2000,
 	},
 	autonomous: {
+		...DEFAULT_PIPELINE_V2.autonomous,
 		enabled: true,
 		frozen: false,
 		allowUpdateDelete: true,
 		maintenanceIntervalMs: 1800000,
 		maintenanceMode: "observe",
 	},
-	repair: {
-		reembedCooldownMs: 300000,
-		reembedHourlyBudget: 10,
-		requeueCooldownMs: 60000,
-		requeueHourlyBudget: 50,
-		dedupCooldownMs: 600000,
-		dedupHourlyBudget: 3,
-		dedupSemanticThreshold: 0.92,
-		dedupBatchSize: 100,
-	},
-	documents: {
-		workerIntervalMs: 10000,
-		chunkSize: 2000,
-		chunkOverlap: 200,
-		maxContentBytes: 10 * 1024 * 1024,
-	},
-	guardrails: {
-		maxContentChars: 500,
-		chunkTargetChars: 300,
-		recallTruncateChars: 500,
-	},
 	telemetryEnabled: false,
-	telemetry: {
-		posthogHost: "",
-		posthogApiKey: "",
-		flushIntervalMs: 60000,
-		flushBatchSize: 50,
-		retentionDays: 90,
-	},
 	structural: {
+		...DEFAULT_PIPELINE_V2.structural,
 		enabled: false,
-		classifyBatchSize: 8,
-		dependencyBatchSize: 5,
-		pollIntervalMs: 10000,
 	},
 };
 
@@ -307,6 +302,25 @@ describe("checkRepairGate", () => {
 	});
 });
 
+describe("structuralBackfill", () => {
+	it("does not enqueue LLM structural jobs while structural workers are disabled", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+
+		try {
+			const result = structuralBackfill(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(result.message).toContain("structural backfill disabled");
+		} finally {
+			db.close();
+		}
+	});
+});
+
 // ---------------------------------------------------------------------------
 // requeueDeadJobs
 // ---------------------------------------------------------------------------
@@ -473,6 +487,33 @@ describe("checkFtsConsistency", () => {
 		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
 		// Rebuild only runs on mismatch; consistent case is a no-op
 		expect(result.success).toBe(true);
+	});
+
+	it("detects legacy porter tokenizer drift", () => {
+		insertMemory(db, "We celebrate wins together");
+		installLegacyPorterMemoriesFts(db);
+		const limiter = createRateLimiter();
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, false);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.message).toMatch(/tokenizer drift/i);
+		expect(readMemoriesFtsSql(toFtsSchemaQueryDb(db))).toContain("porter unicode61");
+	});
+
+	it("repairs legacy porter tokenizer drift when repair=true", () => {
+		insertMemory(db, "We celebrate wins together");
+		installLegacyPorterMemoriesFts(db);
+		const limiter = createRateLimiter();
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.message).toMatch(/unicode61 tokenizer/i);
+
+		const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
+		expect(sql).toContain("tokenize='unicode61'");
+		expect(sql).not.toContain("porter unicode61");
 	});
 });
 

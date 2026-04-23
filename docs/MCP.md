@@ -49,7 +49,9 @@ Tool Reference
 --------------
 
 All tools are defined in `packages/daemon/src/mcp/tools.ts`. Tool handlers
-call the daemon's HTTP API internally — they don't duplicate business logic.
+call the daemon's HTTP API internally and use the shared recall/remember
+surface helpers from `@signet/core` so MCP, CLI, and harness integrations do
+not drift into separate request shapes or result formatting.
 
 ### memory_search
 
@@ -59,23 +61,48 @@ reranking.
 
 **Parameters:**
 
+Primary controls:
+
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `query` | string | yes | Search query text |
 | `limit` | number | no | Max results to return (default 10) |
-| `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
-| `min_score` | number | no | Minimum relevance score threshold |
+| `project` | string | no | Optional project path filter |
+| `expand` | boolean | no | Include expanded transcript/context sources |
 
-**Returns:** Array of memory objects with content, type, importance, tags,
-and relevance score.
+Common refinements:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
+| `tags` | string | no | Filter by tags (comma-separated) |
+| `who` | string | no | Filter by author |
+| `since` | string | no | Only include memories created after this date |
+| `until` | string | no | Only include memories created before this date |
+
+Advanced controls:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `keyword_query` | string | no | Override the keyword/FTS query used for recall |
+| `pinned` | boolean | no | Only return pinned memories |
+| `importance_min` | number | no | Minimum memory importance threshold |
+| `min_score` | number | no | Deprecated compatibility alias for `importance_min` |
+| `score_min` | number | no | Minimum recall score threshold, applied client-side to returned rows |
+
+**Returns:** A formatted recall brief with primary matches, supporting
+context, and no-hit handling. The tool still reads from
+`POST /api/memory/recall` under the hood.
 
 **Example:**
 
 ```json
 {
   "query": "user prefers dark mode",
+  "project": "/home/user/myapp",
   "limit": 5,
-  "type": "preference"
+  "type": "preference",
+  "score_min": 0.8
 }
 ```
 
@@ -83,8 +110,9 @@ and relevance score.
 
 ### memory_store
 
-Save a new memory to the database. Tags are prepended in `[tag1,tag2]: `
-format before being sent to the daemon.
+Save a new memory to the database. Tags, structured graph payloads, hints,
+and transcripts are forwarded as request metadata instead of being folded into
+memory text. This keeps MCP aligned with CLI and harness remember behavior.
 
 **Parameters:**
 
@@ -94,6 +122,10 @@ format before being sent to the daemon.
 | `type` | string | no | Memory type (`fact`, `preference`, `decision`, etc.) |
 | `importance` | number | no | Importance score 0–1 |
 | `tags` | string | no | Comma-separated tags for categorization |
+| `pinned` | boolean | no | Pin this memory so it bypasses decay |
+| `hints` | string[] | no | Prospective recall hints and alternate phrasings |
+| `transcript` | string | no | Raw source text to preserve alongside the extracted memory |
+| `structured` | object | no | Pre-extracted entity/aspect/attribute graph data for structured remembering |
 
 **Returns:** The created memory object with its assigned ID.
 
@@ -347,8 +379,9 @@ hooks are silenced.
 
 ### secret_list
 
-List available secret names. Returns names only — raw secret values are
-never exposed to agents.
+List available secret names. This value-safe tool is owned by the
+`signet.secrets` core plugin. It returns names only, raw secret values
+are never exposed to agents.
 
 **Parameters:** None.
 
@@ -365,7 +398,9 @@ never exposed to agents.
 ### secret_exec
 
 Run a shell command with secrets injected as environment variables. Output
-is automatically redacted — secret values never appear in results.
+is automatically redacted, secret values never appear in results. Bare
+secret names resolve through the local provider, for example
+`OPENAI_API_KEY` is equivalent to `local://OPENAI_API_KEY`.
 
 **Parameters:**
 
@@ -389,6 +424,39 @@ Secret values in output are replaced with `[REDACTED]`.
 ```
 
 **Daemon endpoint:** `POST /api/secrets/exec` (30s timeout)
+
+### Optional GraphIQ Code Tools
+
+The MCP server registers generic GraphIQ code retrieval tools as stable tool
+names. Each call is runtime-gated by the optional `signet.graphiq` plugin state
+and the active indexed project. Run `signet index <path>` to index a project
+and make it active. Re-running the command for another path moves the active
+GraphIQ context to that project.
+
+GraphIQ stores its index at `<project>/.graphiq/`. Signet stores only plugin
+state and the active project pointer, so GraphIQ code indexes remain outside
+the main Signet memory architecture.
+
+| Tool | Purpose |
+|------|---------|
+| `code_search` | Search the active indexed project for symbols and implementation context |
+| `code_context` | Read source and structural neighborhood for a symbol |
+| `code_blast` | Analyze forward/backward impact radius for a symbol |
+| `code_status` | Show GraphIQ status for the active project |
+| `code_doctor` | Diagnose GraphIQ artifact health |
+| `code_constants` | Find shared numeric and string constants |
+
+`code_search` parameters:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | yes | Code search query |
+| `top` | number | no | Max results to return (default 10) |
+| `file` | string | no | Optional file path filter |
+| `debug` | boolean | no | Include GraphIQ score/debug details |
+
+`code_context` and `code_blast` both take a `symbol` string. `code_blast` also
+accepts optional `depth` and `direction` (`forward`, `backward`, or `both`).
 
 
 Discovery Protocol

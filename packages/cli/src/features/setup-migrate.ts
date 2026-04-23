@@ -7,6 +7,7 @@ import {
 	type ImportResult,
 	type SetupDetection,
 	type SkillsResult,
+	disableGraphiqState,
 	ensureUnifiedSchema,
 	findSignetForgeBinary,
 	formatYaml,
@@ -22,11 +23,14 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
+import { installGraphiqPlugin } from "./graphiq.js";
 import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
+import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
+	formatWorkspaceSourceRepoSync,
 	getEmbeddingDimensions,
 	readErr,
 	readHarnesses,
@@ -50,9 +54,14 @@ export async function runExistingSetupWizard(
 		embeddingModel?: string;
 		extractionProvider?: ExtractionProviderChoice;
 		extractionModel?: string;
+		signetSecretsEnabled?: boolean;
+		graphiqEnabled?: boolean;
 	},
 ): Promise<void> {
 	const spinner = ora("Setting up Signet for existing identity...").start();
+	const signetSecretsEnabled = options?.signetSecretsEnabled ?? true;
+	const graphiqEnabled = options?.graphiqEnabled ?? false;
+	let graphiqInstalled = false;
 
 	try {
 		const templatesDir = deps.getTemplatesDir();
@@ -93,6 +102,9 @@ export async function runExistingSetupWizard(
 		spinner.text = "Syncing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
 
+		spinner.text = "Cloning Signet source checkout...";
+		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(basePath);
+
 		spinner.text = "Creating agent manifest...";
 		const now = new Date().toISOString();
 		let agentName = "My Agent";
@@ -114,8 +126,11 @@ export async function runExistingSetupWizard(
 		if (detection.harnesses.openclaw) detectedHarnesses.push("openclaw");
 		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
 		if (detection.harnesses.codex) detectedHarnesses.push("codex");
+		if (detection.harnesses.hermesAgent) detectedHarnesses.push("hermes-agent");
+		if (detection.harnesses.gemini) detectedHarnesses.push("gemini");
 		const configuredHarnessList = readHarnesses(existingConfig.harnesses);
 		if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detectedHarnesses.push("oh-my-pi");
+		if (detection.harnesses.pi || configuredHarnessList.includes("pi")) detectedHarnesses.push("pi");
 		const wantsForge = detection.harnesses.forge || configuredHarnessList.includes("forge");
 		const installedForgePath = findSignetForgeBinary(basePath);
 		if (wantsForge && installedForgePath) {
@@ -202,6 +217,15 @@ export async function runExistingSetupWizard(
 
 		if (!existsSync(join(basePath, "agent.yaml"))) {
 			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
+		}
+
+		writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
+		if (graphiqEnabled) {
+			spinner.stop();
+			graphiqInstalled = await installGraphiqPlugin({ agentsDir: basePath });
+			spinner.start("Continuing Signet setup...");
+		} else {
+			disableGraphiqState(basePath);
 		}
 
 		const agentsPath = join(basePath, "AGENTS.md");
@@ -329,6 +353,16 @@ export async function runExistingSetupWizard(
 		console.log(chalk.dim("  Your existing identity files are now managed by Signet."));
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
+		console.log(chalk.dim("  Core plugins:"));
+		console.log(
+			chalk.dim(
+				`    ${signetSecretsEnabled ? "✓" : "○"} Signet Secrets ${signetSecretsEnabled ? "enabled" : "installed but disabled"}`,
+			),
+		);
+		console.log(
+			chalk.dim(`    ${graphiqInstalled ? "✓" : "○"} GraphIQ ${graphiqInstalled ? "enabled" : "not installed"}`),
+		);
+		console.log();
 
 		if (importResult && importResult.imported > 0) {
 			console.log(chalk.dim(`  Memory logs imported: ${importResult.imported} entries`));
@@ -341,6 +375,12 @@ export async function runExistingSetupWizard(
 			console.log(
 				chalk.dim(`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`),
 			);
+		}
+
+		const sourceRepoLine = formatWorkspaceSourceRepoSync(sourceRepoSync);
+		if (sourceRepoLine) {
+			console.log();
+			console.log(chalk.dim(sourceRepoLine));
 		}
 
 		if (configuredHarnesses.length > 0) {

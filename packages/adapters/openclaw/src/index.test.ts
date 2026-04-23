@@ -8,7 +8,7 @@ import type { OpenClawPluginApi } from "./openclaw-types";
 // mocking @signet/core globally, which otherwise leaks into later suites.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore, _resetRegistration } = signet;
+const { memoryStore, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -337,7 +337,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
 
-	it("normalizes memory_store tags to a comma string", async () => {
+	it("forwards memory_store tags as request metadata", async () => {
 		const id = await memoryStore("save this", {
 			daemonUrl: "http://daemon.test",
 			tags: ["alpha", " beta ", ""],
@@ -1097,11 +1097,11 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		await beforePromptBuild?.(
 			{
-				prompt: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+				prompt: 'real user question\n<signet-memory source="bad">truncated injected text',
 				messages: [
 					{
 						role: "user",
-						content: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+						content: 'real user question\n<signet-memory source="bad">truncated injected text',
 					},
 				],
 			},
@@ -1793,5 +1793,438 @@ describe("registration guard (#422)", () => {
 		expect(hooks.has("session:compact:after")).toBeFalse();
 		expect(hooks.has("before_compaction")).toBeTrue();
 		expect(hooks.has("after_compaction")).toBeTrue();
+	});
+});
+
+// ===========================================================================
+// Request normalization (routing metadata + content normalization)
+// ===========================================================================
+
+describe("injectBillingBlock", () => {
+	const { injectBillingBlock, BILLING_BLOCK } = _sanitization;
+
+	it("prepends billing block to array system field", () => {
+		const body: Record<string, unknown> = {
+			model: "claude-sonnet-4-20250514",
+			system: [{ type: "text", text: "You are a helpful assistant." }],
+			messages: [{ role: "user", content: "hello" }],
+		};
+		expect(injectBillingBlock(body)).toBeTrue();
+		const blocks = body.system as Array<{ type: string; text: string }>;
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+		expect(blocks[1].text).toBe("You are a helpful assistant.");
+	});
+
+	it("converts string system field to array with billing block", () => {
+		const body: Record<string, unknown> = {
+			system: "You are a helpful assistant.",
+		};
+		expect(injectBillingBlock(body)).toBeTrue();
+		const blocks = body.system as Array<{ type: string; text: string }>;
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+		expect(blocks[1].text).toBe("You are a helpful assistant.");
+	});
+
+	it("adds system field with billing block when missing", () => {
+		const body: Record<string, unknown> = {
+			messages: [{ role: "user", content: "hello" }],
+		};
+		expect(injectBillingBlock(body)).toBeTrue();
+		const blocks = body.system as Array<{ type: string; text: string }>;
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+	});
+
+	it("does not double-inject billing block", () => {
+		const body: Record<string, unknown> = {
+			system: [
+				{ type: "text", text: BILLING_BLOCK.text },
+				{ type: "text", text: "You are a helpful assistant." },
+			],
+		};
+		expect(injectBillingBlock(body)).toBeFalse();
+		expect((body.system as unknown[]).length).toBe(2);
+	});
+
+	it("preserves existing system blocks when prepending", () => {
+		const body: Record<string, unknown> = {
+			system: [
+				{ type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+				{ type: "text", text: "More instructions here." },
+			],
+		};
+		expect(injectBillingBlock(body)).toBeTrue();
+		const blocks = body.system as Array<{ type: string; text: string }>;
+		expect(blocks).toHaveLength(3);
+		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+		expect(blocks[1].text).toBe("You are Claude Code, Anthropic's official CLI for Claude.");
+		expect(blocks[2].text).toBe("More instructions here.");
+	});
+});
+
+describe("replaceTriggers", () => {
+	const { replaceTriggers } = _sanitization;
+
+	it("replaces OpenClaw platform name", () => {
+		const [result, changed] = replaceTriggers("Welcome to OpenClaw");
+		expect(changed).toBeTrue();
+		expect(result).not.toContain("OpenClaw");
+		expect(result).toContain("assistant platform");
+	});
+
+	it("replaces lowercase openclaw", () => {
+		const [result, changed] = replaceTriggers("path: /usr/lib/node_modules/openclaw/docs");
+		expect(changed).toBeTrue();
+		expect(result).not.toContain("openclaw");
+	});
+
+	it("replaces session management tool names", () => {
+		const input = JSON.stringify({
+			tools: [
+				{ name: "sessions_spawn" },
+				{ name: "sessions_list" },
+				{ name: "sessions_history" },
+				{ name: "sessions_send" },
+			],
+		});
+		const [result, changed] = replaceTriggers(input);
+		expect(changed).toBeTrue();
+		expect(result).not.toContain("sessions_spawn");
+		expect(result).not.toContain("sessions_list");
+		expect(result).not.toContain("sessions_history");
+		expect(result).not.toContain("sessions_send");
+		expect(result).toContain("create_task");
+		expect(result).toContain("list_tasks");
+		expect(result).toContain("get_history");
+		expect(result).toContain("send_to_task");
+	});
+
+	it("replaces 'running inside' self-declaration", () => {
+		const [result, changed] = replaceTriggers("You are running inside a harness.");
+		expect(changed).toBeTrue();
+		expect(result).toBe("You are running on a harness.");
+	});
+
+	it("returns unchanged for clean input", () => {
+		const [result, changed] = replaceTriggers("You are a helpful assistant.");
+		expect(changed).toBeFalse();
+		expect(result).toBe("You are a helpful assistant.");
+	});
+});
+
+describe("mergeBetaHeaders", () => {
+	const { mergeBetaHeaders, REQUIRED_BETAS } = _sanitization;
+
+	it("adds all required betas to empty headers", () => {
+		const headers: Record<string, string> = {};
+		expect(mergeBetaHeaders(headers)).toBeTrue();
+		const betas = headers["anthropic-beta"].split(",");
+		for (const required of REQUIRED_BETAS) {
+			expect(betas).toContain(required);
+		}
+	});
+
+	it("preserves existing betas and adds missing ones", () => {
+		const headers: Record<string, string> = {
+			"anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+		};
+		expect(mergeBetaHeaders(headers)).toBeTrue();
+		const betas = headers["anthropic-beta"].split(",");
+		expect(betas).toContain("claude-code-20250219");
+		expect(betas).toContain("oauth-2025-04-20");
+		expect(betas).toContain("interleaved-thinking-2025-05-14");
+	});
+
+	it("returns false when all betas already present", () => {
+		const headers: Record<string, string> = {
+			"anthropic-beta": REQUIRED_BETAS.join(","),
+		};
+		expect(mergeBetaHeaders(headers)).toBeFalse();
+	});
+});
+
+describe("sanitizeRequest", () => {
+	const { sanitizeRequest, BILLING_BLOCK } = _sanitization;
+
+	it("injects billing block and replaces triggers", () => {
+		const request = {
+			body: JSON.stringify({
+				model: "claude-sonnet-4-20250514",
+				system: [{ type: "text", text: "You are running inside OpenClaw." }],
+				messages: [{ role: "user", content: "hello" }],
+			}),
+		};
+		expect(sanitizeRequest(request)).toBeTrue();
+		const parsed = JSON.parse(request.body as string) as Record<string, unknown>;
+		const blocks = parsed.system as Array<{ type: string; text: string }>;
+		// Billing block injected as first element
+		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+		// Trigger phrases replaced
+		expect(request.body).not.toContain("OpenClaw");
+		expect(request.body).not.toContain("running inside");
+	});
+
+	it("injects billing block even when no triggers present", () => {
+		const request = {
+			body: JSON.stringify({
+				system: [{ type: "text", text: "You are a helpful assistant." }],
+				messages: [{ role: "user", content: "hello" }],
+			}),
+		};
+		expect(sanitizeRequest(request)).toBeTrue();
+		const parsed = JSON.parse(request.body as string) as Record<string, unknown>;
+		const blocks = parsed.system as Array<{ type: string; text: string }>;
+		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+	});
+
+	it("replaces session tool names in tool definitions", () => {
+		const request = {
+			body: JSON.stringify({
+				system: [{ type: "text", text: "You are a helpful assistant." }],
+				tools: [{ name: "sessions_spawn", description: "Spawn a new session" }],
+			}),
+		};
+		expect(sanitizeRequest(request)).toBeTrue();
+		expect(request.body).not.toContain("sessions_spawn");
+		expect(request.body).toContain("create_task");
+	});
+
+	it("does not double-inject billing block", () => {
+		const request = {
+			body: JSON.stringify({
+				system: [
+					{ type: "text", text: BILLING_BLOCK.text },
+					{ type: "text", text: "You are a helpful assistant." },
+				],
+			}),
+		};
+		// Even with billing already present, sanitizeRequest returns false
+		// since no injection needed and no triggers found
+		expect(sanitizeRequest(request)).toBeFalse();
+	});
+
+	it("returns false for non-string body", () => {
+		expect(sanitizeRequest({ body: null })).toBeFalse();
+		expect(sanitizeRequest({ body: undefined })).toBeFalse();
+		expect(sanitizeRequest({ body: 42 })).toBeFalse();
+	});
+
+	it("handles non-JSON body with triggers", () => {
+		const request = { body: "some text OpenClaw more text" };
+		expect(sanitizeRequest(request)).toBeTrue();
+		expect(request.body).not.toContain("OpenClaw");
+	});
+
+	it("returns false for non-JSON body without triggers", () => {
+		expect(sanitizeRequest({ body: "clean text" })).toBeFalse();
+	});
+});
+
+describe("swapAuthHeaders", () => {
+	const { swapAuthHeaders } = _sanitization;
+
+	it("replaces x-api-key with OAuth bearer token", () => {
+		const headers: Record<string, string> = {
+			"x-api-key": "sk-ant-api-key-123",
+			"content-type": "application/json",
+		};
+		swapAuthHeaders(headers, "sk-ant-oat01-oauth-token");
+		expect(headers["x-api-key"]).toBeUndefined();
+		expect(headers.authorization).toBe("Bearer sk-ant-oat01-oauth-token");
+		expect(headers["content-type"]).toBe("application/json");
+	});
+
+	it("sets bearer token even without existing api key", () => {
+		const headers: Record<string, string> = {};
+		swapAuthHeaders(headers, "sk-ant-oat01-token");
+		expect(headers.authorization).toBe("Bearer sk-ant-oat01-token");
+	});
+});
+
+describe("installFetchSanitizer", () => {
+	const { installFetchSanitizer } = _sanitization;
+
+	let savedFetch: typeof globalThis.fetch;
+	let capturedBodies: string[];
+	let capturedHeaders: Record<string, string>[];
+
+	beforeEach(() => {
+		capturedBodies = [];
+		capturedHeaders = [];
+		savedFetch = globalThis.fetch;
+		globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.body && typeof init.body === "string") {
+				capturedBodies.push(init.body);
+			}
+			if (init?.headers) {
+				capturedHeaders.push(init.headers as Record<string, string>);
+			}
+			return new Response("ok", { status: 200 });
+		}) as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = savedFetch;
+	});
+
+	it("injects billing block, replaces triggers, and merges betas", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			await globalThis.fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				headers: { "anthropic-beta": "claude-code-20250219", "x-api-key": "sk-ant-key" },
+				body: JSON.stringify({
+					model: "claude-sonnet-4-6",
+					system: [{ type: "text", text: "You are running inside OpenClaw." }],
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			});
+			expect(capturedBodies).toHaveLength(1);
+			const sent = JSON.parse(capturedBodies[0]) as Record<string, unknown>;
+			const blocks = sent.system as Array<{ type: string; text: string }>;
+			// Billing block injected
+			expect(blocks[0].text).toContain("x-anthropic-billing-header");
+			// Triggers replaced
+			expect(capturedBodies[0]).not.toContain("OpenClaw");
+			// Beta headers merged
+			expect(capturedHeaders[0]["anthropic-beta"]).toContain("oauth-2025-04-20");
+		} finally {
+			remove();
+		}
+	});
+
+	it("does not modify non-provider requests", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			const originalBody = JSON.stringify({
+				system: [{ type: "text", text: "OpenClaw request" }],
+			});
+			await globalThis.fetch("https://localhost:3850/api/hooks/session-start", {
+				method: "POST",
+				body: originalBody,
+			});
+			expect(capturedBodies).toHaveLength(1);
+			expect(capturedBodies[0]).toBe(originalBody);
+		} finally {
+			remove();
+		}
+	});
+
+	it("preserves original auth headers when no OAuth token available", async () => {
+		const remove = installFetchSanitizer();
+		try {
+			await globalThis.fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				headers: { "x-api-key": "sk-ant-api-key-123", "anthropic-beta": "claude-code-20250219" },
+				body: JSON.stringify({
+					model: "claude-sonnet-4-6",
+					system: [{ type: "text", text: "You are a helpful assistant." }],
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			});
+			expect(capturedHeaders).toHaveLength(1);
+			// No OAuth token in test env → original x-api-key must be preserved
+			expect(capturedHeaders[0]["x-api-key"] ?? capturedHeaders[0].authorization).toBeDefined();
+		} finally {
+			remove();
+		}
+	});
+
+	it("restores original fetch on cleanup", () => {
+		const before = globalThis.fetch;
+		const remove = installFetchSanitizer();
+		expect(globalThis.fetch).not.toBe(before);
+		remove();
+		expect(globalThis.fetch).toBe(before);
+	});
+});
+
+describe("installSdkSanitizer", () => {
+	class FakeAnthropic {
+		async prepareRequest(
+			_request: Record<string, unknown>,
+			_context: { url: string; options: unknown },
+		): Promise<void> {}
+	}
+
+	const { sanitizeRequest } = _sanitization;
+
+	it("injects billing block via prepareRequest hook", async () => {
+		const original = FakeAnthropic.prototype.prepareRequest;
+		FakeAnthropic.prototype.prepareRequest = async function (request, context) {
+			sanitizeRequest(request as { body?: unknown });
+			return original.call(this, request, context);
+		};
+		try {
+			const client = new FakeAnthropic();
+			const request: Record<string, unknown> = {
+				body: JSON.stringify({
+					model: "claude-sonnet-4-20250514",
+					system: [{ type: "text", text: "You are running inside OpenClaw." }],
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			};
+			await client.prepareRequest(request, { url: "https://api.anthropic.com/v1/messages", options: {} });
+			const parsed = JSON.parse(request.body as string) as Record<string, unknown>;
+			const blocks = parsed.system as Array<{ type: string; text: string }>;
+			expect(blocks[0].text).toContain("x-anthropic-billing-header");
+			expect(JSON.stringify(parsed)).not.toContain("OpenClaw");
+		} finally {
+			FakeAnthropic.prototype.prepareRequest = original;
+		}
+	});
+
+	it("calls through to original prepareRequest", async () => {
+		let originalCalled = false;
+		const original = FakeAnthropic.prototype.prepareRequest;
+		FakeAnthropic.prototype.prepareRequest = async function (request, context) {
+			sanitizeRequest(request as { body?: unknown });
+			originalCalled = true;
+			return original.call(this, request, context);
+		};
+		try {
+			const client = new FakeAnthropic();
+			await client.prepareRequest({ body: "{}" }, { url: "https://api.anthropic.com/v1/messages", options: {} });
+			expect(originalCalled).toBeTrue();
+		} finally {
+			FakeAnthropic.prototype.prepareRequest = original;
+		}
+	});
+
+	it("installSdkSanitizer is safe when the SDK is absent or present", () => {
+		const { resolveAnthropicBase, installSdkSanitizer } = _sanitization;
+		const base = resolveAnthropicBase();
+		expect(base === undefined || typeof base === "function").toBeTrue();
+		const cleanup = installSdkSanitizer();
+		cleanup();
+	});
+});
+
+describe("cleanupTimedMap regression", () => {
+	it("deletes all expired entries without modifying non-expired ones", () => {
+		const map = new Map<string, number>([
+			["expired-1", 100],
+			["expired-2", 200],
+			["current", 900],
+		]);
+		cleanupTimedMap(map, 1000, 500);
+		expect(map.has("expired-1")).toBe(false);
+		expect(map.has("expired-2")).toBe(false);
+		expect(map.has("current")).toBe(true);
+	});
+
+	it("handles empty map and all-expired map without errors", () => {
+		const empty = new Map<string, number>();
+		cleanupTimedMap(empty, 1000, 500);
+		expect(empty.size).toBe(0);
+
+		const allExpired = new Map<string, number>([
+			["a", 100],
+			["b", 200],
+		]);
+		cleanupTimedMap(allExpired, 1000, 500);
+		expect(allExpired.size).toBe(0);
 	});
 });

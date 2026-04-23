@@ -71,6 +71,8 @@ export interface OpenClawInstallOptions {
 	runtimePath?: "plugin" | "legacy";
 }
 
+export type OpenClawRuntimeState = "plugin" | "legacy" | "dual" | null;
+
 /**
  * Recursively merge `source` into `target`. Arrays are replaced (not
  * concatenated); objects are merged. Mutates and returns `target`.
@@ -678,8 +680,9 @@ export class OpenClawConnector extends BaseConnector {
 		return false;
 	}
 
-	getConfiguredRuntimePath(): "plugin" | "legacy" | null {
+	getRuntimeState(): OpenClawRuntimeState {
 		let sawLegacy = false;
+		let sawPlugin = false;
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
@@ -691,20 +694,35 @@ export class OpenClawConnector extends BaseConnector {
 				const pluginSlot =
 					config.plugins?.slots?.memory === "signet-memory-openclaw" ||
 					config.plugins?.slots?.memory === "signet-memory";
+				const plugin = pluginEntry || pluginSlot;
+				const legacy = config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true;
 
-				if (pluginEntry || pluginSlot) {
-					return "plugin";
-				}
-
-				if (config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true) {
-					sawLegacy = true;
+				sawPlugin ||= plugin;
+				sawLegacy ||= legacy;
+				if (sawPlugin && sawLegacy) {
+					return "dual";
 				}
 			} catch {
 				// malformed config — skip
 			}
 		}
 
+		if (sawPlugin) {
+			return "plugin";
+		}
+
 		return sawLegacy ? "legacy" : null;
+	}
+
+	getConfiguredRuntimePath(): "plugin" | "legacy" | null {
+		const state = this.getRuntimeState();
+		if (state === "plugin" || state === "dual") {
+			return "plugin";
+		}
+		if (state === "legacy") {
+			return "legacy";
+		}
+		return null;
 	}
 
 	/**
@@ -821,10 +839,26 @@ export class OpenClawConnector extends BaseConnector {
 		}
 
 		// Historical home-dir overrides.
-		push(process.env.OPENCLAW_HOME ? join(expandHome(process.env.OPENCLAW_HOME, this.getHomeDir()), "openclaw.json") : undefined);
-		push(process.env.CLAWDBOT_HOME ? join(expandHome(process.env.CLAWDBOT_HOME, this.getHomeDir()), "clawdbot.json") : undefined);
-		push(process.env.MOLDBOT_HOME ? join(expandHome(process.env.MOLDBOT_HOME, this.getHomeDir()), "moldbot.json") : undefined);
-		push(process.env.MOLTBOT_HOME ? join(expandHome(process.env.MOLTBOT_HOME, this.getHomeDir()), "moltbot.json") : undefined);
+		push(
+			process.env.OPENCLAW_HOME
+				? join(expandHome(process.env.OPENCLAW_HOME, this.getHomeDir()), "openclaw.json")
+				: undefined,
+		);
+		push(
+			process.env.CLAWDBOT_HOME
+				? join(expandHome(process.env.CLAWDBOT_HOME, this.getHomeDir()), "clawdbot.json")
+				: undefined,
+		);
+		push(
+			process.env.MOLDBOT_HOME
+				? join(expandHome(process.env.MOLDBOT_HOME, this.getHomeDir()), "moldbot.json")
+				: undefined,
+		);
+		push(
+			process.env.MOLTBOT_HOME
+				? join(expandHome(process.env.MOLTBOT_HOME, this.getHomeDir()), "moltbot.json")
+				: undefined,
+		);
 
 		for (const pair of namedConfigPairs) {
 			push(join(home, `.${pair.dirName}`, pair.fileName));
@@ -1110,6 +1144,34 @@ async function fetchDaemon(path, body) {
   return res.json();
 }
 
+let sharedRecallFormatter;
+async function recallMessage(data) {
+  if (typeof data?.message === "string") return data.message;
+  const rows = Array.isArray(data?.results) ? data.results : [];
+  if (rows.length === 0) {
+    return "No matching memories found.";
+  }
+
+  try {
+    sharedRecallFormatter ??= (await import("@signet/core")).formatRecallText;
+    if (typeof sharedRecallFormatter === "function") {
+      return sharedRecallFormatter(data);
+    }
+  } catch {
+    // Older standalone hook installs may not have @signet/core resolvable.
+    // Keep a compact compatibility path instead of dumping raw JSON into
+    // the prompt.
+  }
+
+  const method = typeof data?.method === "string" ? data.method : "hybrid";
+  const lines = [\`Found \${rows.length} \${rows.length === 1 ? "memory" : "memories"} (\${method}).\`];
+  for (const row of rows.slice(0, 8)) {
+    const score = typeof row?.score === "number" ? \`[\${Math.round(row.score * 100)}%] \` : "";
+    const id = typeof row?.id === "string" && row.id ? \`id: \${row.id}; \` : "";
+    lines.push(\`- \${score}\${id}\${row?.content ?? ""}\`);
+  }
+  return lines.join("\\n");
+}
 const handler = async (event) => {
   // When the plugin runtime path is active, legacy hooks are disabled
   // to prevent duplicate capture/recall. Set SIGNET_RUNTIME_PATH=plugin
@@ -1135,11 +1197,7 @@ const handler = async (event) => {
         const data = await fetchDaemon("/api/hooks/recall", {
           harness: "openclaw", query: args.trim(),
         });
-        if (data.results?.length) {
-          event.messages.push(data.results.map(r => \`- \${r.content}\`).join("\\n"));
-        } else {
-          event.messages.push("No memories found.");
-        }
+        event.messages.push(await recallMessage(data));
       } catch (e) { event.messages.push(\`Error: \${e.message}\`); }
       break;
     case "context":

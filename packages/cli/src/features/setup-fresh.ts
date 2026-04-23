@@ -1,20 +1,29 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { ensureUnifiedSchema, formatYaml, resolvePrimaryPackageManager, runMigrations } from "@signet/core";
+import {
+	disableGraphiqState,
+	ensureUnifiedSchema,
+	formatYaml,
+	resolvePrimaryPackageManager,
+	runMigrations,
+} from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
+import { installGraphiqPlugin } from "./graphiq.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
+import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
-import { readErr, readRecord } from "./setup-shared.js";
+import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
 export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Promise<void> {
 	const spinner = ora("Setting up Signet...").start();
+	let graphiqInstalled = false;
 
 	try {
 		if (cfg.nonInteractive && !cfg.allowUnprotectedWorkspace && !cfg.createLocalBackup) {
@@ -68,6 +77,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		spinner.text = "Installing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), cfg.basePath);
+
+		spinner.text = "Cloning Signet source checkout...";
+		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(cfg.basePath);
 
 		spinner.text = "Creating agent identity...";
 		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
@@ -125,6 +137,18 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		writeFileSync(join(cfg.basePath, "agent.yaml"), formatYaml(config));
 
+		writeSetupCorePluginRegistry(cfg.basePath, {
+			signetSecretsEnabled: cfg.signetSecretsEnabled,
+			graphiqEnabled: cfg.graphiqEnabled,
+		});
+		if (cfg.graphiqEnabled) {
+			spinner.stop();
+			graphiqInstalled = await installGraphiqPlugin({ agentsDir: cfg.basePath });
+			spinner.start("Continuing Signet setup...");
+		} else {
+			disableGraphiqState(cfg.basePath);
+		}
+
 		const docFiles = [
 			{ name: "MEMORY.md", template: "MEMORY.md.template" },
 			{ name: "SOUL.md", template: "SOUL.md.template" },
@@ -181,6 +205,11 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		spinner.text = "Configuring harness hooks...";
+		// Hooks are installed before the daemon starts. This is safe because
+		// connectors only write static files (extension bundles) with a
+		// well-known daemon URL (127.0.0.1:3850). The extension resolves the
+		// actual daemon address at runtime via SIGNET_DAEMON_URL, falling back
+		// to the baked default — no live daemon connection is needed here.
 		const configuredHarnesses: string[] = [];
 		for (const harness of cfg.harnesses) {
 			try {
@@ -224,7 +253,19 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		console.log(chalk.dim("    ├── IDENTITY.md   agent identity"));
 		console.log(chalk.dim("    ├── USER.md       your profile"));
 		console.log(chalk.dim("    ├── MEMORY.md     working memory"));
+		console.log(chalk.dim("    ├── signetai/     Signet source checkout"));
 		console.log(chalk.dim("    └── memory/       database & vectors"));
+
+		console.log();
+		console.log(chalk.dim("  Core plugins:"));
+		console.log(
+			chalk.dim(
+				`    ${cfg.signetSecretsEnabled ? "✓" : "○"} Signet Secrets ${cfg.signetSecretsEnabled ? "enabled" : "installed but disabled"}`,
+			),
+		);
+		console.log(
+			chalk.dim(`    ${graphiqInstalled ? "✓" : "○"} GraphIQ ${graphiqInstalled ? "enabled" : "not installed"}`),
+		);
 
 		if (configuredHarnesses.length > 0) {
 			console.log();
@@ -232,6 +273,12 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			for (const harness of configuredHarnesses) {
 				console.log(chalk.dim(`    ✓ ${harness}`));
 			}
+		}
+
+		const sourceRepoLine = formatWorkspaceSourceRepoSync(sourceRepoSync);
+		if (sourceRepoLine) {
+			console.log();
+			console.log(chalk.dim(sourceRepoLine));
 		}
 
 		if (daemonStarted) {

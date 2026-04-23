@@ -2,16 +2,23 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { NETWORK_MODES, type NetworkMode, parseSimpleYaml, readNetworkMode } from "@signet/core";
+import { NETWORK_MODES, type NetworkMode, disableGraphiqState, parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
 import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
+import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
+import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
-import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
+import {
+	hasCommand,
+	hasLlamaCppServer,
+	preflightOllamaEmbedding,
+	promptOpenAIEmbeddingModel,
+} from "./setup-providers.js";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
 	type DeploymentTypeChoice,
@@ -29,6 +36,7 @@ import {
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
 	failSetupValidation,
+	findUnknownHarnessValues,
 	formatDetectionSummary,
 	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
@@ -114,7 +122,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const hasCodexCommand = hasCommand("codex");
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
+	const llamaCppServerAvailable = await hasLlamaCppServer();
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
+	if (llamaCppServerAvailable) availableToolExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
 	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
@@ -136,6 +146,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
 		);
 	}
+	const unknownHarnessValues = findUnknownHarnessValues(options.harness, deps);
+	if (nonInteractive && unknownHarnessValues.length > 0) {
+		failNonInteractiveSetup(
+			`Unknown --harness value(s): ${unknownHarnessValues.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
+		);
+	}
 
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
@@ -149,6 +165,32 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 				createLocalBackup: options.createLocalBackup === true,
 			});
+			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
+			if (graphiqEnabled) {
+				await installGraphiqPlugin({ agentsDir: basePath });
+			} else {
+				disableGraphiqState(basePath);
+			}
+
+			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
+			if (requestedHarnesses.length > 0) {
+				// Hooks are installed before the daemon starts. This is safe because
+				// connectors only write static files with a baked-in loopback default.
+				// The installed runtime reads SIGNET_DAEMON_URL at runtime and only
+				// falls back to that default when no explicit override is present.
+				for (const harness of requestedHarnesses) {
+					try {
+						await deps.configureHarnessHooks(harness, basePath);
+					} catch (err) {
+						// best-effort — non-interactive should not fail on hook errors
+						console.warn(
+							chalk.yellow(`  ⚠ Could not configure ${harness}: ${err instanceof Error ? err.message : String(err)}`),
+						);
+					}
+				}
+			}
 
 			const running = await deps.isDaemonRunning();
 			if (!running) {
@@ -247,6 +289,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				preferredHarnesses: normalizedExistingHarnesses,
 			});
 
+			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
 				openDashboard: options.openDashboard === true,
@@ -257,6 +302,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
 				extractionProvider: migrationExtractionProvider,
 				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
+				signetSecretsEnabled,
+				graphiqEnabled,
 			});
 			return;
 		}
@@ -327,6 +374,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				preferredHarnesses: normalizedExistingHarnesses,
 			});
 
+			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
+			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
+
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				allowUnprotectedWorkspace: false,
 				createLocalBackup: false,
@@ -337,6 +387,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					deps.normalizeStringValue(existingPipeline.extractionModel) ||
 					deps.normalizeStringValue(existingExtraction.model) ||
 					undefined,
+				signetSecretsEnabled,
+				graphiqEnabled,
 			});
 			return;
 		}
@@ -376,6 +428,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
 		{ value: "oh-my-pi", name: "Oh My Pi", checked: existingHarnesses.includes("oh-my-pi") },
+		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
+		{ value: "hermes-agent", name: "Hermes Agent", checked: existingHarnesses.includes("hermes-agent") },
+		{ value: "gemini", name: "Gemini CLI (Google)", checked: existingHarnesses.includes("gemini") },
 		{
 			value: "forge",
 			name: "Forge (native Signet harness)",
@@ -389,20 +444,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 	let harnesses: HarnessChoice[] = [];
 	if (nonInteractive) {
-		const rawParts = (options.harness ?? []).flatMap((value) =>
-			value
-				.split(",")
-				.map((part) => part.trim())
-				.filter(Boolean),
-		);
 		const requestedHarnesses = normalizeHarnessList(options.harness, deps);
-
-		if (rawParts.length > 0 && rawParts.length !== requestedHarnesses.length) {
-			const unknown = rawParts.filter((part) => !deps.normalizeChoice(part, SETUP_HARNESS_CHOICES));
-			failNonInteractiveSetup(
-				`Unknown --harness value(s): ${unknown.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
-			);
-		}
 
 		if (requestedHarnesses.length > 0) {
 			harnesses = requestedHarnesses;
@@ -475,6 +517,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				default: existingDesc,
 			});
 
+	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, nonInteractive, options);
+	const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, nonInteractive, options);
+
 	let networkMode: NetworkMode;
 	if (nonInteractive) {
 		networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
@@ -529,6 +574,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			message: "How should memories be embedded for search?",
 			choices: [
 				{ value: "native", name: "Built-in (recommended, no setup required)" },
+				{ value: "llama-cpp", name: "llama.cpp (local — nomic-embed-text)" },
 				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
 				{ value: "openai", name: "OpenAI API" },
 				{ value: "none", name: "Skip embeddings for now" },
@@ -542,6 +588,31 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (embeddingProvider === "native") {
 		embeddingModel = "nomic-embed-text-v1.5";
 		embeddingDimensions = 768;
+	} else if (embeddingProvider === "llama-cpp") {
+		if (nonInteractive) {
+			const configuredModel =
+				deps.normalizeStringValue(options.embeddingModel) ||
+				deps.normalizeStringValue(existingEmbedding.model) ||
+				"nomic-embed-text";
+			embeddingModel = configuredModel;
+			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+		} else {
+			console.log();
+			const model = await select({
+				message: "Which embedding model?",
+				choices: [
+					{ value: "nomic-embed-text", name: "nomic-embed-text (768d, recommended)" },
+					{ value: "all-minilm", name: "all-minilm (384d, faster)" },
+					{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d, better quality)" },
+				],
+			});
+			embeddingModel = model;
+			embeddingDimensions = getEmbeddingDimensions(model);
+			if (!llamaCppServerAvailable) {
+				console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
+				console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
+			}
+		}
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =
@@ -619,6 +690,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log(chalk.yellow(`  Warning: ${EXTRACTION_SAFETY_WARNING}`));
 		console.log();
 		const choices = [
+			{
+				value: "llama-cpp",
+				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
+			},
 			{
 				value: "claude-code",
 				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,
@@ -835,7 +910,73 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		openDashboard: options.openDashboard === true,
 		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 		createLocalBackup: options.createLocalBackup === true,
+		signetSecretsEnabled,
+		graphiqEnabled,
 	};
 
 	await runFreshSetup(cfg, deps);
+}
+
+async function resolveGraphiqPluginSelection(
+	basePath: string,
+	nonInteractive: boolean,
+	options: SetupWizardOptions,
+): Promise<boolean> {
+	const current = readSetupCorePluginEnabled(basePath, "signet.graphiq");
+	const defaultEnabled = current ?? false;
+	if (options.withGraphiq === true) return true;
+	if (options.disableGraphiq === true) return false;
+	if (nonInteractive) return defaultEnabled;
+
+	console.log();
+	console.log(chalk.bold("  Optional code retrieval"));
+	console.log(
+		chalk.dim(
+			"    GraphIQ is a managed plugin for fast local codebase indexing, symbol search, structural context, constants, and blast-radius analysis.",
+		),
+	);
+	console.log(
+		chalk.dim(
+			"    It stores each project index outside Signet memory at <project>/.graphiq/ and Signet only remembers the active indexed project.",
+		),
+	);
+	console.log();
+	return confirm({
+		message: "Install GraphIQ for better code retrieval/context?",
+		default: defaultEnabled,
+	});
+}
+
+async function resolveSignetSecretsCorePluginSelection(
+	basePath: string,
+	nonInteractive: boolean,
+	options: SetupWizardOptions,
+): Promise<boolean> {
+	const current = readSetupCorePluginEnabled(basePath);
+	const defaultEnabled = current ?? true;
+	if (options.disableSignetSecrets === true) return false;
+	if (nonInteractive) return defaultEnabled;
+
+	console.log();
+	console.log(chalk.bold("  Core plugins"));
+	console.log(
+		chalk.dim(
+			"    Signet Secrets is a bundled core plugin for storing reusable credentials outside chat, memory, logs, and source files.",
+		),
+	);
+	console.log(
+		chalk.dim(
+			"    It connects to Signet's encrypted local store and 1Password references, with value-safe CLI/MCP/SDK helpers and command output redaction.",
+		),
+	);
+	console.log(
+		chalk.dim(
+			"    This is safer than pasting API keys into prompts because agents can list names and run commands with injected values without reading raw secrets.",
+		),
+	);
+	console.log();
+	return confirm({
+		message: "Install and enable the Signet Secrets core plugin?",
+		default: defaultEnabled,
+	});
 }

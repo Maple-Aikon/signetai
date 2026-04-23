@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-04-01"
+updated_at: "2026-04-02"
 
 specs:
   - id: memory-pipeline-v2
@@ -115,7 +115,7 @@ specs:
       - "Canonical historical content consists of immutable markdown summary/transcript/compaction artifacts, and MEMORY.md is a rebuildable derived projection"
       - "Session-end and compaction persist canonical artifacts with deterministic workspace-root-relative Obsidian wikilinks"
       - "Content-linked DB lineage/search rows are rebuildable from markdown artifacts while runtime temporal telemetry remains DB-native"
-      - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per in-window session and no clipping"
+      - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per projectable in-window session, while fixed-budget projection clips oldest ledger rows explicitly before high-signal head sections"
     decision: null
 
   - id: procedural-memory-plan
@@ -149,6 +149,20 @@ specs:
     success_criteria:
       - "Memory retrieval returns structurally related context, not just embedding-similar fragments"
       - "Entity graph traversal produces richer context than flat embedding search alone"
+    decision: null
+
+  - id: knowledge-architecture-navigation
+    status: approved
+    path: docs/specs/approved/knowledge-architecture-navigation.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-KNOWLEDGE-GRAPH-NAVIGATION.md
+    success_criteria:
+      - "Agents can list entities, aspects, groups, claims, and attributes without loading the full constellation graph"
+      - "Attribute reads default to active observations while preserving explicit access to superseded history"
     decision: null
 
   - id: predictive-memory-scorer
@@ -255,6 +269,77 @@ specs:
       - "CLI hook commands continue to reach daemon hook endpoints after runtime transport refactors"
       - "Published daemon-bearing packages always include the bundled dashboard assets required for `/` to serve the UI"
       - "Regression tests fail when `npm pack --dry-run` for `@signet/daemon` or `signetai` omits `dashboard/index.html`"
+    decision: null
+
+  - id: explicit-recall-surface-alignment
+    status: approved
+    path: docs/specs/approved/explicit-recall-surface-alignment.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "TypeScript explicit recall uses one canonical retrieval engine and one canonical response contract across API, CLI, MCP, and harness consumers"
+      - "Prompt-submit recall remains a lightweight injection path and does not absorb explicit recall product concerns"
+      - "Legacy or duplicate TypeScript recall helpers are either removed or reduced to thin wrappers around the canonical recall path"
+      - "Consumer renderers preserve useful recall metadata instead of flattening results into source-less snippet lists"
+    decision: null
+
+  - id: semantic-prospective-hints
+    status: planning
+    path: docs/specs/planning/semantic-prospective-hints.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - desire-paths-epic
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OBSIDIAN-VAULT-RECALL-EVAL.md
+      - docs/research/market/memory-benchmark-comparison.md
+    success_criteria:
+      - "Prospective hints are embedded at write time and become queryable through the same embedding provider path used for document recall"
+      - "Hybrid recall fuses content FTS, content vectors, hint FTS, and hint vectors without regressing no-hint behavior"
+      - "Backfill and degraded-mode behavior are explicit: existing installs can populate missing hint embeddings incrementally and recall continues to function when hint vectors are unavailable"
+      - "Evaluation shows semantic hint retrieval is a measurable improvement over hint FTS alone on Signet's retrieval-quality suite"
+    decision: null
+
+  - id: transcript-surface-separation
+    status: planning
+    path: docs/specs/planning/transcript-surface-separation.md
+    hard_depends_on:
+      - session-continuity-protocol
+      - lossless-working-memory-runtime
+      - lossless-working-memory-closure
+      - explicit-recall-surface-alignment
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OBSIDIAN-VAULT-RECALL-EVAL.md
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+    success_criteria:
+      - "Raw session transcripts remain lossless, canonical, and drill-downable, but prompt-submit and explicit recall no longer surface raw harness metadata as first-class memory results"
+      - "Transcript fallback queries a derived retrieval layer that strips or classifies harness-side noise without destroying the underlying source-of-truth transcript"
+      - "Recall weighting and rendering treat raw transcript material as a lower-priority fallback surface than structured memories, summaries, and curated artifacts"
+      - "Balanced evals show soft-human queries keep curated-quality behavior in mixed corpora and reflective queries reduce dirty-transcript contamination without regressing factual recall"
+    decision: null
+
+  - id: openclaw-legacy-plugin-migration
+    status: planning
+    path: docs/specs/planning/openclaw-legacy-plugin-migration.md
+    hard_depends_on:
+      - openclaw-hardening
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/notebook-dump-2026-02-25.md
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+    success_criteria:
+      - "Legacy-only OpenClaw configs are auto-migrated to the plugin runtime path during `signet sync`"
+      - "`signet doctor` flags legacy-only OpenClaw runtime state with a remediation command"
+      - "Regression tests cover the upgrade path from legacy-only config to plugin runtime activation"
     decision: null
 
   - id: dogfood-hardening-2026-03-29
@@ -859,10 +944,38 @@ specs:
     hard_depends_on:
       - signet-runtime
     soft_depends_on: []
-    blocks: []
-    informed_by: []
+    blocks:
+      - plugin-sdk-core-v1
+    informed_by:
+      - docs/research/technical/RESEARCH-PLUGIN-SDK-SECRETS.md
     success_criteria:
-      - "Plugin API supports dashboard/CLI integrations for first-party and third-party apps"
+      - "Plugin SDK supports first-party TypeScript plugins and managed Rust sidecar plugins through one manifest and capability model"
+      - "Plugins can declare daemon, CLI, MCP, dashboard, SDK, connector, and prompt-lifecycle contributions from one host-mediated contract"
+      - "Signet Secrets can run as a privileged core plugin while preserving existing local encrypted secrets without re-encryption or user action"
+      - "Secret providers can register modular backends such as local, 1Password, Bitwarden, Vault, cloud secret managers, and environment resolvers"
+      - "Plugin manifests are marketplace-ready without requiring full marketplace install support in the first implementation"
+    decision: null
+
+
+  - id: plugin-sdk-core-v1
+    status: complete
+    path: docs/specs/complete/plugin-sdk-core-v1.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on:
+      - plugin-api-ecosystem
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-PLUGIN-SDK-SECRETS.md
+      - docs/specs/planning/plugin-api-ecosystem.md
+    success_criteria:
+      - "Bundled TypeScript core plugins can register a manifest, lifecycle state, capabilities, surface metadata, health, and prompt contributions through a daemon-owned plugin host"
+      - "Plugin status and diagnostics expose enabled, disabled, blocked, active, and degraded states without crashing the daemon on plugin failure"
+      - "Prompt contributions are append-only/context-only, provenance-tagged, token-bounded, and removed when a plugin is disabled"
+      - "Signet Secrets is represented as a privileged bundled core plugin while existing /api/secrets routes, CLI, MCP, dashboard, and SDK behavior remain backward compatible"
+      - "CLI setup enables Signet Secrets by default for existing installs, asks new interactive installs whether to enable the bundled core plugin, and supports non-interactive opt-out without deleting stored secrets"
+      - "The local Secrets provider adopts existing $SIGNET_WORKSPACE/.secrets/secrets.enc files in place without re-encryption, relocation, or user action"
+      - "The V1 manifest and registry store marketplace-ready metadata and future Rust sidecar compatibility fields without implementing marketplace install or Rust sidecar execution"
     decision: null
 
 
@@ -1042,6 +1155,7 @@ specs:
       - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
       - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
       - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+      - "The supported source-build path is exposed through `signet desktop build` and `signet desktop install`"
     decision: null
 
 

@@ -15,7 +15,7 @@ success_criteria:
   - "Canonical historical content consists of immutable markdown summary/transcript/compaction artifacts, and MEMORY.md is a rebuildable derived projection"
   - "Session-end and compaction persist canonical artifacts with deterministic workspace-root-relative Obsidian wikilinks"
   - "Content-linked DB lineage/search rows are rebuildable from markdown artifacts while runtime temporal telemetry remains DB-native"
-  - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per in-window session and no clipping"
+  - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per projectable in-window session, while fixed-budget projection clips oldest ledger rows explicitly before high-signal head sections"
 scope_boundary: "Defines markdown-canonical history, derived DB indexing, and MEMORY.md rendering contracts; does not replace DB-native graph and runtime telemetry systems"
 draft_quality: "implementation-ready planning spec"
 ---
@@ -201,7 +201,10 @@ At render time `t_now` in UTC:
 - `membership_ts = ended_at` when present, else `captured_at`
 - day buckets use `membership_ts` UTC date
 
-No in-window session may be dropped due to rank, token budget, or top-N caps.
+Projection excludes temp/test sessions from visible lineage surfaces. For
+projectable sessions, the renderer must prefer a fixed output budget over
+unbounded growth: high-signal head sections stay intact, then the oldest ledger
+rows may be clipped with an explicit notice in `MEMORY.md`.
 
 ## Per-session sentence quality floor
 
@@ -347,7 +350,7 @@ Required:
 1. render strict rolling 30-day UTC ledger
 2. read per-session sentence from frontmatter
 3. enforce per-session sentence quality floor + fallback flag handling
-4. enforce no clipping/no top-N omission
+4. enforce fixed-budget clipping of oldest ledger rows with explicit notice
 
 ### Phase 3: derived DB indexing and re-index
 
@@ -363,7 +366,7 @@ Required:
 
 ## Validation and regression tests
 
-1. 1,500-session window test (50/day x 30) yields 1,500 ledger rows.
+1. 1,500-session window test (50/day x 30) preserves the newest in-window ledger rows, clips oldest rows when needed, and emits an explicit clipping notice.
 2. sentence floor test rejects low-signal rows.
 3. wikilink format test enforces workspace-root-relative links.
 4. immutable artifact test rejects post-commit mutation.

@@ -1,5 +1,11 @@
+export const OPENCODE_PIPELINE_AGENT = "signet-pipeline";
+
+export const OPENCODE_PIPELINE_SYSTEM_PROMPT =
+	"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+
 export const PIPELINE_PROVIDER_CHOICES = [
 	"none",
+	"llama-cpp",
 	"ollama",
 	"claude-code",
 	"codex",
@@ -20,6 +26,7 @@ export const DEFAULT_PIPELINE_TIMEOUT_MS = 90000;
 
 const MODEL_DEFAULTS = {
 	none: "",
+	"llama-cpp": "qwen3.5:4b",
 	ollama: "qwen3:4b",
 	"claude-code": "haiku",
 	codex: "gpt-5-codex-mini",

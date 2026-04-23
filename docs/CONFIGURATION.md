@@ -533,7 +533,11 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
+| `structuredOutput` | `true` | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the provider rejects structured output (e.g. GitHub Copilot API). The daemon also auto-detects unsupported providers at runtime and disables this transparently. |
 | `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) — required when `provider: "command"` |
+| `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max extraction-provider calls per hour; set `0` to disable rate limiting |
+| `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
+| `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
 
 For safety, the intended extraction setups are:
 
@@ -549,6 +553,38 @@ Remote API extraction can accumulate extreme fees quickly because the
 pipeline runs continuously in the background. Use `anthropic`,
 `openrouter`, or remote OpenCode routes only when you explicitly want
 that billing behavior.
+
+`rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
+provider's existing behavior with no throughput throttling. When
+configured, it applies only to remote or paid providers
+(`claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
+Ollama and `command` providers are always exempt. If you set `rateLimit`
+on an exempt provider, Signet logs a warning and passes calls through
+unthrottled.
+
+An empty `rateLimit: {}` block is treated as disabled. Set at least one
+sub-field to opt in, or omit the stanza entirely to leave rate limiting
+off.
+
+When a rate-limited job fails (the bucket is empty and the wait timeout
+expires), it is classified as non-retryable and sent directly to
+dead-letter status. Dead-lettered jobs are not retried when the rate-limit
+window resets. Choose `maxCallsPerHour` high enough to handle sustained
+ingestion bursts, or you will permanently lose extraction for memories
+queued during exhaustion. Dead-letter jobs are purged after 30 days by
+the retention worker.
+
+When configured via YAML, `burstSize` is clamped to a minimum of `1`.
+The lower-level `withRateLimit()` helper is more defensive: passing
+`burstSize: 0` or `maxCallsPerHour: 0` disables the wrapper entirely
+instead of constructing a limiter that can never acquire a token.
+
+Rate-limiter state is in-memory only. After a daemon restart the full
+`burstSize` is available immediately (the token bucket starts full). In
+environments with frequent restarts (crash-loops, rolling deployments),
+this means the limiter cannot protect against a burst of calls right
+after startup. Set `burstSize` conservatively if your daemon restarts
+often under load.
 
 When using `ollama`, the model must be available locally. When using
 `claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
@@ -617,11 +653,25 @@ defaults (`ollama` + default synthesis model/timeout) instead.
 | `model` | inherited from extraction when omitted | — | Model name for the configured provider |
 | `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, or OpenRouter |
 | `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |
+| `structuredOutput` | inherited from extraction when omitted | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the synthesis provider rejects structured output (e.g. GitHub Copilot API). Falls back to `extraction.structuredOutput` when omitted. |
+| `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |
+| `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
+| `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
 
 Set `provider: none` or `enabled: false` to disable background session
 summary synthesis entirely.
 
 `synthesis.provider: command` is invalid and rejected during config load.
+
+Widget HTML generation uses a separate provider instance by default, so
+widget traffic does not consume the synthesis pipeline's `rateLimit`
+bucket.
+
+As with extraction, an empty `rateLimit: {}` block is treated as
+disabled. Set at least one sub-field to opt in.
+
+Rate-limited synthesis jobs that fail are sent to dead-letter without
+retry. See the extraction `rateLimit` docs above for the full warning.
 
 
 ### Worker (`worker`)
@@ -653,6 +703,29 @@ from extracted facts and uses them to boost search relevance.
 | `enabled` | `true` | — | Enable knowledge graph building and querying |
 | `boostWeight` | `0.15` | 0.0-1.0 | Weight applied to graph-neighbor score boost |
 | `boostTimeoutMs` | `500` | 50-5000 ms | Timeout for graph lookup during search |
+
+
+### Structural Analysis (`structural`)
+
+Structural workers classify extracted facts into entity aspects, extract
+direct entity dependencies from facts, and synthesize cross-entity
+dependency edges from the existing graph.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Enable structural classification and dependency workers |
+| `classifyBatchSize` | `8` | 1-20 | Max facts per entity classification call |
+| `dependencyBatchSize` | `5` | 1-10 | Max stale entities or dependency jobs per worker tick |
+| `pollIntervalMs` | `10000` | 2000-120000 ms | Structural job polling interval |
+| `synthesisEnabled` | `true` | — | Enable cross-entity dependency synthesis |
+| `synthesisIntervalMs` | `60000` | 10000-600000 ms | Dependency synthesis polling interval |
+| `synthesisTopEntities` | `20` | 5-100 | Candidate entities considered per synthesis call |
+| `synthesisMaxFacts` | `10` | 3-50 | Facts included for the focal entity |
+| `synthesisMaxStallMs` | `1800000` | 0-86400000 ms | Pause dependency synthesis when extraction has made no successful progress for this long; set `0` to disable the circuit breaker |
+
+The aliases `dependencySynthesis.maxStallMs` and
+`dependencySynthesis.synthesisMaxStallMs` are accepted for
+`structural.synthesisMaxStallMs`.
 
 
 ### Hints (`hints`)
@@ -991,10 +1064,17 @@ harness session:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `recallLimit` | `10` | Number of memories to inject |
+| `recallLimit` | `50` | Number of memories to inject |
+| `candidatePoolLimit` | `100` | Number of candidate memories to rank before token budgeting |
 | `includeIdentity` | `true` | Include agent name and description |
 | `includeRecentContext` | `true` | Include `MEMORY.md` content |
 | `recencyBias` | `0.7` | Weight toward recent vs. important memories (0-1) |
+| `maxInjectTokens` | `12000` | Maximum session-start injection budget after context assembly |
+
+Predicted context from recent session summaries is scoped to the active
+project. If the harness does not provide a project path, Signet skips
+predicted-context FTS at session start to avoid global broad-term scans
+over large memory stores.
 
 `hooks.preCompaction` controls what is included when the harness triggers
 a pre-compaction summary:
@@ -1031,7 +1111,7 @@ editing the config file is impractical.
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
-| `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs |
+| `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace |
 | `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace |
 | `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS` | — | Comma-separated host allowlist for Anthropic endpoint overrides used during credentialed startup preflight (supports entries like `proxy.example.com` and `*.example.com`) |
@@ -1165,9 +1245,9 @@ The SQLite database at `memory/memories.db` contains three main tables.
 
 ### memories_fts
 
-FTS5 virtual table for keyword search. Indexes `content` and `tags`
-from the `memories` table. An after-delete trigger keeps the FTS index
-in sync when tombstones are hard-purged.
+FTS5 virtual table for keyword search over `content`, backed by the
+`memories` table and created with the `unicode61` tokenizer. Triggers
+keep the index in sync when rows are inserted, deleted, or updated.
 
 
 Harness-Specific Configuration
