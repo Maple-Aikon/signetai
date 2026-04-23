@@ -11,14 +11,7 @@
 		"declarationMap": true,
 		"outDir": "./dist",
 		"rootDir": "./src",
-		"jsx": "react-jsx",
-		"baseUrl": ".",
-		"paths": {
-			"@signet/core": ["packages/core/src/index.ts"],
-			"@signet/core/*": ["packages/core/src/*"],
-			"@signet/connector-base": ["packages/connector-base/src/index.ts"],
-			"@signet/connector-openclaw": ["packages/connector-openclaw/src/index.ts"]
-		}
+		"jsx": "react-jsx"
 	},
 	"exclude": ["node_modules", "dist"]
 }
