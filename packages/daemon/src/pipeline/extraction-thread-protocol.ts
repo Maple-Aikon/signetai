@@ -54,7 +54,7 @@ export type WorkerToMainMessage =
 	| { readonly type: "ready" }
 	| { readonly type: "stopped" }
 	| { readonly type: "stats"; readonly stats: WorkerStats }
-	| { readonly type: "log"; readonly level: string; readonly category: string; readonly message: string; readonly data?: unknown }
+	| { readonly type: "log"; readonly level: string; readonly category: string; readonly message: string; readonly data?: Record<string, unknown> }
 	| { readonly type: "telemetry"; readonly event: string; readonly data: Record<string, unknown> }
 	| { readonly type: "analytics"; readonly method: string; readonly args: readonly unknown[] }
 	| { readonly type: "error"; readonly error: string; readonly stack?: string };
