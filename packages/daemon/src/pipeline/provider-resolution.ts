@@ -345,8 +345,7 @@ export async function resolveRuntimeProviderStartup(opts: RuntimeStartupOptions)
 				status = "blocked";
 				degraded = true;
 				fallbackApplied = false;
-				reason =
-					opts.fallbackProvider === "none" ? `${failedReason}; fallbackProvider is none` : failedReason;
+				reason = opts.fallbackProvider === "none" ? `${failedReason}; fallbackProvider is none` : failedReason;
 				since = since ?? new Date().toISOString();
 				provider = null;
 			}

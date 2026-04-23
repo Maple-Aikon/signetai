@@ -7,10 +7,10 @@
  */
 
 import type { LlmProvider } from "@signet/core";
-import { logger, type LogCategory } from "./logger";
+import { type LogCategory, logger } from "./logger";
 import { getSecret } from "./secrets.js";
 
-export const LLM_ROLES = ["extraction", "synthesis"] as const;
+export const LLM_ROLES = ["extraction", "synthesis", "widget"] as const;
 export type LlmRole = (typeof LLM_ROLES)[number];
 
 export class MissingOpenAiApiKeyError extends Error {
@@ -34,11 +34,13 @@ interface OpenAiChatOptions {
 const ROLE_LABELS: Record<LlmRole, string> = {
 	extraction: "LlmProvider",
 	synthesis: "Synthesis LlmProvider",
+	widget: "Widget LlmProvider",
 };
 
 const ROLE_LOG_CATEGORIES: Record<LlmRole, LogCategory> = {
 	extraction: "pipeline",
 	synthesis: "synthesis",
+	widget: "widget",
 };
 
 const providers: Partial<Record<LlmRole, LlmProvider>> = {};
@@ -66,7 +68,7 @@ export function getInteractiveLlmProviderOrNull(): LlmProvider | null {
 
 function closeProvider(role: LlmRole): void {
 	delete providers[role];
-	if (!providers.extraction && !providers.synthesis) {
+	if (!providers.extraction && !providers.synthesis && !providers.widget) {
 		cachedOpenAiApiKey = undefined;
 	}
 }
@@ -131,8 +133,16 @@ export function closeSynthesisProvider(): void {
 	closeProvider("synthesis");
 }
 
+export function initWidgetProvider(instance: LlmProvider): void {
+	initProvider("widget", instance);
+}
+
 export function getWidgetProvider(): LlmProvider {
-	return getProvider("synthesis");
+	return providers.widget ?? getProvider("synthesis");
+}
+
+export function closeWidgetProvider(): void {
+	closeProvider("widget");
 }
 
 export function getInteractiveLlmProvider(): LlmProvider {

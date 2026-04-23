@@ -9,6 +9,7 @@ export const ROUTING_EXECUTOR_KINDS = [
 	"anthropic",
 	"openrouter",
 	"ollama",
+	"llama-cpp",
 	"openai-compatible",
 ] as const;
 export const ROUTING_POLICY_MODES = ["strict", "automatic", "hybrid"] as const;
@@ -299,15 +300,15 @@ function asRoutingCostTier(value: unknown): RoutingCostTier | undefined {
 }
 
 function inferTargetKind(executor: string): RoutingTargetKind {
-	if (executor === "ollama" || executor === "openai-compatible") {
-		return executor === "ollama" ? "local" : "gateway";
+	if (executor === "ollama" || executor === "llama-cpp" || executor === "openai-compatible") {
+		return executor === "openai-compatible" ? "gateway" : "local";
 	}
 	if (executor === "anthropic" || executor === "openrouter") return "api";
 	return "subscription_session";
 }
 
 function inferTargetPrivacy(executor: string): RoutingPrivacyTier {
-	if (executor === "ollama") return "local_only";
+	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
 	if (executor === "claude-code" || executor === "codex" || executor === "opencode") return "restricted_remote";
 	return "remote_ok";
 }

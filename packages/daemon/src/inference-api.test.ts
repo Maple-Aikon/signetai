@@ -231,11 +231,6 @@ function startFakeOpenAiServer(
 									closed = true;
 									controller.close();
 								};
-								const safeError = (error: Error) => {
-									if (closed) return;
-									closed = true;
-									controller.error(error);
-								};
 								const safeEnqueue = (text: string) => {
 									if (closed) return;
 									try {

@@ -44,7 +44,15 @@ import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { getOrCreateInferenceRouter } from "./inference-router.js";
-import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
+import {
+	closeLlmProvider,
+	closeSynthesisProvider,
+	closeWidgetProvider,
+	getLlmProvider,
+	initLlmProvider,
+	initSynthesisProvider,
+	initWidgetProvider,
+} from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
@@ -108,9 +116,7 @@ import { getSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
 import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
 import { createSingleFlightRunner } from "./single-flight-runner";
-import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
-import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
@@ -1704,7 +1710,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 													}
 												: {}),
 										});
-		initSynthesisProvider(synthesisProvider);
 		const widgetProvider = synthesisProvider;
 		synthesisProvider = withRateLimit(synthesisProvider, memoryCfg.pipelineV2.synthesis.rateLimit);
 		initSynthesisProvider(synthesisProvider);

@@ -6,9 +6,6 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
-	Agent,
-	AgentManifest,
-	AgentConfig,
 	MEMORY_TYPES,
 	EXTRACTION_STATUSES,
 	JOB_STATUSES,
@@ -24,6 +21,9 @@ export {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
 export type {
+	Agent,
+	AgentManifest,
+	AgentConfig,
 	LlmProvider,
 	LlmUsage,
 	LlmGenerateResult,
@@ -111,6 +111,7 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
+	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,
 	type VectorSearchOptions,
@@ -143,7 +144,8 @@ export {
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
 } from "./fts-schema";
-export { migrate, MigrationSource } from "./migrate";
+export { migrate } from "./migrate";
+export type { MigrationSource } from "./migrate";
 export {
 	detectSchema,
 	ensureUnifiedSchema,
