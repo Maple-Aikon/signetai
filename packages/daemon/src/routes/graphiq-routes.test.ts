@@ -42,14 +42,15 @@ describe("getInstallScriptPath", () => {
 
 	test("production resolver finds script when placed in bundled dist layout", () => {
 		const fakePkg = join(thisDir, "__test_pkg_layout__");
-		const fakeDistRoutes = join(fakePkg, "dist", "routes");
+		const fakeDist = join(fakePkg, "dist");
 		const fakeScripts = join(fakePkg, "scripts");
-		mkdirSync(fakeDistRoutes, { recursive: true });
+		mkdirSync(fakeDist, { recursive: true });
 		mkdirSync(fakeScripts, { recursive: true });
+		writeFileSync(join(fakeDist, "daemon.js"), "// bundle\n");
 		const scriptContent = "#!/bin/sh\necho test\n";
 		writeFileSync(join(fakeScripts, "install-graphiq.sh"), scriptContent);
 		try {
-			const result = getInstallScriptPath(`file://${fakeDistRoutes}/`);
+			const result = getInstallScriptPath(`file://${join(fakeDist, "daemon.js")}`);
 			expect(existsSync(result)).toBe(true);
 			expect(readFileSync(result, "utf-8")).toBe(scriptContent);
 		} finally {
