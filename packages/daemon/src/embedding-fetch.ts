@@ -48,12 +48,21 @@ export function setNativeFallbackProvider(
 	nativeFallbackModel = model ?? null;
 }
 
-async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string): Promise<number[] | null> {
+type EmbeddingFetchOptions = {
+	readonly signal?: AbortSignal;
+};
+
+async function fetchOllamaEmbedding(
+	text: string,
+	baseUrl: string,
+	model: string,
+	opts: EmbeddingFetchOptions = {},
+): Promise<number[] | null> {
 	const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embeddings`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ model, prompt: text }),
-		signal: AbortSignal.timeout(30000),
+		signal: opts.signal ?? AbortSignal.timeout(30000),
 	});
 	if (!res.ok) {
 		logger.warn("embedding", "Ollama embedding request failed", {
@@ -97,12 +106,16 @@ export async function resolveEmbeddingApiKey(rawApiKey: string | undefined): Pro
 	return configured || process.env.OPENAI_API_KEY || "";
 }
 
-export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promise<number[] | null> {
+export async function fetchEmbedding(
+	text: string,
+	cfg: EmbeddingConfig,
+	opts: EmbeddingFetchOptions = {},
+): Promise<number[] | null> {
 	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "native") {
 			if (nativeFallbackProvider === "ollama") {
-				return await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
+				return await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
 			}
 			if (nativeFallbackProvider === "llama-cpp") {
 				const fallbackModel = nativeFallbackModel ?? "nomic-embed-text";
@@ -110,7 +123,7 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({ input: text, model: fallbackModel }),
-					signal: AbortSignal.timeout(5000),
+					signal: opts.signal ?? AbortSignal.timeout(5000),
 				});
 				if (llamaCppRes.ok) {
 					const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
@@ -140,7 +153,7 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
 							body: JSON.stringify({ input: text, model: discoveredModel }),
-							signal: AbortSignal.timeout(5000),
+							signal: opts.signal ?? AbortSignal.timeout(5000),
 						});
 						if (llamaCppRes.ok) {
 							nativeFallbackProvider = "llama-cpp";
@@ -159,7 +172,7 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 					logger.warn("embedding", "llama.cpp fallback not reachable");
 				}
 				try {
-					const result = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
+					const result = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
 					if (result !== null) {
 						nativeFallbackProvider = "ollama";
 						logger.info(
@@ -176,7 +189,7 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 			}
 		}
 		if (cfg.provider === "ollama") {
-			return await fetchOllamaEmbedding(text, cfg.base_url, cfg.model);
+			return await fetchOllamaEmbedding(text, cfg.base_url, cfg.model, opts);
 		}
 
 		if (cfg.provider === "llama-cpp") {
@@ -185,7 +198,7 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ model: cfg.model, input: text }),
-				signal: AbortSignal.timeout(30000),
+				signal: opts.signal ?? AbortSignal.timeout(30000),
 			});
 			if (!res.ok) {
 				logger.warn("embedding", "llama.cpp embedding request failed", {
@@ -211,7 +224,7 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 				...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
 			},
 			body: JSON.stringify({ model: cfg.model, input: text }),
-			signal: AbortSignal.timeout(30000),
+			signal: opts.signal ?? AbortSignal.timeout(30000),
 		});
 		if (!res.ok) {
 			logger.warn("embedding", "Embedding API request failed", {
