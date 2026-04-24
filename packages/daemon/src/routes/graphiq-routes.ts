@@ -152,6 +152,8 @@ function isGraphiqInstalled(): boolean {
 
 function getInstallScriptPath(): string {
 	const thisDir = dirname(fileURLToPath(import.meta.url));
+	const bundled = resolve(thisDir, "../scripts/install-graphiq.sh");
+	if (existsSync(bundled)) return bundled;
 	return resolve(thisDir, "../../../../scripts/install-graphiq.sh");
 }
 
