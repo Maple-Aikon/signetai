@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getInstallScriptPath } from "./graphiq-install-path.js";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(thisDir, "../../../../");
@@ -9,7 +10,13 @@ const sourceScript = resolve(repoRoot, "scripts/install-graphiq.sh");
 const pkgScript = resolve(repoRoot, "packages/signetai/scripts/install-graphiq.sh");
 const pkgJsonPath = resolve(repoRoot, "packages/signetai/package.json");
 
-describe("graphiq install script bundling", () => {
+describe("getInstallScriptPath", () => {
+	test("returns a path that points to an existing install-graphiq.sh", () => {
+		const path = getInstallScriptPath();
+		expect(existsSync(path)).toBe(true);
+		expect(path).toMatch(/scripts\/install-graphiq\.sh$/);
+	});
+
 	test("install-graphiq.sh exists in repo root scripts directory", () => {
 		expect(existsSync(sourceScript)).toBe(true);
 	});
@@ -29,7 +36,7 @@ describe("graphiq install script bundling", () => {
 		expect(pkgJson.files).toContain("scripts");
 	});
 
-	test("copy:scripts build step copies install-graphiq.sh", () => {
+	test("copy:scripts build step exists in package.json", () => {
 		const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
 		expect(pkgJson.scripts["copy:scripts"]).toBeDefined();
 		expect(pkgJson.scripts.prebuild).toContain("copy:scripts");
