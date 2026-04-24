@@ -1,53 +1,52 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
-const repoScript = resolve(thisDir, "../../../../scripts/install-graphiq.sh");
+const repoRoot = resolve(thisDir, "../../../../");
+const sourceScript = resolve(repoRoot, "scripts/install-graphiq.sh");
+const pkgScript = resolve(repoRoot, "packages/signetai/scripts/install-graphiq.sh");
+const pkgJsonPath = resolve(repoRoot, "packages/signetai/package.json");
 
-describe("graphiq install script path resolution", () => {
-	test("install-graphiq.sh exists in repo scripts directory", () => {
-		expect(existsSync(repoScript)).toBe(true);
+describe("graphiq install script bundling", () => {
+	test("install-graphiq.sh exists in repo root scripts directory", () => {
+		expect(existsSync(sourceScript)).toBe(true);
 	});
 
-	test("source fallback path resolves to repo scripts directory", () => {
-		const sourcePath = resolve(thisDir, "../../../../scripts/install-graphiq.sh");
-		expect(sourcePath).toMatch(/scripts\/install-graphiq\.sh$/);
-		expect(existsSync(sourcePath)).toBe(true);
+	test("install-graphiq.sh exists in signetai package scripts directory", () => {
+		expect(existsSync(pkgScript)).toBe(true);
 	});
 
-	test("bundled path takes precedence when scripts directory exists alongside dist", () => {
-		const fakeDist = join(thisDir, "__test_dist__");
-		const fakeScripts = join(fakeDist, "scripts");
+	test("source and package scripts are identical", () => {
+		expect(readFileSync(sourceScript, "utf-8")).toBe(
+			readFileSync(pkgScript, "utf-8"),
+		);
+	});
+
+	test("signetai package.json includes scripts in files array", () => {
+		const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+		expect(pkgJson.files).toContain("scripts");
+	});
+
+	test("copy:scripts build step copies install-graphiq.sh", () => {
+		const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+		expect(pkgJson.scripts["copy:scripts"]).toBeDefined();
+		expect(pkgJson.scripts.prebuild).toContain("copy:scripts");
+	});
+
+	test("bundled path resolution: ../scripts from dist/daemon.js reaches scripts directory", () => {
+		const fakePkg = join(thisDir, "__test_pkg_layout__");
+		const fakeDist = join(fakePkg, "dist");
+		const fakeScripts = join(fakePkg, "scripts");
+		mkdirSync(fakeDist, { recursive: true });
 		mkdirSync(fakeScripts, { recursive: true });
 		writeFileSync(join(fakeScripts, "install-graphiq.sh"), "#!/bin/sh\n");
-
-		const bundled = resolve(fakeDist, "scripts/install-graphiq.sh");
 		try {
-			expect(existsSync(bundled)).toBe(true);
-			const result = resolveFakeScript(fakeDist);
-			expect(result).toBe(bundled);
+			const resolvedFromBundle = resolve(fakeDist, "../scripts/install-graphiq.sh");
+			expect(existsSync(resolvedFromBundle)).toBe(true);
 		} finally {
-			rmSync(fakeDist, { recursive: true, force: true });
-		}
-	});
-
-	test("falls back to source path when bundled script is absent", () => {
-		const fakeDist = join(thisDir, "__test_dist_noscript__");
-		mkdirSync(fakeDist, { recursive: true });
-		try {
-			const result = resolveFakeScript(fakeDist);
-			expect(result).toMatch(/scripts\/install-graphiq\.sh$/);
-			expect(existsSync(result)).toBe(true);
-		} finally {
-			rmSync(fakeDist, { recursive: true, force: true });
+			rmSync(fakePkg, { recursive: true, force: true });
 		}
 	});
 });
-
-function resolveFakeScript(fakeDistDir: string): string {
-	const bundled = resolve(fakeDistDir, "scripts/install-graphiq.sh");
-	if (existsSync(bundled)) return bundled;
-	return repoScript;
-}
