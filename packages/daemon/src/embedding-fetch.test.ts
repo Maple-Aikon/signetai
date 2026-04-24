@@ -49,11 +49,15 @@ describe("fetchEmbedding", () => {
 		});
 	});
 
-	it("passes caller abort signals through to provider fetches", async () => {
+	it("composes caller abort signals with provider timeouts", async () => {
 		const controller = new AbortController();
 		let capturedSignal: AbortSignal | null | undefined;
 		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
 			capturedSignal = init?.signal;
+			expect(capturedSignal).not.toBe(controller.signal);
+			expect(capturedSignal?.aborted).toBe(false);
+			controller.abort();
+			expect(capturedSignal?.aborted).toBe(true);
 			return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
 		}) as unknown as typeof fetch;
 
@@ -69,7 +73,7 @@ describe("fetchEmbedding", () => {
 		);
 
 		expect(result).toEqual([0.1, 0.2, 0.3]);
-		expect(capturedSignal).toBe(controller.signal);
+		expect(capturedSignal?.aborted).toBe(true);
 	});
 
 	it("routes to ollama when nativeFallbackProvider is 'ollama'", async () => {

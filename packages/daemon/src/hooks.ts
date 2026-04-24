@@ -2467,37 +2467,21 @@ type UserPromptSubmitDeps = {
 };
 
 const PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
-let promptSubmitEmbeddingInFlight: Promise<number[] | null> | null = null;
 
 async function fetchPromptSubmitEmbedding(
 	deps: Pick<UserPromptSubmitDeps, "fetchEmbedding" | "logger">,
 	text: string,
 	cfg: Parameters<typeof fetchEmbedding>[1],
 ): Promise<number[] | null> {
-	if (promptSubmitEmbeddingInFlight) {
-		deps.logger.warn("hooks", "User prompt submit embedding already in flight, skipping vector recall", {
-			timeoutMs: PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
-		});
-		return null;
-	}
-
 	const controller = new AbortController();
 	let timer: ReturnType<typeof setTimeout> | null = null;
-	const request = deps.fetchEmbedding(text, cfg, { signal: controller.signal }).finally(() => {
-		if (promptSubmitEmbeddingInFlight === request) {
-			promptSubmitEmbeddingInFlight = null;
-		}
-	});
-	promptSubmitEmbeddingInFlight = request;
+	const request = deps.fetchEmbedding(text, cfg, { signal: controller.signal });
 	try {
 		return await Promise.race([
 			request,
 			new Promise<null>((resolve) => {
 				timer = setTimeout(() => {
 					controller.abort();
-					if (promptSubmitEmbeddingInFlight === request) {
-						promptSubmitEmbeddingInFlight = null;
-					}
 					resolve(null);
 				}, PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
 			}),

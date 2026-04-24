@@ -52,18 +52,62 @@ type EmbeddingFetchOptions = {
 	readonly signal?: AbortSignal;
 };
 
+type EmbeddingFetchSignal = {
+	readonly signal: AbortSignal;
+	readonly cleanup: () => void;
+};
+
+function createEmbeddingFetchSignal(opts: EmbeddingFetchOptions, timeoutMs: number): EmbeddingFetchSignal {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	let abortCaller: (() => void) | null = null;
+	if (opts.signal) {
+		if (opts.signal.aborted) {
+			controller.abort();
+		} else {
+			abortCaller = () => controller.abort();
+			opts.signal.addEventListener("abort", abortCaller, { once: true });
+		}
+	}
+	return {
+		signal: controller.signal,
+		cleanup: () => {
+			clearTimeout(timer);
+			if (abortCaller) opts.signal?.removeEventListener("abort", abortCaller);
+		},
+	};
+}
+
+async function fetchWithEmbeddingTimeout(
+	input: Parameters<typeof fetch>[0],
+	init: RequestInit,
+	opts: EmbeddingFetchOptions,
+	timeoutMs: number,
+): Promise<Response> {
+	const state = createEmbeddingFetchSignal(opts, timeoutMs);
+	try {
+		return await fetch(input, { ...init, signal: state.signal });
+	} finally {
+		state.cleanup();
+	}
+}
+
 async function fetchOllamaEmbedding(
 	text: string,
 	baseUrl: string,
 	model: string,
 	opts: EmbeddingFetchOptions = {},
 ): Promise<number[] | null> {
-	const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embeddings`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ model, prompt: text }),
-		signal: opts.signal ?? AbortSignal.timeout(30000),
-	});
+	const res = await fetchWithEmbeddingTimeout(
+		`${baseUrl.replace(/\/$/, "")}/api/embeddings`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ model, prompt: text }),
+		},
+		opts,
+		30000,
+	);
 	if (!res.ok) {
 		logger.warn("embedding", "Ollama embedding request failed", {
 			status: res.status,
@@ -119,12 +163,16 @@ export async function fetchEmbedding(
 			}
 			if (nativeFallbackProvider === "llama-cpp") {
 				const fallbackModel = nativeFallbackModel ?? "nomic-embed-text";
-				const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ input: text, model: fallbackModel }),
-					signal: opts.signal ?? AbortSignal.timeout(5000),
-				});
+				const llamaCppRes = await fetchWithEmbeddingTimeout(
+					`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ input: text, model: fallbackModel }),
+					},
+					opts,
+					5000,
+				);
 				if (llamaCppRes.ok) {
 					const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
 					if (data.data?.[0]?.embedding) return data.data[0].embedding;
@@ -149,12 +197,16 @@ export async function fetchEmbedding(
 					if (!discoveredModel) {
 						logger.warn("embedding", "llama.cpp server reachable but no supported embedding model loaded");
 					} else {
-						const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ input: text, model: discoveredModel }),
-							signal: opts.signal ?? AbortSignal.timeout(5000),
-						});
+						const llamaCppRes = await fetchWithEmbeddingTimeout(
+							`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`,
+							{
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({ input: text, model: discoveredModel }),
+							},
+							opts,
+							5000,
+						);
 						if (llamaCppRes.ok) {
 							nativeFallbackProvider = "llama-cpp";
 							nativeFallbackModel = discoveredModel;
@@ -194,12 +246,16 @@ export async function fetchEmbedding(
 
 		if (cfg.provider === "llama-cpp") {
 			const baseUrl = cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
-			const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/embeddings`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ model: cfg.model, input: text }),
-				signal: opts.signal ?? AbortSignal.timeout(30000),
-			});
+			const res = await fetchWithEmbeddingTimeout(
+				`${baseUrl.replace(/\/$/, "")}/v1/embeddings`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ model: cfg.model, input: text }),
+				},
+				opts,
+				30000,
+			);
 			if (!res.ok) {
 				logger.warn("embedding", "llama.cpp embedding request failed", {
 					status: res.status,
@@ -217,15 +273,19 @@ export async function fetchEmbedding(
 			logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
 			return null;
 		}
-		const res = await fetch(`${baseUrl.replace(/\/$/, "")}/embeddings`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+		const res = await fetchWithEmbeddingTimeout(
+			`${baseUrl.replace(/\/$/, "")}/embeddings`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+				},
+				body: JSON.stringify({ model: cfg.model, input: text }),
 			},
-			body: JSON.stringify({ model: cfg.model, input: text }),
-			signal: opts.signal ?? AbortSignal.timeout(30000),
-		});
+			opts,
+			30000,
+		);
 		if (!res.ok) {
 			logger.warn("embedding", "Embedding API request failed", {
 				status: res.status,

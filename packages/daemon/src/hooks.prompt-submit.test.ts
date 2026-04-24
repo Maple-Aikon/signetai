@@ -332,6 +332,66 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).toContain("prompt submit timeout trace uses fast vector context");
 	});
 
+	it("preserves vector prompt-submit recall for concurrent fast embeddings", async () => {
+		const firstEmbedding = makePendingEmbedding();
+		const secondEmbedding = makePendingEmbedding();
+		fetchEmbeddingMock
+			.mockImplementationOnce(async () => firstEmbedding.promise)
+			.mockImplementationOnce(async () => secondEmbedding.promise);
+		hybridRecallMock.mockImplementation(async (_params, _cfg, embed) => {
+			const vector = await embed("prompt submit concurrent vector trace", {
+				provider: "ollama",
+				model: "nomic-embed-text",
+				dimensions: 768,
+				base_url: "http://localhost:11434",
+			});
+			return {
+				results: vector
+					? [
+							{
+								id: `mem-concurrent-${vector[0]}`,
+								score: 0.95,
+								content: `prompt submit concurrent vector recall ${vector[0]}`,
+								created_at: "2026-03-26T20:10:00.000Z",
+							},
+						]
+					: [],
+			};
+		});
+
+		const first = handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "prompt submit concurrent vector trace",
+				sessionKey: "session-concurrent-fast-embedding-one",
+			},
+			makeDeps(),
+		);
+		const second = handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "prompt submit concurrent vector trace",
+				sessionKey: "session-concurrent-fast-embedding-two",
+			},
+			makeDeps(),
+		);
+
+		firstEmbedding.resolve([0.1, 0.2, 0.3]);
+		secondEmbedding.resolve([0.4, 0.5, 0.6]);
+		const [firstResult, secondResult] = await Promise.all([first, second]);
+
+		expect(fetchEmbeddingMock).toHaveBeenCalledTimes(2);
+		expect(firstResult.memoryCount).toBe(1);
+		expect(firstResult.inject).toContain("prompt submit concurrent vector recall 0.1");
+		expect(secondResult.memoryCount).toBe(1);
+		expect(secondResult.inject).toContain("prompt submit concurrent vector recall 0.4");
+		expect(warnMock).not.toHaveBeenCalledWith(
+			"hooks",
+			"User prompt submit embedding already in flight, skipping vector recall",
+			expect.anything(),
+		);
+	});
+
 	it("bypasses prompt-submit embeddings when they exceed the hook budget", async () => {
 		const pending = makePendingEmbedding();
 		let signal: AbortSignal | undefined;
