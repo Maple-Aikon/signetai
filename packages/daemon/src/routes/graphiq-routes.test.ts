@@ -26,9 +26,7 @@ describe("getInstallScriptPath", () => {
 	});
 
 	test("source and package scripts are identical", () => {
-		expect(readFileSync(sourceScript, "utf-8")).toBe(
-			readFileSync(pkgScript, "utf-8"),
-		);
+		expect(readFileSync(sourceScript, "utf-8")).toBe(readFileSync(pkgScript, "utf-8"));
 	});
 
 	test("signetai package.json includes scripts in files array", () => {
@@ -42,16 +40,18 @@ describe("getInstallScriptPath", () => {
 		expect(pkgJson.scripts.prebuild).toContain("copy:scripts");
 	});
 
-	test("bundled path resolution: ../scripts from dist/daemon.js reaches scripts directory", () => {
+	test("production resolver finds script when placed in bundled dist layout", () => {
 		const fakePkg = join(thisDir, "__test_pkg_layout__");
-		const fakeDist = join(fakePkg, "dist");
+		const fakeDistRoutes = join(fakePkg, "dist", "routes");
 		const fakeScripts = join(fakePkg, "scripts");
-		mkdirSync(fakeDist, { recursive: true });
+		mkdirSync(fakeDistRoutes, { recursive: true });
 		mkdirSync(fakeScripts, { recursive: true });
-		writeFileSync(join(fakeScripts, "install-graphiq.sh"), "#!/bin/sh\n");
+		const scriptContent = "#!/bin/sh\necho test\n";
+		writeFileSync(join(fakeScripts, "install-graphiq.sh"), scriptContent);
 		try {
-			const resolvedFromBundle = resolve(fakeDist, "../scripts/install-graphiq.sh");
-			expect(existsSync(resolvedFromBundle)).toBe(true);
+			const result = getInstallScriptPath(`file://${fakeDistRoutes}/`);
+			expect(existsSync(result)).toBe(true);
+			expect(readFileSync(result, "utf-8")).toBe(scriptContent);
 		} finally {
 			rmSync(fakePkg, { recursive: true, force: true });
 		}

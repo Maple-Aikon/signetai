@@ -1,6 +1,5 @@
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import {
 	disableGraphiqState,
 	enableGraphiqState,
@@ -13,8 +12,8 @@ import { requirePermission } from "../auth";
 import { getActiveGraphiqDbPath, getAgentsDir, resolveGraphiqBinary, runCommand } from "../graphiq.js";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "../plugins/bundled/graphiq.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
-import { authConfig } from "./state.js";
 import { getInstallScriptPath } from "./graphiq-install-path.js";
+import { authConfig } from "./state.js";
 
 export function registerGraphiqRoutes(app: Hono): void {
 	const adminGuard = async (c: import("hono").Context, next: import("hono").Next) => {
