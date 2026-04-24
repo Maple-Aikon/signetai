@@ -18,7 +18,7 @@ detect_target() {
 		darwin-arm64)  echo "aarch64-apple-darwin"   ;;
 		darwin-x86_64) echo "x86_64-apple-darwin"    ;;
 		linux-x86_64)  echo "x86_64-unknown-linux-gnu" ;;
-		linux-aarch64) echo "aarch64-unknown-linux-gnu" ;;
+		linux-aarch64|linux-arm64|linux-armv8l) echo "aarch64-unknown-linux-gnu" ;;
 		*) die "Unsupported platform: $os-$arch"      ;;
 	esac
 }
