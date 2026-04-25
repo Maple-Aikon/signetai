@@ -200,6 +200,7 @@ export function withManagedForgeInstallLock<T>(run: () => Promise<T>, home = hom
 
 function resolveForgeManifestPath(getTemplatesDir: () => string): string | null {
 	const sourceCandidates = [
+		join(__dirname, "..", "..", "..", "..", "runtimes", "forge", "forge-version.json"),
 		join(__dirname, "..", "..", "forge", "forge-version.json"),
 		join(__dirname, "..", "..", "..", "forge", "forge-version.json"),
 		join(getTemplatesDir(), "forge", "manifest.json"),

@@ -276,6 +276,7 @@ describe("sqlite runtime ordering", () => {
 
 		for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: import.meta.dir })) {
 			if (file.endsWith(".test.ts") || file.endsWith(".bench.ts")) continue;
+			if (file.startsWith("__tests__/")) continue;
 
 			const text = readFileSync(join(import.meta.dir, file), "utf8");
 			if (text.includes("new Database(")) {

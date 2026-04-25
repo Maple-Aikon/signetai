@@ -47,7 +47,7 @@ describe("GraphIQ daemon CLI runner", () => {
 		writeFileSync(graphiqPath, "#!/bin/sh\ntrap '' TERM\nsleep 10\n");
 		chmodSync(graphiqPath, 0o755);
 		process.env.SIGNET_PATH = agentsDir;
-		process.env.PATH = binDir;
+		process.env.PATH = originalPath ? `${binDir}:${originalPath}` : binDir;
 
 		await expect(runGraphiqCli(["status"], 20)).rejects.toThrow("Timed out after 20ms");
 	});

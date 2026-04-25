@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "./yaml";
@@ -141,7 +141,7 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 	const userAgentFamily = parsePackageManagerUserAgent(options.userAgent ?? options.env?.npm_config_user_agent);
 	// Try the provided exec path, then process.argv[0], then `which signet`
 	let execPathForDetection = options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
-	if (!detectFromExecPath(execPathForDetection)) {
+	if (!options.execPath && !detectFromExecPath(execPathForDetection)) {
 		try {
 			const locator = process.platform === "win32" ? "where" : "which";
 			const result = spawnSync(locator, ["signet"], { encoding: "utf-8", windowsHide: true });
