@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-25
-- Bug fixes: bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
+- Bug fixes: package extraction worker and test lifecycle; proxy analytics and telemetry from worker thread via IPC; reject startup promise on early worker exit and guard duplicate startPipeline; address 3 blocking review findings in extraction worker thread; bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
+- Refactoring: make logger injectable in startWorker via LogSink interface.
 
 ### 2026-04-24
 - Bug fixes: bundle install-graphiq.sh so graphiq install/update works; bound prompt-submit embedding latency; detect default install path; emit structured hook JSON.
@@ -32,6 +33,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: resolve all typescript strict-mode errors in daemon package.
 
 ## Release Ledger
+
+## [0.108.9] - 2026-04-25
+
+Release summary: 4 bug fixes and 1 refactor.
+Tag range: `v0.108.8..v0.108.9`.
+
+### Bug Fixes
+
+- **pipeline**: package extraction worker and test lifecycle
+- **pipeline**: proxy analytics and telemetry from worker thread via IPC
+- **pipeline**: reject startup promise on early worker exit and guard duplicate startPipeline
+- **daemon**: address 3 blocking review findings in extraction worker thread
+
+### Refactoring
+
+- **pipeline**: make logger injectable in startWorker via LogSink interface
 
 ## [0.108.8] - 2026-04-25
 
