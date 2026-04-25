@@ -833,7 +833,7 @@ interface StructuralPass1Stats {
 }
 
 export function shouldPersistExtractionGraph(cfg: PipelineV2Config, entityCount: number): boolean {
-	return cfg.graph.enabled && cfg.graph.extractionWritesEnabled && entityCount > 0;
+	return cfg.graph.enabled && cfg.graph.extractionWritesEnabled === true && entityCount > 0;
 }
 
 /**
@@ -1593,10 +1593,10 @@ export function startWorker(
 					durationMs: runtime.now() - jobStart,
 				});
 				if (nonRetryable) {
-				log.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, undefined, {
-					error: msg,
-					memoryId: job.memory_id,
-				});
+					log.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, undefined, {
+						error: msg,
+						memoryId: job.memory_id,
+					});
 				}
 				accessor.withWriteTx((db) => {
 					if (nonRetryable) {

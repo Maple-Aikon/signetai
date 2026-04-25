@@ -7,23 +7,36 @@
  * return value.
  */
 
-import { Worker } from "node:worker_threads";
-import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import type { AnalyticsCollector } from "../analytics";
 import { logger } from "../logger";
 import type { LogCategory } from "../logger";
 import type { TelemetryCollector, TelemetryEventType, TelemetryProperties } from "../telemetry";
-import type { WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
+import type { MainToWorkerMessage, WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
 import type { WorkerHandle, WorkerStats } from "./worker";
 
 const READY_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
 
+export interface ExtractionWorker {
+	on(event: "message", listener: (msg: WorkerToMainMessage) => void): ExtractionWorker;
+	on(event: "error", listener: (err: Error) => void): ExtractionWorker;
+	on(event: "exit", listener: (code: number) => void): ExtractionWorker;
+	postMessage(msg: MainToWorkerMessage): void;
+	terminate(): Promise<number> | number;
+}
+
+export type ExtractionWorkerFactory = (workerPath: string, init: WorkerInit) => ExtractionWorker;
+
 export interface ExtractionThreadOpts {
 	readonly init: WorkerInit;
 	readonly analytics?: AnalyticsCollector;
 	readonly telemetry?: TelemetryCollector;
+	readonly workerFactory?: ExtractionWorkerFactory;
+	readonly readyTimeoutMs?: number;
+	readonly stopTimeoutMs?: number;
 }
 
 export function startExtractionThread(opts: ExtractionThreadOpts): Promise<WorkerHandle> {
@@ -31,7 +44,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 	return new Promise<WorkerHandle>((resolve, reject) => {
 		const bundled = join(import.meta.dir, "extraction-thread.js");
 		const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "extraction-thread.ts");
-		const worker = new Worker(workerPath, { workerData: init });
+		const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init);
 
 		let running = true;
 		let settled = false;
@@ -52,9 +65,13 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 		const readyTimer = setTimeout(() => {
 			if (settled) return;
 			settled = true;
-			reject(new Error(`Extraction worker thread failed to become ready within ${READY_TIMEOUT_MS}ms`));
+			reject(
+				new Error(
+					`Extraction worker thread failed to become ready within ${opts.readyTimeoutMs ?? READY_TIMEOUT_MS}ms`,
+				),
+			);
 			worker.terminate();
-		}, READY_TIMEOUT_MS);
+		}, opts.readyTimeoutMs ?? READY_TIMEOUT_MS);
 
 		worker.on("message", (msg: WorkerToMainMessage) => {
 			switch (msg.type) {
@@ -148,7 +165,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 						logger.warn("pipeline", "Extraction worker thread stop timed out, terminating");
 						worker.terminate();
 						res();
-					}, STOP_TIMEOUT_MS);
+					}, opts.stopTimeoutMs ?? STOP_TIMEOUT_MS);
 					worker.on("message", (msg: WorkerToMainMessage) => {
 						if (msg.type === "stopped") {
 							clearTimeout(stopTimer);
@@ -162,4 +179,8 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 			},
 		};
 	});
+}
+
+function createNodeWorker(workerPath: string, init: WorkerInit): ExtractionWorker {
+	return new Worker(workerPath, { workerData: init });
 }
