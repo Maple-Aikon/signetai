@@ -48,6 +48,10 @@ export function setNativeFallbackProvider(
 	nativeFallbackModel = model ?? null;
 }
 
+export function setNativeEmbeddingProviderForTest(provider: ((text: string) => Promise<number[]>) | null): void {
+	cachedNativeEmbed = provider;
+}
+
 type EmbeddingFetchOptions = {
 	readonly signal?: AbortSignal;
 };

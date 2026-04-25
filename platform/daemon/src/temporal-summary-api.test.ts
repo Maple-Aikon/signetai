@@ -9,6 +9,7 @@ let app: {
 };
 let dir = "";
 let prev: string | undefined;
+let reloadAuthState: ((agentsDir: string) => void) | null = null;
 
 function jsonHeader(): HeadersInit {
 	return { "Content-Type": "application/json" };
@@ -42,10 +43,14 @@ describe("temporal summary API auth", () => {
 		process.env.SIGNET_PATH = dir;
 
 		const daemon = await import(`./daemon?temporal-summary-api=${Date.now()}`);
+		const state = await import("./routes/state");
+		reloadAuthState = state.reloadAuthState;
+		reloadAuthState(dir);
 		app = daemon.app;
 	});
 
 	beforeEach(() => {
+		reloadAuthState?.(dir);
 		closeDbAccessor();
 		rmSync(join(dir, "memory", "memories.db"), { force: true });
 		rmSync(join(dir, "memory", "memories.db-shm"), { force: true });
@@ -62,7 +67,7 @@ describe("temporal summary API auth", () => {
 	afterAll(() => {
 		closeDbAccessor();
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}

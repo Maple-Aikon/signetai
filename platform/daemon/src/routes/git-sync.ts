@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	SIGNET_GIT_PROTECTED_PATHS,
@@ -20,10 +21,14 @@ export interface GitConfig {
 	branch: string;
 }
 
-function detectGitBranch(remote: string): string {
+function resolveAgentsDirForModuleInit(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function detectGitBranch(remote: string, dir = resolveAgentsDirForModuleInit()): string {
 	try {
 		const ref = execFileSync("git", ["symbolic-ref", `refs/remotes/${remote}/HEAD`], {
-			cwd: AGENTS_DIR,
+			cwd: dir,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 			timeout: 3000,
@@ -39,7 +44,7 @@ function detectGitBranch(remote: string): string {
 
 	try {
 		const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-			cwd: AGENTS_DIR,
+			cwd: dir,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 			timeout: 3000,
@@ -55,7 +60,7 @@ function detectGitBranch(remote: string): string {
 	return "main";
 }
 
-export function loadGitConfig(): GitConfig {
+export function loadGitConfig(agentsDir = resolveAgentsDirForModuleInit()): GitConfig {
 	const defaults: GitConfig = {
 		enabled: true,
 		autoCommit: true,
@@ -65,7 +70,7 @@ export function loadGitConfig(): GitConfig {
 		branch: "",
 	};
 
-	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;
@@ -87,7 +92,7 @@ export function loadGitConfig(): GitConfig {
 	}
 
 	if (!defaults.branch) {
-		defaults.branch = detectGitBranch(defaults.remote);
+		defaults.branch = detectGitBranch(defaults.remote, agentsDir);
 	}
 
 	return defaults;

@@ -1598,17 +1598,18 @@ export function startWorker(
 						memoryId: job.memory_id,
 					});
 				}
+				const effectiveMaxAttempts = Math.min(job.max_attempts, pipelineCfg.worker.maxRetries);
 				accessor.withWriteTx((db) => {
 					if (nonRetryable) {
 						deadLetterJob(db, job.id, msg);
 					} else {
-						failJob(db, job.id, msg, job.attempts, job.max_attempts);
+						failJob(db, job.id, msg, job.attempts, effectiveMaxAttempts);
 					}
-					if (nonRetryable || job.attempts >= job.max_attempts) {
+					if (nonRetryable || job.attempts >= effectiveMaxAttempts) {
 						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});
-				consecutiveFailures++;
+				consecutiveFailures = nonRetryable || job.attempts >= effectiveMaxAttempts ? 0 : consecutiveFailures + 1;
 				lastAttempt = runtime.now();
 			}
 		} catch (e) {

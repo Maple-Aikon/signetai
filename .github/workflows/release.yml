@@ -111,7 +111,7 @@ jobs:
           echo "bump_level=$BUMP" >> $GITHUB_OUTPUT
           rm -f .bump-level
 
-          mapfile -t PACKAGE_FILES < <(git ls-files package.json 'platform/**/package.json' 'surfaces/**/package.json' 'integrations/**/package.json' 'libs/**/package.json' 'dist/**/package.json' 'web/**/package.json' | grep -v '^surfaces/dashboard/package.json$')
+          mapfile -t PACKAGE_FILES < <(git ls-files package.json 'platform/**/package.json' 'surfaces/**/package.json' 'integrations/**/package.json' 'libs/**/package.json' 'dist/**/package.json' | grep -v '^surfaces/dashboard/package.json$')
           for file in "${PACKAGE_FILES[@]}"; do
             jq --arg v "$NEW_VERSION" '.version = $v' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
           done

@@ -23,6 +23,10 @@ import { createRateLimiter } from "../repair-actions";
 import type { TelemetryCollector } from "../telemetry";
 import { getUpdateState } from "../update-system";
 
+export let restartPipelineRuntimeRef:
+	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
+	| null = null;
+
 // Paths
 export const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 export const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
@@ -30,6 +34,14 @@ export const PID_FILE = join(DAEMON_DIR, "pid");
 export const LOG_DIR = join(DAEMON_DIR, "logs");
 export const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 export const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
+
+export function getCurrentAgentsDir(): string {
+	return process.env.SIGNET_PATH || AGENTS_DIR;
+}
+
+export function getCurrentMemoryDbPath(): string {
+	return join(getCurrentAgentsDir(), "memory", "memories.db");
+}
 
 // Config utilities
 export function readEnvTrimmed(key: string): string | undefined {
@@ -175,12 +187,16 @@ export const ALLOWED_ORIGINS = _ALLOWED_ORIGINS;
 export function isAllowedOrigin(origin: string | undefined): boolean {
 	if (!origin) return false;
 	if (ALLOWED_ORIGINS.has(origin)) return true;
-	if (NETWORK_MODE !== "tailscale") return false;
+	const agentsDir = process.env.SIGNET_PATH || AGENTS_DIR;
+	const binding = readConfiguredNetworkBinding(agentsDir);
+	const networkMode = networkModeFromBindHost(normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? binding.bind));
+	const port = parsePort(readEnvTrimmed("SIGNET_PORT"), PORT);
+	if (networkMode !== "tailscale") return false;
 
 	try {
 		const url = new URL(origin);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-		if (parseOriginPort(url) !== PORT) return false;
+		if (parseOriginPort(url) !== port) return false;
 		const host = normalizeOriginHost(url.hostname);
 		if (isLoopbackOriginHost(host)) return false;
 		return isTailscaleOriginHost(host);
@@ -483,10 +499,6 @@ function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 }
 
 export { readPipelineMode };
-
-export let restartPipelineRuntimeRef:
-	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
-	| null = null;
 
 export function setRestartPipelineRuntime(
 	fn: (memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>,

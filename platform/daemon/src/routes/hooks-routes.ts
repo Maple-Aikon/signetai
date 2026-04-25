@@ -44,7 +44,6 @@ import { writeCompactionArtifact } from "../memory-lineage.js";
 import { hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { isNoiseSession } from "../session-noise";
-import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	type RuntimePath,
 	claimSession,
@@ -59,13 +58,14 @@ import {
 	renewSession,
 } from "../session-tracker.js";
 import { upsertThreadHead } from "../thread-heads";
+import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
 	INTERNAL_SELF_HOST,
-	MEMORY_DB,
 	PORT,
 	authConfig,
 	authCrossAgentMessageLimiter,
+	getCurrentMemoryDbPath,
 	harnessLastSeen,
 } from "./state";
 import {
@@ -621,7 +621,7 @@ function registerCompactionComplete(app: Hono): void {
 				return c.json({ success: true, bypassed: true });
 			}
 
-			if (!existsSync(MEMORY_DB)) {
+			if (!existsSync(getCurrentMemoryDbPath())) {
 				return c.json({ error: "Memory database not found" }, 500);
 			}
 

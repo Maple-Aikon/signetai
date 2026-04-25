@@ -34,8 +34,8 @@ const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 let projTok: Tiktoken | null = null;
 const purgeSeen = new Set<string>();
 
-// Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = mtimeMs
-const artifactIndexCache = new Map<string, Map<string, number>>();
+// Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = stat fingerprint
+const artifactIndexCache = new Map<string, Map<string, string>>();
 
 // Changed manifest paths from last reindexMemoryArtifacts call — read by renderMemoryProjection, keyed by agentId
 const lastChangedManifestsByAgent = new Map<string, Set<string>>();
@@ -261,6 +261,11 @@ function artifactFileName(capturedAt: string, sessionToken: string, kind: Artifa
 	return `${fsTimestamp(capturedAt)}--${sessionToken}--${kind}.md`;
 }
 
+function artifactStatKey(path: string): string {
+	const stat = statSync(path, { bigint: true });
+	return `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
+}
+
 function artifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
 	return join(getMemoryDir(), artifactFileName(capturedAt, sessionToken, kind));
 }
@@ -472,6 +477,15 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 		if (!fieldsMatch) {
 			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (identity mismatch)`);
 		}
+		const existingBodyHash = hashNormalizedBody(existing.body);
+		const declaredHash =
+			typeof fm.content_sha256 === "string" && fm.content_sha256.length > 0 ? fm.content_sha256 : null;
+		if (declaredHash && declaredHash !== existingBodyHash) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (checksum mismatch)`);
+		}
+		if (existingBodyHash !== frontmatter.content_sha256) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (content mismatch)`);
+		}
 		return path;
 	}
 
@@ -598,16 +612,6 @@ export function indexExternalMemoryArtifact(input: {
 	);
 }
 
-function canSeedColdCacheFromDbRow(currentMtimeMs: number, row: { readonly source_mtime_ms?: unknown }): boolean {
-	if (!Number.isFinite(currentMtimeMs)) return false;
-
-	if (typeof row.source_mtime_ms === "number" && Number.isFinite(row.source_mtime_ms)) {
-		return currentMtimeMs === row.source_mtime_ms;
-	}
-
-	return false;
-}
-
 function listCanonicalFiles(): string[] {
 	const dir = getMemoryDir();
 	if (!existsSync(dir)) return [];
@@ -675,15 +679,13 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 			const root = getAgentsDir();
 			for (const row of dbPaths) {
 				const absPath = join(root, row.source_path);
-				if (!existsSync(absPath)) {
-					cache.set(absPath, 0);
-					continue;
-				}
-				const currentMtimeMs = statSync(absPath).mtimeMs;
-				cache.set(absPath, canSeedColdCacheFromDbRow(currentMtimeMs, row) ? currentMtimeMs : 0);
+				// Cold caches must re-read existing files at least once. Mtime-only
+				// seeding can miss fast local tampering where the frontmatter checksum
+				// no longer matches the body but the timestamp did not advance.
+				cache.set(absPath, "0");
 			}
 			for (const path of files) {
-				if (!cache.has(path)) cache.set(path, 0);
+				if (!cache.has(path)) cache.set(path, "0");
 			}
 		}
 	}
@@ -703,33 +705,34 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 
 	const fileSet = new Set(files);
 	for (const path of files) {
-		const mtime = statSync(path).mtimeMs;
-		if (cache.get(path) === mtime) continue;
+		const statKey = artifactStatKey(path);
+		if (cache.get(path) === statKey) continue;
 
 		const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
 			deleteArtifactRowsForPath(path, scope);
-			cache.set(path, mtime);
+			cache.set(path, statKey);
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
 			deleteArtifactRowsForPath(path, scope);
-			cache.set(path, mtime);
+			cache.set(path, statKey);
 			changedPaths.add(path);
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
 			deleteArtifactRowsForPath(path, scope);
-			cache.set(path, mtime);
+			cache.set(path, statKey);
 			changedPaths.add(path);
 			continue;
 		}
+		const mtime = statSync(path).mtimeMs;
 		upsertArtifactRow(path, parsed.frontmatter, body, mtime);
-		cache.set(path, mtime);
+		cache.set(path, statKey);
 		changedPaths.add(path);
 	}
 

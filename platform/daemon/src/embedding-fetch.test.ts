@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { fetchEmbedding, requiresOpenAiApiKey, setNativeFallbackProvider } from "./embedding-fetch";
+import {
+	fetchEmbedding,
+	requiresOpenAiApiKey,
+	setNativeEmbeddingProviderForTest,
+	setNativeFallbackProvider,
+} from "./embedding-fetch";
 
 const originalFetch = globalThis.fetch;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
@@ -21,6 +26,7 @@ describe("requiresOpenAiApiKey", () => {
 describe("fetchEmbedding", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		setNativeEmbeddingProviderForTest(null);
 		setNativeFallbackProvider(null);
 		if (originalOpenAiApiKey === undefined) {
 			Reflect.deleteProperty(process.env, "OPENAI_API_KEY");
@@ -149,6 +155,9 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
+		setNativeEmbeddingProviderForTest(async () => {
+			throw new Error("native unavailable");
+		});
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -175,6 +184,9 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
+		setNativeEmbeddingProviderForTest(async () => {
+			throw new Error("native unavailable");
+		});
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",

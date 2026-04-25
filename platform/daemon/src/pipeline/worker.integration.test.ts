@@ -10,15 +10,15 @@
  * exercise a specific stage of the pipeline.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "../../../core/src/migrations";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { LlmProvider, PipelineV2Config } from "@signet/core";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import type { DecisionConfig } from "./decision";
-import { enqueueExtractionJob, startWorker } from "./worker";
-import { startHintsWorker } from "./prospective-index";
+import { runMigrations } from "../../../core/src/migrations";
 import { normalizeAndHashContent } from "../content-normalization";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import type { DecisionConfig } from "./decision";
+import { startHintsWorker } from "./prospective-index";
+import { enqueueExtractionJob, startWorker } from "./worker";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -170,7 +170,7 @@ function testPipelineCfg(): PipelineV2Config {
 			},
 		},
 		worker: { pollMs: 10, maxRetries: 3, leaseTimeoutMs: 300000, maxLoadPerCpu: 2, overloadBackoffMs: 5000 },
-		graph: { enabled: true, boostWeight: 0.15, boostTimeoutMs: 500 },
+		graph: { enabled: true, extractionWritesEnabled: true, boostWeight: 0.15, boostTimeoutMs: 500 },
 		traversal: {
 			enabled: false,
 			primary: false,
@@ -375,7 +375,7 @@ function getRelations(db: Database, sourceEntityId: string) {
 }
 
 function getMentions(db: Database, memoryId: string) {
-	return db.prepare(`SELECT entity_id FROM memory_entity_mentions WHERE memory_id = ?`).all(memoryId) as Array<{
+	return db.prepare("SELECT entity_id FROM memory_entity_mentions WHERE memory_id = ?").all(memoryId) as Array<{
 		entity_id: string;
 	}>;
 }
@@ -396,7 +396,7 @@ function getHistory(db: Database, memoryId: string) {
 }
 
 function getHints(db: Database, memoryId: string) {
-	return db.prepare(`SELECT hint FROM memory_hints WHERE memory_id = ? ORDER BY hint`).all(memoryId) as Array<{
+	return db.prepare("SELECT hint FROM memory_hints WHERE memory_id = ? ORDER BY hint").all(memoryId) as Array<{
 		hint: string;
 	}>;
 }
@@ -671,7 +671,9 @@ describe("pipeline integration", () => {
 
 		const provider = scriptedProvider([
 			JSON.stringify({
-				facts: [{ content: longFact("It might rain tomorrow but who really knows for sure"), type: "fact", confidence: 0.4 }],
+				facts: [
+					{ content: longFact("It might rain tomorrow but who really knows for sure"), type: "fact", confidence: 0.4 },
+				],
 				entities: [],
 			}),
 			JSON.stringify({ action: "add", confidence: 0.4, reason: "Low confidence speculation" }),
@@ -766,7 +768,13 @@ describe("pipeline integration", () => {
 
 		const provider = scriptedProvider([
 			JSON.stringify({
-				facts: [{ content: longFact("Carol lives in Denver, Colorado as her primary residence"), type: "fact", confidence: 0.9 }],
+				facts: [
+					{
+						content: longFact("Carol lives in Denver, Colorado as her primary residence"),
+						type: "fact",
+						confidence: 0.9,
+					},
+				],
 				entities: [],
 			}),
 			DECISION_ADD_RESPONSE,

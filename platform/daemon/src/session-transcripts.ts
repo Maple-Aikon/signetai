@@ -158,8 +158,11 @@ export function searchTranscriptFallback(params: {
 
 	try {
 		if (tableExists("session_transcripts_fts")) {
-			const fts = sanitizeFtsQuery(params.query);
-			if (fts.length > 0) {
+			const anchors = extractAnchorTerms(params.query)
+				.map((term) => term.replace(/[_:/.-]+/g, " "))
+				.join(" ");
+			const ftsQueries = [...new Set([sanitizeFtsQuery(params.query), sanitizeFtsQuery(anchors)].filter(Boolean))];
+			for (const fts of ftsQueries) {
 				try {
 					const rows = getDbAccessor().withReadDb((db) => {
 						const parts = [

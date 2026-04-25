@@ -171,7 +171,7 @@ describe("memory-lineage", () => {
 		expect(existsSync(join(dir, row.source_path))).toBe(false);
 	});
 
-	it("writeSummaryArtifact is idempotent when called twice for the same session", async () => {
+	it("writeSummaryArtifact is idempotent for identical content and rejects content mutation", async () => {
 		const stamp = new Date().toISOString();
 		const base = {
 			agentId: "default",
@@ -192,9 +192,16 @@ describe("memory-lineage", () => {
 
 		const second = await writeSummaryArtifact({
 			...base,
-			summary: "Completely different content from a retry.",
+			summary: "First summary content for the session.",
 		});
 		expect(second.summaryPath).toBe(first.summaryPath);
+
+		await expect(
+			writeSummaryArtifact({
+				...base,
+				summary: "Completely different content from a retry.",
+			}),
+		).rejects.toThrow("Refusing to mutate immutable artifact");
 
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
@@ -496,7 +503,7 @@ describe("memory-lineage", () => {
 			expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
 		});
 
-		it("cold cache trusts persisted source_mtime_ms for unchanged artifacts", async () => {
+		it("cold cache revalidates artifacts instead of trusting persisted source_mtime_ms", async () => {
 			await addSummary({ sessionId: "mtime-seeded-skip", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 			reindexMemoryArtifacts("default");
 
@@ -516,7 +523,7 @@ describe("memory-lineage", () => {
 			);
 
 			expect(rows.length).toBeGreaterThan(0);
-			expect(rows.every((row) => row.updated_at === oldStamp)).toBe(true);
+			expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
 		});
 
 		it("cold cache refreshes upgraded rows missing source_mtime_ms", async () => {

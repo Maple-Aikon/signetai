@@ -102,6 +102,10 @@ export function shapeStructuredEvidence(
 		},
 	};
 
+	const hasSecondaryEvidence = inputs.some(
+		(input) => clamp01(input.hint) > 0 || clamp01(input.traversal) > 0 || clamp01(input.structured) > 0,
+	);
+
 	const shaped = inputs.flatMap((input): EvidenceCandidate[] => {
 		const evidence: EvidenceChannels = {
 			lexical: clamp01(input.lexical),
@@ -111,7 +115,9 @@ export function shapeStructuredEvidence(
 			structured: clamp01(input.structured),
 		};
 
-		let score = weightedScore(evidence, cfg.weights);
+		const lexicalFloor =
+			evidence.lexical > 0 ? (hasSecondaryEvidence ? 0.4 + evidence.lexical * 0.02 : evidence.lexical) : 0;
+		let score = Math.max(weightedScore(evidence, cfg.weights), lexicalFloor, evidence.hint);
 		if (evidence.structured >= 0.25) {
 			score += (evidence.structured - 0.25) * 0.8;
 		}

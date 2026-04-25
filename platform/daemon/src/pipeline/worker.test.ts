@@ -43,6 +43,12 @@ function makeAccessor(db: Database): DbAccessor {
 	};
 }
 
+function durableFact(content: string): string {
+	const trimmed = content.trim();
+	if (trimmed.length >= 80) return trimmed;
+	return `${trimmed}. This durable test memory preserves enough specific context for extraction validation.`;
+}
+
 function insertMemory(
 	db: Database,
 	id: string,
@@ -60,6 +66,7 @@ function insertMemory(
 	},
 ): void {
 	const now = new Date().toISOString();
+	const storageContent = opts?.normalizedContent ? content : durableFact(content);
 	db.prepare(
 		`INSERT INTO memories
 		 (id, type, content, normalized_content, content_hash, confidence, importance, created_at, updated_at,
@@ -69,8 +76,8 @@ function insertMemory(
 	).run(
 		id,
 		opts?.type ?? "fact",
-		content,
-		opts?.normalizedContent ?? content,
+		storageContent,
+		opts?.normalizedContent ?? storageContent,
 		opts?.contentHash ?? null,
 		now,
 		now,
@@ -128,7 +135,7 @@ function goodProvider(): LlmProvider {
 	const extractionResponse = JSON.stringify({
 		facts: [
 			{
-				content: "User prefers dark mode in their editor settings",
+				content: durableFact("User prefers dark mode in their editor settings"),
 				type: "preference",
 				confidence: 0.9,
 			},
@@ -195,12 +202,31 @@ function scriptedProvider(outputs: readonly string[]): LlmProvider {
 			// Clamp to the final scripted output once the sequence is exhausted.
 			const output = outputs[Math.min(cursor, outputs.length - 1)] ?? "";
 			cursor += 1;
-			return output;
+			return normalizeMockExtractionOutput(output);
 		},
 		async available() {
 			return true;
 		},
 	};
+}
+
+function normalizeMockExtractionOutput(output: string): string {
+	try {
+		const parsed = JSON.parse(output) as unknown;
+		if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { facts?: unknown }).facts)) {
+			return output;
+		}
+		const obj = parsed as { facts: Array<Record<string, unknown>> };
+		return JSON.stringify({
+			...(parsed as Record<string, unknown>),
+			facts: obj.facts.map((fact) => {
+				if (typeof fact.content !== "string" || !/[a-z0-9]/i.test(fact.content)) return fact;
+				return { ...fact, content: durableFact(fact.content) };
+			}),
+		});
+	} catch {
+		return output;
+	}
 }
 
 /**
@@ -210,7 +236,7 @@ function scriptedProvider(outputs: readonly string[]): LlmProvider {
 function failThenSucceedProvider(failures: number): LlmProvider {
 	let calls = 0;
 	const good = JSON.stringify({
-		facts: [{ content: "Test fact", type: "preference", confidence: 0.9 }],
+		facts: [{ content: durableFact("Test fact"), type: "preference", confidence: 0.9 }],
 		entities: [{ source: "User", relationship: "prefers", target: "tests", confidence: 0.9 }],
 	});
 	return {
@@ -298,7 +324,14 @@ const DECISION_CFG: DecisionConfig = {
 		dimensions: 3, // matches test mock vectors
 		base_url: "http://localhost:11434",
 	},
-	search: { alpha: 0.7, top_k: 20, min_score: 0.0, rehearsal_enabled: false, rehearsal_weight: 0, rehearsal_half_life_days: 7 },
+	search: {
+		alpha: 0.7,
+		top_k: 20,
+		min_score: 0.0,
+		rehearsal_enabled: false,
+		rehearsal_weight: 0,
+		rehearsal_half_life_days: 7,
+	},
 	async fetchEmbedding() {
 		return null;
 	},
@@ -671,7 +704,9 @@ describe("Worker phase C controlled writes", () => {
 		expect(created).toHaveLength(1);
 		expect(created[0].type).toBe("preference");
 		expect(created[0].content).toContain("dark mode");
-		expect(created[0].normalized_content).toBe("user prefers dark mode in their editor settings");
+		expect(created[0].normalized_content).toBe(
+			"user prefers dark mode in their editor settings. this durable test memory preserves enough specific context for extraction validation",
+		);
 		expect(created[0].extraction_status).toBe("completed");
 		expect(created[0].extraction_model).toBe("qwen3:4b");
 		expect(created[0].embedding_model).toBe("nomic-embed-text");
@@ -764,9 +799,9 @@ describe("Worker phase C controlled writes", () => {
 			.prepare(
 				`SELECT id FROM memories
 				 WHERE source_type = 'pipeline-v2'
-				   AND content = 'User prefers dark mode in their editor settings'`,
+				   AND content = ?`,
 			)
-			.all() as Array<{ id: string }>;
+			.all(durableFact("User prefers dark mode in their editor settings")) as Array<{ id: string }>;
 		expect(extractedMemories).toHaveLength(1);
 
 		const historyRows = db
@@ -818,7 +853,7 @@ describe("Worker phase C controlled writes", () => {
 	});
 
 	it("does not dedupe against identical content in a different scope", async () => {
-		const scoped = normalizeAndHashContent("User prefers dark mode in editor settings");
+		const scoped = normalizeAndHashContent(durableFact("User prefers dark mode in editor settings"));
 		insertMemory(db, "mem-existing-scope-b", scoped.storageContent, {
 			scope: "scope-b",
 			normalizedContent: scoped.normalizedContent,
@@ -1336,7 +1371,7 @@ describe("Worker phase C controlled writes", () => {
 				JSON.stringify({
 					facts: [
 						{
-							content: "..........!!!!!!!!!!..........",
+							content: "..........!!!!!!!!!!..........!!!!!!!!!!..........!!!!!!!!!!..........!!!!!!!!!!..........",
 							type: "preference",
 							confidence: 0.92,
 						},
@@ -1566,7 +1601,7 @@ describe("Worker phase C controlled writes", () => {
 		const target = db.prepare("SELECT content, updated_by FROM memories WHERE id = ?").get("mem-target-update") as
 			| { content: string; updated_by: string }
 			| undefined;
-		expect(target?.content).toBe("User prefers dark mode editor theme");
+		expect(target?.content).toBe(durableFact("User prefers dark mode editor theme"));
 		expect(target?.updated_by).toBe("pipeline-v2");
 
 		// Stats should reflect the update
