@@ -1055,4 +1055,48 @@ describe("migration framework", () => {
 		expect(after).toContain("We celebrate wins together");
 		expect(after).not.toContain("Celebrity filter blocks face likenesses");
 	});
+
+	test("migration 063 limits memories_fts updates to content changes", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const trigger = db
+			.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'memories_au'")
+			.get();
+		expect(trigger?.sql).toContain("AFTER UPDATE OF content ON memories");
+
+		db.exec(`
+			INSERT INTO memories (id, content, type, confidence, access_count, created_at, updated_at, updated_by)
+			VALUES ('mem-fts-access', 'recall access tracking should stay searchable', 'fact', 0.9, 0, datetime('now'), datetime('now'), 'test')
+		`);
+
+		db.prepare("UPDATE memories SET access_count = access_count + 1 WHERE id = ?").run("mem-fts-access");
+		expect(
+			db
+				.query<{ id: string }, [string]>(
+					`SELECT m.id
+					 FROM memories_fts
+					 JOIN memories m ON memories_fts.rowid = m.rowid
+					 WHERE memories_fts MATCH ?`,
+				)
+				.all("searchable")
+				.map((row) => row.id),
+		).toContain("mem-fts-access");
+
+		db.prepare("UPDATE memories SET content = ? WHERE id = ?").run(
+			"content updates still refresh searchable text",
+			"mem-fts-access",
+		);
+		expect(
+			db
+				.query<{ id: string }, [string]>(
+					`SELECT m.id
+					 FROM memories_fts
+					 JOIN memories m ON memories_fts.rowid = m.rowid
+					 WHERE memories_fts MATCH ?`,
+				)
+				.all("refresh")
+				.map((row) => row.id),
+		).toContain("mem-fts-access");
+	});
 });

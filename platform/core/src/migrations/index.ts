@@ -68,6 +68,7 @@ import { up as entityAttributeClaimKey } from "./059-entity-attribute-claim-key"
 import { up as entityAttributeGroupKey } from "./060-entity-attribute-group-key";
 import { up as memoryArtifactSourceMtime } from "./061-memory-artifact-source-mtime";
 import { up as memoryArtifactSoftDelete } from "./062-memory-artifact-soft-delete";
+import { up as contentOnlyMemoriesFtsUpdate } from "./063-content-only-memories-fts-update";
 
 // -- Public interface consumed by Database.init() --
 
@@ -590,6 +591,11 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "memory_artifacts", column: "deleted_at" },
 			],
 		},
+	},
+	{
+		version: 63,
+		name: "content-only-memories-fts-update",
+		up: contentOnlyMemoriesFtsUpdate,
 	},
 ];
 
