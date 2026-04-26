@@ -693,7 +693,6 @@ specs:
     blocks:
       - ssm-temporal-backbone
     informed_by:
-      - references/Engram
       - "arxiv:2601.07372 (Engram: Conditional Memory via Scalable Lookup)"
       - docs/research/technical/RESEARCH-SSM-INTEGRATION.md
       - docs/specs/planning/ssm-foundation-evaluation.md

@@ -142,7 +142,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
 | `ontology-evolution-core`, `ontology-governance-workflow` | RESEARCH-ONTOLOGY-EVOLUTION | How should ontology schema and governance evolve without losing local-first simplicity? |
 | `ssm-foundation-evaluation`, `ssm-temporal-backbone`, `ssm-graph-traversal-model` | RESEARCH-SSM-INTEGRATION, SSM-GRAPH-INTERSECTION, SSM-LITERATURE-REVIEW, SYNTHETIC-DATA-GENERATION | How should SSM research translate into benchmarked, staged deployment without violating retrieval invariants? |
-| `engram-informed-predictor-track` | references/Engram, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
+| `engram-informed-predictor-track` | arxiv:2601.07372, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
 | `macos-sqlite-runtime-discovery` | RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY | How should Signet select a compatible SQLite runtime on macOS so Bun can load sqlite-vec? |
 | `docker-self-hosting-stack` | RESEARCH-DOCKER-SELF-HOSTING | What deployment contract keeps Docker self-hosting reproducible, persistent, and secure by default? |
 | `openclaw-workspace-protection-plan`, `openclaw-workspace-protection` | RESEARCH-OPENCLAW-WORKSPACE-PROTECTION | How should Signet prevent data loss when OpenClaw uninstall deletes a workspace that points at `.agents`? |
@@ -364,12 +364,12 @@ cannot suppress them. This is a hard retrieval invariant.
   taxonomy. Requires updating invariant 3 when implemented.
 - DP-16 (post-fusion dampening) adds gravity, hub, and resolution
   filters after fusion scoring. Informed by Ori-Mnemos ablation data.
-  Implemented in `packages/daemon/src/pipeline/dampening.ts`.
+  Implemented in `platform/daemon/src/pipeline/dampening.ts`.
 - DP-17 (compaction resilience) adds PreCompact/PostCompact checkpoint
   hooks for mid-session context recovery. Extends session continuity.
 - DP-18 (decision auto-protection) auto-detects decisions and marks
   them as constraints (invariant 5 ensures they always surface).
-  Implemented in `packages/daemon/src/inline-entity-linker.ts` (14
+  Implemented in `platform/daemon/src/inline-entity-linker.ts` (14
   regex patterns, auto-promotes matching attributes to constraints).
 - DP-19 (adaptive write gate) evolves DP-1 significance gate from
   session-level to per-memory surprisal filtering.
@@ -511,7 +511,7 @@ Phase ordering based on hard dependencies and integration contracts.
   - Independent of cognition stack, talks to daemon API only
 - **Multi-Agent Phase 1-8**: IN PROGRESS (2026-03-24)
   - Phase 1: `AgentDefinition` type + `agents.roster` in `AgentManifest` — DONE
-  - Phase 2: `packages/core/src/agents.ts` — discovery, scaffold, identity inheritance — DONE
+  - Phase 2: `platform/core/src/agents.ts` — discovery, scaffold, identity inheritance — DONE
   - Phase 3: Migration 043 — `agents` table + `memories.agent_id` + `memories.visibility` — DONE
   - Phase 4: Daemon — scope clause, `/api/agents` endpoints, `agent-id.ts` — DONE
   - Phase 5: File watcher — watches `~/.agents/agents/` subdirectories — DONE

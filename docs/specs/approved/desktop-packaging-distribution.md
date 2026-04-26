@@ -56,5 +56,5 @@ Arch.
   not clone over local work or silently switch branches.
 - Generated AUR metadata is emitted as CI artifacts and can be pushed by
   a separate credentialed job.
-- `packages/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar usage is intentionally bound to the current Bun daemon.
+- `platform/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar usage is intentionally bound to the current Bun daemon.
   `daemon-rs` remains separate parity work until cutover is approved.
