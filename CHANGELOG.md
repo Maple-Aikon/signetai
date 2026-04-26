@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-26
+- Bug fixes: keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
+- Refactoring: reorganize monorepo layout.
+
 ### 2026-04-25
 - Bug fixes: package extraction worker and test lifecycle; proxy analytics and telemetry from worker thread via IPC; reject startup promise on early worker exit and guard duplicate startPipeline; address 3 blocking review findings in extraction worker thread; bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
 - Refactoring: make logger injectable in startWorker via LogSink interface.
@@ -29,10 +33,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
 - Refactoring: align recall and remember surfaces.
 
-### 2026-04-19
-- Bug fixes: resolve all typescript strict-mode errors in daemon package.
-
 ## Release Ledger
+
+## [0.108.10] - 2026-04-26
+
+Release summary: 3 bug fixes and 1 refactor.
+Tag range: `v0.108.9..v0.108.10`.
+
+### Bug Fixes
+
+- **repo**: keep web manifests out of version sync
+- **daemon**: stabilize repo-layout test suite
+- **repo**: harden layout test checks
+
+### Refactoring
+
+- **repo**: reorganize monorepo layout
 
 ## [0.108.9] - 2026-04-25
 
