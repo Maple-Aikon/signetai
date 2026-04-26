@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-26
-- Bug fixes: show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
+- Features: store transcripts as canonical jsonl.
+- Bug fixes: make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
 - Performance: reduce recall hot path latency.
 - Refactoring: reorganize monorepo layout.
 
@@ -35,6 +36,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: align recall and remember surfaces.
 
 ## Release Ledger
+
+## [0.109.0] - 2026-04-26
+
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.108.13..v0.109.0`.
+
+### Features
+
+- **memory**: store transcripts as canonical jsonl
+
+### Bug Fixes
+
+- **memory**: make live transcript append idempotent
+- **memory**: serialize transcript jsonl backfill writes
 
 ## [0.108.13] - 2026-04-26
 
