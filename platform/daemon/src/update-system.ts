@@ -609,10 +609,10 @@ export function detectDesktopInstall(
 	if (!launcherExists) {
 		return {
 			installed: true,
-			managed: true,
+			managed: false,
 			launcherPath,
 			appImagePath,
-			reason: "managed Signet desktop AppImage exists without a launcher",
+			reason: "Signet desktop AppImage exists without a managed launcher",
 		};
 	}
 

@@ -132,6 +132,7 @@ describe("desktop update integration", () => {
 	it("detects absent, managed, and unmanaged Linux desktop installs", () => {
 		const home = "/home/tester";
 		const launcher = join(home, ".local", "bin", "signet-desktop");
+		const appImage = join(home, ".local", "share", "signet", "desktop", "Signet.AppImage");
 
 		expect(
 			detectDesktopInstall(home, {
@@ -146,6 +147,17 @@ describe("desktop update integration", () => {
 				readFileSync: () => "# signet-desktop managed launcher\n",
 			}),
 		).toMatchObject({ installed: true, managed: true });
+
+		expect(
+			detectDesktopInstall(home, {
+				existsSync: (path) => path === appImage,
+				readFileSync: () => "",
+			}),
+		).toMatchObject({
+			installed: true,
+			managed: false,
+			reason: "Signet desktop AppImage exists without a managed launcher",
+		});
 
 		expect(
 			detectDesktopInstall(home, {
