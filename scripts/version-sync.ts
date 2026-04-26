@@ -7,6 +7,14 @@ const REFERENCE_FILE = "dist/signetai/package.json";
 const EXCLUDED_FILES = new Set(["surfaces/dashboard/package.json"]);
 const EXCLUDED_CARGO_FILES = new Set(["runtimes/forge/Cargo.toml"]);
 const FORGE_VERSION_FILE = "runtimes/forge/forge-version.json";
+export const VERSION_SYNC_PACKAGE_GLOBS = [
+	"package.json",
+	"platform/**/package.json",
+	"surfaces/**/package.json",
+	"integrations/**/package.json",
+	"libs/**/package.json",
+	"dist/**/package.json",
+] as const;
 const FORGE_MANIFEST_FILES = [
 	"surfaces/cli/templates/forge/manifest.json",
 	"dist/signetai/templates/forge/manifest.json",
@@ -54,7 +62,7 @@ function getRemoteVersion(filePath: string): string | null {
 }
 
 function listTargetPackageFiles(): string[] {
-	const output = execSync("git ls-files package.json 'platform/**/package.json' 'surfaces/**/package.json' 'integrations/**/package.json' 'libs/**/package.json' 'dist/**/package.json' 'web/**/package.json'", {
+	const output = execSync(`git ls-files ${VERSION_SYNC_PACKAGE_GLOBS.map((glob) => `'${glob}'`).join(" ")}`, {
 		encoding: "utf8",
 	});
 
@@ -288,4 +296,6 @@ function main() {
 	}
 }
 
-main();
+if (import.meta.main) {
+	main();
+}
