@@ -869,6 +869,30 @@ export async function hybridRecall(
 
 	const filter = buildFilterClause(params);
 	const scoped = params.scope !== undefined;
+	const queryVecPromise = (() => {
+		try {
+			return Promise.resolve(embedFn(query, cfg.embedding));
+		} catch (e) {
+			return Promise.reject(e);
+		}
+	})();
+	let graphQueryTokens: string[] | undefined;
+	let focalCache: { agentId: string; value: ReturnType<typeof resolveFocalEntities> } | null = null;
+	const getGraphQueryTokens = (): string[] => {
+		graphQueryTokens ??= tokenizeGraphQuery(query);
+		return graphQueryTokens;
+	};
+	const getFocalEntities = (agentId: string): ReturnType<typeof resolveFocalEntities> => {
+		if (focalCache?.agentId === agentId) return focalCache.value;
+		const value = getDbAccessor().withReadDb((db) =>
+			resolveFocalEntities(db, agentId, {
+				queryTokens: getGraphQueryTokens(),
+				includePinned: false,
+			}),
+		);
+		focalCache = { agentId, value };
+		return value;
+	};
 
 	// --- BM25 keyword search via FTS5 ---
 	const bm25Map = new Map<string, number>();
@@ -952,9 +976,13 @@ export async function hybridRecall(
 	}
 
 	// --- Query embedding (used by reranker even when vector search is skipped) ---
+	// Start embedding before the synchronous lexical/structured DB work above.
+	// Local embedding providers are often the slowest prompt-submit step, so
+	// overlapping that I/O with candidate lookup reduces wall-clock latency
+	// without changing the recall channels or final ranking math.
 	let queryVecF32: Float32Array | null = null;
 	try {
-		const queryVec = await embedFn(query, cfg.embedding);
+		const queryVec = await queryVecPromise;
 		if (queryVec) queryVecF32 = new Float32Array(queryVec);
 	} catch (e) {
 		logger.warn("memory", "Embedding failed", { error: String(e) });
@@ -1063,15 +1091,10 @@ export async function hybridRecall(
 		if (cfg.pipelineV2.traversal) {
 			try {
 				const traversalCfg = cfg.pipelineV2.traversal;
-				const queryTokens = tokenizeGraphQuery(query);
+				const queryTokens = getGraphQueryTokens();
 				if (queryTokens.length > 0) {
 					const agentId = params.agentId ?? "default";
-					const focal = getDbAccessor().withReadDb((db) =>
-						resolveFocalEntities(db, agentId, {
-							queryTokens,
-							includePinned: false,
-						}),
-					);
+					const focal = getFocalEntities(agentId);
 
 					if (focal.entityIds.length > 0) {
 						const traversal = getDbAccessor().withReadDb((db) =>
@@ -1201,15 +1224,10 @@ export async function hybridRecall(
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 			try {
 				const traversalCfg = cfg.pipelineV2.traversal;
-				const queryTokens = tokenizeGraphQuery(query);
+				const queryTokens = getGraphQueryTokens();
 				if (queryTokens.length > 0) {
 					const agentId = params.agentId ?? "default";
-					const focal = getDbAccessor().withReadDb((db) =>
-						resolveFocalEntities(db, agentId, {
-							queryTokens,
-							includePinned: false,
-						}),
-					);
+					const focal = getFocalEntities(agentId);
 
 					if (focal.entityIds.length > 0) {
 						const traversal = getDbAccessor().withReadDb((db) =>
@@ -1917,14 +1935,11 @@ export async function hybridRecall(
 
 	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 		try {
-			const queryTokens = tokenizeGraphQuery(query);
+			const queryTokens = getGraphQueryTokens();
 			if (queryTokens.length > 0) {
 				const agentId = params.agentId ?? "default";
+				const focal = getFocalEntities(agentId);
 				const ctx = getDbAccessor().withReadDb((db) => {
-					const focal = resolveFocalEntities(db, agentId, {
-						queryTokens,
-						includePinned: false,
-					});
 					if (focal.entityIds.length === 0) return null;
 
 					// Scope-filter: only include entities mentioned in

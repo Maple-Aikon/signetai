@@ -129,6 +129,33 @@ describe("hybridRecall", () => {
 		});
 	});
 
+	it("falls back to keyword recall when embedding throws synchronously", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-keyword-sync-throw", "keyword-only recall survives embedding failure", now, now);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "keyword-only recall",
+				keywordQuery: "keyword-only recall",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			() => {
+				throw new Error("embedding unavailable");
+			},
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("mem-keyword-sync-throw");
+	});
+
 	it("recalls indexed native harness memory artifacts without materializing memories", async () => {
 		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
 		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
