@@ -1,0 +1,806 @@
+/**
+ * Core types for Signet
+ */
+
+// ---------------------------------------------------------------------------
+// LLM Provider interface (used by ingest extractors, daemon pipeline, etc.)
+// ---------------------------------------------------------------------------
+
+export interface LlmUsage {
+	readonly inputTokens: number | null;
+	readonly outputTokens: number | null;
+	readonly cacheReadTokens: number | null;
+	readonly cacheCreationTokens: number | null;
+	readonly totalCost: number | null;
+	readonly totalDurationMs: number | null;
+}
+
+export interface LlmGenerateResult {
+	readonly text: string;
+	readonly usage: LlmUsage | null;
+}
+
+export interface LlmProvider {
+	readonly name: string;
+	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number }): Promise<string>;
+	generateWithUsage?(
+		prompt: string,
+		opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number },
+	): Promise<LlmGenerateResult>;
+	available(): Promise<boolean>;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-agent types
+// ---------------------------------------------------------------------------
+
+/**
+ * Controls which agents' memories are visible on read.
+ * - "isolated": only own memories
+ * - "shared": all global memories + own private
+ * - { type: "group" }: global memories from group members + own private
+ */
+export type ReadPolicy = "isolated" | "shared" | { readonly type: "group"; readonly group: string };
+
+/** A named agent entry in the roster. */
+export interface AgentDefinition {
+	readonly name: string;
+	readonly model?: string;
+	readonly harnesses?: readonly string[];
+	/** Skills allowlist. Omit or empty string[] = all skills. */
+	readonly skills?: readonly string[];
+	/** Relative path to agent's SOUL.md (defaults to root SOUL.md). */
+	readonly personality?: string;
+	readonly memory?: {
+		readonly read_policy?: ReadPolicy;
+	};
+}
+
+// ---------------------------------------------------------------------------
+
+export interface AgentManifest {
+	version: number;
+	schema: string;
+
+	// Identity
+	agent: {
+		name: string;
+		description?: string;
+		created: string;
+		updated: string;
+	};
+
+	// Owner (optional)
+	owner?: {
+		address?: string;
+		localId?: string;
+		ens?: string;
+		name?: string;
+	};
+
+	// Multi-agent roster (optional; omit for single-agent installs)
+	agents?: {
+		readonly roster: readonly AgentDefinition[];
+	};
+
+	// Harnesses this agent works with
+	harnesses?: string[];
+
+	// Embedding configuration
+	embedding?: {
+		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
+		model: string;
+		dimensions: number;
+		base_url?: string;
+		api_key?: string;
+	};
+
+	// Search configuration
+	search?: {
+		alpha: number; // Vector weight (0-1)
+		top_k: number; // Candidates per source
+		min_score: number; // Minimum threshold
+	};
+
+	// Memory configuration
+	memory?: {
+		database: string;
+		vectors?: string;
+		session_budget?: number;
+		decay_rate?: number;
+		pipelineV2?: Partial<PipelineV2Config>;
+		dreaming?: Partial<DreamingConfig>;
+	};
+
+	// Trust & verification (optional)
+	trust?: {
+		verification: "none" | "erc8128" | "gpg" | "did" | "registry";
+		registry?: string;
+	};
+
+	// External service integration
+	services?: {
+		openclaw?: {
+			restart_command?: string;
+		};
+	};
+
+	// Home dashboard configuration (optional)
+	home?: {
+		spotlightEntity?: string;
+	};
+
+	// Legacy fields
+	auth?: {
+		method: "none" | "erc8128" | "gpg" | "did";
+		chainId?: number;
+		// Phase J: deployment mode auth
+		mode?: "local" | "team" | "hybrid";
+		rateLimits?: Record<string, { windowMs?: number; max?: number }>;
+	};
+	capabilities?: string[];
+	harnessCompatibility?: string[];
+}
+
+export interface Agent {
+	manifest: AgentManifest;
+	soul: string;
+	memory: string;
+	dbPath: string;
+}
+
+export interface AgentConfig {
+	basePath?: string;
+	dbPath?: string;
+	autoSync?: boolean;
+	embeddings?: {
+		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
+		model?: string;
+		dimensions?: number;
+	};
+}
+
+// -- Pipeline v2 feature flags --
+
+export const PIPELINE_FLAGS = [
+	"enabled",
+	"paused",
+	"shadowMode",
+	"mutationsFrozen",
+	"graph.enabled",
+	"traversal.enabled",
+	"reranker.enabled",
+	"autonomous.enabled",
+	"autonomous.frozen",
+	"autonomous.allowUpdateDelete",
+	"telemetryEnabled",
+] as const;
+
+export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
+
+// -- Pipeline v2 sub-config interfaces --
+
+export interface PipelineEscalationConfig {
+	readonly maxNewEntitiesPerChunk: number;
+	readonly maxNewAttributesPerEntity: number;
+	readonly level2MaxEntities: number;
+}
+
+export interface PipelineCommandConfig {
+	readonly bin: string;
+	readonly args: ReadonlyArray<string>;
+	readonly cwd?: string;
+	readonly env?: Readonly<Record<string, string>>;
+}
+
+// Callers may provide a partial rate-limit config; omitted fields fall back to
+// these defaults in the config parser and in withRateLimit().
+export interface ProviderRateLimitConfig {
+	readonly maxCallsPerHour?: number;
+	readonly burstSize?: number;
+	readonly waitTimeoutMs?: number;
+}
+
+export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
+	maxCallsPerHour: 200,
+	burstSize: 20,
+	waitTimeoutMs: 5000,
+};
+
+export interface PipelineExtractionConfig {
+	readonly provider:
+		| "none"
+		| "llama-cpp"
+		| "ollama"
+		| "claude-code"
+		| "opencode"
+		| "codex"
+		| "anthropic"
+		| "openrouter"
+		| "command";
+	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
+	readonly allowRemoteProviders?: boolean;
+	readonly model: string;
+	readonly strength: "low" | "medium" | "high";
+	readonly endpoint?: string;
+	readonly timeout: number;
+	readonly minConfidence: number;
+	readonly structuredOutput?: boolean;
+	readonly command?: PipelineCommandConfig;
+	readonly escalation?: PipelineEscalationConfig;
+	readonly rateLimit?: ProviderRateLimitConfig;
+}
+
+export interface PipelineWorkerConfig {
+	readonly pollMs: number;
+	readonly maxRetries: number;
+	readonly leaseTimeoutMs: number;
+	readonly maxLoadPerCpu: number;
+	readonly overloadBackoffMs: number;
+	/** Run extraction pipeline in a dedicated worker thread (default: false). */
+	readonly threadedExtraction: boolean;
+}
+
+export interface PipelineGraphConfig {
+	readonly enabled: boolean;
+	readonly extractionWritesEnabled?: boolean;
+	readonly boostWeight: number;
+	readonly boostTimeoutMs: number;
+}
+
+export interface PipelineTraversalConfig {
+	readonly enabled: boolean;
+	readonly primary: boolean;
+	readonly maxAspectsPerEntity: number;
+	readonly maxAttributesPerAspect: number;
+	readonly maxDependencyHops: number;
+	readonly minDependencyStrength: number;
+	readonly maxBranching: number;
+	readonly maxTraversalPaths: number;
+	readonly minConfidence: number;
+	readonly timeoutMs: number;
+	readonly boostWeight: number;
+	readonly constraintBudgetChars: number;
+}
+
+export interface PipelineRerankerConfig {
+	readonly enabled: boolean;
+	readonly model: string;
+	readonly useExtractionModel: boolean;
+	readonly topN: number;
+	readonly timeoutMs: number;
+}
+
+export interface PipelineAutonomousConfig {
+	readonly enabled: boolean;
+	readonly frozen: boolean;
+	readonly allowUpdateDelete: boolean;
+	readonly maintenanceIntervalMs: number;
+	readonly maintenanceMode: "observe" | "execute";
+}
+
+export interface PipelineRepairConfig {
+	readonly reembedCooldownMs: number;
+	readonly reembedHourlyBudget: number;
+	readonly requeueCooldownMs: number;
+	readonly requeueHourlyBudget: number;
+	readonly dedupCooldownMs: number;
+	readonly dedupHourlyBudget: number;
+	readonly dedupSemanticThreshold: number;
+	readonly dedupBatchSize: number;
+}
+
+export interface PipelineDocumentsConfig {
+	readonly workerIntervalMs: number;
+	readonly chunkSize: number;
+	readonly chunkOverlap: number;
+	readonly maxContentBytes: number;
+}
+
+export interface PipelineGuardrailsConfig {
+	readonly maxContentChars: number;
+	readonly chunkTargetChars: number;
+	readonly recallTruncateChars: number;
+	readonly contextBudgetChars?: number;
+}
+
+export interface PipelineTelemetryConfig {
+	readonly posthogHost: string;
+	readonly posthogApiKey: string;
+	readonly flushIntervalMs: number;
+	readonly flushBatchSize: number;
+	readonly retentionDays: number;
+}
+
+export interface PipelineContinuityConfig {
+	readonly enabled: boolean;
+	readonly promptInterval: number;
+	readonly timeIntervalMs: number;
+	readonly maxCheckpointsPerSession: number;
+	readonly retentionDays: number;
+	readonly recoveryBudgetChars: number;
+}
+
+export interface PipelineWriteGateConfig {
+	readonly enabled: boolean;
+	readonly threshold: number;
+	readonly continuityDiscount: number;
+}
+
+export interface PipelineV2Config {
+	// Master switches (flat)
+	readonly enabled: boolean;
+	readonly paused: boolean;
+	readonly shadowMode: boolean;
+	readonly nativeShadowEnabled: boolean;
+	readonly mutationsFrozen: boolean;
+	readonly semanticContradictionEnabled: boolean;
+	readonly semanticContradictionTimeoutMs: number;
+	readonly telemetryEnabled: boolean;
+	readonly allowRemoteProviders?: boolean;
+
+	// Grouped sub-objects
+	readonly extraction: PipelineExtractionConfig;
+	readonly worker: PipelineWorkerConfig;
+	readonly graph: PipelineGraphConfig;
+	readonly traversal?: PipelineTraversalConfig;
+	readonly reranker: PipelineRerankerConfig;
+	readonly autonomous: PipelineAutonomousConfig;
+	readonly repair: PipelineRepairConfig;
+	readonly documents: PipelineDocumentsConfig;
+	readonly guardrails: PipelineGuardrailsConfig;
+	readonly telemetry: PipelineTelemetryConfig;
+	readonly continuity: PipelineContinuityConfig;
+	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
+	readonly synthesis: PipelineSynthesisConfig;
+	readonly procedural: PipelineProceduralConfig;
+	readonly structural: PipelineStructuralConfig;
+	readonly feedback: PipelineFeedbackConfig;
+	readonly significance?: PipelineSignificanceConfig;
+	readonly writeGate?: PipelineWriteGateConfig;
+	readonly predictor?: PredictorConfig;
+	readonly predictorPipeline: PipelinePredictorConfig;
+	readonly modelRegistry: PipelineModelRegistryConfig;
+	readonly hints?: PipelineHintsConfig;
+}
+
+export interface ModelRegistryEntry {
+	readonly id: string;
+	readonly provider: string;
+	readonly label: string;
+	readonly tier: "high" | "mid" | "low";
+	readonly deprecated: boolean;
+}
+
+export interface PipelineModelRegistryConfig {
+	readonly enabled: boolean;
+	readonly refreshIntervalMs: number;
+}
+
+export interface PipelinePredictorConfig {
+	readonly agentFeedback: boolean;
+	readonly trainingTelemetry: boolean;
+}
+
+export interface PredictorConfig {
+	readonly enabled: boolean;
+	readonly trainIntervalSessions: number;
+	readonly minTrainingSessions: number;
+	readonly scoreTimeoutMs: number;
+	readonly trainTimeoutMs: number;
+	readonly crashDisableThreshold: number;
+	readonly rrfK: number;
+	readonly explorationRate: number;
+	readonly driftResetWindow: number;
+	readonly binaryPath?: string;
+	readonly binaryArgs?: ReadonlyArray<string>;
+	readonly checkpointPath?: string;
+}
+
+export interface PipelineEmbeddingTrackerConfig {
+	readonly enabled: boolean;
+	readonly pollMs: number;
+	readonly batchSize: number;
+}
+
+export interface PipelineSynthesisConfig {
+	readonly enabled: boolean;
+	readonly provider:
+		| "none"
+		| "llama-cpp"
+		| "ollama"
+		| "claude-code"
+		| "codex"
+		| "opencode"
+		| "anthropic"
+		| "openrouter";
+	readonly model: string;
+	readonly endpoint?: string;
+	readonly timeout: number;
+	readonly maxTokens: number;
+	readonly idleGapMinutes: number;
+	readonly structuredOutput?: boolean;
+	readonly rateLimit?: ProviderRateLimitConfig;
+}
+
+export interface PipelineProceduralConfig {
+	readonly enabled: boolean;
+	readonly decayRate: number;
+	readonly minImportance: number;
+	readonly importanceOnInstall: number;
+	readonly enrichOnInstall: boolean;
+	readonly enrichMinDescription: number;
+	readonly reconcileIntervalMs: number;
+}
+
+export interface PipelineStructuralConfig {
+	readonly enabled: boolean;
+	readonly classifyBatchSize: number;
+	readonly dependencyBatchSize: number;
+	readonly pollIntervalMs: number;
+	readonly synthesisEnabled: boolean;
+	readonly synthesisIntervalMs: number;
+	readonly synthesisTopEntities: number;
+	readonly synthesisMaxFacts: number;
+	readonly synthesisMaxStallMs: number;
+	readonly supersessionEnabled: boolean;
+	readonly supersessionSweepEnabled: boolean;
+	readonly supersessionSemanticFallback: boolean;
+	readonly supersessionMinConfidence: number;
+}
+
+export interface PipelineFeedbackConfig {
+	readonly enabled: boolean;
+	readonly ftsWeightDelta: number;
+	readonly maxAspectWeight: number;
+	readonly minAspectWeight: number;
+	readonly decayEnabled: boolean;
+	readonly decayRate: number;
+	readonly staleDays: number;
+	readonly decayIntervalSessions: number;
+}
+
+export interface PipelineSignificanceConfig {
+	readonly enabled: boolean;
+	readonly minTurns: number;
+	readonly minEntityOverlap: number;
+	readonly noveltyThreshold: number;
+}
+
+export interface PipelineHintsConfig {
+	readonly enabled: boolean;
+	readonly max: number;
+	readonly timeout: number;
+	readonly maxTokens: number;
+	readonly poll: number;
+}
+
+export interface DreamingConfig {
+	readonly enabled: boolean;
+	readonly tokenThreshold: number;
+	readonly timeout: number;
+	readonly maxInputTokens: number;
+	readonly maxOutputTokens: number;
+	readonly backfillOnFirstRun: boolean;
+}
+
+// -- Status/union constants --
+
+export const MEMORY_TYPES = [
+	"fact",
+	"preference",
+	"decision",
+	"rationale",
+	"daily-log",
+	"episodic",
+	"procedural",
+	"semantic",
+	"system",
+] as const;
+export type MemoryType = (typeof MEMORY_TYPES)[number];
+
+export const EXTRACTION_STATUSES = ["none", "pending", "completed", "failed"] as const;
+export type ExtractionStatus = (typeof EXTRACTION_STATUSES)[number];
+
+export const JOB_STATUSES = ["pending", "leased", "completed", "failed", "dead"] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+
+export const HISTORY_EVENTS = ["created", "updated", "deleted", "recovered", "merged", "none", "split"] as const;
+export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
+
+export const DECISION_ACTIONS = ["add", "update", "delete", "none"] as const;
+export type DecisionAction = (typeof DECISION_ACTIONS)[number];
+
+// -- Scheduled tasks --
+
+export const TASK_HARNESSES = ["claude-code", "opencode", "codex"] as const;
+export type TaskHarness = (typeof TASK_HARNESSES)[number];
+
+export const TASK_RUN_STATUSES = ["pending", "running", "completed", "failed"] as const;
+export type TaskRunStatus = (typeof TASK_RUN_STATUSES)[number];
+
+export interface ScheduledTask {
+	readonly id: string;
+	readonly name: string;
+	readonly prompt: string;
+	readonly cronExpression: string;
+	readonly harness: TaskHarness;
+	readonly workingDirectory: string | null;
+	readonly enabled: boolean;
+	readonly lastRunAt: string | null;
+	readonly nextRunAt: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface TaskRun {
+	readonly id: string;
+	readonly taskId: string;
+	readonly status: TaskRunStatus;
+	readonly startedAt: string;
+	readonly completedAt: string | null;
+	readonly exitCode: number | null;
+	readonly stdout: string | null;
+	readonly stderr: string | null;
+	readonly error: string | null;
+}
+
+// -- Core interfaces --
+
+export interface Memory {
+	id: string;
+	type: MemoryType;
+	category?: string;
+	content: string;
+	confidence: number;
+	sourceId?: string;
+	sourceType?: string;
+	tags: string[];
+	createdAt: string;
+	updatedAt: string;
+	updatedBy: string;
+	vectorClock: Record<string, number>;
+	version: number;
+	manualOverride: boolean;
+	// v2 fields (optional for backward compatibility)
+	contentHash?: string;
+	normalizedContent?: string;
+	isDeleted?: boolean;
+	deletedAt?: string;
+	pinned?: boolean;
+	importance?: number;
+	extractionStatus?: ExtractionStatus;
+	embeddingModel?: string;
+	extractionModel?: string;
+	updateCount?: number;
+	accessCount?: number;
+	lastAccessed?: string;
+	who?: string;
+}
+
+export interface Conversation {
+	id: string;
+	sessionId: string;
+	harness: string;
+	startedAt: string;
+	endedAt?: string;
+	summary?: string;
+	topics: string[];
+	decisions: string[];
+	createdAt: string;
+	updatedAt: string;
+	updatedBy: string;
+	vectorClock: Record<string, number>;
+	version: number;
+	manualOverride: boolean;
+}
+
+export interface Embedding {
+	id: string;
+	contentHash: string;
+	vector: Float32Array;
+	dimensions: number;
+	sourceType: string;
+	sourceId: string;
+	chunkText: string;
+	createdAt: string;
+}
+
+export interface MemoryHistory {
+	id: string;
+	memoryId: string;
+	event: HistoryEvent;
+	oldContent?: string;
+	newContent?: string;
+	changedBy: string;
+	reason?: string;
+	metadata?: string; // JSON
+	createdAt: string;
+	actorType?: string;
+	sessionId?: string;
+	requestId?: string;
+}
+
+export interface MemoryJob {
+	id: string;
+	memoryId: string;
+	jobType: string;
+	status: JobStatus;
+	payload?: string; // JSON
+	result?: string; // JSON
+	attempts: number;
+	maxAttempts: number;
+	leasedAt?: string;
+	completedAt?: string;
+	failedAt?: string;
+	error?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface Entity {
+	id: string;
+	name: string;
+	canonicalName?: string;
+	entityType: string;
+	agentId: string;
+	description?: string;
+	mentions?: number;
+	pinned?: boolean;
+	pinnedAt?: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface Relation {
+	id: string;
+	sourceEntityId: string;
+	targetEntityId: string;
+	relationType: string;
+	strength: number;
+	mentions?: number;
+	confidence?: number;
+	metadata?: string;
+	createdAt: string;
+	updatedAt?: string;
+}
+
+export interface MemoryEntityMention {
+	memoryId: string;
+	entityId: string;
+	mentionText?: string;
+	confidence?: number;
+	createdAt?: string;
+}
+
+// -- Extraction pipeline contracts --
+
+export interface ExtractedFact {
+	readonly content: string;
+	readonly type: MemoryType;
+	readonly confidence: number;
+}
+
+export interface ExtractedEntity {
+	readonly source: string;
+	readonly sourceType?: string;
+	readonly relationship: string;
+	readonly target: string;
+	readonly targetType?: string;
+	readonly confidence: number;
+}
+
+export interface ExtractionResult {
+	readonly facts: readonly ExtractedFact[];
+	readonly entities: readonly ExtractedEntity[];
+	readonly warnings: readonly string[];
+}
+
+export interface DecisionProposal {
+	readonly action: DecisionAction;
+	readonly targetMemoryId?: string;
+	readonly confidence: number;
+	readonly reason: string;
+}
+
+export interface DecisionResult {
+	readonly proposals: readonly DecisionProposal[];
+	readonly warnings: readonly string[];
+}
+
+// -- Knowledge Architecture types --
+
+export const ENTITY_TYPES = ["person", "project", "system", "tool", "concept", "skill", "task", "unknown"] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
+export const ATTRIBUTE_KINDS = ["attribute", "constraint"] as const;
+export type AttributeKind = (typeof ATTRIBUTE_KINDS)[number];
+
+export const ATTRIBUTE_STATUSES = ["active", "superseded", "deleted"] as const;
+export type AttributeStatus = (typeof ATTRIBUTE_STATUSES)[number];
+
+export const DEPENDENCY_TYPES = [
+	// core
+	"uses",
+	"requires",
+	"owned_by",
+	"blocks",
+	"informs",
+	// knowledge
+	"built",
+	"depends_on",
+	"related_to",
+	"learned_from",
+	"teaches",
+	"knows",
+	"assumes",
+	// structural
+	"contradicts",
+	"supersedes",
+	"part_of",
+	// temporal / execution flow
+	"precedes",
+	"follows",
+	"triggers",
+	// impact
+	"impacts",
+	"produces",
+	"consumes",
+] as const;
+export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
+
+export const TASK_STATUSES = ["open", "in_progress", "blocked", "done", "cancelled"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export interface EntityAspect {
+	readonly id: string;
+	readonly entityId: string;
+	readonly agentId: string;
+	readonly name: string;
+	readonly canonicalName: string;
+	readonly weight: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface EntityAttribute {
+	readonly id: string;
+	readonly aspectId: string;
+	readonly agentId: string;
+	readonly memoryId: string | null;
+	readonly kind: AttributeKind;
+	readonly content: string;
+	readonly normalizedContent: string;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
+	readonly confidence: number;
+	readonly importance: number;
+	readonly status: AttributeStatus;
+	readonly supersededBy: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface EntityDependency {
+	readonly id: string;
+	readonly sourceEntityId: string;
+	readonly targetEntityId: string;
+	readonly agentId: string;
+	readonly aspectId: string | null;
+	readonly dependencyType: DependencyType;
+	readonly strength: number;
+	readonly confidence: number;
+	readonly reason: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface TaskMeta {
+	readonly entityId: string;
+	readonly agentId: string;
+	readonly status: TaskStatus;
+	readonly expiresAt: string | null;
+	readonly retentionUntil: string | null;
+	readonly completedAt: string | null;
+	readonly updatedAt: string;
+}

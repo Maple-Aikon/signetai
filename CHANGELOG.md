@@ -6,8 +6,17 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-26
+- Bug fixes: show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
+- Refactoring: reorganize monorepo layout.
+
+### 2026-04-25
+- Bug fixes: package extraction worker and test lifecycle; proxy analytics and telemetry from worker thread via IPC; reject startup promise on early worker exit and guard duplicate startPipeline; address 3 blocking review findings in extraction worker thread; bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
+- Refactoring: make logger injectable in startWorker via LogSink interface.
+
 ### 2026-04-24
-- Bug fixes: detect default install path; emit structured hook JSON.
+- Bug fixes: bundle install-graphiq.sh so graphiq install/update works; bound prompt-submit embedding latency; detect default install path; emit structured hook JSON.
+- Refactoring: replace brew/cargo install with shell script; add session auto-connect.
 
 ### 2026-04-23
 - Features: add GraphIQ plugin management UI and daemon API; index native harness memories; unify LLM provider plumbing.
@@ -24,14 +33,101 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
 - Refactoring: align recall and remember surfaces.
 
-### 2026-04-19
-- Bug fixes: resolve all typescript strict-mode errors in daemon package.
-
-### 2026-04-18
-- Features: add plugin registry panel.
-- Bug fixes: scope Signet memory to named agents; align desktop release build prerequisites.
-
 ## Release Ledger
+
+## [0.108.12] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.11..v0.108.12`.
+
+### Bug Fixes
+
+- **dashboard**: show own-agent presence in readout
+
+## [0.108.11] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.10..v0.108.11`.
+
+### Bug Fixes
+
+- **daemon**: soft-delete native memory artifacts
+
+## [0.108.10] - 2026-04-26
+
+Release summary: 3 bug fixes and 1 refactor.
+Tag range: `v0.108.9..v0.108.10`.
+
+### Bug Fixes
+
+- **repo**: keep web manifests out of version sync
+- **daemon**: stabilize repo-layout test suite
+- **repo**: harden layout test checks
+
+### Refactoring
+
+- **repo**: reorganize monorepo layout
+
+## [0.108.9] - 2026-04-25
+
+Release summary: 4 bug fixes and 1 refactor.
+Tag range: `v0.108.8..v0.108.9`.
+
+### Bug Fixes
+
+- **pipeline**: package extraction worker and test lifecycle
+- **pipeline**: proxy analytics and telemetry from worker thread via IPC
+- **pipeline**: reject startup promise on early worker exit and guard duplicate startPipeline
+- **daemon**: address 3 blocking review findings in extraction worker thread
+
+### Refactoring
+
+- **pipeline**: make logger injectable in startWorker via LogSink interface
+
+## [0.108.8] - 2026-04-25
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.7..v0.108.8`.
+
+### Bug Fixes
+
+- **memory**: bridge native harness memory artifacts (#566)
+
+## [0.108.7] - 2026-04-25
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.6..v0.108.7`.
+
+### Bug Fixes
+
+- **codex**: pair remote Signet MCP with lifecycle hooks (#564)
+
+## [0.108.6] - 2026-04-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.5..v0.108.6`.
+
+### Bug Fixes
+
+- **daemon**: bundle install-graphiq.sh so graphiq install/update works (#562)
+
+## [0.108.5] - 2026-04-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.4..v0.108.5`.
+
+### Bug Fixes
+
+- **daemon**: bound prompt-submit embedding latency (#559)
+
+## [0.108.4] - 2026-04-24
+
+Release summary: 1 refactor.
+Tag range: `v0.108.3..v0.108.4`.
+
+### Refactoring
+
+- **graphiq**: replace brew/cargo install with shell script; add session auto-connect (#560)
 
 ## [0.108.3] - 2026-04-24
 

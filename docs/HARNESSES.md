@@ -183,6 +183,22 @@ claude-code` (or `signet setup`) to rewrite hook config.
 
 **SessionEnd** — automatically saves a session summary to memory.
 
+### Native memory bridge
+
+Signet indexes Claude Code-owned memdir artifacts without rewriting them or
+turning them into Signet-authored rows. The daemon watches Claude Code
+entrypoint indexes and memory files under `~/.claude/projects/*/memory/`,
+session memory under `~/.claude/session-memory/`, and agent-scoped memory
+under `~/.claude/agent-memory/` and `~/.claude/agent-memory-local/`. Matching
+content is exposed through Signet recall as `native_memory` results with
+Claude Code provenance. Removed native files are soft-deleted from active
+recall while preserving their artifact rows for lineage.
+
+This replaces the older daemon-local Claude watcher that only read
+`~/.claude/projects/*/memory/MEMORY.md` and pushed chunks back through
+`/api/memory/remember`. Claude Code remains the owner of those native files;
+Signet indexes them as artifacts.
+
 ### Using /remember and /recall
 
 In Claude Code sessions, use these commands directly:
@@ -237,6 +253,16 @@ registers as an MCP server so Codex can call `signet_remember` and
 | `~/.codex/config.toml` | MCP server registration (`[mcp_servers.signet]`) |
 | `~/.codex/skills` | Symlink to `$SIGNET_WORKSPACE/skills` |
 
+### Native memory bridge
+
+Signet indexes Codex-owned memory artifacts without rewriting them or turning
+them into Signet-authored memory rows. The daemon watches
+`~/.codex/memories/` and automation-local `~/.codex/automations/*/memory.md`
+files, then exposes matching content through Signet recall as
+`native_memory` results with Codex provenance. Removed native files are
+soft-deleted from active recall while preserving their artifact rows for
+lineage.
+
 ### How it works
 
 1. Codex reads `~/.codex/hooks.json` at startup and registers three hooks.
@@ -252,6 +278,21 @@ grace. Codex `UserPromptSubmit` defaults to 7 seconds: `SIGNET_PROMPT_SUBMIT_TIM
 (`5000` ms by default) plus 2 seconds of harness grace. Rerun `signet setup`
 or `signet connect codex` after upgrading to rewrite an existing
 `~/.codex/hooks.json`.
+
+For a remote Signet daemon, set `SIGNET_DAEMON_URL` before running the
+Codex connector:
+
+```bash
+SIGNET_DAEMON_URL=http://192.168.0.60:3850 signet setup --harness codex
+```
+
+When `SIGNET_DAEMON_URL` is set, the Codex connector writes
+`[mcp_servers.signet] url = "<daemon>/mcp"` and bakes the same daemon URL
+into the generated lifecycle hook commands. This keeps on-demand MCP tools
+and automatic lifecycle memory pointed at the same Signet instance.
+The value must be the daemon origin only, for example
+`http://192.168.0.60:3850` or `https://signet.internal:3850`, with no
+path, query string, fragment, or embedded credentials.
 
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
@@ -275,6 +316,10 @@ tools (namespaced as `mcp__signet__*`):
 - `memory_list` — list recent memories
 - `memory_modify` — update existing memory
 - `memory_forget` — delete a memory
+
+MCP tools do not replace hooks. MCP gives Codex on-demand tools during a
+session; hooks provide automatic identity injection, prompt-time recall,
+and session-end extraction.
 
 ### Extraction provider
 
