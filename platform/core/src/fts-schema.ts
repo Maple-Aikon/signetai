@@ -35,7 +35,7 @@ export function createMemoriesFts(db: FtsSchemaExecDb): void {
 		END;
 	`);
 	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEGIN
 			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
 			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
 		END;

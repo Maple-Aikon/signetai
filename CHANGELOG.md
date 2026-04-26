@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-26
 - Bug fixes: show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
+- Performance: reduce recall hot path latency.
 - Refactoring: reorganize monorepo layout.
 
 ### 2026-04-25
@@ -34,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: align recall and remember surfaces.
 
 ## Release Ledger
+
+## [0.108.13] - 2026-04-26
+
+Release summary: 1 performance improvement.
+Tag range: `v0.108.12..v0.108.13`.
+
+### Performance
+
+- **memory**: reduce recall hot path latency
 
 ## [0.108.12] - 2026-04-26
 
