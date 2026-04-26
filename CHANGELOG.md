@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-26
 - Features: store transcripts as canonical jsonl.
-- Bug fixes: make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
+- Bug fixes: preserve native response globals; make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
 - Performance: reduce recall hot path latency.
 - Refactoring: reorganize monorepo layout.
 
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: align recall and remember surfaces.
 
 ## Release Ledger
+
+## [0.109.1] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.0..v0.109.1`.
+
+### Bug Fixes
+
+- **daemon**: preserve native response globals
 
 ## [0.109.0] - 2026-04-26
 
