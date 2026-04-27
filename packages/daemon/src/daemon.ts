@@ -1046,7 +1046,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
-			dreamingWorkerHandle = startDreamingWorker(getDbAccessor(), memoryCfg.dreaming, AGENTS_DIR, resolveAgentId({}));
+			dreamingWorkerHandle = startDreamingWorker(getDbAccessor(), memoryCfg.dreaming, AGENTS_DIR, defaultAgentId);
 			setDreamingWorker(dreamingWorkerHandle);
 		} catch (err) {
 			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {

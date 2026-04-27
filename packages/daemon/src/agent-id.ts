@@ -18,7 +18,7 @@ export function resolveAgentId(body: { agentId?: string; sessionKey?: string }):
 	if (body.agentId) return body.agentId;
 	const parts = (body.sessionKey ?? "").split(":");
 	if (parts[0] === "agent" && parts[1]?.trim()) return parts[1].trim();
-	return "default";
+	return process.env.SIGNET_AGENT_ID?.trim() || "default";
 }
 
 export function resolveDaemonAgentId(env: NodeJS.ProcessEnv = process.env): string {

@@ -1,8 +1,24 @@
 import { homedir } from "os";
 import { join } from "path";
+import { existsSync, readFileSync } from "fs";
 
 export function resolveDefaultBasePath(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	const signetPath = process.env.SIGNET_PATH;
+	if (signetPath) return signetPath;
+
+	// Check workspace config
+	const xdgConfigHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+	const configPath = join(xdgConfigHome, "signet", "workspace.json");
+	if (existsSync(configPath)) {
+		try {
+			const config = JSON.parse(readFileSync(configPath, "utf-8"));
+			if (config.workspace) return config.workspace;
+		} catch {
+			// ignore malformed config
+		}
+	}
+
+	return join(homedir(), ".agents");
 }
 
 export function expandHome(p: string, home = homedir()): string {
