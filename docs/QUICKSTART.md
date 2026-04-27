@@ -454,7 +454,7 @@ Install as a System Service
 To have Signet start automatically on boot:
 
 ```bash
-cd packages/daemon
+cd platform/daemon
 bun run install:service
 ```
 

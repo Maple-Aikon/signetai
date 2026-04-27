@@ -7,9 +7,9 @@
 			"**/node_modules/**",
 			"**/.svelte-kit/**",
 			"**/build/**",
-			"web/.wrangler/**",
-			"packages/signetai/dashboard/**",
-			"web/.astro/**",
+			"web/marketing/.wrangler/**",
+			"dist/signetai/dashboard/**",
+			"web/marketing/.astro/**",
 			"memorybench/data/**",
 			"memorybench/dist/**",
 			"memorybench/node_modules/**"

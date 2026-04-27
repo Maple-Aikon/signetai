@@ -6,6 +6,12 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-26
+- Features: store transcripts as canonical jsonl.
+- Bug fixes: report skipped desktop refresh reasons; require managed desktop launcher marker; refresh desktop app after Signet update; resolve bundled GraphIQ install script; preserve native response globals; make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
+- Performance: reduce recall hot path latency.
+- Refactoring: reorganize monorepo layout.
+
 ### 2026-04-25
 - Bug fixes: package extraction worker and test lifecycle; proxy analytics and telemetry from worker thread via IPC; reject startup promise on early worker exit and guard duplicate startPipeline; address 3 blocking review findings in extraction worker thread; bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
 - Refactoring: make logger injectable in startWorker via LogSink interface.
@@ -29,10 +35,92 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
 - Refactoring: align recall and remember surfaces.
 
-### 2026-04-19
-- Bug fixes: resolve all typescript strict-mode errors in daemon package.
-
 ## Release Ledger
+
+## [0.109.3] - 2026-04-26
+
+Release summary: 3 bug fixes.
+Tag range: `v0.109.2..v0.109.3`.
+
+### Bug Fixes
+
+- **update**: report skipped desktop refresh reasons
+- **update**: require managed desktop launcher marker
+- **update**: refresh desktop app after Signet update
+
+## [0.109.2] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.1..v0.109.2`.
+
+### Bug Fixes
+
+- **cli**: resolve bundled GraphIQ install script
+
+## [0.109.1] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.0..v0.109.1`.
+
+### Bug Fixes
+
+- **daemon**: preserve native response globals
+
+## [0.109.0] - 2026-04-26
+
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.108.13..v0.109.0`.
+
+### Features
+
+- **memory**: store transcripts as canonical jsonl
+
+### Bug Fixes
+
+- **memory**: make live transcript append idempotent
+- **memory**: serialize transcript jsonl backfill writes
+
+## [0.108.13] - 2026-04-26
+
+Release summary: 1 performance improvement.
+Tag range: `v0.108.12..v0.108.13`.
+
+### Performance
+
+- **memory**: reduce recall hot path latency
+
+## [0.108.12] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.11..v0.108.12`.
+
+### Bug Fixes
+
+- **dashboard**: show own-agent presence in readout
+
+## [0.108.11] - 2026-04-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.10..v0.108.11`.
+
+### Bug Fixes
+
+- **daemon**: soft-delete native memory artifacts
+
+## [0.108.10] - 2026-04-26
+
+Release summary: 3 bug fixes and 1 refactor.
+Tag range: `v0.108.9..v0.108.10`.
+
+### Bug Fixes
+
+- **repo**: keep web manifests out of version sync
+- **daemon**: stabilize repo-layout test suite
+- **repo**: harden layout test checks
+
+### Refactoring
+
+- **repo**: reorganize monorepo layout
 
 ## [0.108.9] - 2026-04-25
 

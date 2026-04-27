@@ -6,10 +6,10 @@ description: "Electron desktop shell and menu bar companion for the Signet daemo
 # Desktop Tray
 
 The consumer desktop distribution for Signet is the Electron app in
-`packages/desktop`. It owns the native window, menu bar tray, bundled Bun
+`surfaces/desktop`. It owns the native window, menu bar tray, bundled Bun
 runtime, and daemon process lifecycle for desktop installs.
 
-`packages/tray` is intentionally small. It contains shared tray/menu state
+`surfaces/tray` is intentionally small. It contains shared tray/menu state
 utilities only. It is not a desktop shell and contains no legacy native-shell code.
 
 ## Runtime model
@@ -21,6 +21,13 @@ resources and marks that daemon as desktop-owned.
 
 The daemon remains a separate local process. The desktop app is a
 distribution and control layer, not a replacement for the daemon.
+
+When `signet update install` or daemon auto-update installs a new Signet
+version, the update system checks for a managed Linux desktop install at
+`~/.local/bin/signet-desktop` / `~/.local/share/signet/desktop/Signet.AppImage`.
+If present, it refreshes the Electron AppImage from the synced Signet source
+checkout as part of the same update. Unmanaged desktop launchers are left
+untouched and reported as skipped.
 
 ## User-facing behavior
 
@@ -46,7 +53,7 @@ bun run build:desktop
 For focused desktop work:
 
 ```bash
-cd packages/desktop
+cd surfaces/desktop
 bun run build:desktop
 bun run dev
 ```
@@ -58,7 +65,7 @@ The desktop build stages:
 3. a platform Bun runtime
 4. Electron packaging artifacts
 
-Generated desktop resources live under `packages/desktop/resources/` and are
+Generated desktop resources live under `surfaces/desktop/resources/` and are
 not committed.
 
 ## Release artifacts
