@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
-import { appendCanonicalTranscriptTurns, canonicalTranscriptPath } from "./transcript-jsonl";
+import {
+	appendCanonicalTranscriptSnapshot,
+	appendCanonicalTranscriptTurns,
+	canonicalTranscriptPath,
+} from "./transcript-jsonl";
 
 const roots: string[] = [];
 
@@ -139,5 +143,127 @@ await appendCanonicalTranscriptTurns({
 		const transcript = readFileSync(join(root, "memory", "codex", "transcripts", "transcript.jsonl"), "utf8");
 		expect(transcript.match(/same assistant context/g)?.length).toBe(1);
 		expect(transcript.match(/same retried prompt/g)?.length).toBe(1);
+	});
+});
+
+describe("backfill OOM regression (#587)", () => {
+	test("skips backfill when persistent marker exists", async () => {
+		const root = makeRoot("marker-skip");
+		const memDir = join(root, "memory");
+		mkdirSync(memDir, { recursive: true });
+
+		// Create a markdown transcript artifact that would be backfilled
+		const artifact = join(memDir, "2026-04-28T00-00-00Z--markertest000000--transcript.md");
+		writeFileSync(
+			artifact,
+			[
+				"---",
+				'kind: "transcript"',
+				'agent_id: "default"',
+				'harness: "codex"',
+				'session_key: "marker-skip-session"',
+				'session_id: "marker-skip-session"',
+				'captured_at: "2026-04-28T00:00:00.000Z"',
+				'project: "/tmp/project"',
+				"---",
+				"User: should not appear if marker works",
+				"Assistant: marker test reply",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+
+		// Write the persistent marker before calling ensureCanonicalTranscriptHistory
+		const markerPath = join(memDir, ".canonical-transcript-backfill-v1");
+		writeFileSync(markerPath, JSON.stringify({ completed_at: new Date().toISOString(), agent_id: "default" }), "utf8");
+
+		// Backfill should be skipped entirely — no JSONL file created
+		await ensureCanonicalTranscriptHistory(root, "default");
+		const jsonlPath = join(memDir, "codex", "transcripts", "transcript.jsonl");
+		expect(existsSync(jsonlPath)).toBe(false);
+	});
+
+	test("skips backfill when JSONL already >1MB (crash-before-marker guard)", async () => {
+		const root = makeRoot("populated-skip");
+		const memDir = join(root, "memory");
+		const transcriptsDir = join(memDir, "codex", "transcripts");
+		mkdirSync(transcriptsDir, { recursive: true });
+
+		// Simulate a large JSONL from a previous lifecycle
+		const jsonlPath = join(transcriptsDir, "transcript.jsonl");
+		const fakeRecord = JSON.stringify({
+			session_key: "old-session",
+			harness: "codex",
+			turns: [{ role: "user", content: "x".repeat(500) }],
+		});
+		// Write >1MB of data
+		const lines = Array.from({ length: 2500 }, () => fakeRecord).join("\n");
+		writeFileSync(jsonlPath, lines, "utf8");
+		expect(statSync(jsonlPath).size).toBeGreaterThan(1024 * 1024);
+
+		// Create a markdown artifact that would be backfilled
+		const artifact = join(memDir, "2026-04-28T00-00-00Z--populatedtest00--transcript.md");
+		writeFileSync(
+			artifact,
+			[
+				"---",
+				'kind: "transcript"',
+				'agent_id: "default"',
+				'harness: "codex"',
+				'session_key: "populated-skip-session"',
+				'session_id: "populated-skip-session"',
+				'captured_at: "2026-04-28T00:00:00.000Z"',
+				'project: "/tmp/project"',
+				"---",
+				"User: should not be appended to existing JSONL",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+
+		const sizeBefore = statSync(jsonlPath).size;
+		await ensureCanonicalTranscriptHistory(root, "default");
+
+		// JSONL should NOT have grown — backfill was skipped
+		expect(statSync(jsonlPath).size).toBe(sizeBefore);
+
+		// Marker should have been written
+		expect(existsSync(join(memDir, ".canonical-transcript-backfill-v1"))).toBe(true);
+	});
+
+	test("appendCanonicalTranscriptSnapshot appends without reading full file", async () => {
+		const root = makeRoot("append-snapshot");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+
+		// Seed with initial data
+		await appendCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "db",
+			transcript: "User: first session\nAssistant: first reply",
+		});
+
+		const sizeAfterFirst = statSync(jsonlPath).size;
+		expect(sizeAfterFirst).toBeGreaterThan(0);
+
+		// Append a second session — should grow, not rewrite
+		await appendCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-2",
+			sourceFormat: "db",
+			transcript: "User: second session\nAssistant: second reply",
+		});
+
+		const sizeAfterSecond = statSync(jsonlPath).size;
+		expect(sizeAfterSecond).toBeGreaterThan(sizeAfterFirst);
+
+		// Both sessions present
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain("first session");
+		expect(content).toContain("second session");
 	});
 });
