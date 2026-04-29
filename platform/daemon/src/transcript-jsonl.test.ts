@@ -5,9 +5,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
 import {
-	appendCanonicalTranscriptSnapshot,
+	appendCanonicalTranscriptSnapshotIfMissing,
 	appendCanonicalTranscriptTurns,
 	canonicalTranscriptPath,
+	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
 
 const roots: string[] = [];
@@ -174,7 +175,7 @@ describe("backfill OOM regression (#587)", () => {
 		);
 
 		// Write the persistent marker before calling ensureCanonicalTranscriptHistory
-		const markerPath = join(memDir, ".canonical-transcript-backfill-v1");
+		const markerPath = join(memDir, ".canonical-transcript-backfill-v1.default");
 		writeFileSync(markerPath, JSON.stringify({ completed_at: new Date().toISOString(), agent_id: "default" }), "utf8");
 
 		// Backfill should be skipped entirely — no JSONL file created
@@ -183,8 +184,8 @@ describe("backfill OOM regression (#587)", () => {
 		expect(existsSync(jsonlPath)).toBe(false);
 	});
 
-	test("skips backfill when JSONL already >1MB (crash-before-marker guard)", async () => {
-		const root = makeRoot("populated-skip");
+	test("backfills missing sessions even when an existing JSONL is large", async () => {
+		const root = makeRoot("populated-continue");
 		const memDir = join(root, "memory");
 		const transcriptsDir = join(memDir, "codex", "transcripts");
 		mkdirSync(transcriptsDir, { recursive: true });
@@ -215,7 +216,7 @@ describe("backfill OOM regression (#587)", () => {
 				'captured_at: "2026-04-28T00:00:00.000Z"',
 				'project: "/tmp/project"',
 				"---",
-				"User: should not be appended to existing JSONL",
+				"User: should be appended despite existing JSONL",
 				"",
 			].join("\n"),
 			"utf8",
@@ -224,32 +225,87 @@ describe("backfill OOM regression (#587)", () => {
 		const sizeBefore = statSync(jsonlPath).size;
 		await ensureCanonicalTranscriptHistory(root, "default");
 
-		// JSONL should NOT have grown — backfill was skipped
-		expect(statSync(jsonlPath).size).toBe(sizeBefore);
+		expect(statSync(jsonlPath).size).toBeGreaterThan(sizeBefore);
+		expect(readFileSync(jsonlPath, "utf8")).toContain("should be appended despite existing JSONL");
 
-		// Marker should have been written
-		expect(existsSync(join(memDir, ".canonical-transcript-backfill-v1"))).toBe(true);
+		expect(existsSync(join(memDir, ".canonical-transcript-backfill-v1.default"))).toBe(true);
 	});
 
-	test("appendCanonicalTranscriptSnapshot appends without reading full file", async () => {
-		const root = makeRoot("append-snapshot");
+	test("scopes persistent markers by agent", async () => {
+		const root = makeRoot("marker-agent-scope");
+		const memDir = join(root, "memory");
+		mkdirSync(memDir, { recursive: true });
+		writeFileSync(
+			join(memDir, ".canonical-transcript-backfill-v1.default"),
+			JSON.stringify({ completed_at: new Date().toISOString(), agent_id: "default" }),
+			"utf8",
+		);
+		writeFileSync(
+			join(memDir, "2026-04-28T00-00-00Z--agenttwotest00--transcript.md"),
+			[
+				"---",
+				'kind: "transcript"',
+				'agent_id: "agent-two"',
+				'harness: "codex"',
+				'session_key: "agent-two-session"',
+				'session_id: "agent-two-session"',
+				'captured_at: "2026-04-28T00:00:00.000Z"',
+				"---",
+				"User: scoped marker should not suppress this",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+
+		await ensureCanonicalTranscriptHistory(root, "agent-two");
+
+		const transcript = readFileSync(join(memDir, "codex", "transcripts", "transcript.jsonl"), "utf8");
+		expect(transcript).toContain("scoped marker should not suppress this");
+		expect(existsSync(join(memDir, ".canonical-transcript-backfill-v1.agent-two"))).toBe(true);
+	});
+
+	test("appendCanonicalTranscriptSnapshotIfMissing does not duplicate retried backfill sessions", async () => {
+		const root = makeRoot("append-snapshot-missing");
 		const jsonlPath = canonicalTranscriptPath(root, "codex");
 
-		// Seed with initial data
-		await appendCanonicalTranscriptSnapshot({
+		const input = {
 			basePath: root,
 			agentId: "default",
 			harness: "codex",
 			sessionKey: "session-1",
-			sourceFormat: "db",
+			sourceFormat: "db" as const,
 			transcript: "User: first session\nAssistant: first reply",
+		};
+
+		await appendCanonicalTranscriptSnapshotIfMissing(input);
+		await appendCanonicalTranscriptSnapshotIfMissing(input);
+
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content.match(/first session/g)?.length).toBe(1);
+		expect(content.match(/first reply/g)?.length).toBe(1);
+	});
+
+	test("writeCanonicalTranscriptSnapshot replaces live partial turns for a session", async () => {
+		const root = makeRoot("replace-snapshot");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial prompt" }],
 		});
-
-		const sizeAfterFirst = statSync(jsonlPath).size;
-		expect(sizeAfterFirst).toBeGreaterThan(0);
-
-		// Append a second session — should grow, not rewrite
-		await appendCanonicalTranscriptSnapshot({
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			transcript: "User: final prompt\nAssistant: final reply",
+		});
+		await writeCanonicalTranscriptSnapshot({
 			basePath: root,
 			agentId: "default",
 			harness: "codex",
@@ -258,12 +314,10 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: second session\nAssistant: second reply",
 		});
 
-		const sizeAfterSecond = statSync(jsonlPath).size;
-		expect(sizeAfterSecond).toBeGreaterThan(sizeAfterFirst);
-
-		// Both sessions present
 		const content = readFileSync(jsonlPath, "utf8");
-		expect(content).toContain("first session");
+		expect(content).not.toContain("partial prompt");
+		expect(content).toContain("final prompt");
+		expect(content).toContain("final reply");
 		expect(content).toContain("second session");
 	});
 });
