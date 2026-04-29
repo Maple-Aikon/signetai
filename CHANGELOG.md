@@ -7,8 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-29
-- Bug fixes: prevent false install failure from cleanup trap; resolve event-loop starvation from synchronous I/O on large memory directories; streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
-- Docs: correct stale documentation claims; fix documentation drift.
+- Bug fixes: validate embedding model availability during install and daemon startup; prevent false install failure from cleanup trap; resolve event-loop starvation from synchronous I/O on large memory directories; streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
+- Docs: force horizontal contributor avatars; render contributors inline; clean up contributors rendering; add LeuciRemi to contributors; correct stale documentation claims; fix documentation drift.
 
 ### 2026-04-26
 - Features: store transcripts as canonical jsonl.
@@ -36,6 +36,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: dedupe summary fact hash collisions; suppress OpenCode notifications for extraction sessions; skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
 
 ## Release Ledger
+
+## [0.109.13] - 2026-04-29
+
+Release summary: 1 bug fix and 4 docs updates.
+Tag range: `v0.109.12..v0.109.13`.
+
+### Bug Fixes
+
+- **setup**: validate embedding model availability during install and daemon startup (#602)
+
+### Docs
+
+- force horizontal contributor avatars
+- render contributors inline
+- clean up contributors rendering
+- add LeuciRemi to contributors
 
 ## [0.109.12] - 2026-04-29
 
