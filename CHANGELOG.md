@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-29
+- Bug fixes: make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
+
 ### 2026-04-26
 - Features: store transcripts as canonical jsonl.
 - Bug fixes: report skipped desktop refresh reasons; require managed desktop launcher marker; refresh desktop app after Signet update; resolve bundled GraphIQ install script; preserve native response globals; make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
@@ -31,11 +34,17 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Gemini CLI harness connector.
 - Bug fixes: dedupe summary fact hash collisions; suppress OpenCode notifications for extraction sessions; skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
 
-### 2026-04-20
-- Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
-- Refactoring: align recall and remember surfaces.
-
 ## Release Ledger
+
+## [0.109.4] - 2026-04-29
+
+Release summary: 2 bug fixes.
+Tag range: `v0.109.3..v0.109.4`.
+
+### Bug Fixes
+
+- **daemon**: make transcript backfill idempotent
+- **daemon**: prevent OOM crash-loop in transcript backfill (#587)
 
 ## [0.109.3] - 2026-04-26
 
