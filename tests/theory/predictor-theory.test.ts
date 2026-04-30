@@ -495,10 +495,10 @@ describe("Exploration Sampling", () => {
 		// It does: if (Math.random() > explorationRate) return null;
 		// So with rate=1.0, Math.random() > 1.0 is never true, exploration runs.
 
-		const exploredId = maybeExplore(candidates, injectedIds, 1.0);
+		const result = maybeExplore(candidates, injectedIds, 1.0);
 
 		// c has the highest rank disagreement (|3-50| = 47)
-		expect(exploredId).toBe("c");
+		expect(result.exploredId).toBe("c");
 	});
 
 	// Spec: "Replaces the LAST slot in the final selection, not a random one"
@@ -531,10 +531,10 @@ describe("Exploration Sampling", () => {
 		];
 
 		const injectedIds = new Set(["a", "b", "c"]);
-		const exploredId = maybeExplore(candidates, injectedIds, 1.0);
+		const result = maybeExplore(candidates, injectedIds, 1.0);
 
 		// d should be explored (highest disagreement, not injected)
-		expect(exploredId).toBe("d");
+		expect(result.exploredId).toBe("d");
 		// b should be removed (lowest fusedScore among injected)
 		expect(injectedIds.has("b")).toBe(false);
 		// d should now be in the set
@@ -564,10 +564,10 @@ describe("Exploration Sampling", () => {
 		];
 
 		const injectedIds = new Set(["a"]);
-		const exploredId = maybeExplore(candidates, injectedIds, 1.0);
+		const result = maybeExplore(candidates, injectedIds, 1.0);
 
 		// No candidates have predictor ranks, so no disagreement can be computed
-		expect(exploredId).toBeNull();
+		expect(result.exploredId).toBeNull();
 	});
 
 	test("exploration returns null with empty injected set", () => {
@@ -581,8 +581,8 @@ describe("Exploration Sampling", () => {
 		];
 
 		const injectedIds = new Set<string>();
-		const exploredId = maybeExplore(candidates, injectedIds, 1.0);
-		expect(exploredId).toBeNull();
+		const result = maybeExplore(candidates, injectedIds, 1.0);
+		expect(result.exploredId).toBeNull();
 	});
 });
 
