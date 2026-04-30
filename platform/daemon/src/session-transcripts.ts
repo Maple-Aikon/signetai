@@ -1,10 +1,19 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
-import { writeCanonicalTranscriptSnapshot } from "./transcript-jsonl";
+import {
+	type TranscriptIdentity,
+	type TranscriptSessionKeyClassification,
+	appendCanonicalTranscriptSnapshotIfMissing,
+	canonicalTranscriptPath,
+	readCanonicalTranscriptSessionKeys,
+	rewriteReplacingLiveOnlySessions,
+	sanitizeHarnessPath,
+	sessionSeqCacheKey,
+} from "./transcript-jsonl";
 
 interface TranscriptRow {
 	readonly session_key: string;
@@ -33,6 +42,33 @@ export interface TranscriptHit {
 	readonly updatedAt: string;
 	readonly excerpt: string;
 	readonly rank: number;
+}
+
+interface BackfillSeen {
+	readonly classification: TranscriptSessionKeyClassification;
+}
+
+function createBackfillSeenReader(basePath: string, agentId?: string): (harness: string) => Promise<BackfillSeen> {
+	const seen = new Map<string, Promise<BackfillSeen>>();
+	return (harness: string) => {
+		const key = sanitizeHarnessPath(harness);
+		const existing = seen.get(key);
+		if (existing) return existing;
+		const loaded = readCanonicalTranscriptSessionKeys({ basePath, harness, agentId }).then((classification) => ({
+			classification,
+		}));
+		seen.set(key, loaded);
+		return loaded;
+	};
+}
+
+function knownBackfillKeys(classification: TranscriptSessionKeyClassification): Set<string> {
+	return new Set([...classification.canonicalKeys, ...classification.liveOnlyKeys]);
+}
+
+function markBackfillCanonical(classification: TranscriptSessionKeyClassification, key: string): void {
+	classification.liveOnlyKeys.delete(key);
+	classification.canonicalKeys.add(key);
 }
 
 function tableExists(name: string): boolean {
@@ -73,30 +109,61 @@ function parseArtifactFrontmatter(content: string): { frontmatter: Record<string
 	return { frontmatter, body: text.slice(end + 5) };
 }
 
-async function backfillMarkdownTranscriptArtifacts(basePath: string, agentId?: string): Promise<number> {
+async function backfillMarkdownTranscriptArtifacts(
+	basePath: string,
+	agentId: string | undefined,
+	getSeen: (harness: string) => Promise<BackfillSeen>,
+): Promise<number> {
 	const memoryDir = join(basePath, "memory");
 	if (!existsSync(memoryDir)) return 0;
 	let failures = 0;
-	for (const name of readdirSync(memoryDir)) {
-		if (!name.endsWith("--transcript.md")) continue;
+	const liveOnlyReplacements = new Map<
+		string,
+		Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>
+	>();
+	const files = readdirSync(memoryDir).filter((name) => name.endsWith("--transcript.md"));
+	for (const [i, name] of files.entries()) {
 		const path = join(memoryDir, name);
 		try {
 			const parsed = parseArtifactFrontmatter(readFileSync(path, "utf8"));
 			if (!parsed || parsed.frontmatter.kind !== "transcript") continue;
 			const rowAgentId = parsed.frontmatter.agent_id || "default";
 			if (agentId && rowAgentId !== agentId) continue;
-			await writeCanonicalTranscriptSnapshot({
+			const harness = parsed.frontmatter.harness || "unknown";
+			const input = {
 				basePath,
 				agentId: rowAgentId,
-				harness: parsed.frontmatter.harness || "unknown",
+				harness,
 				sessionKey: parsed.frontmatter.session_key || null,
 				sessionId: parsed.frontmatter.session_id || null,
 				project: parsed.frontmatter.project || null,
 				capturedAt: parsed.frontmatter.captured_at || new Date().toISOString(),
-				sourceFormat: "markdown",
+				sourceFormat: "markdown" as const,
 				sourcePath: `memory/${name}`,
 				transcript: parsed.body,
-			});
+			};
+			const { classification } = await getSeen(harness);
+			const key = sessionSeqCacheKey(input);
+			if (classification.liveOnlyKeys.has(key)) {
+				const replacements =
+					liveOnlyReplacements.get(harness) ||
+					new Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>();
+				replacements.set(key, {
+					identity: {
+						agentId: input.agentId,
+						harness: input.harness,
+						sessionKey: input.sessionKey,
+						sessionId: input.sessionId,
+						sourceFormat: "markdown",
+					},
+					transcript: input.transcript,
+				});
+				liveOnlyReplacements.set(harness, replacements);
+				continue;
+			}
+			if (await appendCanonicalTranscriptSnapshotIfMissing(input, knownBackfillKeys(classification))) {
+				markBackfillCanonical(classification, key);
+			}
 		} catch (error) {
 			failures++;
 			logger.warn("transcripts", "Markdown transcript backfill failed", {
@@ -104,34 +171,107 @@ async function backfillMarkdownTranscriptArtifacts(basePath: string, agentId?: s
 				path,
 			});
 		}
+		if (i > 0 && i % 100 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	for (const [harness, replacements] of liveOnlyReplacements.entries()) {
+		if (replacements.size === 0) continue;
+		const jsonlPath = canonicalTranscriptPath(basePath, harness);
+		try {
+			await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+			const { classification } = await getSeen(harness);
+			for (const key of replacements.keys()) {
+				markBackfillCanonical(classification, key);
+			}
+		} catch (error) {
+			failures++;
+			logger.warn("transcripts", "Markdown transcript backfill rewrite failed", {
+				error: error instanceof Error ? error.message : String(error),
+				harness,
+				path: jsonlPath,
+			});
+		}
 	}
 	return failures;
 }
 
-async function backfillDatabaseTranscripts(basePath: string, agentId?: string): Promise<boolean> {
+async function backfillDatabaseTranscripts(
+	basePath: string,
+	agentId: string | undefined,
+	getSeen: (harness: string) => Promise<BackfillSeen>,
+): Promise<boolean> {
 	if (!tableExists("session_transcripts")) return true;
+	const PAGE_SIZE = 100;
+	const liveOnlyReplacements = new Map<
+		string,
+		Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>
+	>();
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
-			const hasUpdated = cols.some((col) => col.name === "updated_at");
-			const sql = hasUpdated
-				? "SELECT session_key, content, harness, project, agent_id, created_at, updated_at FROM session_transcripts"
-				: "SELECT session_key, content, harness, project, agent_id, created_at, NULL AS updated_at FROM session_transcripts";
-			return db.prepare(sql).all() as StoredTranscriptBackfillRow[];
-		});
-		for (const row of rows) {
-			const rowAgentId = row.agent_id?.trim() || "default";
-			if (agentId && rowAgentId !== agentId) continue;
-			await writeCanonicalTranscriptSnapshot({
-				basePath,
-				agentId: rowAgentId,
-				harness: row.harness?.trim() || "unknown",
-				sessionKey: row.session_key,
-				project: row.project,
-				capturedAt: row.updated_at || row.created_at || new Date().toISOString(),
-				sourceFormat: "db",
-				transcript: row.content,
+		let offset = 0;
+		while (true) {
+			const rows = getDbAccessor().withReadDb((db) => {
+				const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
+					Record<string, unknown>
+				>;
+				const hasUpdated = cols.some((col) => col.name === "updated_at");
+				const sql = hasUpdated
+					? `SELECT session_key, content, harness, project, agent_id, created_at, updated_at
+						FROM session_transcripts
+						ORDER BY agent_id, harness, session_key, rowid
+						LIMIT ? OFFSET ?`
+					: `SELECT session_key, content, harness, project, agent_id, created_at, NULL AS updated_at
+						FROM session_transcripts
+						ORDER BY agent_id, harness, session_key, rowid
+						LIMIT ? OFFSET ?`;
+				return db.prepare(sql).all(PAGE_SIZE, offset) as StoredTranscriptBackfillRow[];
 			});
+			if (rows.length === 0) break;
+			for (const row of rows) {
+				const rowAgentId = row.agent_id?.trim() || "default";
+				if (agentId && rowAgentId !== agentId) continue;
+				const harness = row.harness?.trim() || "unknown";
+				const input = {
+					basePath,
+					agentId: rowAgentId,
+					harness,
+					sessionKey: row.session_key,
+					project: row.project,
+					capturedAt: row.updated_at || row.created_at || new Date().toISOString(),
+					sourceFormat: "db" as const,
+					transcript: row.content,
+				};
+				const { classification } = await getSeen(harness);
+				const key = sessionSeqCacheKey(input);
+				if (classification.liveOnlyKeys.has(key)) {
+					const replacements =
+						liveOnlyReplacements.get(harness) ||
+						new Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>();
+					replacements.set(key, {
+						identity: {
+							agentId: input.agentId,
+							harness: input.harness,
+							sessionKey: input.sessionKey,
+							sourceFormat: "db",
+						},
+						transcript: input.transcript,
+					});
+					liveOnlyReplacements.set(harness, replacements);
+					continue;
+				}
+				if (await appendCanonicalTranscriptSnapshotIfMissing(input, knownBackfillKeys(classification))) {
+					markBackfillCanonical(classification, key);
+				}
+			}
+			offset += PAGE_SIZE;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+		for (const [harness, replacements] of liveOnlyReplacements.entries()) {
+			if (replacements.size === 0) continue;
+			const jsonlPath = canonicalTranscriptPath(basePath, harness);
+			await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+			const { classification } = await getSeen(harness);
+			for (const key of replacements.keys()) {
+				markBackfillCanonical(classification, key);
+			}
 		}
 	} catch (error) {
 		logger.warn("transcripts", "Database transcript backfill failed", {
@@ -142,11 +282,42 @@ async function backfillDatabaseTranscripts(basePath: string, agentId?: string): 
 	return true;
 }
 
+const BACKFILL_MARKER = ".canonical-transcript-backfill-v1";
+
+function markerScope(agentId?: string): string {
+	return (agentId?.trim() || "all").replace(/[^a-zA-Z0-9._-]+/g, "-") || "default";
+}
+
+function getMarkerPath(basePath: string, agentId?: string): string {
+	return join(basePath, "memory", `${BACKFILL_MARKER}.${markerScope(agentId)}`);
+}
+
+function markerMatches(path: string, agentId?: string): boolean {
+	try {
+		const parsed = JSON.parse(readFileSync(path, "utf8")) as { readonly agent_id?: unknown };
+		return parsed.agent_id === (agentId?.trim() || "*");
+	} catch (error) {
+		logger.warn("transcripts", "Ignoring invalid transcript backfill marker", {
+			error: error instanceof Error ? error.message : String(error),
+			path,
+		});
+		return false;
+	}
+}
+
 export async function ensureCanonicalTranscriptHistory(basePath: string, agentId?: string): Promise<void> {
 	const key = `${basePath}:${agentId ?? "*"}`;
 	if (canonicalBackfills.has(key)) return;
-	const failures = await backfillMarkdownTranscriptArtifacts(basePath, agentId);
-	const databaseOk = await backfillDatabaseTranscripts(basePath, agentId);
+
+	const markerPath = getMarkerPath(basePath, agentId);
+	if (existsSync(markerPath) && markerMatches(markerPath, agentId)) {
+		canonicalBackfills.add(key);
+		return;
+	}
+
+	const getSeen = createBackfillSeenReader(basePath, agentId);
+	const failures = await backfillMarkdownTranscriptArtifacts(basePath, agentId, getSeen);
+	const databaseOk = await backfillDatabaseTranscripts(basePath, agentId, getSeen);
 	if (failures > 0 || !databaseOk) {
 		logger.warn("transcripts", "Canonical transcript backfill incomplete; will retry on next write", {
 			agentId: agentId ?? "*",
@@ -156,7 +327,26 @@ export async function ensureCanonicalTranscriptHistory(basePath: string, agentId
 		});
 		return;
 	}
+
+	if (!writeMarker(markerPath, agentId)) return;
 	canonicalBackfills.add(key);
+}
+
+function writeMarker(markerPath: string, agentId?: string): boolean {
+	try {
+		mkdirSync(dirname(markerPath), { recursive: true });
+		writeFileSync(
+			markerPath,
+			JSON.stringify({ completed_at: new Date().toISOString(), agent_id: agentId ?? "*" }),
+			"utf8",
+		);
+		return true;
+	} catch (error) {
+		logger.warn("transcripts", "Failed to write backfill marker", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return false;
+	}
 }
 
 function hasUpdatedAt(): boolean {

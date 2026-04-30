@@ -4,19 +4,12 @@
  * Background service for memory, API, and dashboard hosting
  */
 
+import "./bun-socket-polyfill";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-	copyFileSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	statSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -31,6 +24,7 @@ import {
 import { watch } from "chokidar";
 import { Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "./agent-id";
+import { yieldEvery } from "./async-yield";
 import { requirePermission } from "./auth";
 import { bindWithRetry } from "./bind-with-retry";
 import { migrateConfig } from "./config-migration";
@@ -606,7 +600,7 @@ async function importExistingMemoryFiles(): Promise<number> {
 
 	let files: string[];
 	try {
-		files = readdirSync(memoryDir)
+		files = (await readdir(memoryDir))
 			.filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
 			.filter((f) => !ARTIFACT_FILENAME_RE.test(f) && !MEMORY_BACKUP_FILENAME_RE.test(f));
 	} catch (e) {
@@ -621,9 +615,11 @@ async function importExistingMemoryFiles(): Promise<number> {
 	}
 
 	let totalChunks = 0;
+	const yielder = yieldEvery(10);
 	for (const file of files) {
 		const count = await ingestMemoryMarkdown(join(memoryDir, file));
 		totalChunks += count;
+		await yielder();
 	}
 
 	if (totalChunks > 0) {
@@ -1556,6 +1552,36 @@ async function main() {
 			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 			logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
 		});
+
+		const startupCfg = loadMemoryConfig(AGENTS_DIR);
+		if (startupCfg.embedding.provider !== "none") {
+			checkEmbeddingProvider(startupCfg.embedding)
+				.then((embeddingStatus) => {
+					if (!embeddingStatus.available) {
+						logger.warn(
+							"daemon",
+							`Embedding provider '${startupCfg.embedding.provider}' is unavailable: ${embeddingStatus.error ?? "unknown error"}`,
+						);
+						logger.warn(
+							"daemon",
+							"Vector search and memory embeddings will not work until this is resolved. Run 'signet sync' or reconfigure with 'signet setup'.",
+						);
+					} else if (embeddingStatus.error) {
+						logger.warn("daemon", `Embedding provider using fallback: ${embeddingStatus.error}`);
+					} else {
+						logger.info(
+							"daemon",
+							`Embedding provider '${startupCfg.embedding.provider}' is ready (model: ${startupCfg.embedding.model})`,
+						);
+					}
+				})
+				.catch((e) => {
+					logger.warn(
+						"daemon",
+						`Embedding provider health check failed: ${e instanceof Error ? e.message : String(e)}`,
+					);
+				});
+		}
 	};
 
 	bindWithRetry({

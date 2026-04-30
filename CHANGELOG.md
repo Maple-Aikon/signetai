@@ -6,6 +6,13 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-30
+- Bug fixes: apply is_deleted filter to BM25 FTS path.
+
+### 2026-04-29
+- Bug fixes: stop native memory fd leak; validate embedding model availability during install and daemon startup; prevent false install failure from cleanup trap; resolve event-loop starvation from synchronous I/O on large memory directories; streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
+- Docs: force horizontal contributor avatars; render contributors inline; clean up contributors rendering; add LeuciRemi to contributors; correct stale documentation claims; fix documentation drift.
+
 ### 2026-04-26
 - Features: store transcripts as canonical jsonl.
 - Bug fixes: report skipped desktop refresh reasons; require managed desktop launcher marker; refresh desktop app after Signet update; resolve bundled GraphIQ install script; preserve native response globals; make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
@@ -27,15 +34,124 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add desktop source install command; add GraphIQ plugin integration.
 - Bug fixes: expose preload bridge reliably; proxy dashboard API to daemon; stage desktop AppImage replacement; bind install to configured workspace; write named-agent memory heads locally.
 
-### 2026-04-21
-- Features: add Gemini CLI harness connector.
-- Bug fixes: dedupe summary fact hash collisions; suppress OpenCode notifications for extraction sessions; skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
-
-### 2026-04-20
-- Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
-- Refactoring: align recall and remember surfaces.
-
 ## Release Ledger
+
+## [0.109.15] - 2026-04-30
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.14..v0.109.15`.
+
+### Bug Fixes
+
+- **daemon**: apply is_deleted filter to BM25 FTS path (#605)
+
+## [0.109.14] - 2026-04-29
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.13..v0.109.14`.
+
+### Bug Fixes
+
+- **daemon**: stop native memory fd leak (#604)
+
+## [0.109.13] - 2026-04-29
+
+Release summary: 1 bug fix and 4 docs updates.
+Tag range: `v0.109.12..v0.109.13`.
+
+### Bug Fixes
+
+- **setup**: validate embedding model availability during install and daemon startup (#602)
+
+### Docs
+
+- force horizontal contributor avatars
+- render contributors inline
+- clean up contributors rendering
+- add LeuciRemi to contributors
+
+## [0.109.12] - 2026-04-29
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.11..v0.109.12`.
+
+### Bug Fixes
+
+- **graphiq**: prevent false install failure from cleanup trap (#599)
+
+## [0.109.11] - 2026-04-29
+
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.109.10..v0.109.11`.
+
+### Bug Fixes
+
+- **daemon**: resolve event-loop starvation from synchronous I/O on large memory directories (#596)
+
+### Docs
+
+- correct stale documentation claims (#601)
+
+## [0.109.10] - 2026-04-29
+
+Release summary: 1 docs update.
+Tag range: `v0.109.9..v0.109.10`.
+
+### Docs
+
+- fix documentation drift (#600)
+
+## [0.109.9] - 2026-04-29
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.8..v0.109.9`.
+
+### Bug Fixes
+
+- **daemon**: streaming rewrite for live-only transcript sessions during backfill (#594)
+
+## [0.109.8] - 2026-04-29
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.109.7..v0.109.8`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.109.7] - 2026-04-29
+
+Release summary: 2 bug fixes.
+Tag range: `v0.109.6..v0.109.7`.
+
+### Bug Fixes
+
+- **inference**: repair Codex provider and test timeouts (#585)
+- **openclaw**: preserve prompt content in provider requests (#598)
+
+## [0.109.6] - 2026-04-29
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.109.5..v0.109.6`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.109.5] - 2026-04-29
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.4..v0.109.5`.
+
+### Bug Fixes
+
+- **ci**: harden desktop release builds
+
+## [0.109.4] - 2026-04-29
+
+Release summary: 2 bug fixes.
+Tag range: `v0.109.3..v0.109.4`.
+
+### Bug Fixes
+
+- **daemon**: make transcript backfill idempotent
+- **daemon**: prevent OOM crash-loop in transcript backfill (#587)
 
 ## [0.109.3] - 2026-04-26
 

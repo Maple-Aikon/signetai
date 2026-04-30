@@ -18,6 +18,7 @@ import {
 	hasLlamaCppServer,
 	preflightOllamaEmbedding,
 	promptOpenAIEmbeddingModel,
+	validateOllamaModelNonInteractive,
 } from "./setup-providers.js";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
@@ -621,6 +622,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				"nomic-embed-text";
 			embeddingModel = configuredModel;
 			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+
+			const ollamaCheck = await validateOllamaModelNonInteractive(configuredModel);
+			if (!ollamaCheck.available || !ollamaCheck.modelInstalled) {
+				console.log(chalk.yellow(`  ⚠ ${ollamaCheck.error ?? "Ollama embedding model not available"}`));
+				console.log(chalk.yellow("  Downgrading embedding provider to 'native' (built-in ONNX)."));
+				embeddingProvider = "native";
+				embeddingModel = "nomic-embed-text-v1.5";
+				embeddingDimensions = 768;
+			}
 		} else {
 			console.log();
 			const model = await select({

@@ -19,7 +19,7 @@
 <a href="https://github.com/openclaw/openclaw"><img src="https://img.shields.io/badge/OpenClaw-Compatible-orange?style=for-the-badge" alt="OpenClaw Compatible"></a>
 <a href="./docs/BENCHMARKING.md#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
 
-**97.6% LongMemEval answer accuracy**<br />
+**97.6% average LongMemEval answer accuracy**<br />
 Readable record · inspectable recall · harnesses are replaceable
 
 [Website](https://signetai.sh) · [Docs](https://signetai.sh/docs) · [Benchmarks](./docs/BENCHMARKING.md) · [Vision](VISION.md) · [Discussions](https://github.com/Signet-AI/signetai/discussions) · [Discord](https://discord.gg/Psdeg7sQm7) · [Contributing](docs/CONTRIBUTING.md) · [AI Policy](AI_POLICY.md)
@@ -223,15 +223,15 @@ underneath it.
 
 [LongMemEval](https://arxiv.org/abs/2410.10813) measures whether a memory
 system can recover and use facts across long-running, multi-session
-assistant conversations. Signet's current published run scores **97.6% answer
-accuracy** under the MemoryBench `rules` profile.
+assistant conversations. Signet's latest tracked MemoryBench runs average
+**97.6% answer accuracy** under the `rules` profile.
 
 That profile keeps the benchmark contract strict: memories are ingested through
 `/api/memory/remember`, recalled through `/api/memory/recall`, and answered
 from bounded daemon recall results. Search does not call an LLM.
 
 See [Benchmarks](./docs/BENCHMARKING.md#current-longmemeval-score) for the
-methodology and run workflow.
+methodology, scoring note, and run workflow.
 
 ## Install (detailed)
 
@@ -373,11 +373,13 @@ Connectors
 | [`@signet/connector-opencode`](./integrations/opencode/connector) | OpenCode integration |
 | [`@signet/connector-openclaw`](./integrations/openclaw/connector) | OpenClaw integration |
 | [`@signet/connector-codex`](./integrations/codex/connector) | Codex CLI integration |
+| [`@signet/connector-forge`](./integrations/forge/connector) | Forge integration |
 | [`@signet/connector-gemini`](./integrations/gemini/connector) | Gemini CLI integration |
 | [`@signet/connector-oh-my-pi`](./integrations/oh-my-pi/connector) | Oh My Pi integration |
 | [`@signet/connector-hermes-agent`](./integrations/hermes-agent/connector) | Hermes Agent integration |
 | [`@signet/connector-pi`](./integrations/pi/connector) | Pi coding agent integration |
 | [`@signet/oh-my-pi-extension`](./integrations/oh-my-pi/extension) | Oh My Pi extension bridge |
+| [`@signet/pi-extension-base`](./integrations/pi/extension-base) | Shared Pi and Oh My Pi extension utilities |
 | [`@signet/pi-extension`](./integrations/pi/extension) | Pi extension — memory tools, lifecycle, and session hooks |
 | [`@signet/opencode-plugin`](./integrations/opencode/plugin) | OpenCode runtime plugin — memory tools and session hooks |
 | [`@signetai/signet-memory-openclaw`](./integrations/openclaw/memory-adapter) | OpenClaw runtime plugin |
@@ -473,65 +475,8 @@ contributing significant features. Read the
 
 ## Contributors
 
-<table>
-  <tr>
-    <td align="center" width="54">
-      <a href="https://github.com/NicholaiVogel">
-        <img src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/BusyBee3333">
-        <img src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/stephenwoska2-cpu">
-        <img src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/PatchyToes">
-        <img src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/aaf2tbz">
-        <img src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/ddasgupta4">
-        <img src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/alcar2364">
-        <img src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/maximhar">
-        <img src="https://avatars.githubusercontent.com/maximhar?v=4&s=48" width="48" height="48" alt="maximhar" title="maximhar" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/lost-orchard">
-        <img src="https://avatars.githubusercontent.com/lost-orchard?v=4&s=48" width="48" height="48" alt="lost-orchard" title="lost-orchard" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/Ostico">
-        <img src="https://avatars.githubusercontent.com/u/8008416?v=4&s=48" width="48" height="48" alt="Ostico" title="Ostico" />
-      </a>
-    </td>
-    <td align="center" width="54">
-      <a href="https://github.com/gpzack">
-        <img src="https://avatars.githubusercontent.com/u/271398594?v=4&s=48" width="48" height="48" alt="gpzack" title="gpzack" />
-      </a>
-    </td>
-  </tr>
-</table>
+<a href="https://github.com/NicholaiVogel"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel" /></a> <a href="https://github.com/BusyBee3333"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333" /></a> <a href="https://github.com/stephenwoska2-cpu"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu" /></a> <a href="https://github.com/PatchyToes"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes" /></a> <a href="https://github.com/aaf2tbz"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz" /></a> <a href="https://github.com/ddasgupta4"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4" /></a> <a href="https://github.com/alcar2364"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364" /></a> <a href="https://github.com/maximhar"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/maximhar?v=4&s=48" width="48" height="48" alt="maximhar" title="maximhar" /></a> <a href="https://github.com/lost-orchard"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/lost-orchard?v=4&s=48" width="48" height="48" alt="lost-orchard" title="lost-orchard" /></a> <a href="https://github.com/Ostico"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/8008416?v=4&s=48" width="48" height="48" alt="Ostico" title="Ostico" /></a> <a href="https://github.com/gpzack"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/271398594?v=4&s=48" width="48" height="48" alt="gpzack" title="gpzack" /></a> <a href="https://github.com/LeuciRemi"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/44776125?v=4&s=48" width="48" height="48" alt="LeuciRemi" title="LeuciRemi" /></a>
+<br clear="left" />
 
 Made with love by members of Dashore Incubator & friends of Jake Shore and Nicholai Vogel.
 
